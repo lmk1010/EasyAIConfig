@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EasyAIConfig</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+
+<body>
+  <main class="app-shell">
+    <div class="window-dragbar" data-tauri-drag-region>
+      <div class="window-dragbar-fill" data-tauri-drag-region></div>
+    </div>
+
+    <div class="desktop-layout">
+      <aside class="sidebar">
+        <div class="sidebar-drag-region" data-tauri-drag-region></div>
+        <div class="sidebar-head">
+          <div class="brand-row">
+            <svg class="brand-logo" width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <rect x="1" y="1" width="16" height="16" rx="4" stroke="rgba(141,192,255,0.5)" stroke-width="1.2" />
+              <path d="M9.5 4L6.5 9.5h5L8.5 14" stroke="rgba(141,192,255,0.7)" stroke-width="1.3" stroke-linecap="round"
+                stroke-linejoin="round" />
+            </svg>
+            <span class="brand-name">EASYAICONFIG</span>
+          </div>
+        </div>
+
+        <nav class="sidebar-nav">
+          <button class="nav-item active" data-page-target="quick">
+            <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
+                stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7.5 1L4.5 6.5h4L5.5 12" />
+              </svg></span><span>快速配置</span>
+          </button>
+          <button class="nav-item" data-page-target="providers">
+            <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
+                stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+                <rect x="2" y="2" width="9" height="9" rx="1.5" />
+                <line x1="5" y1="4.5" x2="5" y2="8.5" />
+                <line x1="8" y1="4.5" x2="8" y2="8.5" />
+              </svg></span><span>Provider</span>
+          </button>
+          <button class="nav-item" data-page-target="system">
+            <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
+                stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+                <rect x="2" y="2" width="9" height="9" rx="1.5" />
+                <circle cx="6.5" cy="6.5" r="1.8" />
+              </svg></span><span>系统与路径</span>
+          </button>
+          <button class="nav-item" data-page-target="about">
+            <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
+                stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+                <circle cx="6.5" cy="6.5" r="4.5" />
+                <circle cx="6.5" cy="4.8" r="0.6" fill="currentColor" stroke="none" />
+                <line x1="6.5" y1="6.5" x2="6.5" y2="9" />
+              </svg></span><span>关于与更新</span>
+          </button>
+          <button class="nav-item" id="setupWizardNavBtn" data-page-target="__wizard__">
+            <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
+                stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 6.5h9M8 3.5l3 3-3 3" />
+              </svg></span><span>初始化向导</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-status">
+          <div class="sidebar-line">
+            <span class="sidebar-label">桌面应用</span>
+            <div class="sidebar-inline">
+              <span id="appUpdatePill" class="badge">客户端检测中</span>
+              <button id="appUpdateBtn" class="secondary ghost-btn" hidden>检查更新</button>
+            </div>
+          </div>
+          <div class="sidebar-line">
+            <span class="sidebar-label">Codex</span>
+            <div class="sidebar-inline">
+              <span id="codexPill" class="badge">检测中</span>
+              <button id="updateCodexBtn" class="secondary ghost-btn">更新 / 安装</button>
+            </div>
+          </div>
+          <div class="sidebar-line">
+            <span class="sidebar-label">主题</span>
+            <div class="sidebar-inline">
+              <button id="themeToggleBtn" class="secondary ghost-btn theme-toggle-btn" title="切换白天/黑夜模式">
+                <span class="theme-icon theme-icon-light">☀️</span>
+                <span class="theme-icon theme-icon-dark">🌙</span>
+                <span id="themeLabel">黑夜模式</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <div class="workspace-drag-region" data-tauri-drag-region></div>
+        <header class="workspace-topbar" data-tauri-drag-region>
+          <div>
+            <div id="pageEyebrow" class="eyebrow">Quick Setup</div>
+            <h1 id="pageTitle">一键配置 Codex 工具</h1>
+            <p id="pageSubtitle">输入 URL 和 API Key，剩下交给 EasyAIConfig。</p>
+          </div>
+          <div class="workspace-actions" id="defaultActions">
+            <button id="openAdvancedBtn" class="secondary subtle-btn">系统设置</button>
+            <button id="openAboutBtn" class="secondary subtle-btn">关于</button>
+          </div>
+          <div class="workspace-actions hide" id="configEditorActions">
+            <button id="closeConfigEditorBtn" class="secondary subtle-btn">关闭</button>
+            <button id="saveConfigEditorBtn" class="secondary subtle-btn">保存表单配置</button>
+            <button id="applyConfigEditorBtn">保存并生效</button>
+          </div>
+        </header>
+
+        <div id="flash" class="flash hide"></div>
+
+        <div class="page-stack">
+          <section class="page-view active" data-page="quick">
+            <div class="quick-layout">
+              <section class="quick-main">
+                <div class="hero-strip">
+                  <div class="hero-copy">
+                    <div class="hero-title">最快路径</div>
+                    <div class="hero-subtitle">用户通常只需要 `URL` 和 `API Key`，这里一步完成。</div>
+                  </div>
+                  <div class="hero-indicators">
+                    <span class="hero-pill">自动补全协议</span>
+                    <span class="hero-pill">自动检测模型</span>
+                    <span class="hero-pill">一键保存并启动</span>
+                  </div>
+                </div>
+
+                <section class="view-section flow-section">
+                  <div class="section-head compact-head">
+                    <div>
+                      <div class="section-title-row">
+                        <div class="section-title">连接配置</div>
+                        <span class="section-badge success">保持极简</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="flow-grid">
+                    <label class="field field-wide">
+                      <span>Base URL</span>
+                      <input id="baseUrlInput" placeholder="https://your-provider.com/v1" />
+                    </label>
+
+                    <label class="field field-wide">
+                      <span>API Key</span>
+                      <input id="apiKeyInput" type="password" placeholder="sk-..." />
+                    </label>
+
+                    <div class="field action-field">
+                      <span>连接检测</span>
+                      <button id="detectBtn" class="secondary fit-btn">检测模型</button>
+                    </div>
+
+                    <label class="field field-wide model-field">
+                      <span>可用模型</span>
+                      <div class="select-wrap">
+                        <select id="modelSelect">
+                          <option value="">先检测模型</option>
+                        </select>
+                      </div>
+                    </label>
+                  </div>
+
+                  <div id="detectionMeta" class="inline-meta">默认只需要 URL 和 API Key；缺少 http/https 会自动补全。</div>
+                  <div id="modelChips" class="chips hide"></div>
+
+                  <div class="primary-actions">
+                    <button id="editConfigQuickBtn" class="secondary">编辑配置</button>
+                    <button id="saveBtn" class="secondary">保存配置</button>
+                    <button id="launchBtn">启动 Codex</button>
+                  </div>
+                </section>
+              </section>
+
+              <aside class="quick-rail">
+                <section class="current-config" id="currentConfigCard">
+                  <div class="current-head">
+                    <div>
+                      <div class="current-label">当前配置</div>
+                      <div id="currentConfigMain" class="current-main">未加载</div>
+                    </div>
+                    <div class="current-actions">
+                      <button id="configEditorBtn" class="secondary tiny-icon-btn icon-menu-btn"
+                        title="编辑当前配置"></button>
+                      <button id="providerRefreshBtn" class="secondary tiny-icon-btn icon-refresh-btn"
+                        title="手动检测"></button>
+                      <button id="providerSwitchBtn" class="secondary tiny-icon-btn icon-chevron-btn"
+                        aria-expanded="false" title="切换配置"></button>
+                    </div>
+                  </div>
+                  <div id="currentConfigMeta" class="current-meta">当前 Provider 与模型会显示在这里</div>
+                  <div id="providerDropdown" class="provider-dropdown hide"></div>
+                </section>
+
+                <section class="line-panel feature-panel">
+                  <div class="mini-title">配置提示</div>
+                  <div class="feature-list">
+                    <div class="feature-row"><span>1</span><strong>检测模型后自动推荐最新可用模型</strong></div>
+                    <div class="feature-row"><span>2</span><strong>保存后写入 Codex 配置并保留备份</strong></div>
+                    <div class="feature-row"><span>3</span><strong>未安装 Codex 时，启动会弹窗引导自动安装</strong></div>
+                  </div>
+                </section>
+              </aside>
+            </div>
+            <div class="workspace-watermark">ELECTRON</div>
+          </section>
+
+          <section class="page-view" data-page="providers">
+            <div class="split-grid">
+              <section class="view-section">
+                <div class="section-head slim-head">
+                  <div>
+                    <div class="section-title">Provider 列表</div>
+                    <div class="section-copy">已发现配置、连通性与快速载入。</div>
+                  </div>
+                  <button id="refreshBtn" class="secondary tiny-btn">↻ 刷新</button>
+                </div>
+                <div id="savedProviders" class="provider-list desktop-provider-list"></div>
+              </section>
+
+              <section class="view-section">
+                <div class="section-head slim-head">
+                  <div>
+                    <div class="section-title">配置摘要</div>
+                    <div class="section-copy">当前将写入的 Provider / Model / Env 信息。</div>
+                  </div>
+                </div>
+                <div id="quickSummary" class="quick-summary desktop-summary"></div>
+              </section>
+            </div>
+
+            <section class="view-section backup-section">
+              <div class="section-head slim-head">
+                <div>
+                  <div class="section-title">备份历史</div>
+                  <div class="section-copy">保存前自动留档，可一键回滚。</div>
+                </div>
+                <button id="reloadBackupsBtn" class="secondary tiny-btn">↻ 刷新</button>
+              </div>
+              <div id="backups" class="backup-list"></div>
+            </section>
+          </section>
+
+          <section class="page-view" data-page="system">
+            <div class="split-grid system-grid">
+              <section class="view-section">
+                <div class="section-head slim-head">
+                  <div>
+                    <div class="section-title">路径与执行</div>
+                    <div class="section-copy">针对工作区、权限和启动目录做快速调整。</div>
+                  </div>
+                  <button id="closeAdvancedBtn" class="secondary subtle-btn">返回主页</button>
+                </div>
+
+                <div class="dense-form-grid">
+                  <label class="field"><span>Provider Key</span><input id="providerKeyInput"
+                      placeholder="自动生成" /></label>
+                  <label class="field"><span>展示名称</span><input id="providerLabelInput" placeholder="自动生成" /></label>
+                  <label class="field"><span>Env Key</span><input id="envKeyInput" placeholder="自动生成" /></label>
+                  <label class="field"><span>模型覆盖</span><input id="manualModelInput" placeholder="可不填" /></label>
+                  <label class="field"><span>配置范围</span>
+                    <div class="select-wrap"><select id="scopeSelect">
+                        <option value="global">全局 ~/.codex</option>
+                        <option value="project">项目 .codex/config.toml</option>
+                      </select></div>
+                  </label>
+                  <label class="field"><span>项目路径</span><input id="projectPathInput"
+                      placeholder="/path/to/project" /></label>
+                  <label class="field"><span>审批策略</span>
+                    <div class="select-wrap"><select id="approvalPolicySelect">
+                        <option value="">保持当前 (suggest)</option>
+                        <option value="never">never</option>
+                        <option value="on-request">on-request</option>
+                        <option value="on-failure">on-failure</option>
+                        <option value="untrusted">untrusted</option>
+                      </select></div>
+                  </label>
+                  <label class="field"><span>沙箱模式</span>
+                    <div class="select-wrap"><select id="sandboxModeSelect">
+                        <option value="">保持当前 (read-only)</option>
+                        <option value="read-only">read-only</option>
+                        <option value="workspace-write">workspace-write</option>
+                        <option value="danger-full-access">danger-full-access</option>
+                      </select></div>
+                  </label>
+                  <label class="field"><span>推理强度</span>
+                    <div class="select-wrap"><select id="reasoningEffortSelect">
+                        <option value="">保持当前 (medium)</option>
+                        <option value="none">none</option>
+                        <option value="minimal">minimal</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                        <option value="xhigh">xhigh</option>
+                      </select></div>
+                  </label>
+                  <label class="field"><span>启动目录</span><input id="launchCwdInput" placeholder="默认当前目录" /></label>
+                  <label class="field field-wide"><span>CODEX_HOME</span><input id="codexHomeInput"
+                      placeholder="默认 ~/.codex" /></label>
+                </div>
+              </section>
+
+              <aside class="view-section side-actions-section">
+                <div class="section-head slim-head">
+                  <div>
+                    <div class="section-title">系统动作</div>
+                    <div class="section-copy">安装、重装、卸载与精细化 TOML 编辑。</div>
+                  </div>
+                </div>
+
+                <div class="stack-actions">
+                  <button id="reinstallCodexBtn" class="secondary">重装 Codex</button>
+                  <button id="uninstallCodexBtn" class="secondary danger-btn">卸载 Codex</button>
+                  <button class="secondary" id="configEditorShortcutBtn" type="button">打开当前配置编辑</button>
+                </div>
+              </aside>
+            </div>
+            <div class="workspace-watermark">ELECTRON</div>
+          </section>
+
+          <section class="page-view" data-page="about">
+            <section class="view-section about-page">
+              <div class="section-head slim-head">
+                <div>
+                  <div class="section-title">关于 / 当前桌面版本 / 更新源</div>
+                  <div class="section-copy">保持桌面端信息透明，也方便检查更新链路。</div>
+                </div>
+                <button id="closeAboutBtn" class="secondary subtle-btn">返回主页</button>
+              </div>
+
+              <div class="about-grid">
+                <div class="about-card"><span>当前桌面版本</span><strong id="aboutAppVersion">-</strong></div>
+                <div class="about-card"><span>客户端更新</span><strong id="aboutUpdaterStatus">-</strong></div>
+                <div class="about-card"><span>当前 Codex</span><strong id="aboutCodexVersion">-</strong></div>
+                <div class="about-card"><span>更新仓库</span><strong id="aboutRepo">-</strong></div>
+              </div>
+
+              <div class="about-meta-panel">
+                <div class="about-meta-row"><span>更新源</span><code id="aboutEndpoint">-</code></div>
+                <div class="about-meta-row"><span>公钥状态</span><strong id="aboutPubkeyStatus">-</strong></div>
+              </div>
+
+              <div class="about-actions">
+                <button id="aboutCheckUpdateBtn" class="secondary">检查应用更新</button>
+                <button id="aboutOpenAdvancedBtn">打开系统页</button>
+              </div>
+            </section>
+          </section>
+
+          <section id="configEditorView" class="page-view" data-page="configEditor">
+            <div class="config-editor-page">
+              <div class="config-editor-layout">
+                <section class="config-editor-main">
+                  <div class="editor-grid dense-grid">
+                    <label class="field"><span>默认模型</span><input id="cfgModelInput" placeholder="默认由模型目录决定" /></label>
+                    <label class="field"><span>默认 Provider</span><input id="cfgProviderInput"
+                        placeholder="openai" /></label>
+                    <label class="field"><span>服务模式</span>
+                      <div class="select-wrap"><select id="cfgServiceTierSelect">
+                          <option value="">默认 (无偏好)</option>
+                          <option value="fast">Fast</option>
+                          <option value="flex">Flex</option>
+                        </select></div>
+                    </label>
+                    <label class="field"><span>个性</span>
+                      <div class="select-wrap"><select id="cfgPersonalityInput">
+                          <option value="">默认 (无)</option>
+                          <option value="none">none</option>
+                          <option value="friendly">friendly</option>
+                          <option value="pragmatic">pragmatic</option>
+                        </select></div>
+                    </label>
+                    <label class="field"><span>审批策略</span>
+                      <div class="select-wrap"><select id="cfgApprovalSelect">
+                          <option value="">默认 (suggest)</option>
+                          <option value="never">never</option>
+                          <option value="on-request">on-request</option>
+                          <option value="on-failure">on-failure</option>
+                          <option value="untrusted">untrusted</option>
+                        </select></div>
+                    </label>
+                    <label class="field"><span>沙箱模式</span>
+                      <div class="select-wrap"><select id="cfgSandboxSelect">
+                          <option value="">默认 (read-only)</option>
+                          <option value="read-only">read-only</option>
+                          <option value="workspace-write">workspace-write</option>
+                          <option value="danger-full-access">danger-full-access</option>
+                        </select></div>
+                    </label>
+                    <label class="field"><span>推理强度</span>
+                      <div class="select-wrap"><select id="cfgReasoningSelect">
+                          <option value="">默认 (medium)</option>
+                          <option value="none">none</option>
+                          <option value="minimal">minimal</option>
+                          <option value="low">low</option>
+                          <option value="medium">medium</option>
+                          <option value="high">high</option>
+                          <option value="xhigh">xhigh</option>
+                        </select></div>
+                    </label>
+                    <label class="field"><span>Plan 推理</span>
+                      <div class="select-wrap"><select id="cfgPlanReasoningSelect">
+                          <option value="">默认 (medium)</option>
+                          <option value="none">none</option>
+                          <option value="minimal">minimal</option>
+                          <option value="low">low</option>
+                          <option value="medium">medium</option>
+                          <option value="high">high</option>
+                          <option value="xhigh">xhigh</option>
+                        </select></div>
+                    </label>
+                    <label class="field"><span>上下文大小</span><input id="cfgContextWindowInput" type="number"
+                        placeholder="默认 272000" /></label>
+                    <label class="field"><span>自动压缩阈值</span><input id="cfgCompactLimitInput" type="number"
+                        placeholder="默认 上下文90% ≈ 244800" /></label>
+                    <label class="field"><span>工具输出上限</span><input id="cfgToolLimitInput" type="number"
+                        placeholder="默认 无限制" /></label>
+                    <label class="field"><span>SQLite 目录</span><input id="cfgSqliteHomeInput"
+                        placeholder="默认 ~/.codex" /></label>
+                  </div>
+                  <div class="toggle-grid">
+                    <label class="toggle-item"><input id="cfgHideReasoningCheck"
+                        type="checkbox" /><span>隐藏推理过程</span></label>
+                    <label class="toggle-item"><input id="cfgShowRawReasoningCheck"
+                        type="checkbox" /><span>显示原始推理</span></label>
+                    <label class="toggle-item"><input id="cfgDisableStorageCheck"
+                        type="checkbox" /><span>关闭响应存储</span></label>
+                    <label class="toggle-item"><input id="cfgShellSnapshotCheck" type="checkbox" /><span>启用 Shell
+                        Snapshot</span></label>
+                    <label class="toggle-item"><input id="cfgCompactPromptCheck"
+                        type="checkbox" /><span>紧凑提示模式</span></label>
+                    <label class="toggle-item"><input id="cfgUpdateCheck" type="checkbox"
+                        checked /><span>启动时检查更新</span></label>
+                  </div>
+                  <label class="field field-wide"><span>系统指令</span><textarea id="cfgInstructionsTextarea" rows="4"
+                      placeholder="自定义系统指令 (可选)"></textarea></label>
+                  <label class="field field-wide"><span>基础指令</span><textarea id="cfgBaseInstructionsTextarea" rows="4"
+                      placeholder="覆盖模型内置基础指令 (不推荐)"></textarea></label>
+                </section>
+                <aside class="config-editor-side">
+                  <div class="line-panel">
+                    <div class="subline">
+                      <span class="eyebrow">当前原始 TOML</span>
+                      <div class="inline-button-group">
+                        <button id="saveRawConfigEditorBtn" class="secondary tiny-btn">保存</button>
+                        <button id="applyRawConfigEditorBtn" class="tiny-btn">保存并生效</button>
+                      </div>
+                    </div>
+                    <textarea id="cfgRawTomlTextarea" class="raw-config" rows="26"></textarea>
+                  </div>
+                </aside>
+              </div>
+            </div>
+          </section>
+
+        </div>
+      </section>
+    </div>
+
+
+    <section id="updateDialog" class="update-dialog hide" aria-hidden="true">
+      <div class="update-dialog-backdrop" data-close-update-dialog></div>
+      <div class="update-dialog-panel">
+        <div class="update-dialog-head">
+          <div>
+            <div class="eyebrow" id="updateDialogEyebrow">Update</div>
+            <h3 id="updateDialogTitle">更新提示</h3>
+          </div>
+          <button id="closeUpdateDialogBtn" class="secondary tiny-icon-btn" title="关闭">×</button>
+        </div>
+        <div id="updateDialogBody" class="update-dialog-body"></div>
+        <div id="updateDialogMeta" class="update-dialog-meta hide"></div>
+        <div class="update-dialog-actions">
+          <button id="updateDialogCancelBtn" class="secondary">取消</button>
+          <button id="updateDialogConfirmBtn">继续</button>
+        </div>
+      </div>
+    </section>
+    </section>
+
+    <!-- ─── Welcome / Onboarding Overlay ─── -->
+    <section id="welcomeOverlay" class="welcome-overlay hide" aria-hidden="true">
+      <div class="welcome-backdrop"></div>
+      <div class="welcome-container">
+        <div class="welcome-glow"></div>
+        <div class="welcome-header">
+          <svg class="welcome-logo" width="36" height="36" viewBox="0 0 18 18" fill="none">
+            <rect x="1" y="1" width="16" height="16" rx="4" stroke="rgba(141,192,255,0.5)" stroke-width="1.2" />
+            <path d="M9.5 4L6.5 9.5h5L8.5 14" stroke="rgba(141,192,255,0.7)" stroke-width="1.3" stroke-linecap="round"
+              stroke-linejoin="round" />
+          </svg>
+          <h1 class="welcome-title">欢迎使用 EasyAIConfig</h1>
+          <p class="welcome-subtitle">Codex 配置管理工具，让 AI 编程更简单</p>
+        </div>
+
+        <div class="welcome-question">你的使用经验如何？</div>
+
+        <div class="welcome-cards">
+          <button class="welcome-card welcome-card-expert" id="welcomeExpertBtn">
+            <div class="wcard-icon-wrap wcard-icon-expert">
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7 21l3-3m0 0l4-8 4 8m-8 0h8" />
+                <path d="M14 3v2M22 8l-1.5 1.5M6 8l1.5 1.5M4 14h2M22 14h2" />
+                <circle cx="14" cy="10" r="3" />
+              </svg>
+            </div>
+            <div class="wcard-content">
+              <div class="wcard-title">代码大师</div>
+              <div class="wcard-desc">我已安装过 Codex，有 API Provider 配置经验</div>
+            </div>
+            <div class="wcard-arrow">→</div>
+            <div class="wcard-tag">快速进入</div>
+          </button>
+
+          <button class="welcome-card welcome-card-beginner" id="welcomeBeginnerBtn">
+            <div class="wcard-icon-wrap wcard-icon-beginner">
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 4l8 5v6l-8 5-8-5V9l8-5z" />
+                <path d="M14 14v6M14 14l8-5M14 14l-8-5" />
+              </svg>
+            </div>
+            <div class="wcard-content">
+              <div class="wcard-title">新手入门</div>
+              <div class="wcard-desc">第一次使用，请一步步引导我完成全部配置</div>
+            </div>
+            <div class="wcard-arrow">→</div>
+            <div class="wcard-tag">推荐</div>
+          </button>
+        </div>
+
+        <div class="welcome-footer">
+          <span class="welcome-hint" id="welcomeStatusHint"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Setup Wizard Overlay ─── -->
+    <section id="setupWizard" class="wizard-overlay hide" aria-hidden="true">
+      <div class="wizard-backdrop"></div>
+      <div class="wizard-container">
+        <div class="wizard-header">
+          <div class="wizard-brand">
+            <svg width="20" height="20" viewBox="0 0 18 18" fill="none">
+              <rect x="1" y="1" width="16" height="16" rx="4" stroke="rgba(141,192,255,0.5)" stroke-width="1.2" />
+              <path d="M9.5 4L6.5 9.5h5L8.5 14" stroke="rgba(141,192,255,0.7)" stroke-width="1.3" stroke-linecap="round"
+                stroke-linejoin="round" />
+            </svg>
+            <span>EasyAIConfig Setup</span>
+          </div>
+          <button id="wizardCloseBtn" class="wizard-close-btn" title="关闭向导">×</button>
+        </div>
+
+        <!-- Stepper -->
+        <div class="wizard-stepper">
+          <div class="wizard-step active" data-wizard-step="0">
+            <span class="ws-number">1</span>
+            <span class="ws-label">环境检查</span>
+          </div>
+          <div class="wizard-step-line"></div>
+          <div class="wizard-step" data-wizard-step="1">
+            <span class="ws-number">2</span>
+            <span class="ws-label">安装 Codex</span>
+          </div>
+          <div class="wizard-step-line"></div>
+          <div class="wizard-step" data-wizard-step="2">
+            <span class="ws-number">3</span>
+            <span class="ws-label">配置连接</span>
+          </div>
+          <div class="wizard-step-line"></div>
+          <div class="wizard-step" data-wizard-step="3">
+            <span class="ws-number">4</span>
+            <span class="ws-label">完成</span>
+          </div>
+        </div>
+
+        <!-- Step Panels -->
+        <div class="wizard-panels">
+          <!-- Step 0: Environment Check -->
+          <div class="wizard-panel active" data-wizard-panel="0">
+            <div class="wp-card">
+              <div class="wp-icon">🔍</div>
+              <h2 class="wp-title">环境诊断</h2>
+              <p class="wp-desc">正在检查运行 Codex 所需的环境依赖…</p>
+              <div id="wizardEnvChecks" class="wizard-checklist">
+                <div class="wc-item" id="wcNode">
+                  <span class="wc-indicator loading"></span>
+                  <span class="wc-name">Node.js (≥18)</span>
+                  <span class="wc-status" id="wcNodeStatus">检测中…</span>
+                </div>
+                <div class="wc-item" id="wcNpm">
+                  <span class="wc-indicator loading"></span>
+                  <span class="wc-name">npm</span>
+                  <span class="wc-status" id="wcNpmStatus">检测中…</span>
+                </div>
+                <div class="wc-item" id="wcCodex">
+                  <span class="wc-indicator loading"></span>
+                  <span class="wc-name">Codex CLI</span>
+                  <span class="wc-status" id="wcCodexStatus">检测中…</span>
+                </div>
+                <div class="wc-item" id="wcConfig">
+                  <span class="wc-indicator loading"></span>
+                  <span class="wc-name">配置文件</span>
+                  <span class="wc-status" id="wcConfigStatus">检测中…</span>
+                </div>
+              </div>
+              <div id="wizardEnvSummary" class="wizard-env-summary"></div>
+              <div class="wp-actions">
+                <button id="wizardEnvRetryBtn" class="secondary" style="display:none">重新检测</button>
+                <button id="wizardEnvNextBtn" class="wizard-primary-btn" disabled>下一步</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 1: Install Codex -->
+          <div class="wizard-panel" data-wizard-panel="1">
+            <div class="wp-card">
+              <div class="wp-icon">📦</div>
+              <h2 class="wp-title">安装 Codex</h2>
+              <p class="wp-desc">将通过 npm 全局安装 <code>@openai/codex</code></p>
+              <div id="wizardInstallStatus" class="wizard-install-box">
+                <div class="wib-command">npm install -g @openai/codex</div>
+                <div class="wib-progress hide" id="wizardInstallProgress">
+                  <div class="wib-progress-bar">
+                    <div class="wib-progress-fill"></div>
+                  </div>
+                  <span class="wib-progress-text">安装中…</span>
+                </div>
+                <div class="wib-result hide" id="wizardInstallResult"></div>
+              </div>
+              <div class="wp-actions">
+                <button id="wizardInstallBackBtn" class="secondary">上一步</button>
+                <button id="wizardInstallBtn" class="wizard-primary-btn">开始安装</button>
+                <button id="wizardInstallSkipBtn" class="secondary" style="display:none">已安装，跳过</button>
+                <button id="wizardInstallNextBtn" class="wizard-primary-btn" style="display:none">下一步</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: Configure Provider -->
+          <div class="wizard-panel" data-wizard-panel="2">
+            <div class="wp-card">
+              <div class="wp-icon">⚡</div>
+              <h2 class="wp-title">配置 API 连接</h2>
+              <p class="wp-desc">填入你的 API Provider 信息，自动检测可用模型</p>
+              <div class="wizard-form">
+                <label class="wizard-field">
+                  <span>Base URL</span>
+                  <input id="wizardBaseUrl" placeholder="https://your-provider.com/v1" />
+                </label>
+                <label class="wizard-field">
+                  <span>API Key</span>
+                  <input id="wizardApiKey" type="password" placeholder="sk-..." />
+                </label>
+                <div class="wizard-detect-row">
+                  <button id="wizardDetectBtn" class="secondary">检测模型</button>
+                  <span id="wizardDetectStatus" class="wizard-detect-status"></span>
+                </div>
+                <label class="wizard-field" id="wizardModelField" style="display:none">
+                  <span>推荐模型</span>
+                  <div class="select-wrap"><select id="wizardModelSelect">
+                      <option value="">先检测模型</option>
+                    </select></div>
+                </label>
+              </div>
+              <div class="wp-actions">
+                <button id="wizardConfigBackBtn" class="secondary">上一步</button>
+                <button id="wizardConfigNextBtn" class="wizard-primary-btn" disabled>保存并完成</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: Complete -->
+          <div class="wizard-panel" data-wizard-panel="3">
+            <div class="wp-card wp-complete-card">
+              <div class="wp-icon wp-success-icon">✅</div>
+              <h2 class="wp-title">配置完成！</h2>
+              <p class="wp-desc">你的 Codex 已经配置好了，可以开始使用了</p>
+              <div id="wizardCompleteSummary" class="wizard-complete-summary"></div>
+              <div class="wp-actions">
+                <button id="wizardFinishBtn" class="wizard-primary-btn">进入主界面</button>
+                <button id="wizardLaunchBtn" class="secondary">启动 Codex</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+
+</html>

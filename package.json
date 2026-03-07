@@ -1,0 +1,39 @@
+{
+  "name": "easyaiconfig",
+  "version": "0.1.0",
+  "description": "EasyAIConfig desktop and local UI for configuring Codex providers, models, and common settings.",
+  "type": "module",
+  "bin": {
+    "easyaiconfig": "bin/easyaiconfig.js"
+  },
+  "scripts": {
+    "start": "node ./bin/easyaiconfig.js",
+    "check": "node --check ./src/server.js && node --check ./src/lib/config-store.js && node --check ./src/lib/provider-check.js && node --check ./public/app.js",
+    "pack:dry": "npm pack --dry-run",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "desktop:icon": "tauri icon",
+    "tauri": "tauri"
+  },
+  "keywords": [
+    "codex",
+    "config",
+    "ui",
+    "newapi",
+    "openai-compatible"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@iarna/toml": "^2.2.5",
+    "@tauri-apps/api": "^2.10.1",
+    "express": "^4.21.2",
+    "open": "^10.1.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1"
+  }
+}

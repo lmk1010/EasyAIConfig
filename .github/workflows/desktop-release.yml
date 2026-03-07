@@ -1,0 +1,64 @@
+name: desktop-release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      EASYAICONFIG_UPDATER_PUBLIC_KEY: ${{ secrets.EASYAICONFIG_UPDATER_PUBLIC_KEY }}
+      EASYAICONFIG_GITHUB_REPOSITORY: ${{ github.repository }}
+      EASYAICONFIG_UPDATER_ENDPOINT: ${{ format('https://github.com/{0}/releases/latest/download/latest.json', github.repository) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check
+        run: npm run check
+
+      - name: Build and publish Tauri release
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: EasyAIConfig ${{ github.ref_name }}
+          releaseBody: |
+            EasyAIConfig desktop release.
+
+            - macOS installer bundles
+            - Windows installer bundles
+            - latest.json updater manifest
+            - signed updater artifacts
+          releaseDraft: false
+          prerelease: false
+          generateReleaseNotes: true
+          tauriScript: npm run tauri --
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
