@@ -37,7 +37,27 @@ jobs:
               repo: context.repo.repo,
               tag_name: tag,
               name: `EasyAIConfig ${tag}`,
-              body: `## EasyAIConfig ${tag}\n\n### 下载\n| 平台 | 文件 |\n|------|------|\n| macOS (Apple Silicon) | \`.dmg\` |\n| macOS (Intel) | \`.dmg\` |\n| Windows | \`.msi\` / \`.exe\` |\n| Linux | \`.deb\` / \`.AppImage\` |\n\n### 更新日志\n- 自动构建发布`,
+              body: [
+                `## EasyAIConfig ${tag}`,
+                '',
+                '### 📦 下载',
+                '| 平台 | 文件 |',
+                '|------|------|',
+                '| macOS (Apple Silicon) | `.dmg` |',
+                '| macOS (Intel) | `.dmg` |',
+                '| Windows | `.msi` / `.exe` |',
+                '| Linux | `.deb` / `.AppImage` |',
+                '',
+                '### 🍎 macOS 安装说明',
+                '下载 `.dmg` 后拖入 Applications，首次打开前运行：',
+                '```bash',
+                'sudo xattr -rd com.apple.quarantine /Applications/EasyAIConfig.app',
+                '```',
+                '然后正常双击打开即可。',
+                '',
+                '### 更新日志',
+                '- 自动构建发布',
+              ].join('\n'),
               draft: true,
               prerelease: false
             });
@@ -103,35 +123,12 @@ jobs:
       - name: Install npm dependencies
         run: npm ci || npm install
 
-      # macOS: Import Apple certificate for signing
-      - name: Import Apple certificate
-        if: startsWith(matrix.platform, 'macos') && env.APPLE_CERTIFICATE != ''
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
-          security create-keychain -p actions build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p actions build.keychain
-          security import certificate.p12 -k build.keychain -P $APPLE_CERTIFICATE_PASSWORD -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
-          rm certificate.p12
-
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Tauri updater signing
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS signing & notarization (optional)
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
