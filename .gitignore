@@ -2,3 +2,8 @@ node_modules/
 .npm/
 .DS_Store
 *.log
+dist/
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/WixTools/
