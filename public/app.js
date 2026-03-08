@@ -197,10 +197,18 @@ function setPage(page = 'quick') {
 
 function populateAboutPanel() {
   const info = state.appUpdate || {};
-  const codex = state.current?.codexBinary || {};
-  el('aboutAppVersion').textContent = info.currentVersion || '-';
-  el('aboutUpdaterStatus').textContent = info.enabled ? (info.available ? `可更新到 ${info.version || '-'}` : '已配置') : '未配置';
-  el('aboutCodexVersion').textContent = codex.installed ? (codex.version || '已安装') : '未安装';
+  const appVersion = info.currentVersion || '0.1.0';
+  el('aboutAppVersion').textContent = appVersion;
+  // INFO section: show client version
+  el('aboutCodexVersion').textContent = appVersion;
+  if (info.available) {
+    el('aboutUpdaterStatus').textContent = `可更新到 v${info.version || '-'}`;
+  } else if (info.enabled) {
+    el('aboutUpdaterStatus').textContent = '已是最新';
+  } else {
+    el('aboutUpdaterStatus').textContent = '';
+  }
+  // Keep hidden elements populated for debug
   el('aboutRepo').textContent = info.repository || '-';
   el('aboutEndpoint').textContent = info.endpoint || '-';
   el('aboutPubkeyStatus').textContent = info.publicKeyConfigured ? '已配置' : '未配置';
@@ -762,14 +770,9 @@ async function loadAppUpdateState({ manual = false } = {}) {
   }
   state.appUpdate = json.data || null;
   renderAppUpdateStatus();
+  populateAboutPanel();
   if (!manual) return state.appUpdate;
-  if (!state.appUpdate?.enabled) {
-    flash('自动更新未配置，请先配置 GitHub Releases 和签名公钥', 'error');
-  } else if (state.appUpdate?.available) {
-    flash(`发现客户端新版本 ${state.appUpdate.version}`, 'success');
-  } else {
-    flash(`当前已是最新版本 ${state.appUpdate?.currentVersion || ''}`, 'success');
-  }
+  // manual toast feedback is only used from sidebar, not about page
   return state.appUpdate;
 }
 
@@ -1474,7 +1477,30 @@ function bindEvents() {
   });
   el('closeAboutBtn').addEventListener('click', () => setPage('quick'));
   el('aboutCheckUpdateBtn').addEventListener('click', async () => {
-    await loadAppUpdateState({ manual: true });
+    const btn = el('aboutCheckUpdateBtn');
+    const status = el('aboutUpdaterStatus');
+    // Start spinning animation
+    btn.classList.add('checking');
+    btn.querySelector('span').textContent = '检查中...';
+    status.textContent = '';
+    status.className = 'about-status';
+
+    const result = await loadAppUpdateState({ manual: true });
+
+    // Stop spinning
+    btn.classList.remove('checking');
+    btn.querySelector('span').textContent = '检查更新';
+
+    if (!result) {
+      status.textContent = '检测失败，请检查网络连接';
+      status.className = 'about-status about-status-error';
+    } else if (result.available) {
+      status.textContent = `发现新版本 v${result.version}`;
+      status.className = 'about-status about-status-update';
+    } else {
+      status.textContent = `已是最新版本`;
+      status.className = 'about-status about-status-ok';
+    }
     populateAboutPanel();
   });
   el('aboutOpenAdvancedBtn').addEventListener('click', () => setPage('system'));
@@ -1532,6 +1558,7 @@ loadState({ preserveForm: false }).then(() => {
   }
 });
 loadBackups();
+loadAppUpdateState();
 
 /* ── Window drag support ── */
 (function initWindowDrag() {

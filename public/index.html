@@ -325,32 +325,68 @@
           </section>
 
           <section class="page-view" data-page="about">
-            <section class="view-section about-page">
-              <div class="section-head slim-head">
-                <div>
-                  <div class="section-title">关于 / 当前桌面版本 / 更新源</div>
-                  <div class="section-copy">保持桌面端信息透明，也方便检查更新链路。</div>
-                </div>
-                <button id="closeAboutBtn" class="secondary subtle-btn">返回主页</button>
+            <div class="about-hero">
+              <div class="about-icon-wrap">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                  <path d="M13 2L4.5 13.5h6.5L10 22l9-12h-7L13 2z" stroke="rgba(255,255,255,0.95)" stroke-width="1.6"
+                    stroke-linecap="round" stroke-linejoin="round" fill="rgba(255,255,255,0.15)" />
+                </svg>
               </div>
+              <h2 class="about-app-name">EasyAIConfig</h2>
+              <p class="about-version">Version <span id="aboutAppVersion">0.1.0</span></p>
+              <p class="about-status" id="aboutUpdaterStatus"></p>
+              <button id="aboutCheckUpdateBtn" class="about-update-btn">
+                <svg class="about-update-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"
+                  stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2.5 8a5.5 5.5 0 0 1 10.3-2.5M13.5 8a5.5 5.5 0 0 1-10.3 2.5" />
+                  <path d="M13.5 3v2.5H11M2.5 13v-2.5H5" />
+                </svg>
+                <span>检查更新</span>
+              </button>
+            </div>
 
-              <div class="about-grid">
-                <div class="about-card"><span>当前桌面版本</span><strong id="aboutAppVersion">-</strong></div>
-                <div class="about-card"><span>客户端更新</span><strong id="aboutUpdaterStatus">-</strong></div>
-                <div class="about-card"><span>当前 Codex</span><strong id="aboutCodexVersion">-</strong></div>
-                <div class="about-card"><span>更新仓库</span><strong id="aboutRepo">-</strong></div>
-              </div>
+            <div class="about-links">
+              <a class="about-link-card" href="https://github.com/lmk1010/EasyAIConfig" target="_blank">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <path
+                    d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                </svg>
+                <span>GitHub</span>
+              </a>
+              <a class="about-link-card" href="https://github.com/lmk1010/EasyAIConfig/issues" target="_blank">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                  <circle cx="12" cy="17" r=".5" fill="currentColor" />
+                </svg>
+                <span>反馈</span>
+              </a>
+              <button class="about-link-card" id="aboutOpenAdvancedBtn" type="button">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path
+                    d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+                </svg>
+                <span>系统设置</span>
+              </button>
+            </div>
 
-              <div class="about-meta-panel">
-                <div class="about-meta-row"><span>更新源</span><code id="aboutEndpoint">-</code></div>
-                <div class="about-meta-row"><span>公钥状态</span><strong id="aboutPubkeyStatus">-</strong></div>
-              </div>
+            <div class="about-credits">
+              <div class="about-credits-title">INFO</div>
+              <div class="about-credit-row"><span>客户端版本</span><strong id="aboutCodexVersion">-</strong></div>
+              <div class="about-credit-row"><span>开源协议</span><strong>MIT License</strong></div>
+              <div class="about-credit-row"><span>项目主页</span><a href="https://github.com/lmk1010/EasyAIConfig"
+                  target="_blank">github.com/lmk1010/EasyAIConfig</a></div>
+            </div>
 
-              <div class="about-actions">
-                <button id="aboutCheckUpdateBtn" class="secondary">检查应用更新</button>
-                <button id="aboutOpenAdvancedBtn">打开系统页</button>
-              </div>
-            </section>
+            <!-- Hidden elements to keep JS references working -->
+            <span id="aboutRepo" hidden></span>
+            <span id="aboutEndpoint" hidden></span>
+            <span id="aboutPubkeyStatus" hidden></span>
+            <span id="closeAboutBtn" hidden></span>
           </section>
 
           <section id="configEditorView" class="page-view" data-page="configEditor">
@@ -490,10 +526,9 @@
       <div class="welcome-container">
         <div class="welcome-glow"></div>
         <div class="welcome-header">
-          <svg class="welcome-logo" width="36" height="36" viewBox="0 0 18 18" fill="none">
-            <rect x="1" y="1" width="16" height="16" rx="4" stroke="rgba(141,192,255,0.5)" stroke-width="1.2" />
-            <path d="M9.5 4L6.5 9.5h5L8.5 14" stroke="rgba(141,192,255,0.7)" stroke-width="1.3" stroke-linecap="round"
-              stroke-linejoin="round" />
+          <svg class="welcome-logo" width="40" height="40" viewBox="0 0 24 24" fill="none">
+            <path d="M13 2L4.5 13.5h6.5L10 22l9-12h-7L13 2z" stroke="rgba(141,192,255,0.8)" stroke-width="1.4"
+              stroke-linecap="round" stroke-linejoin="round" fill="rgba(141,192,255,0.08)" />
           </svg>
           <h1 class="welcome-title">欢迎使用 EasyAIConfig</h1>
           <p class="welcome-subtitle">Codex 配置管理工具，让 AI 编程更简单</p>
@@ -504,35 +539,45 @@
         <div class="welcome-cards">
           <button class="welcome-card welcome-card-expert" id="welcomeExpertBtn">
             <div class="wcard-icon-wrap wcard-icon-expert">
-              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5"
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round">
-                <path d="M7 21l3-3m0 0l4-8 4 8m-8 0h8" />
-                <path d="M14 3v2M22 8l-1.5 1.5M6 8l1.5 1.5M4 14h2M22 14h2" />
-                <circle cx="14" cy="10" r="3" />
+                <path d="M6 18l2.5-2.5m0 0L12 8l3.5 7.5m-7 0h7" />
+                <path d="M12 2v2M19 6.5l-1.2 1.2M5 6.5l1.2 1.2M3 12h2M19 12h2" />
+                <circle cx="12" cy="8.5" r="2.5" />
               </svg>
             </div>
             <div class="wcard-content">
               <div class="wcard-title">代码大师</div>
               <div class="wcard-desc">我已安装过 Codex，有 API Provider 配置经验</div>
             </div>
-            <div class="wcard-arrow">→</div>
             <div class="wcard-tag">快速进入</div>
+            <div class="wcard-arrow">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 3l5 5-5 5" />
+              </svg>
+            </div>
           </button>
 
           <button class="welcome-card welcome-card-beginner" id="welcomeBeginnerBtn">
             <div class="wcard-icon-wrap wcard-icon-beginner">
-              <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5"
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 4l8 5v6l-8 5-8-5V9l8-5z" />
-                <path d="M14 14v6M14 14l8-5M14 14l-8-5" />
+                <path d="M12 3l7 4.5v5L12 17l-7-4.5v-5L12 3z" />
+                <path d="M12 12v5M12 12l7-4.5M12 12l-7-4.5" />
               </svg>
             </div>
             <div class="wcard-content">
               <div class="wcard-title">新手入门</div>
               <div class="wcard-desc">第一次使用，请一步步引导我完成全部配置</div>
             </div>
-            <div class="wcard-arrow">→</div>
             <div class="wcard-tag">推荐</div>
+            <div class="wcard-arrow">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 3l5 5-5 5" />
+              </svg>
+            </div>
           </button>
         </div>
 

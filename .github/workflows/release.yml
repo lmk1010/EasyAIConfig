@@ -123,6 +123,49 @@ jobs:
       - name: Install npm dependencies
         run: npm ci || npm install
 
+      - name: Validate updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::error::缺少 GitHub Secret: TAURI_SIGNING_PRIVATE_KEY"
+            exit 1
+          fi
+
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
+            echo "::error::缺少 GitHub Secret: TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+            exit 1
+          fi
+
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$key_file"
+
+          first_line="$(head -n 1 "$key_file" || true)"
+          second_line="$(sed -n '2p' "$key_file" || true)"
+
+          if [[ ! "$first_line" =~ ^untrusted\ comment:\ minisign\ secret\ key ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 格式错误：第一行必须以 'untrusted comment: minisign secret key' 开头。请把整个私钥文件原文保存到 GitHub Secret，不要只复制第二行、不要 base64、不要压成单行。"
+            echo "::error::当前第一行预览：$first_line"
+            exit 1
+          fi
+
+          if [[ -z "$second_line" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY 缺少第二行密钥内容。请确认 Secret 中保存的是完整多行私钥文件。"
+            exit 1
+          fi
+
+          if ! npm run tauri -- signer sign -f "$key_file" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" package.json >/dev/null 2>&1; then
+            echo "::error::Updater 私钥或密码校验失败。请确认 TAURI_SIGNING_PRIVATE_KEY 是完整私钥文件原文，且 TAURI_SIGNING_PRIVATE_KEY_PASSWORD 与生成该私钥时输入的密码一致。"
+            exit 1
+          fi
+
+          echo "Updater signing key validation passed"
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:

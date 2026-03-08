@@ -1210,11 +1210,21 @@ fn updater_runtime_var(name: &str, compile_time: Option<&'static str>) -> String
 }
 
 fn updater_repository() -> String {
-  updater_runtime_var("EASYAICONFIG_GITHUB_REPOSITORY", option_env!("EASYAICONFIG_GITHUB_REPOSITORY"))
+  let from_env = updater_runtime_var("EASYAICONFIG_GITHUB_REPOSITORY", option_env!("EASYAICONFIG_GITHUB_REPOSITORY"));
+  if !from_env.is_empty() {
+    return from_env;
+  }
+  // Fallback: infer from the endpoint in tauri.conf.json
+  "lmk1010/EasyAIConfig".to_string()
 }
 
 fn updater_public_key() -> String {
-  updater_runtime_var("EASYAICONFIG_UPDATER_PUBLIC_KEY", option_env!("EASYAICONFIG_UPDATER_PUBLIC_KEY"))
+  let from_env = updater_runtime_var("EASYAICONFIG_UPDATER_PUBLIC_KEY", option_env!("EASYAICONFIG_UPDATER_PUBLIC_KEY"));
+  if !from_env.is_empty() {
+    return from_env;
+  }
+  // Fallback: use the pubkey from tauri.conf.json plugins.updater.pubkey
+  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZEQkRGQjdGOTdBQkI0ClJXUzBxNWQvKzczOUFEbDFSZ1VRTWxIaitBZ3pMU21EekJud0NCRkw1MWIzbXZ6UWtnUUszaUZFCg==".to_string()
 }
 
 fn updater_endpoint() -> String {
@@ -1396,8 +1406,107 @@ fn launch_codex(body: &Value) -> Result<Value, String> {
   Ok(json!({ "ok": true, "cwd": cwd.to_string_lossy().to_string(), "message": message }))
 }
 
+fn check_setup_environment(query: &Value) -> Result<Value, String> {
+  let query_object = parse_json_object(query);
+  let codex_home = {
+    let input = get_string(&query_object, "codexHome");
+    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+  };
+
+  // 1. Check Node.js
+  let node_output = Command::new("node").arg("--version").output();
+  let (node_installed, node_version, node_major) = match node_output {
+    Ok(output) if output.status.success() => {
+      let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+      let major = version
+        .trim_start_matches('v')
+        .split('.')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+      (true, Some(version), major)
+    }
+    _ => (false, None, 0),
+  };
+
+  // 2. Check npm
+  let npm_output = Command::new(npm_command()).arg("--version").output();
+  let (npm_installed, npm_version) = match npm_output {
+    Ok(output) if output.status.success() => {
+      let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+      (true, Some(version))
+    }
+    _ => (false, None),
+  };
+
+  // 3. Check codex binary
+  let codex_binary = find_codex_binary();
+  let codex_installed = codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false);
+
+  // 4. Check config files
+  let global_config_path = codex_home.join("config.toml");
+  let global_env_path = codex_home.join(".env");
+  let config_content = read_text(&global_config_path)?;
+  let env_content = read_text(&global_env_path)?;
+  let config_exists = !config_content.trim().is_empty();
+  let env_exists = !env_content.trim().is_empty();
+
+  // 5. Check if there are any providers configured
+  let (has_providers, has_active_provider) = if config_exists {
+    match parse_toml_config(&config_content) {
+      Ok(config) => {
+        let providers = config
+          .get("model_providers")
+          .and_then(Value::as_object)
+          .map(|p| !p.is_empty())
+          .unwrap_or(false);
+        let active = config
+          .get("model_provider")
+          .and_then(Value::as_str)
+          .map(|s| !s.is_empty())
+          .unwrap_or(false);
+        (providers, active)
+      }
+      Err(_) => (false, false),
+    }
+  } else {
+    (false, false)
+  };
+
+  let needs_setup = !codex_installed || !config_exists || !has_providers;
+
+  Ok(json!({
+    "node": {
+      "installed": node_installed,
+      "version": node_version,
+      "major": node_major,
+      "sufficient": node_major >= 18,
+    },
+    "npm": {
+      "installed": npm_installed,
+      "version": npm_version,
+    },
+    "codex": {
+      "installed": codex_installed,
+      "version": codex_binary.get("version").cloned().unwrap_or(Value::Null),
+      "path": codex_binary.get("path").cloned().unwrap_or(Value::Null),
+    },
+    "config": {
+      "exists": config_exists,
+      "envExists": env_exists,
+      "hasProviders": has_providers,
+      "hasActiveProvider": has_active_provider,
+      "configPath": global_config_path.to_string_lossy().to_string(),
+      "envPath": global_env_path.to_string_lossy().to_string(),
+    },
+    "needsSetup": needs_setup,
+    "codexHome": codex_home.to_string_lossy().to_string(),
+  }))
+}
+
 async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value, body: &Value) -> Result<Value, String> {
   match (path, method) {
+    ("/api/setup/check", "GET") => check_setup_environment(query),
     ("/api/state", "GET") => load_state(query),
     ("/api/provider/test", "POST") => detect_provider(body).await,
     ("/api/config/save", "POST") => save_config(body),

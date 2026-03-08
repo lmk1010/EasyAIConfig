@@ -59,11 +59,26 @@ npm install
 npm run tauri -- signer generate -w ~/.tauri/easyaiconfig.key
 ```
 
-把生成结果分别放到仓库 Secrets：
+GitHub 仓库里至少配置以下 Secrets：
 
-- `TAURI_SIGNING_PRIVATE_KEY`
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- `EASYAICONFIG_UPDATER_PUBLIC_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY`：填写 `~/.tauri/easyaiconfig.key` 的完整原文，必须保留多行，不要只复制第二行、不要 base64、不要压成单行
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：生成该私钥时输入的密码
+- `EASYAICONFIG_UPDATER_PUBLIC_KEY`：公钥内容，供应用更新校验使用
+
+推荐直接用 GitHub CLI 写入，避免换行损坏：
+
+```bash
+gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/easyaiconfig.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+```
+
+私钥文件第一行必须类似：
+
+```text
+untrusted comment: minisign secret key
+```
+
+如果工作流报 `Missing comment in secret key`，说明 `TAURI_SIGNING_PRIVATE_KEY` 不是完整私钥文件原文。
 
 ## 发布桌面安装包
 
