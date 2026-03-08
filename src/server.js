@@ -9,18 +9,26 @@ import {
   checkSetupEnvironment,
   getProviderSecret,
   getCodexReleaseInfo,
+  installClaudeCode,
   installCodex,
+  launchClaudeCode,
   launchCodex,
   listBackups,
   listTools,
+  loadClaudeCodeState,
   loadState,
+  reinstallClaudeCode,
   reinstallCodex,
   restoreBackup,
+  saveClaudeCodeConfig,
+  saveClaudeCodeRawConfig,
   saveConfig,
   saveRawConfig,
   saveSettings,
   testSavedProvider,
+  uninstallClaudeCode,
   uninstallCodex,
+  updateClaudeCode,
   updateCodex,
 } from './lib/config-store.js';
 
@@ -172,6 +180,71 @@ export async function startServer() {
   app.post('/api/codex/launch', async (req, res) => {
     try {
       ok(res, { data: await launchCodex(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  // ─── Claude Code endpoints ───
+  app.get('/api/claudecode/state', async (_req, res) => {
+    try {
+      ok(res, { data: await loadClaudeCodeState() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/config-save', async (req, res) => {
+    try {
+      ok(res, { data: await saveClaudeCodeConfig(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/raw-save', async (req, res) => {
+    try {
+      ok(res, { data: await saveClaudeCodeRawConfig(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/install', async (_req, res) => {
+    try {
+      ok(res, { data: await installClaudeCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/reinstall', async (_req, res) => {
+    try {
+      ok(res, { data: await reinstallClaudeCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/update', async (_req, res) => {
+    try {
+      ok(res, { data: await updateClaudeCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/uninstall', async (_req, res) => {
+    try {
+      ok(res, { data: await uninstallClaudeCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/launch', async (req, res) => {
+    try {
+      ok(res, { data: await launchClaudeCode(req.body || {}) });
     } catch (error) {
       fail(res, error);
     }

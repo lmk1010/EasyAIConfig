@@ -41,7 +41,7 @@ const TOOL_REGISTRY = {
     installMethod: 'npm',
     providerKeyField: null,
     projectConfigDir: '.claude',
-    supported: false,
+    supported: true,
   },
   openclaw: {
     id: 'openclaw',
@@ -591,34 +591,38 @@ async function createBackup({ configPath, envPath, scope }) {
   return targetDir;
 }
 
-function launchTerminalCommand(cwd) {
+function launchTerminalCommand(cwd, { binaryPath, binaryName = 'codex', toolLabel = 'Codex' } = {}) {
+  const bin = binaryPath || binaryName;
+  const escapedCwd = String(cwd).replace(/([\\"$])/g, '\\$1');
+  const escapedBin = String(bin).replace(/([\\"$])/g, '\\$1');
+
   if (process.platform === 'darwin') {
     const appleScript = [
       'tell application "Terminal"',
       'activate',
-      `do script "cd ${String(cwd).replace(/([\\"])/g, '\\$1')} && ${String(findCodexBinary().path || 'codex').replace(/([\\"])/g, '\\$1')}"`,
+      `do script "cd ${escapedCwd} && ${escapedBin}"`,
       'end tell',
     ].join('\n');
     const result = spawnSync('osascript', ['-e', appleScript], { encoding: 'utf8' });
     if (result.status !== 0) {
       throw new Error((result.stderr || result.stdout || 'Failed to open Terminal').trim());
     }
-    return 'Codex 已在 Terminal 中启动';
+    return `${toolLabel} 已在 Terminal 中启动`;
   }
 
   if (process.platform === 'win32') {
-    const child = spawn('cmd.exe', ['/c', 'start', '', 'cmd', '/k', `cd /d "${cwd}" && "${findCodexBinary().path || 'codex'}"`], {
+    const child = spawn('cmd.exe', ['/c', 'start', '', 'cmd', '/k', `cd /d "${cwd}" && "${bin}"`], {
       detached: true,
       stdio: 'ignore',
     });
     child.unref();
-    return 'Codex 已在新命令窗口中启动';
+    return `${toolLabel} 已在新命令窗口中启动`;
   }
 
   const terminals = [
-    ['x-terminal-emulator', ['-e', `bash -lc "cd ${cwd} && ${findCodexBinary().path || 'codex'}"`]],
-    ['gnome-terminal', ['--', 'bash', '-lc', `cd ${cwd} && ${findCodexBinary().path || 'codex'}`]],
-    ['konsole', ['-e', 'bash', '-lc', `cd ${cwd} && ${findCodexBinary().path || 'codex'}`]],
+    ['x-terminal-emulator', ['-e', `bash -lc "cd ${cwd} && ${bin}"`]],
+    ['gnome-terminal', ['--', 'bash', '-lc', `cd ${cwd} && ${bin}`]],
+    ['konsole', ['-e', 'bash', '-lc', `cd ${cwd} && ${bin}`]],
   ];
 
   for (const [command, args] of terminals) {
@@ -627,10 +631,10 @@ function launchTerminalCommand(cwd) {
     }
     const child = spawn(command, args, { detached: true, stdio: 'ignore' });
     child.unref();
-    return 'Codex 已在新终端中启动';
+    return `${toolLabel} 已在新终端中启动`;
   }
 
-  throw new Error('没有找到可用终端，请先手动运行 codex');
+  throw new Error(`没有找到可用终端，请先手动运行 ${binaryName}`);
 }
 
 export async function checkSetupEnvironment({ codexHome = defaultCodexHome() } = {}) {
@@ -991,6 +995,120 @@ export async function launchCodex({ cwd } = {}) {
     throw new Error('Codex 尚未安装，请先点击安装');
   }
 
-  const message = launchTerminalCommand(targetCwd);
+  const message = launchTerminalCommand(targetCwd, {
+    binaryPath: codexBinary.path,
+    binaryName: 'codex',
+    toolLabel: 'Codex',
+  });
+  return { ok: true, cwd: targetCwd, message };
+}
+
+/* ═══════════════  Claude Code  ═══════════════ */
+const CLAUDE_CODE_PACKAGE = '@anthropic-ai/claude-code';
+
+function claudeCodeHome() {
+  return path.join(os.homedir(), '.claude');
+}
+
+function readJsonFile(filePath) {
+  return readText(filePath).then(raw => {
+    const trimmed = raw.trim();
+    if (!trimmed) return {};
+    try { return JSON.parse(trimmed); } catch { return {}; }
+  });
+}
+
+async function writeJsonFile(filePath, data) {
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+}
+
+export async function loadClaudeCodeState() {
+  const home = claudeCodeHome();
+  const settingsPath = path.join(home, 'settings.json');
+  const settings = await readJsonFile(settingsPath);
+  const binary = findToolBinary('claudecode');
+
+  return {
+    toolId: 'claudecode',
+    configHome: home,
+    settingsPath,
+    settings,
+    binary,
+    model: settings.model || '',
+    alwaysThinkingEnabled: settings.alwaysThinkingEnabled || false,
+    skipDangerousModePermissionPrompt: settings.skipDangerousModePermissionPrompt || false,
+    hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
+    settingsJson: JSON.stringify(settings, null, 2),
+  };
+}
+
+export async function saveClaudeCodeConfig(payload) {
+  const home = claudeCodeHome();
+  const settingsPath = path.join(home, 'settings.json');
+  const settings = await readJsonFile(settingsPath);
+
+  // Apply fields
+  if (payload.model !== undefined) settings.model = payload.model || undefined;
+  if (payload.alwaysThinkingEnabled !== undefined) settings.alwaysThinkingEnabled = payload.alwaysThinkingEnabled;
+  if (payload.skipDangerousModePermissionPrompt !== undefined) settings.skipDangerousModePermissionPrompt = payload.skipDangerousModePermissionPrompt;
+  if (payload.env && typeof payload.env === 'object') {
+    settings.env = { ...(settings.env || {}), ...payload.env };
+  }
+
+  // Clean undefined values
+  for (const [key, value] of Object.entries(settings)) {
+    if (value === undefined || value === '') delete settings[key];
+  }
+
+  await writeJsonFile(settingsPath, settings);
+  return { saved: true, settingsPath };
+}
+
+export async function saveClaudeCodeRawConfig(payload) {
+  const home = claudeCodeHome();
+  const settingsPath = path.join(home, 'settings.json');
+  const rawJson = String(payload.settingsJson || '').trim();
+  if (!rawJson) throw new Error('settings.json 内容不能为空');
+  let parsed;
+  try { parsed = JSON.parse(rawJson); } catch (e) {
+    throw new Error(`JSON 解析失败：${e.message}`);
+  }
+  await writeJsonFile(settingsPath, parsed);
+  return { saved: true, settingsPath };
+}
+
+async function claudeCodeNpmAction(args) {
+  const result = await runCommand(npmCommand(), args);
+  return { ...result, command: `${npmCommand()} ${args.join(' ')}` };
+}
+
+export async function installClaudeCode() {
+  return claudeCodeNpmAction(['install', '-g', CLAUDE_CODE_PACKAGE]);
+}
+
+export async function reinstallClaudeCode() {
+  return claudeCodeNpmAction(['install', '-g', CLAUDE_CODE_PACKAGE, '--force']);
+}
+
+export async function updateClaudeCode() {
+  return claudeCodeNpmAction(['install', '-g', `${CLAUDE_CODE_PACKAGE}@latest`]);
+}
+
+export async function uninstallClaudeCode() {
+  return claudeCodeNpmAction(['uninstall', '-g', CLAUDE_CODE_PACKAGE]);
+}
+
+export async function launchClaudeCode({ cwd } = {}) {
+  const targetCwd = path.resolve(cwd || process.cwd());
+  const binary = findToolBinary('claudecode');
+  if (!binary.installed) {
+    throw new Error('Claude Code 尚未安装，请先点击安装');
+  }
+  const message = launchTerminalCommand(targetCwd, {
+    binaryPath: binary.path,
+    binaryName: 'claude',
+    toolLabel: 'Claude Code',
+  });
   return { ok: true, cwd: targetCwd, message };
 }

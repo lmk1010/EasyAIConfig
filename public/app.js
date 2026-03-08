@@ -82,10 +82,33 @@ function renderToolsPage() {
   const grid = document.querySelector('.tools-page .tools-grid');
   if (!grid || !state.tools.length) return;
 
+  const actionSvgs = {
+    update: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3" /></svg>',
+    reinstall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6" /><path d="M2.5 8A10 10 0 1 1 4.34 16" /></svg>',
+    uninstall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>',
+  };
+
   grid.innerHTML = state.tools.map(tool => {
     const isSoon = !tool.supported;
     const isInstalled = tool.binary?.installed;
     const version = tool.binary?.version || '';
+
+    const actionButtons = tool.supported ? `
+      <button class="secondary tool-action-btn" data-tool-action="update" data-tool-id="${tool.id}">
+        ${actionSvgs.update}
+        <span>${isInstalled ? '更新' : '安装'}</span>
+      </button>
+      ${isInstalled ? `
+        <button class="secondary tool-action-btn" data-tool-action="reinstall" data-tool-id="${tool.id}">
+          ${actionSvgs.reinstall}
+          <span>重装</span>
+        </button>
+        <button class="secondary tool-action-btn tool-action-danger" data-tool-action="uninstall" data-tool-id="${tool.id}">
+          ${actionSvgs.uninstall}
+          <span>卸载</span>
+        </button>
+      ` : ''}
+    ` : '<button class="secondary tool-action-btn" disabled>安装</button>';
 
     return `
       <div class="tool-card ${isSoon ? 'tool-card-soon' : ''}" data-tool-id="${tool.id}">
@@ -99,35 +122,85 @@ function renderToolsPage() {
           </div>
         </div>
         <div class="tool-status">
-          <span class="tool-version ${!isInstalled ? 'tool-version-muted' : ''}"${tool.id === 'codex' ? ' id="toolCodexVersion"' : ''}>${isInstalled ? escapeHtml(version) : (isSoon ? '暂未支持' : '未安装')}</span>
-          ${isInstalled ? `<span class="tool-badge tool-badge-ok"${tool.id === 'codex' ? ' id="toolCodexBadge"' : ''}>已安装</span>` : ''}
+          <span class="tool-version ${!isInstalled ? 'tool-version-muted' : ''}">${isInstalled ? escapeHtml(version) : (isSoon ? '暂未支持' : '未安装')}</span>
+          ${isInstalled ? '<span class="tool-badge tool-badge-ok">已安装</span>' : ''}
         </div>
-        <div class="tool-actions">
-          ${tool.id === 'codex' ? `
-            <button id="updateCodexBtn" class="secondary tool-action-btn">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3" /></svg>
-              <span>${isInstalled ? '更新' : '安装'}</span>
-            </button>
-            ${isInstalled ? `
-              <button id="reinstallCodexBtn" class="secondary tool-action-btn">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6" /><path d="M2.5 8A10 10 0 1 1 4.34 16" /></svg>
-                <span>重装</span>
-              </button>
-              <button id="uninstallCodexBtn" class="secondary tool-action-btn tool-action-danger">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
-                <span>卸载</span>
-              </button>
-            ` : ''}
-          ` : `<button class="secondary tool-action-btn" disabled>安装</button>`}
-        </div>
+        <div class="tool-actions">${actionButtons}</div>
       </div>
     `;
   }).join('');
 
-  // Re-bind Codex action buttons after dynamic render
-  el('updateCodexBtn')?.addEventListener('click', updateCodex);
-  el('reinstallCodexBtn')?.addEventListener('click', reinstallCodex);
-  el('uninstallCodexBtn')?.addEventListener('click', uninstallCodex);
+  // Event delegation for all tool action buttons
+  grid.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tool-action]');
+    if (!btn) return;
+    const toolId = btn.dataset.toolId;
+    const action = btn.dataset.toolAction;
+    handleToolAction(toolId, action, btn);
+  });
+}
+
+// Generic tool action handler
+async function handleToolAction(toolId, action, btn) {
+  const toolActions = {
+    codex: {
+      update: updateCodex,
+      reinstall: reinstallCodex,
+      uninstall: uninstallCodex,
+    },
+    claudecode: {
+      update: updateClaudeCodeTool,
+      reinstall: reinstallClaudeCodeTool,
+      uninstall: uninstallClaudeCodeTool,
+    },
+  };
+
+  const handler = toolActions[toolId]?.[action];
+  if (handler) await handler(btn);
+}
+
+// Claude Code tool actions
+async function updateClaudeCodeTool() {
+  await runToolAction('claudecode', '/api/claudecode/update', '更新中...', 'Claude Code 已更新');
+}
+async function reinstallClaudeCodeTool(btn) {
+  const confirmed = await openUpdateDialog({
+    eyebrow: 'Claude Code',
+    title: '重装 Claude Code',
+    body: '<p>这会重新全局安装当前版本 Claude Code。</p>',
+    confirmText: '确认重装',
+    cancelText: '取消',
+  });
+  if (!confirmed) return;
+  await runToolAction('claudecode', '/api/claudecode/reinstall', '重装中...', 'Claude Code 重装完成');
+}
+async function uninstallClaudeCodeTool(btn) {
+  const confirmed = await openUpdateDialog({
+    eyebrow: 'Claude Code',
+    title: '卸载 Claude Code',
+    body: '<p>卸载后将无法直接从工具里启动 Claude Code。</p>',
+    confirmText: '确认卸载',
+    cancelText: '取消',
+    tone: 'danger',
+  });
+  if (!confirmed) return;
+  await runToolAction('claudecode', '/api/claudecode/uninstall', '卸载中...', 'Claude Code 已卸载');
+}
+
+async function runToolAction(toolId, apiPath, busyText, successText) {
+  try {
+    const json = await api(apiPath, { method: 'POST' });
+    if (!json.ok) {
+      flash(json.error || '操作失败', 'error');
+      return false;
+    }
+    if (successText) flash(successText, 'success');
+    loadTools(); // Refresh tool cards
+    return true;
+  } catch (e) {
+    flash(e.message || '操作失败', 'error');
+    return false;
+  }
 }
 
 function toolIconSvg(toolId) {
@@ -144,7 +217,6 @@ function updateToolSelector() {
     const toolId = tab.dataset.tool;
     const tool = state.tools.find(t => t.id === toolId);
     if (tool) {
-      // Update disabled state based on backend
       tab.disabled = !tool.supported;
       tab.classList.toggle('active', toolId === state.activeTool);
     }
@@ -156,10 +228,73 @@ function setActiveTool(toolId) {
   if (!tool || !tool.supported) return;
   state.activeTool = toolId;
   updateToolSelector();
-  // Update launch button text
+
+  // Update launch button
   const launchBtn = el('launchBtn');
   if (launchBtn) launchBtn.textContent = `启动 ${tool.name}`;
+
+  // Update quick setup context
+  const baseUrlField = el('baseUrlInput')?.closest('.field');
+  const apiKeyInput = el('apiKeyInput');
+  const detectBtn = el('detectBtn');
+  const detectField = detectBtn?.closest('.field');
+  const heroTitle = document.querySelector('.hero-title');
+  const heroSubtitle = document.querySelector('.hero-subtitle');
+  const sectionTitle = document.querySelector('.flow-section .section-title');
+  const modelSelect = el('modelSelect');
+  const shortcutsRow = document.querySelector('.quick-shortcuts');
+
+  if (toolId === 'claudecode') {
+    // Claude Code mode: hide Base URL, change API key label, prefill models
+    if (baseUrlField) baseUrlField.style.display = 'none';
+    if (detectField) detectField.style.display = 'none';
+    if (apiKeyInput) apiKeyInput.placeholder = 'ANTHROPIC_API_KEY (可选，通过 claude login 登录也可)';
+    if (heroTitle) heroTitle.textContent = 'Claude Code 配置';
+    if (heroSubtitle) heroSubtitle.textContent = '选择模型和可选的 API Key，Claude Code 也支持通过 `claude login` 直接登录。';
+    if (sectionTitle) sectionTitle.textContent = 'Claude Code 设置';
+    if (shortcutsRow) shortcutsRow.style.display = 'none';
+
+    // Populate model selector with Claude models
+    if (modelSelect) {
+      modelSelect.innerHTML = `
+        <option value="">默认模型</option>
+        <option value="sonnet">Sonnet (推荐)</option>
+        <option value="opus">Opus (高性能)</option>
+        <option value="haiku">Haiku (快速)</option>
+      `;
+    }
+
+    // Load Claude Code state and prefill
+    loadClaudeCodeQuickState();
+  } else {
+    // Codex mode: restore original UI
+    if (baseUrlField) baseUrlField.style.display = '';
+    if (detectField) detectField.style.display = '';
+    if (apiKeyInput) apiKeyInput.placeholder = 'sk-...';
+    if (heroTitle) heroTitle.textContent = '最快路径';
+    if (heroSubtitle) heroSubtitle.textContent = '用户通常只需要 `URL` 和 `API Key`，这里一步完成。';
+    if (sectionTitle) sectionTitle.textContent = '连接配置';
+    if (shortcutsRow) shortcutsRow.style.display = '';
+
+    // Restore model selector
+    if (modelSelect) {
+      modelSelect.innerHTML = '<option value="">先检测模型</option>';
+    }
+  }
 }
+
+async function loadClaudeCodeQuickState() {
+  try {
+    const json = await api('/api/claudecode/state');
+    if (json.ok && json.data) {
+      const modelSelect = el('modelSelect');
+      if (modelSelect && json.data.model) {
+        modelSelect.value = json.data.model;
+      }
+    }
+  } catch { /* silent */ }
+}
+
 
 const PAGE_META = {
   quick: { eyebrow: 'Quick Setup', title: '一键配置 Codex 工具', subtitle: '输入 URL 和 API Key，剩下交给 EasyAIConfig。' },
@@ -1320,6 +1455,9 @@ async function detectModels() {
 
 
 async function saveConfigOnly() {
+  if (state.activeTool === 'claudecode') {
+    return saveClaudeCodeConfigOnly();
+  }
   const payload = currentPayload();
   if (payload.baseUrl && payload.baseUrl !== el('baseUrlInput').value.trim()) el('baseUrlInput').value = payload.baseUrl;
   const canReuseStoredKey = canUseStoredApiKey({ baseUrl: payload.baseUrl, providerKey: payload.providerKey });
@@ -1337,6 +1475,26 @@ async function saveConfigOnly() {
   await loadState({ preserveForm: false });
   await loadBackups();
   loadAppUpdateState();
+}
+
+async function saveClaudeCodeConfigOnly() {
+  const model = el('modelSelect')?.value || '';
+  const apiKey = el('apiKeyInput')?.value?.trim() || '';
+
+  setBusy('saveBtn', true, '保存中...');
+  const payload = { model };
+  if (apiKey) {
+    payload.env = { ANTHROPIC_API_KEY: apiKey };
+  }
+
+  const saved = await api('/api/claudecode/config-save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  setBusy('saveBtn', false);
+  if (!saved.ok) return flash(saved.error || '保存失败', 'error');
+  flash('Claude Code 配置已保存', 'success');
 }
 
 async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已启动') {
@@ -1370,7 +1528,31 @@ async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已�
 }
 
 async function launchCodexOnly() {
+  if (state.activeTool === 'claudecode') {
+    return launchClaudeCodeOnly();
+  }
   await launchCodex('launchBtn', 'Codex 已启动');
+}
+
+async function launchClaudeCodeOnly() {
+  const launchBtn = el('launchBtn');
+  const orig = launchBtn?.textContent || '启动 Claude Code';
+  if (launchBtn) launchBtn.textContent = '启动中...';
+  try {
+    const json = await api('/api/claudecode/launch', {
+      method: 'POST',
+      body: { cwd: state.current?.launch?.cwd || '' },
+    });
+    if (json.ok) {
+      flash(json.data?.message || 'Claude Code 已启动', 'success');
+    } else {
+      flash(json.error || '启动失败', 'error');
+    }
+  } catch (e) {
+    flash(e.message || '启动失败', 'error');
+  } finally {
+    if (launchBtn) launchBtn.textContent = orig;
+  }
 }
 
 async function installCodex({ silent = false } = {}) {
