@@ -1028,6 +1028,31 @@ export async function loadClaudeCodeState() {
   const settingsPath = path.join(home, 'settings.json');
   const settings = await readJsonFile(settingsPath);
   const binary = findToolBinary('claudecode');
+  const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY);
+
+  // Read ~/.claude.json for login and model history
+  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  const claudeJson = await readJsonFile(claudeJsonPath);
+
+  // Login info
+  const oauth = claudeJson.oauthAccount;
+  const login = oauth
+    ? { loggedIn: true, method: 'oauth', email: oauth.emailAddress || '', orgName: oauth.orgName || '', plan: oauth.accountPlan || '' }
+    : hasApiKey
+      ? { loggedIn: true, method: 'api_key', email: '' }
+      : { loggedIn: false, method: '', email: '' };
+
+  // Extract used models from projects
+  const usedModels = new Set();
+  if (claudeJson.projects && typeof claudeJson.projects === 'object') {
+    for (const proj of Object.values(claudeJson.projects)) {
+      if (proj.lastModelUsage && typeof proj.lastModelUsage === 'object') {
+        for (const modelName of Object.keys(proj.lastModelUsage)) {
+          usedModels.add(modelName);
+        }
+      }
+    }
+  }
 
   return {
     toolId: 'claudecode',
@@ -1038,8 +1063,11 @@ export async function loadClaudeCodeState() {
     model: settings.model || '',
     alwaysThinkingEnabled: settings.alwaysThinkingEnabled || false,
     skipDangerousModePermissionPrompt: settings.skipDangerousModePermissionPrompt || false,
-    hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
+    hasApiKey,
     settingsJson: JSON.stringify(settings, null, 2),
+    settingsEnv: settings.env || {},
+    login,
+    usedModels: [...usedModels].sort(),
   };
 }
 

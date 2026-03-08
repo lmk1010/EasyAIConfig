@@ -248,26 +248,24 @@ function setActiveTool(toolId) {
   const shortcutsRow = document.querySelector('.quick-shortcuts');
 
   if (toolId === 'claudecode') {
-    // Claude Code mode: hide Base URL, change API key label, prefill models
+    // Claude Code mode
     if (baseUrlField) baseUrlField.style.display = 'none';
     if (detectField) detectField.style.display = 'none';
-    if (apiKeyInput) apiKeyInput.placeholder = 'ANTHROPIC_API_KEY (可选，通过 claude login 登录也可)';
+    if (apiKeyInput) {
+      apiKeyInput.placeholder = 'ANTHROPIC_API_KEY (可选，已登录则无需填写)';
+      apiKeyInput.value = '';
+    }
     if (heroTitle) heroTitle.textContent = 'Claude Code 配置';
-    if (heroSubtitle) heroSubtitle.textContent = '选择模型和可选的 API Key，Claude Code 也支持通过 `claude login` 直接登录。';
+    if (heroSubtitle) heroSubtitle.textContent = '配置模型与认证方式，支持 claude login 和 API Key。';
     if (sectionTitle) sectionTitle.textContent = 'Claude Code 设置';
     if (shortcutsRow) shortcutsRow.style.display = 'none';
 
-    // Populate model selector with Claude models
+    // Placeholder while loading
     if (modelSelect) {
-      modelSelect.innerHTML = `
-        <option value="">默认模型</option>
-        <option value="sonnet">Sonnet (推荐)</option>
-        <option value="opus">Opus (高性能)</option>
-        <option value="haiku">Haiku (快速)</option>
-      `;
+      modelSelect.innerHTML = '<option value="">加载中...</option>';
     }
 
-    // Load Claude Code state and prefill
+    // Load and prefill
     loadClaudeCodeQuickState();
   } else {
     // Codex mode: restore original UI
@@ -286,15 +284,76 @@ function setActiveTool(toolId) {
   }
 }
 
+// Claude Code model aliases → display names
+const CLAUDE_MODEL_ALIASES = [
+  { value: 'opus', label: 'Opus (最强推理)', group: '别名' },
+  { value: 'sonnet', label: 'Sonnet (均衡推荐)', group: '别名' },
+  { value: 'haiku', label: 'Haiku (快速轻量)', group: '别名' },
+];
+
 async function loadClaudeCodeQuickState() {
   try {
     const json = await api('/api/claudecode/state');
-    if (json.ok && json.data) {
-      const modelSelect = el('modelSelect');
-      if (modelSelect && json.data.model) {
-        modelSelect.value = json.data.model;
+    if (!json.ok || !json.data) return;
+    const data = json.data;
+    state.claudeCodeState = data;
+
+    const modelSelect = el('modelSelect');
+    if (modelSelect) {
+      // Build model options: aliases + used models from history
+      let html = '<option value="">默认 (由 Claude Code 决定)</option>';
+
+      // Alias group
+      html += '<optgroup label="模型别名 (推荐)">';
+      for (const m of CLAUDE_MODEL_ALIASES) {
+        const selected = data.model === m.value ? ' selected' : '';
+        html += `<option value="${m.value}"${selected}>${m.label}</option>`;
       }
+      html += '</optgroup>';
+
+      // Full model names from usage history
+      const usedModels = data.usedModels || [];
+      if (usedModels.length) {
+        html += '<optgroup label="历史使用模型">';
+        for (const modelName of usedModels) {
+          const selected = data.model === modelName ? ' selected' : '';
+          const displayName = modelName
+            .replace('claude-', '')
+            .replace(/-/g, ' ')
+            .replace(/(\d)/g, ' $1')
+            .trim();
+          html += `<option value="${escapeHtml(modelName)}"${selected}>${escapeHtml(modelName)}</option>`;
+        }
+        html += '</optgroup>';
+      }
+
+      modelSelect.innerHTML = html;
+      if (data.model) modelSelect.value = data.model;
     }
+
+    // Show login status in hero subtitle
+    const heroSubtitle = document.querySelector('.hero-subtitle');
+    if (heroSubtitle && data.login) {
+      const loginInfo = data.login;
+      let statusText = '配置模型与认证方式。';
+      if (loginInfo.loggedIn) {
+        if (loginInfo.method === 'oauth') {
+          statusText = `已登录：${loginInfo.email || ''}${loginInfo.orgName ? ` (${loginInfo.orgName})` : ''} · 配置模型与偏好。`;
+        } else {
+          statusText = '已通过 API Key 认证 · 配置模型与偏好。';
+        }
+      } else {
+        statusText = '未登录 · 运行 claude login 或填入 API Key 认证。';
+      }
+      heroSubtitle.textContent = statusText;
+    }
+
+    // Show binary version
+    const heroTitle = document.querySelector('.hero-title');
+    if (heroTitle && data.binary?.version) {
+      heroTitle.textContent = `Claude Code · ${data.binary.version}`;
+    }
+
   } catch { /* silent */ }
 }
 

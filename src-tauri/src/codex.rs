@@ -530,6 +530,51 @@ pub(crate) fn load_claudecode_state() -> Result<Value, String> {
   let has_api_key = std::env::var("ANTHROPIC_API_KEY").map(|v| !v.trim().is_empty()).unwrap_or(false);
   let settings_json = serde_json::to_string_pretty(&settings).unwrap_or_else(|_| "{}".to_string());
 
+  // Read env from settings
+  let settings_env = settings.get("env").cloned().unwrap_or(json!({}));
+
+  // Read ~/.claude.json for login status and used models
+  let claude_json_path = dirs::home_dir()
+    .ok_or("cannot find home")?
+    .join(".claude.json");
+  let claude_json = read_json_file(&claude_json_path).unwrap_or(json!({}));
+
+  // Login status
+  let oauth = claude_json.get("oauthAccount");
+  let login_info = if let Some(account) = oauth.and_then(Value::as_object) {
+    json!({
+      "loggedIn": true,
+      "method": "oauth",
+      "email": account.get("emailAddress").and_then(Value::as_str).unwrap_or(""),
+      "orgName": account.get("orgName").and_then(Value::as_str).unwrap_or(""),
+      "plan": account.get("accountPlan").and_then(Value::as_str).unwrap_or(""),
+    })
+  } else if has_api_key {
+    json!({
+      "loggedIn": true,
+      "method": "api_key",
+      "email": "",
+    })
+  } else {
+    json!({
+      "loggedIn": false,
+      "method": "",
+      "email": "",
+    })
+  };
+
+  // Extract all models from project usage history
+  let mut used_models = std::collections::BTreeSet::new();
+  if let Some(projects) = claude_json.get("projects").and_then(Value::as_object) {
+    for (_path, proj) in projects {
+      if let Some(model_usage) = proj.get("lastModelUsage").and_then(Value::as_object) {
+        for model_name in model_usage.keys() {
+          used_models.insert(model_name.clone());
+        }
+      }
+    }
+  }
+
   Ok(json!({
     "toolId": "claudecode",
     "configHome": home.to_string_lossy().to_string(),
@@ -541,6 +586,9 @@ pub(crate) fn load_claudecode_state() -> Result<Value, String> {
     "skipDangerousModePermissionPrompt": skip_dangerous,
     "hasApiKey": has_api_key,
     "settingsJson": settings_json,
+    "settingsEnv": settings_env,
+    "login": login_info,
+    "usedModels": used_models.into_iter().collect::<Vec<_>>(),
   }))
 }
 
