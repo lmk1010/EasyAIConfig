@@ -1305,6 +1305,17 @@ textarea::placeholder {
   padding-right: 4px;
 }
 
+.editor-section-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 4px;
+}
+
 .toggle-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

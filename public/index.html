@@ -43,12 +43,12 @@
                 <line x1="8" y1="4.5" x2="8" y2="8.5" />
               </svg></span><span>Provider</span>
           </button>
-          <button class="nav-item" data-page-target="system">
+          <button class="nav-item" data-page-target="configEditor">
             <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
                 stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
                 <rect x="2" y="2" width="9" height="9" rx="1.5" />
                 <circle cx="6.5" cy="6.5" r="1.8" />
-              </svg></span><span>系统与路径</span>
+              </svg></span><span>配置编辑</span>
           </button>
           <button class="nav-item" data-page-target="about">
             <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
@@ -103,7 +103,7 @@
             <p id="pageSubtitle">输入 URL 和 API Key，剩下交给 EasyAIConfig。</p>
           </div>
           <div class="workspace-actions" id="defaultActions">
-            <button id="openAdvancedBtn" class="secondary subtle-btn">系统设置</button>
+            <button id="openAdvancedBtn" class="secondary subtle-btn">配置编辑</button>
             <button id="openAboutBtn" class="secondary subtle-btn">关于</button>
           </div>
           <div class="workspace-actions hide" id="configEditorActions">
@@ -244,28 +244,16 @@
           </section>
 
           <section class="page-view" data-page="providers">
-            <div class="split-grid">
-              <section class="view-section">
-                <div class="section-head slim-head">
-                  <div>
-                    <div class="section-title">Provider 列表</div>
-                    <div class="section-copy">已发现配置、连通性与快速载入。</div>
-                  </div>
-                  <button id="refreshBtn" class="secondary tiny-btn">↻ 刷新</button>
+            <section class="view-section">
+              <div class="section-head slim-head">
+                <div>
+                  <div class="section-title">Provider 列表</div>
+                  <div class="section-copy">已发现配置、连通性与快速载入。</div>
                 </div>
-                <div id="savedProviders" class="provider-list desktop-provider-list"></div>
-              </section>
-
-              <section class="view-section">
-                <div class="section-head slim-head">
-                  <div>
-                    <div class="section-title">配置摘要</div>
-                    <div class="section-copy">当前将写入的 Provider / Model / Env 信息。</div>
-                  </div>
-                </div>
-                <div id="quickSummary" class="quick-summary desktop-summary"></div>
-              </section>
-            </div>
+                <button id="refreshBtn" class="secondary tiny-btn">↻ 刷新</button>
+              </div>
+              <div id="savedProviders" class="provider-list desktop-provider-list"></div>
+            </section>
 
             <section class="view-section backup-section">
               <div class="section-head slim-head">
@@ -279,82 +267,7 @@
             </section>
           </section>
 
-          <section class="page-view" data-page="system">
-            <div class="split-grid system-grid">
-              <section class="view-section">
-                <div class="section-head slim-head">
-                  <div>
-                    <div class="section-title">路径与执行</div>
-                    <div class="section-copy">针对工作区、权限和启动目录做快速调整。</div>
-                  </div>
-                  <button id="closeAdvancedBtn" class="secondary subtle-btn">返回主页</button>
-                </div>
 
-                <div class="dense-form-grid">
-                  <label class="field"><span>Provider Key</span><input id="providerKeyInput"
-                      placeholder="自动生成" /></label>
-                  <label class="field"><span>展示名称</span><input id="providerLabelInput" placeholder="自动生成" /></label>
-                  <label class="field"><span>Env Key</span><input id="envKeyInput" placeholder="自动生成" /></label>
-                  <label class="field"><span>模型覆盖</span><input id="manualModelInput" placeholder="可不填" /></label>
-                  <label class="field"><span>配置范围</span>
-                    <div class="select-wrap"><select id="scopeSelect">
-                        <option value="global">全局 ~/.codex</option>
-                        <option value="project">项目 .codex/config.toml</option>
-                      </select></div>
-                  </label>
-                  <label class="field"><span>项目路径</span><input id="projectPathInput"
-                      placeholder="/path/to/project" /></label>
-                  <label class="field"><span>审批策略</span>
-                    <div class="select-wrap"><select id="approvalPolicySelect">
-                        <option value="">保持当前 (suggest)</option>
-                        <option value="never">never</option>
-                        <option value="on-request">on-request</option>
-                        <option value="on-failure">on-failure</option>
-                        <option value="untrusted">untrusted</option>
-                      </select></div>
-                  </label>
-                  <label class="field"><span>沙箱模式</span>
-                    <div class="select-wrap"><select id="sandboxModeSelect">
-                        <option value="">保持当前 (read-only)</option>
-                        <option value="read-only">read-only</option>
-                        <option value="workspace-write">workspace-write</option>
-                        <option value="danger-full-access">danger-full-access</option>
-                      </select></div>
-                  </label>
-                  <label class="field"><span>推理强度</span>
-                    <div class="select-wrap"><select id="reasoningEffortSelect">
-                        <option value="">保持当前 (medium)</option>
-                        <option value="none">none</option>
-                        <option value="minimal">minimal</option>
-                        <option value="low">low</option>
-                        <option value="medium">medium</option>
-                        <option value="high">high</option>
-                        <option value="xhigh">xhigh</option>
-                      </select></div>
-                  </label>
-                  <label class="field"><span>启动目录</span><input id="launchCwdInput" placeholder="默认当前目录" /></label>
-                  <label class="field field-wide"><span>CODEX_HOME</span><input id="codexHomeInput"
-                      placeholder="默认 ~/.codex" /></label>
-                </div>
-              </section>
-
-              <aside class="view-section side-actions-section">
-                <div class="section-head slim-head">
-                  <div>
-                    <div class="section-title">系统动作</div>
-                    <div class="section-copy">安装、重装、卸载与精细化 TOML 编辑。</div>
-                  </div>
-                </div>
-
-                <div class="stack-actions">
-                  <button id="reinstallCodexBtn" class="secondary">重装 Codex</button>
-                  <button id="uninstallCodexBtn" class="secondary danger-btn">卸载 Codex</button>
-                  <button class="secondary" id="configEditorShortcutBtn" type="button">打开当前配置编辑</button>
-                </div>
-              </aside>
-            </div>
-            <div class="workspace-watermark">ELECTRON</div>
-          </section>
 
           <section class="page-view" data-page="about">
             <div class="about-hero">
@@ -546,6 +459,20 @@
                       </div>
                     </label>
                   </div>
+                  <div class="editor-section-title">路径 & 环境</div>
+                  <div class="editor-grid dense-grid">
+                    <label class="field"><span>配置范围</span>
+                      <div class="select-wrap"><select id="scopeSelect">
+                          <option value="global">全局 ~/.codex</option>
+                          <option value="project">项目 .codex/config.toml</option>
+                        </select></div>
+                    </label>
+                    <label class="field"><span>项目路径</span><input id="projectPathInput"
+                        placeholder="/path/to/project" /></label>
+                    <label class="field"><span>启动目录</span><input id="launchCwdInput" placeholder="默认当前目录" /></label>
+                    <label class="field field-wide"><span>CODEX_HOME</span><input id="codexHomeInput"
+                        placeholder="默认 ~/.codex" /></label>
+                  </div>
                   <div class="toggle-grid">
                     <label class="toggle-item"><input id="cfgHideReasoningCheck"
                         type="checkbox" /><span>隐藏推理过程</span></label>
@@ -575,6 +502,13 @@
                       </div>
                     </div>
                     <textarea id="cfgRawTomlTextarea" class="raw-config" rows="26"></textarea>
+                  </div>
+                  <div class="line-panel" style="margin-top:12px">
+                    <div class="subline"><span class="eyebrow">系统动作</span></div>
+                    <div class="stack-actions" style="margin-top:10px">
+                      <button id="reinstallCodexBtn" class="secondary">重装 Codex</button>
+                      <button id="uninstallCodexBtn" class="secondary danger-btn">卸载 Codex</button>
+                    </div>
                   </div>
                 </aside>
               </div>

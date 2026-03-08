@@ -66,9 +66,8 @@ initTheme();
 const PAGE_META = {
   quick: { eyebrow: 'Quick Setup', title: '一键配置 Codex 工具', subtitle: '输入 URL 和 API Key，剩下交给 EasyAIConfig。' },
   providers: { eyebrow: 'Providers', title: 'Provider 与备份', subtitle: '集中查看已发现配置、检测状态与历史备份。' },
-  system: { eyebrow: 'System', title: '系统与路径', subtitle: '处理工作区、权限、路径和 Codex 运行设置。' },
   about: { eyebrow: 'About', title: '关于 EasyAIConfig', subtitle: '查看桌面版本、更新源与当前运行信息。' },
-  configEditor: { eyebrow: 'Current Config', title: '当前配置编辑', subtitle: '把常用 config.toml 配置转成高密度表单，右侧可看原始 TOML。' },
+  configEditor: { eyebrow: 'Current Config', title: '配置编辑', subtitle: '把常用 config.toml 配置转成高密度表单，右侧可看原始 TOML。' },
 };
 
 function parseApiRequest(url, options = {}) {
@@ -163,7 +162,7 @@ function setApiKeyFieldState(provider) {
 
 function currentApiKeyContext() {
   const baseUrl = normalizeBaseUrl(el('baseUrlInput').value);
-  const providerKey = el('providerKeyInput').value.trim() || inferProviderKey(baseUrl);
+  const providerKey = inferProviderKey(baseUrl);
   return { baseUrl, providerKey };
 }
 
@@ -742,31 +741,22 @@ function pickRecommendedModel(models = [], fallback = '') {
 
 function currentPayload() {
   const baseUrl = normalizeBaseUrl(el('baseUrlInput').value);
-  const providerKey = el('providerKeyInput').value.trim() || inferProviderKey(baseUrl);
+  const providerKey = inferProviderKey(baseUrl);
   return {
     scope: el('scopeSelect').value,
     projectPath: el('projectPathInput').value.trim(),
     codexHome: el('codexHomeInput').value.trim(),
     providerKey,
-    providerLabel: el('providerLabelInput').value.trim() || inferProviderLabel(baseUrl),
+    providerLabel: inferProviderLabel(baseUrl),
     baseUrl,
     apiKey: getApiKeyForSubmit({ baseUrl, providerKey }),
-    envKey: el('envKeyInput').value.trim() || inferEnvKey(providerKey),
-    model: el('manualModelInput').value.trim() || el('modelSelect').value,
-    approvalPolicy: el('approvalPolicySelect').value,
-    sandboxMode: el('sandboxModeSelect').value,
-    reasoningEffort: el('reasoningEffortSelect').value,
+    envKey: inferEnvKey(providerKey),
+    model: el('modelSelect').value,
   };
 }
 
 function applyDerivedMeta(force = false) {
-  if (state.metaDirty && !force) return renderQuickSummary();
-  const baseUrl = normalizeBaseUrl(el('baseUrlInput').value);
-  const providerKey = inferProviderKey(baseUrl);
-  el('providerKeyInput').value = providerKey;
-  el('providerLabelInput').value = inferProviderLabel(baseUrl);
-  el('envKeyInput').value = inferEnvKey(providerKey);
-  renderQuickSummary();
+  // No-op: auto-inference fields removed from UI
 }
 
 function renderAppUpdateStatus() {
@@ -827,13 +817,7 @@ function renderStatus() {
 }
 
 function renderQuickSummary() {
-  const payload = currentPayload();
-  el('quickSummary').innerHTML = [
-    ['Provider', payload.providerKey || 'custom'],
-    ['Env Key', payload.envKey || '-'],
-    ['Model', payload.model || state.current?.summary?.model || '待检测'],
-    ['当前', state.current?.summary?.modelProvider || '-'],
-  ].map(([label, value]) => `<div class="summary-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+  // No-op: summary panel removed from Provider page
 }
 
 function providerHealthLabel(provider) {
@@ -939,7 +923,7 @@ function positionProviderDropdown() {
 }
 
 function renderModelOptions(models = state.detected?.models || [], preferred = '') {
-  const selected = preferred || el('manualModelInput').value.trim() || state.current?.summary?.model || '';
+  const selected = preferred || el('modelSelect').value || state.current?.summary?.model || '';
   const unique = [...new Set([selected, state.detected?.recommendedModel, ...models].filter(Boolean))];
   el('modelSelect').innerHTML = unique.length
     ? unique.map((model) => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(model)}</option>`).join('')
@@ -974,24 +958,17 @@ function fillAdvancedFromState() {
   el('scopeSelect').value = state.current?.scope || 'global';
   el('projectPathInput').value = state.current?.projectPath || '';
   el('codexHomeInput').value = state.current?.codexHome || '';
-  el('approvalPolicySelect').value = state.current?.summary?.approvalPolicy || '';
-  el('sandboxModeSelect').value = state.current?.summary?.sandboxMode || '';
-  el('reasoningEffortSelect').value = state.current?.summary?.reasoningEffort || '';
   if (!el('launchCwdInput').value) el('launchCwdInput').value = state.current?.launch?.cwd || '';
 }
 
 function fillFromProvider(provider) {
   if (!provider) return;
   el('baseUrlInput').value = provider.baseUrl || '';
-  el('providerKeyInput').value = provider.key || '';
-  el('providerLabelInput').value = provider.name || '';
-  el('envKeyInput').value = provider.resolvedKeyName || provider.envKey || '';
   setApiKeyFieldState(provider);
-  el('manualModelInput').value = provider.isActive ? (state.current?.summary?.model || '') : '';
   state.detected = null;
   state.metaDirty = true;
-  renderModelOptions([], el('manualModelInput').value);
-  renderQuickSummary();
+  const model = provider.isActive ? (state.current?.summary?.model || '') : '';
+  renderModelOptions([], model);
   renderCurrentConfig();
   el('detectionMeta').textContent = provider.hasApiKey
     ? `已载入 ${provider.name || provider.key}，Key 已保存，可点击右侧眼睛查看`
@@ -1005,10 +982,6 @@ async function loadState({ preserveForm = true } = {}) {
     apiKeyType: el('apiKeyInput').type,
     apiKeyPlaceholder: el('apiKeyInput').placeholder,
     apiKeyField: { ...state.apiKeyField },
-    providerKey: el('providerKeyInput').value,
-    providerLabel: el('providerLabelInput').value,
-    envKey: el('envKeyInput').value,
-    manualModel: el('manualModelInput').value,
     selectedModel: el('modelSelect').value,
     metaDirty: state.metaDirty,
   } : null;
@@ -1024,22 +997,16 @@ async function loadState({ preserveForm = true } = {}) {
   fillAdvancedFromState();
   renderStatus();
   renderProviders();
-  renderQuickSummary();
   renderCurrentConfig();
-  if (snapshot && (snapshot.baseUrl || snapshot.apiKey || snapshot.providerKey || snapshot.apiKeyField?.hasStored)) {
+  if (snapshot && (snapshot.baseUrl || snapshot.apiKey || snapshot.apiKeyField?.hasStored)) {
     el('baseUrlInput').value = snapshot.baseUrl;
     el('apiKeyInput').value = snapshot.apiKey;
     el('apiKeyInput').type = snapshot.apiKeyType || 'password';
     el('apiKeyInput').placeholder = snapshot.apiKeyPlaceholder || 'sk-...';
     state.apiKeyField = snapshot.apiKeyField || { ...state.apiKeyField };
     syncApiKeyToggle();
-    el('providerKeyInput').value = snapshot.providerKey;
-    el('providerLabelInput').value = snapshot.providerLabel;
-    el('envKeyInput').value = snapshot.envKey;
-    el('manualModelInput').value = snapshot.manualModel;
     state.metaDirty = snapshot.metaDirty;
-    renderModelOptions([], snapshot.selectedModel || snapshot.manualModel);
-    renderQuickSummary();
+    renderModelOptions([], snapshot.selectedModel);
     renderCurrentConfig();
     refreshProviderHealth();
     return;
@@ -1148,7 +1115,7 @@ async function detectModels() {
   }
   state.detected = json.data;
   state.detected.recommendedModel = pickRecommendedModel(json.data.models, json.data.recommendedModel);
-  if (!el('manualModelInput').value && state.detected.recommendedModel) el('manualModelInput').value = state.detected.recommendedModel;
+  // Model detection result — update selection via renderModelOptions
   renderModelOptions(json.data.models, state.detected.recommendedModel);
   renderQuickSummary();
   el('detectionMeta').textContent = `检测成功 · ${json.data.models.length} 个模型 · 推荐 ${state.detected.recommendedModel || '-'}`;
@@ -1712,7 +1679,7 @@ async function wizardSaveAndComplete() {
     el('apiKeyInput').type = 'password';
     el('apiKeyInput').placeholder = '已保存，刷新后显示掩码';
     syncApiKeyToggle();
-    if (model) el('manualModelInput').value = model;
+    if (model) renderModelOptions([], model);
     state.metaDirty = false;
     applyDerivedMeta(true);
 
@@ -1748,43 +1715,35 @@ function bindEvents() {
   el('refreshBtn').addEventListener('click', () => loadState({ preserveForm: true }));
   el('reloadBackupsBtn').addEventListener('click', loadBackups);
   el('modelSelect').addEventListener('change', (event) => {
-    el('manualModelInput').value = event.target.value;
     renderModelOptions(state.detected?.models || [], event.target.value);
-    renderQuickSummary();
   });
   el('modelChips').addEventListener('click', (event) => {
     const button = event.target.closest('[data-model]');
     if (!button) return;
-    el('manualModelInput').value = button.dataset.model;
     renderModelOptions(state.detected?.models || [], button.dataset.model);
-    renderQuickSummary();
   });
-  ['providerKeyInput', 'providerLabelInput', 'envKeyInput'].forEach((id) => {
-    el(id).addEventListener('input', () => {
-      state.metaDirty = true;
-      renderQuickSummary();
-    });
-  });
-  ['manualModelInput', 'projectPathInput', 'codexHomeInput', 'launchCwdInput'].forEach((id) => el(id).addEventListener('input', renderQuickSummary));
-  ['scopeSelect', 'approvalPolicySelect', 'sandboxModeSelect', 'reasoningEffortSelect'].forEach((id) => el(id).addEventListener('change', renderQuickSummary));
   el('savedProviders').addEventListener('click', (event) => {
     const button = event.target.closest('[data-load-provider]');
     if (button) fillFromProvider((state.current?.providers || []).find((item) => item.key === button.dataset.loadProvider));
   });
   document.querySelectorAll('[data-page-target]').forEach((node) => {
     if (node.dataset.pageTarget === '__wizard__') return; // handled separately
-    node.addEventListener('click', () => setPage(node.dataset.pageTarget));
+    node.addEventListener('click', () => {
+      if (node.dataset.pageTarget === 'configEditor') {
+        setConfigEditorOpen(true);
+        return;
+      }
+      setPage(node.dataset.pageTarget);
+    });
   });
-  el('openAdvancedBtn').addEventListener('click', () => setPage('system'));
+  el('openAdvancedBtn').addEventListener('click', () => setConfigEditorOpen(true));
   el('openAboutBtn').addEventListener('click', async () => {
     if (!state.appUpdate) await loadAppUpdateState();
     populateAboutPanel();
     setPage('about');
   });
-  el('closeAdvancedBtn').addEventListener('click', () => setPage('quick'));
   el('themeToggleBtn').addEventListener('click', toggleTheme);
   el('configEditorBtn').addEventListener('click', () => setConfigEditorOpen(true));
-  if (el('configEditorShortcutBtn')) el('configEditorShortcutBtn').addEventListener('click', () => setConfigEditorOpen(true));
   el('closeConfigEditorBtn').addEventListener('click', () => setConfigEditorOpen(false));
   el('saveConfigEditorBtn').addEventListener('click', saveConfigEditor);
   el('applyConfigEditorBtn').addEventListener('click', applyConfigEditor);
@@ -1864,7 +1823,7 @@ function bindEvents() {
     }
     populateAboutPanel();
   });
-  el('aboutOpenAdvancedBtn').addEventListener('click', () => setPage('system'));
+  el('aboutOpenAdvancedBtn').addEventListener('click', () => setConfigEditorOpen(true));
   el('closeUpdateDialogBtn').addEventListener('click', () => closeUpdateDialog(false));
   el('updateDialogCancelBtn').addEventListener('click', () => closeUpdateDialog(false));
   el('updateDialogConfirmBtn').addEventListener('click', () => closeUpdateDialog(true));
