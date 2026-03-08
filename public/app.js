@@ -1421,6 +1421,9 @@ function positionProviderDropdown() {
 }
 
 function renderModelOptions(models = state.detected?.models || [], preferred = '') {
+  // Skip when Claude Code is active — its model list is managed separately
+  if (state.activeTool === 'claudecode') return;
+
   const selected = preferred || el('modelSelect').value || state.current?.summary?.model || '';
   const unique = [...new Set([selected, state.detected?.recommendedModel, ...models].filter(Boolean))];
   el('modelSelect').innerHTML = unique.length
@@ -1461,6 +1464,7 @@ function fillAdvancedFromState() {
 
 function fillFromProvider(provider) {
   if (!provider) return;
+  if (state.activeTool === 'claudecode') return; // Codex-only
   el('baseUrlInput').value = provider.baseUrl || '';
   setApiKeyFieldState(provider);
   state.detected = null;
@@ -1496,6 +1500,13 @@ async function loadState({ preserveForm = true } = {}) {
   renderStatus();
   renderProviders();
   renderCurrentConfig();
+
+  // Skip Codex form restoration when Claude Code is active
+  if (state.activeTool === 'claudecode') {
+    refreshProviderHealth();
+    return;
+  }
+
   if (snapshot && (snapshot.baseUrl || snapshot.apiKey || snapshot.apiKeyField?.hasStored)) {
     el('baseUrlInput').value = snapshot.baseUrl;
     el('apiKeyInput').value = snapshot.apiKey;
