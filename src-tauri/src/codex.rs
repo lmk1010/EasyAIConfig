@@ -501,6 +501,55 @@ pub(crate) fn list_tools() -> Result<Value, String> {
 
 /* ═══════════════  Claude Code  ═══════════════ */
 
+/// Read Anthropic env vars from the user's login shell.
+/// Tauri .app bundles don't inherit shell exports, so we must read them explicitly.
+fn read_shell_anthropic_env() -> std::collections::HashMap<String, String> {
+  let mut result = std::collections::HashMap::new();
+
+  if cfg!(target_os = "windows") {
+    // On Windows, env vars are usually inherited
+    for var in &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"] {
+      if let Ok(val) = std::env::var(var) {
+        if !val.trim().is_empty() {
+          result.insert(var.to_string(), val);
+        }
+      }
+    }
+    return result;
+  }
+
+  let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+  // Use a separator to split multiple values from one shell invocation
+  let script = r#"echo "___AK=${ANTHROPIC_API_KEY}___AT=${ANTHROPIC_AUTH_TOKEN}___BU=${ANTHROPIC_BASE_URL}___""#;
+  let output = create_command(&shell)
+    .args(["-lc", script])
+    .output()
+    .ok()
+    .filter(|o| o.status.success())
+    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    .unwrap_or_default();
+
+  fn extract(output: &str, prefix: &str, suffix: &str) -> String {
+    output
+      .find(prefix)
+      .and_then(|start| {
+        let val_start = start + prefix.len();
+        output[val_start..].find(suffix).map(|end| output[val_start..val_start + end].to_string())
+      })
+      .unwrap_or_default()
+  }
+
+  let ak = extract(&output, "___AK=", "___AT=");
+  let at = extract(&output, "___AT=", "___BU=");
+  let bu = extract(&output, "___BU=", "___");
+
+  if !ak.is_empty() { result.insert("ANTHROPIC_API_KEY".to_string(), ak); }
+  if !at.is_empty() { result.insert("ANTHROPIC_AUTH_TOKEN".to_string(), at); }
+  if !bu.is_empty() { result.insert("ANTHROPIC_BASE_URL".to_string(), bu); }
+
+  result
+}
+
 fn read_json_file(path: &Path) -> Result<Value, String> {
   let content = read_text(path)?;
   let trimmed = content.trim();
@@ -527,19 +576,84 @@ pub(crate) fn load_claudecode_state() -> Result<Value, String> {
   let model = settings.get("model").and_then(Value::as_str).unwrap_or("").to_string();
   let always_thinking = settings.get("alwaysThinkingEnabled").and_then(Value::as_bool).unwrap_or(false);
   let skip_dangerous = settings.get("skipDangerousModePermissionPrompt").and_then(Value::as_bool).unwrap_or(false);
-  let has_api_key = std::env::var("ANTHROPIC_API_KEY").map(|v| !v.trim().is_empty()).unwrap_or(false);
   let settings_json = serde_json::to_string_pretty(&settings).unwrap_or_else(|_| "{}".to_string());
 
   // Read env from settings
   let settings_env = settings.get("env").cloned().unwrap_or(json!({}));
 
-  // Read ~/.claude.json for login status and used models
+  // ── Read Anthropic env vars from all sources ──
+  // Tauri .app doesn't inherit login shell exports, so we read from shell too
+  let shell_env = read_shell_anthropic_env();
+
+  fn pick_env(var: &str, settings_env: &Value, shell_env: &std::collections::HashMap<String, String>) -> (String, String) {
+    // Priority: settings.json > shell profile > process env
+    let from_settings = settings_env.get(var).and_then(Value::as_str).unwrap_or("").to_string();
+    if !from_settings.is_empty() {
+      return ("settings.json".to_string(), from_settings);
+    }
+    let from_shell = shell_env.get(var).cloned().unwrap_or_default();
+    if !from_shell.is_empty() {
+      return ("shell".to_string(), from_shell);
+    }
+    let from_env = std::env::var(var).unwrap_or_default();
+    if !from_env.trim().is_empty() {
+      return ("env".to_string(), from_env);
+    }
+    (String::new(), String::new())
+  }
+
+  let (api_key_source, api_key_value) = pick_env("ANTHROPIC_API_KEY", &settings_env, &shell_env);
+  let (auth_token_source, auth_token_value) = pick_env("ANTHROPIC_AUTH_TOKEN", &settings_env, &shell_env);
+  let (base_url_source, base_url_value) = pick_env("ANTHROPIC_BASE_URL", &settings_env, &shell_env);
+
+  // Effective credential: AUTH_TOKEN takes priority (it's used for proxy/oauth flows)
+  let (effective_key_source, effective_key_value) = if !auth_token_value.is_empty() {
+    (&auth_token_source, &auth_token_value)
+  } else if !api_key_value.is_empty() {
+    (&api_key_source, &api_key_value)
+  } else {
+    (&api_key_source, &api_key_value) // both empty
+  };
+
+  let has_api_key = !effective_key_value.is_empty();
+
+  fn mask_key(key: &str) -> String {
+    if key.len() > 12 {
+      format!("{}...{}", &key[..8], &key[key.len()-4..])
+    } else if !key.is_empty() {
+      format!("{}...", &key[..key.len().min(4)])
+    } else {
+      String::new()
+    }
+  }
+
+  let masked_api_key = mask_key(effective_key_value);
+  let is_official = base_url_value.is_empty()
+    || base_url_value.contains("anthropic.com")
+    || base_url_value.contains("api.anthropic.com");
+
+  // ── Check macOS Keychain / CLI login status ──
+  let has_keychain_auth = if cfg!(target_os = "macos") {
+    create_command("security")
+      .args(["find-generic-password", "-s", "Claude Safe Storage", "-a", "Claude Key"])
+      .output()
+      .map(|o| o.status.success())
+      .unwrap_or(false)
+  } else {
+    false
+  };
+
+  // ── Read ~/.claude.json for login status and used models ──
   let claude_json_path = dirs::home_dir()
     .ok_or("cannot find home")?
     .join(".claude.json");
   let claude_json = read_json_file(&claude_json_path).unwrap_or(json!({}));
 
-  // Login status
+  let has_completed_onboarding = claude_json.get("hasCompletedOnboarding")
+    .and_then(Value::as_bool)
+    .unwrap_or(false);
+
+  // Login status — comprehensive
   let oauth = claude_json.get("oauthAccount");
   let login_info = if let Some(account) = oauth.and_then(Value::as_object) {
     json!({
@@ -549,11 +663,18 @@ pub(crate) fn load_claudecode_state() -> Result<Value, String> {
       "orgName": account.get("orgName").and_then(Value::as_str).unwrap_or(""),
       "plan": account.get("accountPlan").and_then(Value::as_str).unwrap_or(""),
     })
+  } else if has_keychain_auth && has_completed_onboarding {
+    json!({
+      "loggedIn": true,
+      "method": "keychain",
+      "email": "",
+    })
   } else if has_api_key {
     json!({
       "loggedIn": true,
       "method": "api_key",
       "email": "",
+      "apiKeySource": api_key_source,
     })
   } else {
     json!({
@@ -585,6 +706,15 @@ pub(crate) fn load_claudecode_state() -> Result<Value, String> {
     "alwaysThinkingEnabled": always_thinking,
     "skipDangerousModePermissionPrompt": skip_dangerous,
     "hasApiKey": has_api_key,
+    "maskedApiKey": masked_api_key,
+    "apiKeySource": effective_key_source,
+    "hasKeychainAuth": has_keychain_auth,
+    "isOfficial": is_official,
+    "envVars": {
+      "ANTHROPIC_API_KEY": { "source": api_key_source, "masked": mask_key(&api_key_value), "set": !api_key_value.is_empty() },
+      "ANTHROPIC_AUTH_TOKEN": { "source": auth_token_source, "masked": mask_key(&auth_token_value), "set": !auth_token_value.is_empty() },
+      "ANTHROPIC_BASE_URL": { "source": base_url_source, "value": base_url_value, "set": !base_url_value.is_empty() },
+    },
     "settingsJson": settings_json,
     "settingsEnv": settings_env,
     "login": login_info,

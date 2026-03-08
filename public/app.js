@@ -305,12 +305,23 @@ function setActiveTool(toolId) {
 
   if (toolId === 'claudecode') {
     // ── Claude Code mode ──
-    if (baseUrlField) baseUrlField.style.display = 'none';
+    // Show Base URL but as display-only for ANTHROPIC_BASE_URL
+    const baseUrlInput = el('baseUrlInput');
+    if (baseUrlInput) {
+      baseUrlInput.value = '';
+      baseUrlInput.placeholder = 'ANTHROPIC_BASE_URL (留空则使用官方)';
+    }
     if (detectField) detectField.style.display = 'none';
     if (heroTitle) heroTitle.textContent = 'Claude Code 配置';
     if (heroSubtitle) heroSubtitle.textContent = '配置模型与认证方式，支持 claude login 和 API Key。';
     if (sectionTitle) sectionTitle.textContent = 'Claude Code 设置';
     if (shortcutsRow) shortcutsRow.style.display = 'none';
+
+    // Clear Codex-specific UI
+    const detectionMeta = el('detectionMeta');
+    if (detectionMeta) detectionMeta.textContent = '';
+    const modelChips = el('modelChips');
+    if (modelChips) modelChips.classList.add('hide');
 
     // Clear Codex values from inputs
     if (apiKeyInput) {
@@ -391,11 +402,6 @@ async function loadClaudeCodeQuickState() {
         html += '<optgroup label="历史使用模型">';
         for (const modelName of usedModels) {
           const selected = data.model === modelName ? ' selected' : '';
-          const displayName = modelName
-            .replace('claude-', '')
-            .replace(/-/g, ' ')
-            .replace(/(\d)/g, ' $1')
-            .trim();
           html += `<option value="${escapeHtml(modelName)}"${selected}>${escapeHtml(modelName)}</option>`;
         }
         html += '</optgroup>';
@@ -405,21 +411,63 @@ async function loadClaudeCodeQuickState() {
       if (data.model) modelSelect.value = data.model;
     }
 
-    // Show login status in hero subtitle
+    // ── Show Base URL ──
+    const ev = data.envVars || {};
+    const baseUrlInput = el('baseUrlInput');
+    if (baseUrlInput && ev.ANTHROPIC_BASE_URL?.set) {
+      baseUrlInput.value = ev.ANTHROPIC_BASE_URL.value;
+    }
+
+    // ── Show API Key status ──
+    const apiKeyInput = el('apiKeyInput');
+    if (apiKeyInput) {
+      if (data.maskedApiKey) {
+        const srcLabel = { shell: 'Shell 环境变量', 'settings.json': 'settings.json', env: '进程环境变量' }[data.apiKeySource] || '';
+        apiKeyInput.placeholder = `${data.maskedApiKey}${srcLabel ? ` (来自 ${srcLabel})` : ''}`;
+        apiKeyInput.value = '';
+      } else if (data.hasKeychainAuth) {
+        apiKeyInput.placeholder = '已通过 claude login 认证 (Keychain)';
+        apiKeyInput.value = '';
+      } else {
+        apiKeyInput.placeholder = 'ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN';
+      }
+    }
+
+    // ── Show auth & env status in hero subtitle ──
     const heroSubtitle = document.querySelector('.hero-subtitle');
-    if (heroSubtitle && data.login) {
-      const loginInfo = data.login;
-      let statusText = '配置模型与认证方式。';
+    if (heroSubtitle) {
+      const loginInfo = data.login || {};
+      const ev = data.envVars || {};
+      const parts = [];
+
+      // Auth method
       if (loginInfo.loggedIn) {
         if (loginInfo.method === 'oauth') {
-          statusText = `已登录：${loginInfo.email || ''}${loginInfo.orgName ? ` (${loginInfo.orgName})` : ''} · 配置模型与偏好。`;
-        } else {
-          statusText = '已通过 API Key 认证 · 配置模型与偏好。';
+          parts.push(`🔐 OAuth：${loginInfo.email || ''}${loginInfo.orgName ? ` (${loginInfo.orgName})` : ''}`);
+        } else if (loginInfo.method === 'keychain') {
+          parts.push('🔑 Keychain 认证');
+        } else if (loginInfo.method === 'api_key') {
+          parts.push('🔑 Token 认证');
         }
       } else {
-        statusText = '未登录 · 运行 claude login 或填入 API Key 认证。';
+        parts.push('⚠️ 未认证');
       }
-      heroSubtitle.textContent = statusText;
+
+      // Base URL — official vs proxy
+      if (ev.ANTHROPIC_BASE_URL?.set) {
+        const url = ev.ANTHROPIC_BASE_URL.value;
+        const isOfficial = data.isOfficial;
+        parts.push(isOfficial ? `📡 官方 API` : `📡 代理：${url}`);
+      }
+
+      // Token info
+      if (ev.ANTHROPIC_AUTH_TOKEN?.set) {
+        parts.push(`Token: ${ev.ANTHROPIC_AUTH_TOKEN.masked}`);
+      } else if (ev.ANTHROPIC_API_KEY?.set) {
+        parts.push(`Key: ${ev.ANTHROPIC_API_KEY.masked}`);
+      }
+
+      heroSubtitle.textContent = parts.join(' · ');
     }
 
     // Show binary version
