@@ -130,14 +130,17 @@ function renderToolsPage() {
     `;
   }).join('');
 
-  // Event delegation for all tool action buttons
-  grid.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-tool-action]');
-    if (!btn) return;
-    const toolId = btn.dataset.toolId;
-    const action = btn.dataset.toolAction;
-    handleToolAction(toolId, action, btn);
-  });
+  // Event delegation - only bind once
+  if (!grid._toolsBound) {
+    grid._toolsBound = true;
+    grid.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-tool-action]');
+      if (!btn) return;
+      const toolId = btn.dataset.toolId;
+      const action = btn.dataset.toolAction;
+      handleToolAction(toolId, action, btn);
+    });
+  }
 }
 
 // Generic tool action handler
