@@ -2379,6 +2379,21 @@
           placeholder="搜索配置方案...如 模型、推理、沙箱、上下文" autocomplete="off" />
         <kbd class="config-store-kbd">ESC</kbd>
       </div>
+      <div class="config-store-smart" id="configStoreSmart">
+        <div class="config-store-smart-head">
+          <span>智能联想</span>
+          <span class="config-store-smart-hint">不用只输关键词，场景句子也能搜</span>
+        </div>
+        <div class="config-store-suggestions" id="configStoreSuggestions"></div>
+        <div class="config-store-assistant">
+          <div class="config-store-assistant-head">问答助手（规则引擎）</div>
+          <div class="config-store-assistant-row">
+            <input id="configStoreAssistantInput" class="config-store-assistant-input" placeholder="比如：我想让 Discord 只在被 @ 时回复" autocomplete="off" />
+            <button type="button" id="configStoreAssistantRunBtn">解析</button>
+          </div>
+          <div id="configStoreAssistantResult" class="config-store-assistant-result">输入一句你的目标，我会推荐场景并告诉你下一步要填什么。</div>
+        </div>
+      </div>
       <div class="config-store-categories" id="configStoreCategories">
         <button class="config-store-cat-btn active" data-store-cat="all">全部</button>
       </div>
@@ -2392,6 +2407,56 @@
           <line x1="16.5" y1="16.5" x2="21" y2="21" />
         </svg>
         <span>没有匹配的配置方案</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="configStoreGuideModal" class="config-store-guide-modal hide">
+    <div class="config-store-guide-backdrop"></div>
+    <div class="config-store-guide-panel">
+      <div class="config-store-guide-head">
+        <div>
+          <div class="eyebrow">CONFIG GUIDE</div>
+          <h3 id="configStoreGuideTitle">配置引导</h3>
+        </div>
+        <button type="button" id="configStoreGuideCloseBtn" class="topbar-icon-btn" title="关闭">×</button>
+      </div>
+      <div class="config-store-guide-body">
+        <div class="config-store-guide-overview">
+          <div id="configStoreGuideDesc" class="config-store-guide-desc"></div>
+          <div class="config-store-guide-grid">
+            <div class="config-store-guide-card">
+              <div class="config-store-guide-card-title">准备事项</div>
+              <ul id="configStoreGuidePrep" class="config-store-guide-list"></ul>
+            </div>
+            <div class="config-store-guide-card">
+              <div class="config-store-guide-card-title">配置步骤</div>
+              <ol id="configStoreGuideSteps" class="config-store-guide-list ordered"></ol>
+            </div>
+            <div class="config-store-guide-card">
+              <div class="config-store-guide-card-title">如何验证</div>
+              <ul id="configStoreGuideVerify" class="config-store-guide-list"></ul>
+            </div>
+            <div class="config-store-guide-card">
+              <div class="config-store-guide-card-title">相关推荐</div>
+              <div id="configStoreGuideRelated" class="config-store-guide-related"></div>
+            </div>
+          </div>
+        </div>
+        <div class="config-store-guide-config">
+          <div class="config-store-guide-card">
+            <div class="config-store-guide-card-title">引导配置</div>
+            <div id="configStoreGuideFields" class="config-store-guide-fields"></div>
+          </div>
+          <div class="config-store-guide-card">
+            <div class="config-store-guide-card-title">变更预览</div>
+            <pre id="configStoreGuideDiff" class="config-store-guide-diff"></pre>
+          </div>
+        </div>
+      </div>
+      <div class="config-store-guide-foot">
+        <button type="button" id="configStoreGuideCancelBtn" class="secondary">取消</button>
+        <button type="button" id="configStoreGuideApplyBtn">应用配置</button>
       </div>
     </div>
   </div>

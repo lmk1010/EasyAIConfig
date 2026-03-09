@@ -4607,6 +4607,207 @@ select {
   flex-shrink: 0;
 }
 
+.config-store-smart {
+  display: grid;
+  gap: 10px;
+  margin: 12px 20px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.config-store-smart-head,
+.config-store-assistant-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.config-store-smart-hint {
+  font-size: 0.65rem;
+  color: rgba(232, 238, 248, 0.4);
+  font-weight: 500;
+}
+
+.config-store-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.config-store-suggestion-chip {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(232, 238, 248, 0.72);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.config-store-suggestion-chip:hover {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.22);
+}
+
+.config-store-assistant {
+  display: grid;
+  gap: 8px;
+}
+
+.config-store-assistant-row {
+  display: flex;
+  gap: 8px;
+}
+
+.config-store-assistant-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-store-assistant-result {
+  min-height: 60px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.74rem;
+  color: rgba(232, 238, 248, 0.72);
+  line-height: 1.6;
+}
+
+.config-store-assistant-actions,
+.config-store-guide-related {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.config-store-assistant-recipe {
+  font-size: 0.84rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.config-store-assistant-sub {
+  font-size: 0.68rem;
+  color: rgba(232, 238, 248, 0.45);
+}
+
+.config-store-guide-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 410;
+}
+
+.config-store-guide-modal.hide { display: none; }
+
+.config-store-guide-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 9, 15, 0.76);
+  backdrop-filter: blur(16px);
+}
+
+.config-store-guide-panel {
+  position: relative;
+  width: min(1120px, calc(100vw - 36px));
+  max-height: calc(100vh - 48px);
+  margin: 24px auto;
+  display: flex;
+  flex-direction: column;
+  border-radius: 22px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(18, 23, 34, 0.98), rgba(10, 14, 22, 0.98));
+  border: 1px solid rgba(255,255,255,0.06);
+  box-shadow: 0 24px 80px rgba(0,0,0,0.46);
+}
+
+.config-store-guide-head,
+.config-store-guide-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  flex-shrink: 0;
+}
+
+.config-store-guide-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
+  gap: 14px;
+  padding: 0 18px 18px;
+  overflow: auto;
+}
+
+.config-store-guide-overview,
+.config-store-guide-config {
+  display: grid;
+  gap: 12px;
+}
+
+.config-store-guide-desc {
+  font-size: 0.84rem;
+  color: rgba(232, 238, 248, 0.8);
+  line-height: 1.65;
+}
+
+.config-store-guide-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.config-store-guide-card {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255,255,255,0.05);
+}
+
+.config-store-guide-card-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.config-store-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.73rem;
+  line-height: 1.65;
+  color: rgba(232, 238, 248, 0.72);
+}
+
+.config-store-guide-list.ordered {
+  list-style: decimal;
+}
+
+.config-store-guide-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.config-store-guide-diff {
+  margin: 0;
+  min-height: 220px;
+  max-height: 42vh;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255,255,255,0.05);
+  font-size: 0.72rem;
+  line-height: 1.55;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .config-store-cat-btn {
   display: inline-flex;
   align-items: center;

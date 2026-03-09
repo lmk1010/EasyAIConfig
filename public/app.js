@@ -1,3 +1,10 @@
+import {
+  enrichConfigStoreRecipes,
+  getConfigStoreSuggestionChips,
+  runConfigStoreAssistant,
+  searchConfigStoreRecipes,
+} from './config-store-engine.js';
+
 const state = {
   current: null,
   backups: [],
@@ -57,6 +64,8 @@ const state = {
   openClawSetupFlowId: 0,
   openClawSetupContext: null,
   openClawConfigView: localStorage.getItem('easyaiconfig_oc_config_view') === 'minimal' ? 'minimal' : 'full',
+  configStoreGuide: { recipeId: '', values: {} },
+  configStoreAssistant: { recipeId: '', values: {}, missing: [] },
 };
 
 const el = (id) => document.getElementById(id);
@@ -5134,13 +5143,22 @@ const OC_CONFIG_RECIPES = [
   },
 ];
 
+function getActiveRecipesRaw() {
+  const tool = getConfigEditorTool();
+  if (tool === 'openclaw') return OC_CONFIG_RECIPES;
+  return CODEX_CONFIG_RECIPES;
+}
+
 /**
  * Get the combined recipe list based on the active config editor tool.
  */
 function getActiveRecipes() {
-  const tool = getConfigEditorTool();
-  if (tool === 'openclaw') return OC_CONFIG_RECIPES;
-  return CODEX_CONFIG_RECIPES;
+  return enrichConfigStoreRecipes(getActiveRecipesRaw(), getConfigEditorTool());
+}
+
+function getRecipeById(recipeId, tool = getConfigEditorTool()) {
+  return enrichConfigStoreRecipes(tool === 'openclaw' ? OC_CONFIG_RECIPES : CODEX_CONFIG_RECIPES, tool)
+    .find((recipe) => recipe.id === recipeId) || null;
 }
 
 /**
@@ -5148,13 +5166,7 @@ function getActiveRecipes() {
  * Uses fuzzy matching: splits query into tokens and matches against kw + name + desc.
  */
 function searchOcRecipes(query) {
-  const recipes = getActiveRecipes();
-  if (!query || !query.trim()) return recipes;
-  const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return recipes.filter(r => {
-    const haystack = `${r.name} ${r.desc} ${r.kw} ${r.cat}`.toLowerCase();
-    return tokens.every(t => haystack.includes(t));
-  });
+  return searchConfigStoreRecipes(getActiveRecipesRaw(), query, getConfigEditorTool());
 }
 
 /** Render recipe search results into the dropdown. */
@@ -5169,9 +5181,9 @@ function renderOcRecipeResults(recipes) {
     <button type="button" class="oc-recipe-card" data-recipe-id="${r.id}">
       <div class="oc-recipe-card-main">
         <div class="oc-recipe-card-name">${r.name}<span class="oc-recipe-tag">${r.cat}</span></div>
-        <div class="oc-recipe-card-desc">${r.desc}</div>
+        <div class="oc-recipe-card-desc">${r.desc}${r._reason?.length ? ` · ${escapeHtml(r._reason[0])}` : ''}</div>
       </div>
-      <span class="oc-recipe-card-action">${r.fields ? '配置' : '应用'}</span>
+      <span class="oc-recipe-card-action">进入引导</span>
     </button>
   `).join('');
 }
@@ -5245,51 +5257,17 @@ function deepMergeOcConfig(target, source) {
 
 /** Open the recipe form modal for recipes that need user input. */
 function openOcRecipeForm(recipe) {
-  const modal = el('ocRecipeFormModal');
-  const body = el('ocRecipeFormBody');
-  const title = el('ocRecipeFormTitle');
-  if (!modal || !body || !title) return;
-  title.textContent = recipe.name;
-  body.innerHTML = recipe.fields.map((f, i) => `
-    <label class="field"><span>${f.label}</span>
-      <input id="ocRecipeField_${i}" type="${f.type || 'text'}" placeholder="${f.placeholder || ''}" />
-    </label>
-  `).join('');
-  modal.classList.remove('hide');
-  modal._recipe = recipe;
-  // Focus first field
-  setTimeout(() => el('ocRecipeField_0')?.focus(), 100);
+  openConfigStoreGuide(recipe);
 }
 
 /** Close the recipe form modal. */
 function closeOcRecipeForm() {
-  const modal = el('ocRecipeFormModal');
-  if (modal) { modal.classList.add('hide'); modal._recipe = null; }
+  closeConfigStoreGuide();
 }
 
 /** Collect recipe form values and apply. */
 function submitOcRecipeForm() {
-  const modal = el('ocRecipeFormModal');
-  const recipe = modal?._recipe;
-  if (!recipe) return;
-  const values = {};
-  recipe.fields.forEach((f, i) => {
-    values[f.key] = (el(`ocRecipeField_${i}`)?.value || '').trim();
-  });
-  // Check required fields
-  const missing = recipe.fields.filter((f, i) => !values[f.key] && !f.optional);
-  if (missing.length) {
-    flash(`请填写: ${missing.map(f => f.label).join(', ')}`, 'error');
-    return;
-  }
-  const patch = recipe.apply(values);
-  applyOcRecipePatch(patch);
-  closeOcRecipeForm();
-  // Close search results
-  el('ocRecipeResults')?.classList.add('hide');
-  el('ocRecipeSearchInput').value = '';
-  // Close config store modal if open
-  closeConfigStore();
+  applyConfigStoreGuide();
 }
 
 /* ═══════ Config Store Modal ═══════ */
@@ -5298,9 +5276,53 @@ let _configStoreActiveCat = 'all';
 
 /** Get recipes for config store based on active config editor tool tab. */
 function getConfigStoreRecipes() {
-  const tool = getConfigEditorTool();
-  if (tool === 'openclaw') return OC_CONFIG_RECIPES;
-  return CODEX_CONFIG_RECIPES;
+  return getActiveRecipes();
+}
+
+function renderConfigStoreSuggestions(query = '') {
+  const container = el('configStoreSuggestions');
+  if (!container) return;
+  const suggestions = getConfigStoreSuggestionChips(getActiveRecipesRaw(), getConfigEditorTool(), query);
+  container.innerHTML = suggestions.map((item) => `<button type="button" class="config-store-suggestion-chip" data-store-suggestion="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join('');
+}
+
+function renderConfigStoreAssistantResult(payload = null) {
+  const container = el('configStoreAssistantResult');
+  if (!container) return;
+  if (!payload) {
+    container.textContent = '输入一句你的目标，我会推荐场景并告诉你下一步要填什么。';
+    return;
+  }
+  if (payload.mode === 'no_match') {
+    container.innerHTML = `
+      <div class="config-store-assistant-recipe">还没找到特别合适的场景</div>
+      <div>${escapeHtml(payload.message || '')}</div>
+      <div class="config-store-assistant-actions">
+        ${(payload.suggestions || []).map((item) => `<button type="button" class="secondary tiny-btn" data-store-suggestion="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join('')}
+      </div>
+    `;
+    return;
+  }
+  const missing = (payload.missing || []).map((field) => field.label).join('、');
+  container.innerHTML = `
+    <div class="config-store-assistant-recipe">推荐场景：${escapeHtml(payload.recipe.name)}</div>
+    <div>${escapeHtml(payload.recipe.desc)}</div>
+    ${payload.reason?.length ? `<div class="config-store-assistant-sub">匹配原因：${escapeHtml(payload.reason.join(' / '))}</div>` : ''}
+    <div class="config-store-assistant-sub">下一步：${escapeHtml(payload.nextQuestion || '')}${missing ? `（待填：${escapeHtml(missing)}）` : ''}</div>
+    <div class="config-store-assistant-actions">
+      <button type="button" class="secondary tiny-btn" data-store-assistant-open="${escapeHtml(payload.recipe.id)}">进入引导</button>
+      ${(payload.alternatives || []).map((item) => `<button type="button" class="secondary tiny-btn" data-store-assistant-open="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`).join('')}
+    </div>
+  `;
+}
+
+function runCurrentConfigStoreAssistant() {
+  const query = el('configStoreAssistantInput')?.value || '';
+  const payload = runConfigStoreAssistant(getActiveRecipesRaw(), query, getConfigEditorTool(), state.configStoreAssistant);
+  state.configStoreAssistant = payload.mode === 'matched'
+    ? { recipeId: payload.recipe.id, values: payload.values || {}, missing: payload.missing || [] }
+    : { recipeId: '', values: {}, missing: [] };
+  renderConfigStoreAssistantResult(payload);
 }
 
 /** Open the config store modal. */
@@ -5323,9 +5345,15 @@ function openConfigStore() {
     }
   }
 
+  const assistantInput = el('configStoreAssistantInput');
+  if (assistantInput) assistantInput.value = '';
+  state.configStoreAssistant = { recipeId: '', values: {}, missing: [] };
+  renderConfigStoreAssistantResult(null);
+
   _configStoreActiveCat = 'all';
   renderConfigStoreCategories();
   renderConfigStoreCards();
+  renderConfigStoreSuggestions('');
 
   modal.classList.remove('hide');
   setTimeout(() => searchInput?.focus(), 100);
@@ -5365,13 +5393,9 @@ function renderConfigStoreCards() {
   }
 
   // Filter by search query (fuzzy match)
-  if (query.trim()) {
-    const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-    recipes = recipes.filter(r => {
-      const haystack = `${r.name} ${r.desc} ${r.kw} ${r.cat}`.toLowerCase();
-      return tokens.every(t => haystack.includes(t));
-    });
-  }
+  recipes = query.trim()
+    ? searchConfigStoreRecipes(recipes, query, getConfigEditorTool())
+    : recipes;
 
   if (recipes.length === 0) {
     grid.innerHTML = '';
@@ -5381,14 +5405,90 @@ function renderConfigStoreCards() {
 
   if (empty) empty.classList.add('hide');
 
+  renderConfigStoreSuggestions(query);
+
   grid.innerHTML = recipes.map(r => `
     <button type="button" class="cs-card" data-store-recipe-id="${r.id}">
       <span class="cs-card-tag" data-cat="${escapeHtml(r.cat)}">${escapeHtml(r.cat)}</span>
       <div class="cs-card-name">${escapeHtml(r.name)}</div>
       <div class="cs-card-desc">${escapeHtml(r.desc)}</div>
-      <span class="cs-card-action">${r.fields ? '配置 →' : '应用 ✓'}</span>
+      ${r._reason?.length ? `<div class="config-store-assistant-sub">${escapeHtml(r._reason[0])}</div>` : ''}
+      <span class="cs-card-action">进入引导 →</span>
     </button>
   `).join('');
+}
+
+function collectConfigStoreGuideValues(recipe) {
+  const values = {};
+  (recipe.guide.questions || []).forEach((field, index) => {
+    values[field.key] = String(el(`configStoreGuideField_${index}`)?.value || '').trim();
+  });
+  return values;
+}
+
+function renderConfigStoreGuide(recipe, values = {}) {
+  if (!recipe) return;
+  el('configStoreGuideTitle').textContent = recipe.name;
+  el('configStoreGuideDesc').textContent = recipe.guide.overview || recipe.desc;
+  el('configStoreGuidePrep').innerHTML = (recipe.guide.prep || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+  el('configStoreGuideSteps').innerHTML = (recipe.guide.tutorial || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+  el('configStoreGuideVerify').innerHTML = (recipe.guide.verify || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+  const related = (recipe.guide.related || []).length
+    ? recipe.guide.related.map((item) => `<button type="button" class="secondary tiny-btn" data-store-suggestion="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join('')
+    : (recipe.guide.examples || []).slice(0, 4).map((item) => `<button type="button" class="secondary tiny-btn" data-store-suggestion="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join('');
+  el('configStoreGuideRelated').innerHTML = related;
+
+  const questions = recipe.guide.questions || [];
+  el('configStoreGuideFields').innerHTML = questions.length
+    ? questions.map((field, index) => `
+      <label class="field"><span>${escapeHtml(field.label)}</span>
+        <input id="configStoreGuideField_${index}" type="${escapeHtml(field.type || 'text')}" placeholder="${escapeHtml(field.placeholder || '')}" value="${escapeHtml(values[field.key] || '')}" />
+      </label>
+    `).join('')
+    : '<div class="config-store-assistant-sub">该方案无需额外输入，确认后即可应用。</div>';
+
+  const missing = questions.filter((field) => field.required && !String(values[field.key] || '').trim());
+  let preview = {};
+  if (!missing.length) {
+    try {
+      preview = recipe.apply(values);
+    } catch {
+      preview = {};
+    }
+  }
+  el('configStoreGuideDiff').innerHTML = missing.length
+    ? escapeHtml(`请先填写：${missing.map((field) => field.label).join('、')}`)
+    : colorizeJson(JSON.stringify(preview, null, 2));
+}
+
+function openConfigStoreGuide(recipe, presetValues = {}) {
+  const modal = el('configStoreGuideModal');
+  if (!modal || !recipe) return;
+  state.configStoreGuide = { recipeId: recipe.id, values: { ...presetValues } };
+  renderConfigStoreGuide(recipe, state.configStoreGuide.values);
+  modal.classList.remove('hide');
+  setTimeout(() => el('configStoreGuideField_0')?.focus(), 50);
+}
+
+function closeConfigStoreGuide() {
+  el('configStoreGuideModal')?.classList.add('hide');
+  state.configStoreGuide = { recipeId: '', values: {} };
+}
+
+function applyConfigStoreGuide() {
+  const recipe = getRecipeById(state.configStoreGuide.recipeId);
+  if (!recipe) return;
+  const values = collectConfigStoreGuideValues(recipe);
+  const missing = (recipe.guide.questions || []).filter((field) => field.required && !String(values[field.key] || '').trim());
+  if (missing.length) {
+    flash(`请填写: ${missing.map((field) => field.label).join(', ')}`, 'error');
+    renderConfigStoreGuide(recipe, values);
+    return;
+  }
+  const patch = recipe.apply(values);
+  applyOcRecipePatch(patch);
+  closeConfigStoreGuide();
+  closeConfigStore();
 }
 
 /* ═══════ Recipe Confirm Modal ═══════ */
@@ -8956,14 +9056,34 @@ function bindEvents() {
     el('configStoreGrid')?.addEventListener('click', (e) => {
       const card = e.target.closest('[data-store-recipe-id]');
       if (!card) return;
-      const allRecipes = [...CODEX_CONFIG_RECIPES, ...OC_CONFIG_RECIPES];
-      const recipe = allRecipes.find(r => r.id === card.dataset.storeRecipeId);
+      const recipe = getRecipeById(card.dataset.storeRecipeId);
       if (!recipe) return;
-      if (recipe.fields) {
-        openOcRecipeForm(recipe);
-      } else {
-        openRecipeConfirm(recipe);
-      }
+      openConfigStoreGuide(recipe);
+    });
+
+    el('configStoreSuggestions')?.addEventListener('click', (e) => {
+      const button = e.target.closest('[data-store-suggestion]');
+      if (!button) return;
+      const query = button.dataset.storeSuggestion || '';
+      if (el('configStoreSearchInput')) el('configStoreSearchInput').value = query;
+      if (el('configStoreAssistantInput')) el('configStoreAssistantInput').value = query;
+      renderConfigStoreCards();
+      runCurrentConfigStoreAssistant();
+    });
+
+    el('configStoreAssistantRunBtn')?.addEventListener('click', runCurrentConfigStoreAssistant);
+    el('configStoreAssistantInput')?.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      runCurrentConfigStoreAssistant();
+    });
+    el('configStoreAssistantResult')?.addEventListener('click', (e) => {
+      const button = e.target.closest('[data-store-assistant-open]');
+      if (!button) return;
+      const recipe = getRecipeById(button.dataset.storeAssistantOpen);
+      if (!recipe) return;
+      const presetValues = state.configStoreAssistant.recipeId === recipe.id ? (state.configStoreAssistant.values || {}) : {};
+      openConfigStoreGuide(recipe, presetValues);
     });
 
     // ESC key — close confirm modal first, then config store
@@ -9068,14 +9188,7 @@ function bindEvents() {
       if (!card) return;
       const recipe = [...CODEX_CONFIG_RECIPES, ...OC_CONFIG_RECIPES].find(r => r.id === card.dataset.recipeId);
       if (!recipe) return;
-      if (recipe.fields) {
-        openOcRecipeForm(recipe);
-      } else {
-        const patch = recipe.apply();
-        applyOcRecipePatch(patch);
-        recipeResults.classList.add('hide');
-        recipeInput.value = '';
-      }
+      openConfigStoreGuide(getRecipeById(recipe.id) || recipe);
     });
     // Close dropdown on click outside
     document.addEventListener('click', (e) => {
@@ -9091,6 +9204,23 @@ function bindEvents() {
   if (el('ocRecipeFormCloseBtn')) el('ocRecipeFormCloseBtn').addEventListener('click', closeOcRecipeForm);
   const recipeModalBackdrop = document.querySelector('.oc-recipe-modal-backdrop');
   if (recipeModalBackdrop) recipeModalBackdrop.addEventListener('click', closeOcRecipeForm);
+  el('configStoreGuideCloseBtn')?.addEventListener('click', closeConfigStoreGuide);
+  el('configStoreGuideCancelBtn')?.addEventListener('click', closeConfigStoreGuide);
+  el('configStoreGuideApplyBtn')?.addEventListener('click', applyConfigStoreGuide);
+  el('configStoreGuideModal')?.querySelector('.config-store-guide-backdrop')?.addEventListener('click', closeConfigStoreGuide);
+  el('configStoreGuideFields')?.addEventListener('input', () => {
+    const recipe = getRecipeById(state.configStoreGuide.recipeId);
+    if (!recipe) return;
+    renderConfigStoreGuide(recipe, collectConfigStoreGuideValues(recipe));
+  });
+  el('configStoreGuideRelated')?.addEventListener('click', (e) => {
+    const suggestion = e.target.closest('[data-store-suggestion]')?.dataset.storeSuggestion;
+    if (suggestion) {
+      if (el('configStoreSearchInput')) el('configStoreSearchInput').value = suggestion;
+      renderConfigStoreCards();
+      return;
+    }
+  });
   if (el('ocCfgSeamColor')) {
     el('ocCfgSeamColor').addEventListener('input', () => {
       el('ocCfgSeamColorText').value = el('ocCfgSeamColor').value;
