@@ -208,6 +208,22 @@ pub(crate) fn apply_patch(target: &mut Value, patch: &Value) {
   }
 }
 
+pub(crate) fn normalize_settings_patch(patch: &Value) -> Value {
+  let mut normalized = patch.clone();
+  if let Some(object) = normalized.as_object_mut() {
+    match object.get("compact_prompt") {
+      Some(Value::Bool(false)) => {
+        object.insert("compact_prompt".to_string(), Value::String("false".to_string()));
+      }
+      Some(Value::Bool(true)) => {
+        object.insert("compact_prompt".to_string(), Value::Null);
+      }
+      _ => {}
+    }
+  }
+  normalized
+}
+
 pub(crate) fn extract_version(text: &str) -> Option<String> {
   let chars = text.chars().collect::<Vec<_>>();
   for index in 0..chars.len() {

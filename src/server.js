@@ -12,6 +12,8 @@ import {
   installClaudeCode,
   installCodex,
   installOpenClaw,
+  installOpenClawRemote,
+  cancelOpenClawInstallTask,
   getOpenClawInstallTask,
   onboardOpenClaw,
   launchClaudeCode,
@@ -293,9 +295,25 @@ export async function startServer() {
     }
   });
 
+  app.post('/api/openclaw/install/remote', async (req, res) => {
+    try {
+      ok(res, { data: await installOpenClawRemote(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
   app.get('/api/openclaw/install/status', async (req, res) => {
     try {
       ok(res, { data: await getOpenClawInstallTask({ taskId: req.query.taskId || '' }) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/openclaw/install/cancel', async (req, res) => {
+    try {
+      ok(res, { data: await cancelOpenClawInstallTask(req.body || {}) });
     } catch (error) {
       fail(res, error);
     }

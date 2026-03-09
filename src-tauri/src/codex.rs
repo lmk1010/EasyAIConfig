@@ -8,8 +8,11 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 const OPENCLAW_INSTALL_TASK_KEEP: usize = 12;
+const OPENCLAW_INSTALL_SCRIPT_UNIX: &str = "curl -fsSL https://openclaw.ai/install.sh | OPENCLAW_NO_ONBOARD=1 bash -s -- --no-onboard --install-method npm";
+const OPENCLAW_INSTALL_SCRIPT_WIN: &str = "$env:OPENCLAW_NO_ONBOARD='1'; iwr -useb https://openclaw.ai/install.ps1 | iex";
 
 static OPENCLAW_INSTALL_TASK_SEQ: AtomicU64 = AtomicU64::new(1);
 static OPENCLAW_INSTALL_TASKS: OnceLock<Mutex<BTreeMap<String, OpenClawInstallTask>>> = OnceLock::new();
@@ -56,6 +59,21 @@ struct OpenClawInstallTask {
   version: Option<String>,
   error: Option<String>,
   next_actions: Vec<String>,
+  #[serde(skip_serializing)]
+  cancel_requested: bool,
+  #[serde(skip_serializing)]
+  child_pid: Option<u32>,
+  #[serde(skip_serializing)]
+  install_snapshot: OpenClawInstallSnapshot,
+}
+
+#[derive(Clone, Default)]
+struct OpenClawInstallSnapshot {
+  had_binary: bool,
+  home_path: String,
+  home_existed: bool,
+  package_path: String,
+  bin_paths: Vec<String>,
 }
 
 /// Resolve the user's full shell PATH.
@@ -154,8 +172,37 @@ fn create_command(program: &str) -> Command {
 fn run_command(command: &str, args: &[&str], cwd: Option<&Path>) -> Result<Value, String> {
   let mut cmd = create_command(command);
   cmd.args(args);
+  cmd.stdin(Stdio::null()); // prevent /dev/tty errors in GUI context
   if let Some(dir) = cwd {
     cmd.current_dir(dir);
+  }
+  let output = cmd.output().map_err(|error| error.to_string())?;
+  let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+  let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+  Ok(json!({
+    "ok": output.status.success(),
+    "code": output.status.code(),
+    "stdout": stdout,
+    "stderr": stderr,
+  }))
+}
+
+fn run_command_dynamic(
+  command: &str,
+  args: &[String],
+  cwd: Option<&Path>,
+  extra_env: Option<(&str, String)>,
+) -> Result<Value, String> {
+  let mut cmd = create_command(command);
+  cmd.stdin(Stdio::null());
+  if let Some(dir) = cwd {
+    cmd.current_dir(dir);
+  }
+  for arg in args {
+    cmd.arg(arg);
+  }
+  if let Some((key, value)) = extra_env {
+    cmd.env(key, value);
   }
   let output = cmd.output().map_err(|error| error.to_string())?;
   let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -233,12 +280,65 @@ fn create_openclaw_install_task(method: &str, command: &str) -> OpenClawInstallT
     version: None,
     error: None,
     next_actions: Vec::new(),
+    cancel_requested: false,
+    child_pid: None,
+    install_snapshot: OpenClawInstallSnapshot::default(),
   }
+}
+
+fn npm_global_output(args: &[&str]) -> String {
+  create_command(npm_command())
+    .args(args)
+    .stdin(Stdio::null())
+    .output()
+    .ok()
+    .filter(|output| output.status.success())
+    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    .unwrap_or_default()
+}
+
+fn capture_openclaw_install_snapshot() -> OpenClawInstallSnapshot {
+  let binary = find_tool_binary("openclaw");
+  let home = openclaw_home().ok();
+  let npm_prefix = npm_global_output(&["prefix", "-g"]);
+  let npm_root = npm_global_output(&["root", "-g"]);
+  let package_path = if npm_root.is_empty() {
+    String::new()
+  } else {
+    PathBuf::from(&npm_root).join(OPENCLAW_PACKAGE).to_string_lossy().to_string()
+  };
+  let bin_paths = if npm_prefix.is_empty() {
+    Vec::new()
+  } else if cfg!(target_os = "windows") {
+    vec![
+      PathBuf::from(&npm_prefix).join("openclaw").to_string_lossy().to_string(),
+      PathBuf::from(&npm_prefix).join("openclaw.cmd").to_string_lossy().to_string(),
+      PathBuf::from(&npm_prefix).join("openclaw.ps1").to_string_lossy().to_string(),
+    ]
+  } else {
+    vec![PathBuf::from(&npm_prefix).join("bin").join("openclaw").to_string_lossy().to_string()]
+  };
+
+  OpenClawInstallSnapshot {
+    had_binary: binary.get("installed").and_then(Value::as_bool).unwrap_or(false),
+    home_path: home.as_ref().map(|path| path.to_string_lossy().to_string()).unwrap_or_default(),
+    home_existed: home.as_ref().map(|path| path.exists()).unwrap_or(false),
+    package_path,
+    bin_paths,
+  }
+}
+
+fn is_openclaw_install_active(task: &OpenClawInstallTask) -> bool {
+  task.status == "running" || task.status == "cancelling"
+}
+
+fn is_openclaw_install_cancelled(task: &OpenClawInstallTask) -> bool {
+  task.cancel_requested || task.status == "cancelling" || task.status == "cancelled"
 }
 
 fn trim_openclaw_install_tasks(tasks: &mut BTreeMap<String, OpenClawInstallTask>) {
   while tasks.len() > OPENCLAW_INSTALL_TASK_KEEP {
-    let removable = tasks.iter().find(|(_, task)| task.status != "running").map(|(task_id, _)| task_id.clone());
+    let removable = tasks.iter().find(|(_, task)| !is_openclaw_install_active(task)).map(|(task_id, _)| task_id.clone());
     if let Some(task_id) = removable {
       tasks.remove(&task_id);
     } else {
@@ -295,8 +395,12 @@ fn set_openclaw_install_step(task: &mut OpenClawInstallTask, step_index: usize, 
   touch_openclaw_install_task(task);
 }
 
+fn clean_openclaw_install_line(line: &str) -> String {
+  line.replace('\u{1b}', "").trim().to_string()
+}
+
 fn push_openclaw_install_log(task_id: &str, source: &str, line: &str) {
-  let cleaned = line.trim().replace('', "");
+  let cleaned = clean_openclaw_install_line(line);
   if cleaned.is_empty() {
     return;
   }
@@ -317,33 +421,164 @@ fn push_openclaw_install_log(task_id: &str, source: &str, line: &str) {
 }
 
 fn infer_openclaw_install_step(task: &mut OpenClawInstallTask, line: &str) {
-  let text = line.to_lowercase();
+  let cleaned = clean_openclaw_install_line(line);
+  let text = cleaned.to_lowercase();
   if task.method == "script" {
-    if text.contains("curl") || text.contains("download") || text.contains("http://") || text.contains("https://") {
-      set_openclaw_install_step(task, 1, Some(line.to_string()));
+    if text.contains("[1/3]") || text.contains("preparing environment") || text.contains("homebrew") || text.contains("node.js") || text.contains("active npm") || text.contains("active node") {
+      set_openclaw_install_step(task, 0, Some(cleaned));
+      return;
     }
-    if text.contains("install") || text.contains("extract") || text.contains("copy") || text.contains("link") || text.contains("binary") || text.contains("daemon") || text.contains("openclaw") {
-      set_openclaw_install_step(task, 2, Some(line.to_string()));
+    if text.contains("curl") || text.contains("download") || text.contains("fetch") || text.contains("http://") || text.contains("https://") || text.contains("installer") || text.contains("install plan") {
+      set_openclaw_install_step(task, 1, Some(cleaned));
+      return;
     }
-    if text.contains("done") || text.contains("complete") || text.contains("success") || text.contains("finished") || text.contains("installed") {
-      set_openclaw_install_step(task, 3, Some(line.to_string()));
+    if text.contains("[2/3]") || text.contains("installing openclaw") || text.contains("extract") || text.contains("copy") || text.contains("link") || text.contains("binary") || text.contains("daemon") || text.contains("git already installed") {
+      set_openclaw_install_step(task, 2, Some(cleaned));
     }
     return;
   }
 
   if text.contains("fetch") || text.contains("tarball") || text.contains("manifest") || text.contains("registry") || text.contains("http") {
-    set_openclaw_install_step(task, 1, Some(line.to_string()));
+    set_openclaw_install_step(task, 1, Some(cleaned));
+    return;
   }
   if text.contains("install") || text.contains("added") || text.contains("changed") || text.contains("build") || text.contains("postinstall") || text.contains("preinstall") || text.contains("link") || text.contains("reify") {
-    set_openclaw_install_step(task, 2, Some(line.to_string()));
+    set_openclaw_install_step(task, 2, Some(cleaned));
   }
-  if text.contains("audited") || text.contains("funding") || text.contains("done") || text.contains("success") || text.contains("installed") {
-    set_openclaw_install_step(task, 3, Some(line.to_string()));
+}
+
+fn terminate_openclaw_install_process(pid: u32) {
+  if cfg!(target_os = "windows") {
+    let _ = Command::new("taskkill")
+      .args(["/PID", &pid.to_string(), "/T", "/F"])
+      .stdin(Stdio::null())
+      .output();
+    return;
   }
+
+  let _ = Command::new("pkill")
+    .args(["-TERM", "-P", &pid.to_string()])
+    .stdin(Stdio::null())
+    .output();
+  let _ = Command::new("kill")
+    .args(["-TERM", &pid.to_string()])
+    .stdin(Stdio::null())
+    .output();
+  thread::sleep(Duration::from_millis(900));
+  let _ = Command::new("pkill")
+    .args(["-KILL", "-P", &pid.to_string()])
+    .stdin(Stdio::null())
+    .output();
+  let _ = Command::new("kill")
+    .args(["-KILL", &pid.to_string()])
+    .stdin(Stdio::null())
+    .output();
+}
+
+fn cleanup_cancelled_openclaw_install(task: &mut OpenClawInstallTask) -> Vec<String> {
+  let mut cleanup_errors = Vec::new();
+  let snapshot = task.install_snapshot.clone();
+
+  if !snapshot.had_binary {
+    let _ = codex_npm_action(&["uninstall", "-g", OPENCLAW_PACKAGE]);
+    for target in std::iter::once(snapshot.package_path.clone()).chain(snapshot.bin_paths.clone().into_iter()) {
+      if target.trim().is_empty() {
+        continue;
+      }
+      let path = PathBuf::from(&target);
+      let remove_result = if path.is_dir() {
+        std::fs::remove_dir_all(&path)
+      } else {
+        std::fs::remove_file(&path)
+      };
+      if let Err(error) = remove_result {
+        if error.kind() != std::io::ErrorKind::NotFound {
+          cleanup_errors.push(format!("删除 {} 失败：{}", target, error));
+        }
+      }
+    }
+  }
+
+  if !snapshot.home_existed && !snapshot.home_path.trim().is_empty() {
+    let home = PathBuf::from(&snapshot.home_path);
+    if let Err(error) = std::fs::remove_dir_all(&home) {
+      if error.kind() != std::io::ErrorKind::NotFound {
+        cleanup_errors.push(format!("删除 {} 失败：{}", snapshot.home_path, error));
+      }
+    }
+  }
+
+  cleanup_errors
+}
+
+fn cancel_openclaw_install_task_inner(task_id: &str) -> Result<(), String> {
+  let mut pid_to_kill = None;
+  let exists = with_openclaw_install_task(task_id, |task| {
+    if !is_openclaw_install_active(task) {
+      return;
+    }
+    task.cancel_requested = true;
+    task.status = "cancelling".to_string();
+    task.summary = "正在中断 OpenClaw 安装…".to_string();
+    task.hint = "先别关闭窗口，正在终止安装进程并清理残留。".to_string();
+    task.detail = "正在停止安装进程…".to_string();
+    pid_to_kill = task.child_pid;
+    touch_openclaw_install_task(task);
+  });
+  if exists.is_none() {
+    return Err("安装任务不存在，可能已经过期，请重新开始安装".to_string());
+  }
+
+  if let Some(pid) = pid_to_kill {
+    terminate_openclaw_install_process(pid);
+  }
+
+  let _ = with_openclaw_install_task(task_id, |task| {
+    let cleanup_errors = cleanup_cancelled_openclaw_install(task);
+    for (index, step) in task.steps.iter_mut().enumerate() {
+      step.status = if index < task.step_index {
+        "done".to_string()
+      } else if index == task.step_index {
+        "error".to_string()
+      } else {
+        "pending".to_string()
+      };
+    }
+    task.status = "cancelled".to_string();
+    task.progress = 100;
+    task.child_pid = None;
+    task.error = if cleanup_errors.is_empty() { None } else { Some(cleanup_errors.join("；")) };
+    task.summary = if task.error.is_some() {
+      "安装已中断，但清理时遇到问题。".to_string()
+    } else {
+      "安装已中断，残留已清理。".to_string()
+    };
+    task.hint = if task.error.is_some() {
+      "大部分安装已撤销，但还有少量路径需要你手动确认。".to_string()
+    } else {
+      "本次安装已彻底中断，你可以随时重新开始。".to_string()
+    };
+    task.detail = task.error.clone().unwrap_or_else(|| "未发现需要额外清理的残留。".to_string());
+    task.next_actions = if task.error.is_some() {
+      vec![
+        "请先查看最后日志中的清理报错。".to_string(),
+        "确认相关路径已删除后，再重新安装。".to_string(),
+      ]
+    } else {
+      vec!["如需继续，请重新点击安装 OpenClaw。".to_string()]
+    };
+    task.completed_at = Some(now_rfc3339());
+    touch_openclaw_install_task(task);
+  });
+
+  Ok(())
 }
 
 fn fail_openclaw_install_task(task_id: &str, message: String) {
   let _ = with_openclaw_install_task(task_id, |task| {
+    if is_openclaw_install_cancelled(task) {
+      return;
+    }
     for (index, step) in task.steps.iter_mut().enumerate() {
       step.status = if index < task.step_index {
         "done".to_string()
@@ -357,6 +592,7 @@ fn fail_openclaw_install_task(task_id: &str, message: String) {
     task.summary = "OpenClaw 安装失败，需要你看一眼错误提示。".to_string();
     task.hint = "先看下方“最后日志”，通常会直接告诉你缺的是网络、权限还是依赖。".to_string();
     task.detail = message.clone();
+    task.child_pid = None;
     task.error = Some(message.clone());
     task.next_actions = vec![
       "先确认网络能访问 npm 或 openclaw.ai。".to_string(),
@@ -370,6 +606,9 @@ fn fail_openclaw_install_task(task_id: &str, message: String) {
 
 fn complete_openclaw_install_task(task_id: &str, version: Option<String>) {
   let _ = with_openclaw_install_task(task_id, |task| {
+    if is_openclaw_install_cancelled(task) {
+      return;
+    }
     if let Some(last_index) = task.steps.len().checked_sub(1) {
       task.step_index = last_index;
       for (index, step) in task.steps.iter_mut().enumerate() {
@@ -381,6 +620,7 @@ fn complete_openclaw_install_task(task_id: &str, version: Option<String>) {
     task.summary = "OpenClaw 安装完成，已经可以使用。".to_string();
     task.hint = "现在你不用再做技术判断，直接按下面“接下来怎么做”操作就行。".to_string();
     task.detail = version.clone().map(|v| format!("已检测到版本：{v}")).unwrap_or_else(|| "已检测到 openclaw 命令。".to_string());
+    task.child_pid = None;
     task.version = version.clone();
     task.next_actions = vec![
       "下一步 1：点击“启动 OpenClaw”打开工具。".to_string(),
@@ -403,11 +643,11 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
     let mut command = if method == "script" {
       if cfg!(target_os = "windows") {
         let mut cmd = create_command("powershell");
-        cmd.args(["-Command", "iwr -useb https://openclaw.ai/install.ps1 | iex"]);
+        cmd.args(["-Command", OPENCLAW_INSTALL_SCRIPT_WIN]);
         cmd
       } else {
         let mut cmd = create_command("bash");
-        cmd.args(["-lc", "curl -fsSL https://openclaw.ai/install.sh | bash"]);
+        cmd.args(["-lc", OPENCLAW_INSTALL_SCRIPT_UNIX]);
         cmd
       }
     } else {
@@ -416,9 +656,51 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
       cmd
     };
 
-    if method == "script" && !cfg!(target_os = "windows") && command_exists("curl").is_none() {
-      fail_openclaw_install_task(&task_id, "未检测到 `curl`，无法执行脚本安装。请先安装 curl，或改用 npm 安装。".to_string());
+    if get_openclaw_install_task_snapshot(&task_id).map(|task| is_openclaw_install_cancelled(&task)).unwrap_or(false) {
       return;
+    }
+
+    if method == "script" {
+      if !cfg!(target_os = "windows") && command_exists("curl").is_none() {
+        fail_openclaw_install_task(&task_id, "未检测到 `curl`，无法执行脚本安装。请先安装 curl，或改用 npm 安装。".to_string());
+        return;
+      }
+      if command_exists("git").is_none() {
+        push_openclaw_install_log(&task_id, "stdout", "未检测到 Git，正在尝试自动安装…");
+
+        let auto_installed = try_auto_install_git(&task_id);
+
+        if !auto_installed {
+          // Auto-install failed — try to fallback to npm
+          push_openclaw_install_log(&task_id, "stdout", "Git 自动安装失败，尝试自动切换为 npm 安装方式…");
+          let node_ok = create_command("node").arg("--version").stdin(Stdio::null())
+            .output().map(|o| o.status.success()).unwrap_or(false);
+          let npm_ok = create_command(npm_command()).arg("--version").stdin(Stdio::null())
+            .output().map(|o| o.status.success()).unwrap_or(false);
+          if node_ok && npm_ok {
+            push_openclaw_install_log(&task_id, "stdout", "已自动切换为 npm 安装方式");
+            // Rebuild command for npm
+            command = {
+              let mut cmd = create_command(npm_command());
+              cmd.args(["install", "-g", &format!("{}@latest", OPENCLAW_PACKAGE)]);
+              cmd
+            };
+            // Update the task's method/command display
+            let _ = with_openclaw_install_task(&task_id, |t| {
+              t.method = "npm".to_string();
+              t.command = format!("{} install -g {}@latest", npm_command(), OPENCLAW_PACKAGE);
+            });
+          } else {
+            let hint = if cfg!(target_os = "windows") {
+              "脚本安装依赖 Git，自动安装失败且未找到 npm。请手动安装 Git (https://git-scm.com/download/win) 后重试。"
+            } else {
+              "脚本安装依赖 Git，自动安装失败且未找到 npm。请先安装 Git 后重试。"
+            };
+            fail_openclaw_install_task(&task_id, hint.to_string());
+            return;
+          }
+        }
+      }
     }
 
     if method == "npm" {
@@ -445,7 +727,7 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
       set_openclaw_install_step(task, 1, Some(format!("即将执行：{}", task.command)));
     });
 
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match command.spawn() {
       Ok(child) => child,
       Err(error) => {
@@ -453,6 +735,11 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
         return;
       }
     };
+
+    let _ = with_openclaw_install_task(&task_id, |task| {
+      task.child_pid = Some(child.id());
+      touch_openclaw_install_task(task);
+    });
 
     let stdout_handle = child.stdout.take().map(|stdout| {
       let task_id = task_id.clone();
@@ -485,6 +772,10 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
     if let Some(handle) = stdout_handle { let _ = handle.join(); }
     if let Some(handle) = stderr_handle { let _ = handle.join(); }
 
+    if get_openclaw_install_task_snapshot(&task_id).map(|task| is_openclaw_install_cancelled(&task)).unwrap_or(false) {
+      return;
+    }
+
     if !status.success() {
       let message = get_openclaw_install_task_snapshot(&task_id)
         .and_then(|task| task.logs.last().map(|item| item.text.clone()))
@@ -496,6 +787,10 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
     let _ = with_openclaw_install_task(&task_id, |task| {
       set_openclaw_install_step(task, 3, Some("安装命令已执行完成，正在验证 openclaw 命令…".to_string()));
     });
+
+    if get_openclaw_install_task_snapshot(&task_id).map(|task| is_openclaw_install_cancelled(&task)).unwrap_or(false) {
+      return;
+    }
 
     let binary = find_tool_binary("openclaw");
     if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
@@ -511,6 +806,95 @@ fn command_exists(command: &str) -> Option<String> {
   // Set PATH before using which
   std::env::set_var("PATH", full_path_env());
   which::which(command).ok().map(|path| path.to_string_lossy().to_string())
+}
+
+/// Try to install Git automatically. Returns true if Git becomes available after the attempt.
+fn try_auto_install_git(task_id: &str) -> bool {
+  if cfg!(target_os = "windows") {
+    // Try winget (available on Windows 10 1709+)
+    push_openclaw_install_log(task_id, "stdout", "正在通过 winget 安装 Git…");
+    let result = create_command("winget")
+      .args([
+        "install", "--id", "Git.Git", "-e",
+        "--source", "winget",
+        "--accept-source-agreements",
+        "--accept-package-agreements",
+      ])
+      .stdin(Stdio::null())
+      .output();
+
+    match result {
+      Ok(out) => {
+        let stdout_text = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr_text = String::from_utf8_lossy(&out.stderr).to_string();
+        if !stdout_text.trim().is_empty() {
+          push_openclaw_install_log(task_id, "stdout", stdout_text.trim());
+        }
+        if !stderr_text.trim().is_empty() {
+          push_openclaw_install_log(task_id, "stderr", stderr_text.trim());
+        }
+        if out.status.success() {
+          push_openclaw_install_log(task_id, "stdout", "winget 安装命令已完成，正在验证 Git…");
+          // Patch PATH to include Git's common install locations
+          let current_path = std::env::var("PATH").unwrap_or_default();
+          let git_paths = "C:\\Program Files\\Git\\cmd;C:\\Program Files\\Git\\bin;C:\\Program Files (x86)\\Git\\cmd";
+          std::env::set_var("PATH", format!("{};{}", git_paths, current_path));
+          if which::which("git").is_ok() {
+            push_openclaw_install_log(task_id, "stdout", "✓ Git 已安装成功");
+            return true;
+          }
+          push_openclaw_install_log(task_id, "stderr", "winget 已执行但仍未检测到 Git，可能需要重启终端");
+        } else {
+          push_openclaw_install_log(task_id, "stderr", "winget 安装 Git 失败");
+        }
+      }
+      Err(e) => {
+        push_openclaw_install_log(task_id, "stderr", &format!("winget 不可用或执行出错：{}", e));
+      }
+    }
+  } else if cfg!(target_os = "macos") {
+    // Try Homebrew
+    if command_exists("brew").is_some() {
+      push_openclaw_install_log(task_id, "stdout", "正在通过 Homebrew 安装 Git…");
+      let result = create_command("brew")
+        .args(["install", "git"])
+        .stdin(Stdio::null())
+        .output();
+
+      match result {
+        Ok(out) => {
+          let stdout_text = String::from_utf8_lossy(&out.stdout).to_string();
+          if !stdout_text.trim().is_empty() {
+            // Only log last few lines to avoid flooding
+            for line in stdout_text.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
+              push_openclaw_install_log(task_id, "stdout", line);
+            }
+          }
+          if out.status.success() {
+            push_openclaw_install_log(task_id, "stdout", "✓ Git 已通过 Homebrew 安装成功");
+            // brew install git will place it in PATH via /opt/homebrew/bin or /usr/local/bin
+            // which are already in full_path_env, so it should be findable
+            if command_exists("git").is_some() {
+              return true;
+            }
+          } else {
+            let stderr_text = String::from_utf8_lossy(&out.stderr).to_string();
+            push_openclaw_install_log(task_id, "stderr", &format!("brew install git 失败：{}", stderr_text.trim()));
+          }
+        }
+        Err(e) => {
+          push_openclaw_install_log(task_id, "stderr", &format!("brew 执行出错：{}", e));
+        }
+      }
+    } else {
+      push_openclaw_install_log(task_id, "stderr", "未检测到 Homebrew，无法自动安装 Git");
+    }
+  } else {
+    // Linux — don't try to auto-install (needs sudo)
+    push_openclaw_install_log(task_id, "stderr", "Linux 上需要手动安装 Git（如 sudo apt install git）");
+  }
+
+  false
 }
 
 fn codex_candidates() -> Vec<String> {
@@ -1410,11 +1794,14 @@ pub(crate) fn onboard_openclaw(body: &Value) -> Result<Value, String> {
 
   let command_text = format!("{} {}", bin_path, args.join(" "));
 
-  // Run as child process — not in terminal
+  // Run as child process — not in terminal.
+  // Redirect stdin to /dev/null so that any internal TTY reads get EOF
+  // instead of crashing with "/dev/tty: Device not configured" in a GUI context.
   std::env::set_var("PATH", full_path_env());
   let output = create_command(&bin_path)
     .args(&args)
     .current_dir(&cwd)
+    .stdin(Stdio::null())
     .output()
     .map_err(|e| format!("执行 openclaw onboard 失败：{}", e))?;
 
@@ -1442,15 +1829,16 @@ pub(crate) fn start_openclaw_install_task(body: &Value) -> Result<Value, String>
 
   let command = if method == "script" {
     if cfg!(target_os = "windows") {
-      "iwr -useb https://openclaw.ai/install.ps1 | iex".to_string()
+      OPENCLAW_INSTALL_SCRIPT_WIN.to_string()
     } else {
-      "curl -fsSL https://openclaw.ai/install.sh | bash".to_string()
+      OPENCLAW_INSTALL_SCRIPT_UNIX.to_string()
     }
   } else {
     format!("{} install -g {}@latest", npm_command(), OPENCLAW_PACKAGE)
   };
 
-  let task = create_openclaw_install_task(method, &command);
+  let mut task = create_openclaw_install_task(method, &command);
+  task.install_snapshot = capture_openclaw_install_snapshot();
   let response = serde_json::to_value(&task).map_err(|error| error.to_string())?;
   insert_openclaw_install_task(task.clone());
   spawn_openclaw_install_task_runner(task.task_id.clone());
@@ -1468,6 +1856,18 @@ pub(crate) fn get_openclaw_install_task(query: &Value) -> Result<Value, String> 
   serde_json::to_value(task).map_err(|error| error.to_string())
 }
 
+pub(crate) fn cancel_openclaw_install_task(body: &Value) -> Result<Value, String> {
+  let obj = parse_json_object(body);
+  let task_id = obj.get("taskId").and_then(Value::as_str).unwrap_or("").trim();
+  if task_id.is_empty() {
+    return Err("安装任务不存在，可能已经过期，请重新开始安装".to_string());
+  }
+  cancel_openclaw_install_task_inner(task_id)?;
+  let task = get_openclaw_install_task_snapshot(task_id)
+    .ok_or_else(|| "安装任务不存在，可能已经过期，请重新开始安装".to_string())?;
+  serde_json::to_value(task).map_err(|error| error.to_string())
+}
+
 /// Run install via a particular method
 pub(crate) fn run_openclaw_install_script(body: &Value) -> Result<Value, String> {
   let obj = parse_json_object(body);
@@ -1477,20 +1877,20 @@ pub(crate) fn run_openclaw_install_script(body: &Value) -> Result<Value, String>
     "script" => {
       // Run the install script via curl | bash (macOS/Linux) or PowerShell (Windows)
       if cfg!(target_os = "windows") {
-        let result = run_command("powershell", &["-Command", "iwr -useb https://openclaw.ai/install.ps1 | iex"], None)?;
+        let result = run_command("powershell", &["-Command", OPENCLAW_INSTALL_SCRIPT_WIN], None)?;
         Ok(json!({
           "ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
           "method": "script",
-          "command": "iwr -useb https://openclaw.ai/install.ps1 | iex",
+          "command": OPENCLAW_INSTALL_SCRIPT_WIN,
           "stdout": result.get("stdout").cloned().unwrap_or(Value::Null),
           "stderr": result.get("stderr").cloned().unwrap_or(Value::Null),
         }))
       } else {
-        let result = run_command("bash", &["-c", "curl -fsSL https://openclaw.ai/install.sh | bash"], None)?;
+        let result = run_command("bash", &["-c", OPENCLAW_INSTALL_SCRIPT_UNIX], None)?;
         Ok(json!({
           "ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
           "method": "script",
-          "command": "curl -fsSL https://openclaw.ai/install.sh | bash",
+          "command": OPENCLAW_INSTALL_SCRIPT_UNIX,
           "stdout": result.get("stdout").cloned().unwrap_or(Value::Null),
           "stderr": result.get("stderr").cloned().unwrap_or(Value::Null),
         }))
@@ -1538,6 +1938,205 @@ pub(crate) fn run_openclaw_install_script(body: &Value) -> Result<Value, String>
     }
     _ => Err(format!("不支持的安装方式：{}", method)),
   }
+}
+
+fn run_remote_ssh_command(
+  host: &str,
+  port: u16,
+  username: &str,
+  auth_method: &str,
+  password: &str,
+  key_path: &str,
+  remote_command: &str,
+) -> Result<Value, String> {
+  if command_exists("ssh").is_none() {
+    return Err("本机未检测到 ssh 命令，请先安装 OpenSSH 客户端".to_string());
+  }
+
+  let mut ssh_args: Vec<String> = vec![
+    "-o".to_string(), "StrictHostKeyChecking=accept-new".to_string(),
+    "-o".to_string(), "ConnectTimeout=12".to_string(),
+    "-p".to_string(), port.to_string(),
+  ];
+
+  match auth_method {
+    "key" => {
+      if key_path.trim().is_empty() {
+        return Err("请选择 SSH 私钥文件".to_string());
+      }
+      let key_file = PathBuf::from(key_path);
+      if !key_file.exists() {
+        return Err(format!("未找到 SSH 私钥文件：{}", key_path));
+      }
+      ssh_args.push("-i".to_string());
+      ssh_args.push(key_path.to_string());
+      ssh_args.push("-o".to_string());
+      ssh_args.push("BatchMode=yes".to_string());
+    }
+    "agent" => {
+      ssh_args.push("-o".to_string());
+      ssh_args.push("BatchMode=yes".to_string());
+    }
+    "password" => {
+      if password.trim().is_empty() {
+        return Err("请输入远程服务器密码".to_string());
+      }
+    }
+    _ => return Err("不支持的远程登录方式".to_string()),
+  }
+
+  ssh_args.push(format!("{}@{}", username, host));
+  ssh_args.push(remote_command.to_string());
+
+  if auth_method == "password" {
+    if command_exists("sshpass").is_none() {
+      return Err("密码登录需要本机安装 sshpass（macOS 可用 brew install hudochenkov/sshpass/sshpass）".to_string());
+    }
+    let mut args = vec!["-e".to_string(), "ssh".to_string()];
+    args.extend(ssh_args);
+    return run_command_dynamic("sshpass", &args, None, Some(("SSHPASS", password.to_string())));
+  }
+
+  run_command_dynamic("ssh", &ssh_args, None, None)
+}
+
+pub(crate) fn install_openclaw_remote(body: &Value) -> Result<Value, String> {
+  let obj = parse_json_object(body);
+  let host = get_string(&obj, "host");
+  if host.trim().is_empty() {
+    return Err("请输入远程服务器 IP 或域名".to_string());
+  }
+
+  let username = get_string(&obj, "username");
+  if username.trim().is_empty() {
+    return Err("请输入远程登录用户名".to_string());
+  }
+
+  let port = match obj.get("port") {
+    Some(Value::Number(n)) => n.as_u64().unwrap_or(22),
+    Some(Value::String(s)) if !s.trim().is_empty() => s.trim().parse::<u64>().unwrap_or(0),
+    _ => 22,
+  };
+  if port == 0 || port > 65535 {
+    return Err("远程端口必须是 1-65535 的整数".to_string());
+  }
+
+  let auth_method = {
+    let input = get_string(&obj, "authMethod").to_lowercase();
+    if input.trim().is_empty() { "agent".to_string() } else { input }
+  };
+  if auth_method != "agent" && auth_method != "password" && auth_method != "key" {
+    return Err("不支持的远程登录方式".to_string());
+  }
+
+  let password = get_string(&obj, "password");
+  let key_path_raw = get_string(&obj, "keyPath");
+  let key_path = if key_path_raw.starts_with("~/") {
+    if let Some(home) = dirs::home_dir() {
+      home.join(key_path_raw.trim_start_matches("~/")).to_string_lossy().to_string()
+    } else {
+      key_path_raw
+    }
+  } else {
+    key_path_raw
+  };
+
+  let install_method = {
+    let input = get_string(&obj, "installMethod").to_lowercase();
+    if input.trim().is_empty() { "script".to_string() } else { input }
+  };
+  if install_method != "script" && install_method != "npm" {
+    return Err("远程安装仅支持脚本安装或 npm 安装".to_string());
+  }
+
+  let remote_os = {
+    let input = get_string(&obj, "remoteOs").to_lowercase();
+    if input.trim().is_empty() || input == "unix" || input == "linux" || input == "macos" || input == "darwin" {
+      "unix".to_string()
+    } else if input == "windows" || input == "win" {
+      "windows".to_string()
+    } else {
+      return Err("远程系统仅支持 Linux/macOS 或 Windows".to_string());
+    }
+  };
+
+  let remote_command = if remote_os == "windows" {
+    if install_method == "script" {
+      format!(
+        "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{}\"",
+        OPENCLAW_INSTALL_SCRIPT_WIN.replace('"', "\\\"")
+      )
+    } else {
+      "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"npm install -g openclaw@latest\"".to_string()
+    }
+  } else if install_method == "script" {
+    OPENCLAW_INSTALL_SCRIPT_UNIX.to_string()
+  } else {
+    format!("{} install -g {}@latest", npm_command(), OPENCLAW_PACKAGE)
+  };
+  let target = format!("{}@{}:{}", username, host, port);
+
+  let install_result = run_remote_ssh_command(
+    &host,
+    port as u16,
+    &username,
+    &auth_method,
+    &password,
+    &key_path,
+    &remote_command,
+  )?;
+
+  if !install_result.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+    let stderr = install_result.get("stderr").and_then(Value::as_str).unwrap_or("").trim();
+    let stdout = install_result.get("stdout").and_then(Value::as_str).unwrap_or("").trim();
+    if !stderr.is_empty() {
+      return Err(stderr.to_string());
+    }
+    if !stdout.is_empty() {
+      return Err(stdout.to_string());
+    }
+    return Err(format!("远程安装失败：{}", target));
+  }
+
+  let verify_command = if remote_os == "windows" {
+    "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"openclaw --version\""
+  } else {
+    "sh -lc 'openclaw --version 2>/dev/null || true'"
+  };
+  let verify_result = run_remote_ssh_command(
+    &host,
+    port as u16,
+    &username,
+    &auth_method,
+    &password,
+    &key_path,
+    verify_command,
+  )?;
+
+  let verify_stdout = verify_result.get("stdout").and_then(Value::as_str).unwrap_or("").to_string();
+  let verify_stderr = verify_result.get("stderr").and_then(Value::as_str).unwrap_or("").to_string();
+  let verify_text = format!("{}{}", verify_stdout, verify_stderr);
+  let version = extract_version(&verify_text);
+
+  Ok(json!({
+    "ok": true,
+    "mode": "remote",
+    "method": install_method,
+    "command": remote_command,
+    "remote": {
+      "host": host,
+      "port": port,
+      "username": username,
+      "authMethod": auth_method,
+      "os": remote_os,
+      "target": target,
+    },
+    "version": version,
+    "stdout": install_result.get("stdout").cloned().unwrap_or(Value::Null),
+    "stderr": install_result.get("stderr").cloned().unwrap_or(Value::Null),
+    "verifyStdout": verify_result.get("stdout").cloned().unwrap_or(Value::Null),
+    "verifyStderr": verify_result.get("stderr").cloned().unwrap_or(Value::Null),
+  }))
 }
 
 pub(crate) fn open_url_in_browser(body: &Value) -> Result<Value, String> {

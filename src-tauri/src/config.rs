@@ -322,7 +322,8 @@ pub(crate) fn save_settings(body: &Value) -> Result<Value, String> {
   let config_content = read_text(&paths.config_path)?;
   let mut config = parse_toml_config(&config_content)?;
   let original_config = config.clone();
-  apply_patch(&mut config, object.get("settings").unwrap_or(&json!({})));
+  let normalized_settings = normalize_settings_patch(object.get("settings").unwrap_or(&json!({})));
+  apply_patch(&mut config, &normalized_settings);
 
   let changed = config != original_config;
   let backup_path = if changed {
@@ -448,7 +449,7 @@ use crate::provider::{
   summarize_providers,
 };
 use crate::{
-  app_home, apply_patch, backups_root, default_codex_home, ensure_dir, home_dir, parse_env,
-  parse_json_object, parse_toml_config, read_text, stringify_env, stringify_toml_config,
-  timestamp, write_text,
+  app_home, apply_patch, backups_root, default_codex_home, ensure_dir, home_dir,
+  normalize_settings_patch, parse_env, parse_json_object, parse_toml_config, read_text,
+  stringify_env, stringify_toml_config, timestamp, write_text,
 };

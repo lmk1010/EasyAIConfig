@@ -12,6 +12,8 @@ const OPENCLAW_INSTALL_TASK_TTL_MS = 30 * 60 * 1000;
 const OPENCLAW_INSTALL_TASKS = new Map();
 
 let openclawInstallTaskSeq = 0;
+const OPENCLAW_INSTALL_SCRIPT_UNIX = 'curl -fsSL https://openclaw.ai/install.sh | OPENCLAW_NO_ONBOARD=1 bash -s -- --no-onboard --install-method npm';
+const OPENCLAW_INSTALL_SCRIPT_WIN = "$env:OPENCLAW_NO_ONBOARD='1'; iwr -useb https://openclaw.ai/install.ps1 | iex";
 
 /* ═══════════════  Tool Registry  ═══════════════ */
 const TOOL_REGISTRY = {
@@ -254,11 +256,185 @@ function createOpenClawInstallTask({ method, command }) {
     version: null,
     error: null,
     nextActions: [],
+    _cancelRequested: false,
+    _childPid: null,
+    _installSnapshot: null,
+    _cancelPromise: null,
     _stdoutBuffer: '',
     _stderrBuffer: '',
   };
   OPENCLAW_INSTALL_TASKS.set(task.id, task);
   return task;
+}
+
+async function pathExists(targetPath) {
+  if (!targetPath) return false;
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function npmGlobalPrefix() {
+  const result = spawnSync(npmCommand(), ['prefix', '-g'], { encoding: 'utf8' });
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+
+function npmGlobalRoot() {
+  const result = spawnSync(npmCommand(), ['root', '-g'], { encoding: 'utf8' });
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+
+async function captureOpenClawInstallSnapshot() {
+  const homePath = openclawHome();
+  const npmPrefix = npmGlobalPrefix();
+  const npmRoot = npmGlobalRoot();
+  const binary = findToolBinary('openclaw');
+  const packagePath = npmRoot ? path.join(npmRoot, 'openclaw') : '';
+  const binPaths = !npmPrefix
+    ? []
+    : process.platform === 'win32'
+      ? [path.join(npmPrefix, 'openclaw'), path.join(npmPrefix, 'openclaw.cmd'), path.join(npmPrefix, 'openclaw.ps1')]
+      : [path.join(npmPrefix, 'bin', 'openclaw')];
+
+  return {
+    hadBinary: Boolean(binary.installed),
+    homePath,
+    homeExisted: await pathExists(homePath),
+    packagePath,
+    binPaths,
+  };
+}
+
+function isOpenClawInstallActive(task) {
+  return task && (task.status === 'running' || task.status === 'cancelling');
+}
+
+function isOpenClawInstallCancelled(task) {
+  return Boolean(task?._cancelRequested) || task?.status === 'cancelling' || task?.status === 'cancelled';
+}
+
+async function isPidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function terminateOpenClawInstallProcess(task) {
+  const pid = Number(task?._childPid || 0);
+  if (!pid) return;
+
+  if (process.platform === 'win32') {
+    await runCommand('taskkill', ['/F', '/T', '/PID', String(pid)]).catch(() => null);
+    task._childPid = null;
+    return;
+  }
+
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* noop */ }
+  }
+  await new Promise(resolve => setTimeout(resolve, 900));
+  if (await isPidAlive(pid)) {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* noop */ }
+    }
+  }
+  task._childPid = null;
+}
+
+async function cleanupOpenClawInstallArtifacts(task) {
+  const snapshot = task?._installSnapshot || {};
+  const cleanedPaths = [];
+  const cleanupErrors = [];
+
+  if (!snapshot.hadBinary) {
+    try {
+      const uninstallResult = await runCommand(npmCommand(), ['uninstall', '-g', 'openclaw']);
+      const uninstallLog = `${String(uninstallResult.stdout || '').trim()} ${String(uninstallResult.stderr || '').trim()}`.trim();
+      if (uninstallLog) pushOpenClawInstallLog(task, uninstallResult.ok ? 'stdout' : 'stderr', uninstallLog);
+    } catch (error) {
+      cleanupErrors.push(error instanceof Error ? error.message : String(error));
+    }
+
+    for (const targetPath of [snapshot.packagePath, ...(snapshot.binPaths || [])]) {
+      if (!targetPath) continue;
+      try {
+        await fs.rm(targetPath, { recursive: true, force: true });
+        cleanedPaths.push(targetPath);
+      } catch (error) {
+        cleanupErrors.push(`删除 ${targetPath} 失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  if (!snapshot.homeExisted && snapshot.homePath) {
+    try {
+      await fs.rm(snapshot.homePath, { recursive: true, force: true });
+      cleanedPaths.push(snapshot.homePath);
+    } catch (error) {
+      cleanupErrors.push(`删除 ${snapshot.homePath} 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return { cleanedPaths: [...new Set(cleanedPaths)], cleanupErrors };
+}
+
+async function cancelRunningOpenClawInstall(task) {
+  if (!task) throw new Error('安装任务不存在，可能已经过期，请重新开始安装');
+  if (!isOpenClawInstallActive(task)) return serializeOpenClawInstallTask(task);
+  if (task._cancelPromise) {
+    await task._cancelPromise;
+    return serializeOpenClawInstallTask(task);
+  }
+
+  task._cancelRequested = true;
+  task.status = 'cancelling';
+  task.summary = '正在中断 OpenClaw 安装…';
+  task.hint = '先别关闭窗口，正在终止安装进程并清理残留。';
+  task.detail = '正在停止安装进程…';
+  touchOpenClawInstallTask(task);
+
+  task._cancelPromise = (async () => {
+    pushOpenClawInstallLog(task, 'stderr', '收到中断请求，正在终止安装进程…');
+    await terminateOpenClawInstallProcess(task);
+    pushOpenClawInstallLog(task, 'stdout', '安装进程已停止，开始清理本次安装残留…');
+    const cleanup = await cleanupOpenClawInstallArtifacts(task);
+    task.steps = task.steps.map((step, index) => ({
+      ...step,
+      status: index < task.stepIndex ? 'done' : index === task.stepIndex ? 'error' : 'pending',
+    }));
+    task.status = 'cancelled';
+    task.progress = 100;
+    task.error = cleanup.cleanupErrors.length ? cleanup.cleanupErrors.join('；') : null;
+    task.summary = cleanup.cleanupErrors.length ? '安装已中断，但清理时遇到问题。' : '安装已中断，残留已清理。';
+    task.hint = cleanup.cleanupErrors.length
+      ? '大部分安装已撤销，但还有少量路径需要你手动确认。'
+      : '本次安装已彻底中断，你可以随时重新开始。';
+    task.detail = cleanup.cleanupErrors.length
+      ? cleanup.cleanupErrors[0]
+      : cleanup.cleanedPaths.length
+        ? `已清理 ${cleanup.cleanedPaths.length} 处残留。`
+        : '未发现需要额外清理的残留。';
+    task.nextActions = cleanup.cleanupErrors.length
+      ? ['请先查看最后日志中的清理报错。', '确认相关路径已删除后，再重新安装。']
+      : ['如需继续，请重新点击安装 OpenClaw。'];
+    task.completedAt = nowIso();
+    task._childPid = null;
+    touchOpenClawInstallTask(task);
+  })();
+
+  await task._cancelPromise;
+  return serializeOpenClawInstallTask(task);
 }
 
 function serializeOpenClawInstallTask(task) {
@@ -305,8 +481,12 @@ function setOpenClawInstallStep(task, stepIndex, overrides = {}) {
   touchOpenClawInstallTask(task);
 }
 
+function cleanOpenClawInstallLine(line) {
+  return String(line || '').replace(/\u001b\[[0-9;]*m/g, '').trim();
+}
+
 function pushOpenClawInstallLog(task, source, line) {
-  const text = String(line || '').replace(/\u001b\[[0-9;]*m/g, '').trim();
+  const text = cleanOpenClawInstallLine(line);
   if (!text) return;
   task.logs.push({ source, text, at: nowIso() });
   if (task.logs.length > 120) task.logs.shift();
@@ -315,17 +495,30 @@ function pushOpenClawInstallLog(task, source, line) {
 }
 
 function inferOpenClawInstallStep(task, line) {
-  const text = String(line || '').toLowerCase();
+  const cleaned = cleanOpenClawInstallLine(line);
+  const text = cleaned.toLowerCase();
   if (!text) return;
   if (task.method === 'script') {
-    if (/(curl|download|fetch|https?:\/\/)/.test(text)) setOpenClawInstallStep(task, 1, { detail: line });
-    if (/(install|extract|copy|link|binary|daemon|openclaw)/.test(text)) setOpenClawInstallStep(task, 2, { detail: line });
-    if (/(done|complete|success|finished|installed)/.test(text)) setOpenClawInstallStep(task, 3, { detail: line });
+    if (/(\[1\/3\]|preparing environment|homebrew|node\.js|active npm|active node)/.test(text)) {
+      setOpenClawInstallStep(task, 0, { detail: cleaned });
+      return;
+    }
+    if (/(curl|download|fetch|https?:\/\/|installer|install plan)/.test(text)) {
+      setOpenClawInstallStep(task, 1, { detail: cleaned });
+      return;
+    }
+    if (/(\[2\/3\]|installing openclaw|extract|copy|link|binary|daemon|git already installed)/.test(text)) {
+      setOpenClawInstallStep(task, 2, { detail: cleaned });
+    }
     return;
   }
-  if (/(fetch|tarball|manifest|registry|http)/.test(text)) setOpenClawInstallStep(task, 1, { detail: line });
-  if (/(install|added|changed|build|postinstall|preinstall|link|reify)/.test(text)) setOpenClawInstallStep(task, 2, { detail: line });
-  if (/(audited|funding|done|success|installed)/.test(text)) setOpenClawInstallStep(task, 3, { detail: line });
+  if (/(fetch|tarball|manifest|registry|http)/.test(text)) {
+    setOpenClawInstallStep(task, 1, { detail: cleaned });
+    return;
+  }
+  if (/(install|added|changed|build|postinstall|preinstall|link|reify)/.test(text)) {
+    setOpenClawInstallStep(task, 2, { detail: cleaned });
+  }
 }
 
 function consumeOpenClawInstallChunk(task, source, chunk) {
@@ -357,15 +550,21 @@ function runTrackedCommand(task, command, args, options = {}) {
       cwd: options.cwd,
       env: { ...process.env, ...(options.env || {}) },
       shell: false,
+      detached: process.platform !== 'win32',
     });
+
+    task._childPid = child.pid || null;
+    touchOpenClawInstallTask(task);
 
     child.stdout?.on('data', (chunk) => consumeOpenClawInstallChunk(task, 'stdout', chunk));
     child.stderr?.on('data', (chunk) => consumeOpenClawInstallChunk(task, 'stderr', chunk));
     child.on('error', (error) => {
+      task._childPid = null;
       pushOpenClawInstallLog(task, 'stderr', error.message);
       resolve({ ok: false, code: null, stdout: task.stdout, stderr: `${task.stderr}${error.message}` });
     });
     child.on('close', (code) => {
+      task._childPid = null;
       flushOpenClawInstallChunk(task);
       resolve({ ok: code === 0, code, stdout: task.stdout, stderr: task.stderr });
     });
@@ -374,11 +573,12 @@ function runTrackedCommand(task, command, args, options = {}) {
 
 function finishOpenClawInstallTask(task, status, payload = {}) {
   task.status = status;
-  task.progress = status === 'success' ? 100 : task.progress;
+  task.progress = status === 'success' || status === 'cancelled' ? 100 : task.progress;
   task.version = payload.version || task.version || null;
   task.error = payload.error || null;
   task.nextActions = payload.nextActions || [];
   task.completedAt = nowIso();
+  task._childPid = null;
   touchOpenClawInstallTask(task);
 }
 
@@ -388,10 +588,11 @@ async function runOpenClawInstallTask(task) {
     ? (process.platform === 'win32' ? 'powershell' : 'bash')
     : npmCommand();
   const args = isScript
-    ? (process.platform === 'win32' ? ['-Command', 'iwr -useb https://openclaw.ai/install.ps1 | iex'] : ['-lc', 'curl -fsSL https://openclaw.ai/install.sh | bash'])
+    ? (process.platform === 'win32' ? ['-Command', OPENCLAW_INSTALL_SCRIPT_WIN] : ['-lc', OPENCLAW_INSTALL_SCRIPT_UNIX])
     : ['install', '-g', 'openclaw@latest'];
 
   try {
+    if (isOpenClawInstallCancelled(task)) return;
     if (isScript && process.platform !== 'win32' && !commandExists('curl')) {
       throw new Error('未检测到 `curl`，无法执行脚本安装。请先安装 curl，或改用 npm 安装。');
     }
@@ -403,9 +604,30 @@ async function runOpenClawInstallTask(task) {
       pushOpenClawInstallLog(task, 'stdout', `Node.js ${String(nodeResult.stdout || '').trim()} / npm ${String(npmResult.stdout || '').trim()}`);
     }
 
+    // Mark preflight done, start download step
+    setOpenClawInstallStep(task, 0, { status: 'done' });
     setOpenClawInstallStep(task, 1, { detail: `即将执行：${task.command}` });
+
+    // Auto-advance to install step if still on download after 8s
+    // (npm often outputs nothing matching "download" keywords)
+    const autoAdvanceTimer = setTimeout(() => {
+      if (task.status === 'running' && task.stepIndex <= 1) {
+        setOpenClawInstallStep(task, 2, { detail: '正在安装 OpenClaw 及其依赖，请耐心等待…' });
+      }
+    }, 8000);
+
     const result = await runTrackedCommand(task, command, args);
+    clearTimeout(autoAdvanceTimer);
+    if (isOpenClawInstallCancelled(task)) return;
     if (!result.ok) throw new Error(result.stderr || `安装命令退出码：${result.code}`);
+
+    // Ensure install step is marked done before moving to verify
+    if (task.stepIndex < 2) {
+      setOpenClawInstallStep(task, 2, { detail: '安装命令已完成，准备验证…' });
+    }
+    // Small settle delay so user sees "install done" before "verifying"
+    await new Promise(r => setTimeout(r, 600));
+    if (isOpenClawInstallCancelled(task)) return;
 
     setOpenClawInstallStep(task, 3, { detail: '安装命令已执行完成，正在验证 openclaw 命令…' });
     const binary = findToolBinary('openclaw');
@@ -417,6 +639,7 @@ async function runOpenClawInstallTask(task) {
       nextActions: ['下一步 1：点击“启动 OpenClaw”打开工具。', '下一步 2：首次使用建议执行 `openclaw onboard --install-daemon`。', '下一步 3：如需改配置，可编辑 `~/.openclaw/openclaw.json`。'],
     });
   } catch (error) {
+    if (isOpenClawInstallCancelled(task)) return;
     task.steps = task.steps.map((step, index) => ({ ...step, status: index < task.stepIndex ? 'done' : index === task.stepIndex ? 'error' : 'pending' }));
     task.summary = 'OpenClaw 安装失败，需要你看一眼错误提示。';
     task.hint = '先看下方“最后日志”，通常会直接告诉你缺的是网络、权限还是依赖。';
@@ -552,6 +775,13 @@ function applyPatch(target, patch) {
     }
     target[key] = value;
   }
+}
+
+function normalizeSettingsPatch(patch) {
+  const normalized = structuredClone(patch || {});
+  if (normalized.compact_prompt === false) normalized.compact_prompt = 'false';
+  if (normalized.compact_prompt === true) normalized.compact_prompt = null;
+  return normalized;
 }
 
 function parseEnv(content) {
@@ -1194,7 +1424,7 @@ export async function saveSettings(payload) {
   const configContent = await readText(paths.configPath);
   const config = parseToml(configContent);
   const originalConfig = structuredClone(config);
-  applyPatch(config, payload.settings || {});
+  applyPatch(config, normalizeSettingsPatch(payload.settings || {}));
 
   const changed = JSON.stringify(config) !== JSON.stringify(originalConfig);
   const backupPath = changed ? await createBackup(paths) : null;
@@ -1485,6 +1715,194 @@ function openclawHome() {
   return path.join(os.homedir(), '.openclaw');
 }
 
+function resolveRemotePort(input) {
+  const text = String(input ?? '').trim();
+  if (!text) return 22;
+  const port = Number.parseInt(text, 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('远程端口必须是 1-65535 的整数');
+  }
+  return port;
+}
+
+function resolveRemoteKeyPath(input) {
+  const raw = String(input ?? '').trim();
+  if (!raw) return '';
+  const expanded = raw.startsWith('~/') ? path.join(os.homedir(), raw.slice(2)) : raw;
+  return path.resolve(expanded);
+}
+
+function resolveRemoteHost(input) {
+  const host = String(input ?? '').trim();
+  if (!host) throw new Error('请输入远程服务器 IP 或域名');
+  return host;
+}
+
+function resolveRemoteUsername(input) {
+  const username = String(input ?? '').trim();
+  if (!username) throw new Error('请输入远程登录用户名');
+  return username;
+}
+
+function resolveRemoteAuthMethod(input) {
+  const method = String(input ?? 'agent').trim().toLowerCase();
+  if (!['agent', 'password', 'key'].includes(method)) {
+    throw new Error('不支持的远程登录方式');
+  }
+  return method;
+}
+
+function resolveRemoteInstallMethod(input) {
+  const method = String(input ?? 'script').trim().toLowerCase();
+  if (!['script', 'npm'].includes(method)) {
+    throw new Error('远程安装仅支持脚本安装或 npm 安装');
+  }
+  return method;
+}
+
+function resolveRemoteTargetOs(input) {
+  const osText = String(input ?? 'unix').trim().toLowerCase();
+  if (['windows', 'win'].includes(osText)) return 'windows';
+  if (['unix', 'linux', 'macos', 'darwin'].includes(osText)) return 'unix';
+  throw new Error('远程系统仅支持 Linux/macOS 或 Windows');
+}
+
+function resolveRemoteInstallCommand(method, remoteOs) {
+  if (remoteOs === 'windows') {
+    if (method === 'script') {
+      return `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${OPENCLAW_INSTALL_SCRIPT_WIN}"`;
+    }
+    return 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "npm install -g openclaw@latest"';
+  }
+  return method === 'script' ? OPENCLAW_INSTALL_SCRIPT_UNIX : 'npm install -g openclaw@latest';
+}
+
+function resolveRemoteVerifyCommand(remoteOs) {
+  if (remoteOs === 'windows') {
+    return 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "openclaw --version"';
+  }
+  return "sh -lc 'openclaw --version 2>/dev/null || true'";
+}
+
+function extractOpenClawVersion(text) {
+  const match = String(text || '').match(/openclaw[^\d]*(\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?)/i)
+    || String(text || '').match(/(\d+\.\d+\.\d+(?:[-+][a-z0-9.-]+)?)/i);
+  return match ? match[1] : '';
+}
+
+async function runRemoteSshCommand({
+  host,
+  port,
+  username,
+  authMethod,
+  password,
+  keyPath,
+  remoteCommand,
+} = {}) {
+  if (!commandExists('ssh')) {
+    throw new Error('本机未检测到 ssh 命令，请先安装 OpenSSH 客户端');
+  }
+  const sshArgs = [
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'ConnectTimeout=12',
+    '-p', String(port),
+  ];
+  if (authMethod === 'key') {
+    if (!keyPath) throw new Error('请选择 SSH 私钥文件');
+    await fs.access(keyPath).catch(() => {
+      throw new Error(`未找到 SSH 私钥文件：${keyPath}`);
+    });
+    sshArgs.push('-i', keyPath, '-o', 'BatchMode=yes');
+  } else if (authMethod === 'agent') {
+    sshArgs.push('-o', 'BatchMode=yes');
+  } else if (authMethod === 'password') {
+    if (!password) throw new Error('请输入远程服务器密码');
+  } else {
+    throw new Error('不支持的认证方式');
+  }
+  sshArgs.push(`${username}@${host}`, remoteCommand);
+
+  if (authMethod === 'password') {
+    if (!commandExists('sshpass')) {
+      throw new Error('密码登录需要本机安装 sshpass（macOS 可用 brew install hudochenkov/sshpass/sshpass）');
+    }
+    return runCommand('sshpass', ['-e', 'ssh', ...sshArgs], {
+      env: { SSHPASS: password },
+    });
+  }
+  return runCommand('ssh', sshArgs);
+}
+
+export async function installOpenClawRemote({
+  host,
+  port = 22,
+  username,
+  authMethod = 'agent',
+  password = '',
+  keyPath = '',
+  installMethod = 'script',
+  remoteOs = 'unix',
+} = {}) {
+  const remoteHost = resolveRemoteHost(host);
+  const remotePort = resolveRemotePort(port);
+  const remoteUser = resolveRemoteUsername(username);
+  const remoteAuthMethod = resolveRemoteAuthMethod(authMethod);
+  const remoteTargetOs = resolveRemoteTargetOs(remoteOs);
+  const remoteInstallMethod = resolveRemoteInstallMethod(installMethod);
+  const remoteKeyPath = resolveRemoteKeyPath(keyPath);
+  const remoteCommand = resolveRemoteInstallCommand(remoteInstallMethod, remoteTargetOs);
+  const remoteTarget = `${remoteUser}@${remoteHost}:${remotePort}`;
+
+  const installResult = await runRemoteSshCommand({
+    host: remoteHost,
+    port: remotePort,
+    username: remoteUser,
+    authMethod: remoteAuthMethod,
+    password: String(password || ''),
+    keyPath: remoteKeyPath,
+    remoteCommand,
+  });
+
+  if (!installResult.ok) {
+    const reason = String(installResult.stderr || installResult.stdout || '').trim();
+    throw new Error(reason || `远程安装失败：${remoteTarget}`);
+  }
+
+  const verifyCommand = resolveRemoteVerifyCommand(remoteTargetOs);
+  const verifyResult = await runRemoteSshCommand({
+    host: remoteHost,
+    port: remotePort,
+    username: remoteUser,
+    authMethod: remoteAuthMethod,
+    password: String(password || ''),
+    keyPath: remoteKeyPath,
+    remoteCommand: verifyCommand,
+  });
+
+  const versionText = String(verifyResult.stdout || verifyResult.stderr || '').trim();
+  const version = extractOpenClawVersion(versionText);
+
+  return {
+    ok: true,
+    mode: 'remote',
+    method: remoteInstallMethod,
+    command: remoteCommand,
+    remote: {
+      host: remoteHost,
+      port: remotePort,
+      username: remoteUser,
+      authMethod: remoteAuthMethod,
+      os: remoteTargetOs,
+      target: remoteTarget,
+    },
+    version: version || null,
+    stdout: installResult.stdout,
+    stderr: installResult.stderr,
+    verifyStdout: verifyResult.stdout,
+    verifyStderr: verifyResult.stderr,
+  };
+}
+
 export async function loadOpenClawState() {
   const home = openclawHome();
   const configPath = path.join(home, 'openclaw.json');
@@ -1538,10 +1956,11 @@ export async function startOpenClawInstallTask({ method = 'npm' } = {}) {
   }
 
   const command = method === 'script'
-    ? (process.platform === 'win32' ? 'iwr -useb https://openclaw.ai/install.ps1 | iex' : 'curl -fsSL https://openclaw.ai/install.sh | bash')
+    ? (process.platform === 'win32' ? OPENCLAW_INSTALL_SCRIPT_WIN : OPENCLAW_INSTALL_SCRIPT_UNIX)
     : `${npmCommand()} install -g openclaw@latest`;
 
   const task = createOpenClawInstallTask({ method, command });
+  task._installSnapshot = await captureOpenClawInstallSnapshot();
   void runOpenClawInstallTask(task);
   return serializeOpenClawInstallTask(task);
 }
@@ -1554,14 +1973,22 @@ export async function getOpenClawInstallTask({ taskId } = {}) {
   return serializeOpenClawInstallTask(OPENCLAW_INSTALL_TASKS.get(taskId));
 }
 
+export async function cancelOpenClawInstallTask({ taskId } = {}) {
+  cleanupOpenClawInstallTasks();
+  if (!taskId || !OPENCLAW_INSTALL_TASKS.has(taskId)) {
+    throw new Error('安装任务不存在，可能已经过期，请重新开始安装');
+  }
+  return cancelRunningOpenClawInstall(OPENCLAW_INSTALL_TASKS.get(taskId));
+}
+
 export async function installOpenClaw({ method = 'npm' } = {}) {
   if (method === 'script') {
     if (process.platform === 'win32') {
-      const result = await runCommand('powershell', ['-Command', 'iwr -useb https://openclaw.ai/install.ps1 | iex']);
-      return { ...result, method: 'script', command: 'iwr -useb https://openclaw.ai/install.ps1 | iex' };
+      const result = await runCommand('powershell', ['-Command', OPENCLAW_INSTALL_SCRIPT_WIN]);
+      return { ...result, method: 'script', command: OPENCLAW_INSTALL_SCRIPT_WIN };
     } else {
-      const result = await runCommand('bash', ['-c', 'curl -fsSL https://openclaw.ai/install.sh | bash']);
-      return { ...result, method: 'script', command: 'curl -fsSL https://openclaw.ai/install.sh | bash' };
+      const result = await runCommand('bash', ['-c', OPENCLAW_INSTALL_SCRIPT_UNIX]);
+      return { ...result, method: 'script', command: OPENCLAW_INSTALL_SCRIPT_UNIX };
     }
   }
   if (method === 'npm') {

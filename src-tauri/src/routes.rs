@@ -5,6 +5,8 @@ use crate::codex::{
   list_tools, load_claudecode_state, save_claudecode_config, save_claudecode_raw_config,
   launch_claudecode, load_openclaw_state, launch_openclaw, save_openclaw_config,
   run_openclaw_install_script, start_openclaw_install_task, get_openclaw_install_task,
+  cancel_openclaw_install_task,
+  install_openclaw_remote,
   onboard_openclaw, open_url_in_browser, stop_openclaw_gateway, uninstall_openclaw,
 };
 use crate::config::{
@@ -52,6 +54,8 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/openclaw/install", "POST") => run_openclaw_install_script(body),
     ("/api/openclaw/install/start", "POST") => start_openclaw_install_task(body),
     ("/api/openclaw/install/status", "GET") => get_openclaw_install_task(query),
+    ("/api/openclaw/install/cancel", "POST") => cancel_openclaw_install_task(body),
+    ("/api/openclaw/install/remote", "POST") => install_openclaw_remote(body),
     ("/api/openclaw/update", "POST") => codex_npm_action(&["install", "-g", &format!("{}@latest", OPENCLAW_PACKAGE)]),
     ("/api/openclaw/reinstall", "POST") => codex_npm_action(&["install", "-g", OPENCLAW_PACKAGE, "--force"]),
     ("/api/openclaw/uninstall", "POST") => uninstall_openclaw(body),

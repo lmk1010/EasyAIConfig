@@ -2662,22 +2662,53 @@ button.running {
 }
 
 .update-dialog-panel {
-  width: min(520px, calc(100vw - 24px));
-  margin: 24vh auto 0;
-  padding: 18px;
+  width: min(540px, calc(100vw - 24px));
+  margin: 12vh auto 0;
+  padding: 22px 24px 20px;
   border-radius: 24px;
   background: linear-gradient(180deg, rgba(18, 23, 34, 0.98), rgba(10, 14, 22, 0.98));
   box-shadow: var(--shadow), inset 0 0 0 1px var(--line-soft);
+  max-height: calc(100vh - 16vh);
+  display: flex;
+  flex-direction: column;
+  transition: width 280ms cubic-bezier(0.16, 1, 0.3, 1), margin 280ms ease;
+}
+
+.update-dialog-head {
+  align-items: flex-start;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.update-dialog-head h3 {
+  margin-top: 3px !important;
 }
 
 .update-dialog-body {
   color: var(--text);
-  font-size: 0.92rem;
-  line-height: 1.58;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+/* Scrollbar for dialog body */
+.update-dialog-body::-webkit-scrollbar {
+  width: 4px;
+}
+.update-dialog-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.update-dialog-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
 }
 
 .update-dialog-meta {
   margin-top: 12px;
+  flex-shrink: 0;
 }
 
 .update-line+.update-line {
@@ -2688,7 +2719,10 @@ button.running {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
 }
 
 #appUpdateBtn[hidden] {
@@ -2790,7 +2824,8 @@ body.update-dialog-open {
   }
 
   .update-dialog-panel {
-    margin-top: 16vh;
+    margin-top: 6vh;
+    max-height: calc(100vh - 10vh);
   }
 }
 
@@ -7422,6 +7457,10 @@ textarea:focus {
   color: #64748b;
 }
 
+[data-theme="light"] .update-dialog-actions {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+
 [data-theme="light"] .update-dialog-footer {
   border-top-color: transparent;
   background: rgba(0, 0, 0, 0.015);
@@ -8298,7 +8337,7 @@ button.about-link-card {
 /* ═══════════════  OpenClaw Install Methods  ═══════════════ */
 
 .openclaw-install-methods {
-  padding: 4px 0;
+  padding: 0;
 }
 
 .install-methods-title {
@@ -8317,11 +8356,11 @@ button.about-link-card {
 .install-method-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  border: 1px solid var(--line-soft);
-  background: var(--bg-panel);
+  gap: 10px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.018);
   cursor: pointer;
   transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   text-align: left;
@@ -8332,61 +8371,72 @@ button.about-link-card {
 
 .install-method-card:hover {
   border-color: rgba(141, 192, 255, 0.22);
-  background: rgba(141, 192, 255, 0.06);
-  box-shadow: 0 4px 20px rgba(141, 192, 255, 0.08);
+  background: rgba(141, 192, 255, 0.055);
+  box-shadow: 0 4px 24px rgba(141, 192, 255, 0.08);
   transform: translateY(-2px);
 }
 
 .imc-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .imc-icon {
-  font-size: 1.2rem;
-  line-height: 1;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: rgba(141, 192, 255, 0.08);
+  color: rgba(141, 192, 255, 0.75);
+  flex-shrink: 0;
 }
 
 .imc-title {
   font-weight: 640;
-  font-size: 0.88rem;
+  font-size: 0.86rem;
+  line-height: 1.2;
 }
 
 .imc-tag {
-  font-size: 0.56rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(141, 192, 255, 0.12);
-  color: var(--accent);
-  line-height: 1.4;
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(141, 192, 255, 0.1);
+  color: rgba(141, 192, 255, 0.85);
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .imc-desc {
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   color: var(--muted);
-  line-height: 1.4;
+  line-height: 1.45;
+  opacity: 0.85;
 }
 
 .imc-cmd {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-family: "SF Mono", "JetBrains Mono", "Fira Code", monospace;
-  color: rgba(141, 192, 255, 0.65);
-  background: rgba(0, 0, 0, 0.15);
-  padding: 5px 8px;
-  border-radius: 6px;
+  color: rgba(141, 192, 255, 0.6);
+  background: rgba(0, 0, 0, 0.18);
+  padding: 6px 10px;
+  border-radius: 8px;
   word-break: break-all;
-  line-height: 1.4;
+  line-height: 1.45;
+  border: 1px solid rgba(255, 255, 255, 0.03);
 }
 
 .install-methods-hint {
   margin-top: 12px;
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   color: var(--muted);
-  opacity: 0.7;
+  opacity: 0.6;
+  text-align: center;
 }
 
 .openclaw-installed-view {
@@ -8451,19 +8501,89 @@ button.about-link-card {
 .install-method-dialog {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.install-method-dialog .install-scope-switch {
+  margin-bottom: 4px;
+}
+
+/* Widen dialog when it contains install method content */
+.update-dialog-panel:has(.install-method-dialog) {
+  width: min(640px, calc(100vw - 24px)) !important;
+}
+
+.update-dialog-panel.install-dialog-wide {
+  width: min(640px, calc(100vw - 24px)) !important;
+}
+
+.install-scope-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  background: rgba(255, 255, 255, 0.035);
+  border-radius: 12px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.install-scope-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-size: 0.8rem;
+  font-weight: 520;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.install-scope-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  transform: none;
+}
+
+.install-scope-btn.is-active {
+  background: rgba(141, 192, 255, 0.12);
+  color: var(--text);
+  font-weight: 580;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.install-scope-panel {
+  display: none;
+}
+
+.install-scope-panel.is-active {
+  display: block;
+  animation: scopePanelIn 200ms ease;
+}
+
+@keyframes scopePanelIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.install-scope-hint {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+  opacity: 0.75;
 }
 
 .install-method-opt {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid var(--line-soft);
-  background: var(--bg-panel);
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.018);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   color: var(--text);
   text-align: left;
   height: auto;
@@ -8472,13 +8592,23 @@ button.about-link-card {
 }
 
 .install-method-opt:hover {
-  border-color: rgba(141, 192, 255, 0.22);
-  background: rgba(141, 192, 255, 0.06);
+  border-color: rgba(141, 192, 255, 0.2);
+  background: rgba(141, 192, 255, 0.055);
+  box-shadow: 0 2px 16px rgba(141, 192, 255, 0.06);
+  transform: translateY(-1px);
 }
 
 .imo-icon {
-  font-size: 1.3rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(141, 192, 255, 0.08);
+  color: rgba(141, 192, 255, 0.7);
   flex-shrink: 0;
+  margin-top: 1px;
 }
 
 .imo-content {
@@ -8487,19 +8617,132 @@ button.about-link-card {
 }
 
 .imo-title {
-  font-size: 0.84rem;
+  font-size: 0.86rem;
   font-weight: 620;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  line-height: 1.3;
 }
 
 .imo-cmd {
   font-size: 0.72rem;
   font-family: "SF Mono", "JetBrains Mono", monospace;
   color: var(--muted);
-  margin-top: 3px;
+  margin-top: 5px;
+  opacity: 0.6;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.remote-install-form {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.018);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.remote-install-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.remote-install-row.two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.remote-install-row.three-col {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.remote-install-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.remote-install-row label span {
+  font-size: 0.72rem;
+  font-weight: 520;
+  color: var(--muted);
+}
+
+.remote-install-row input,
+.remote-install-row select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 0.78rem;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.remote-install-row input:focus,
+.remote-install-row select:focus {
+  outline: none;
+  border-color: rgba(141, 192, 255, 0.35);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Custom select inside remote form */
+.remote-install-row .select-wrap {
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.remote-install-row .custom-select-trigger {
+  height: 38px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.remote-install-row .custom-select-trigger:hover {
+  border-color: rgba(141, 192, 255, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.remote-install-note {
+  font-size: 0.72rem;
+  color: var(--muted);
   opacity: 0.7;
+  text-align: center;
+  padding-top: 2px;
+}
+
+.remote-install-submit-btn {
+  border: none;
+  background: linear-gradient(135deg, rgba(141, 192, 255, 0.18), rgba(99, 160, 255, 0.14));
+  color: var(--text);
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 0.82rem;
+  font-weight: 560;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 0 1px rgba(141, 192, 255, 0.18);
+}
+
+.remote-install-submit-btn:hover {
+  background: linear-gradient(135deg, rgba(141, 192, 255, 0.24), rgba(99, 160, 255, 0.2));
+  box-shadow: 0 0 0 1px rgba(141, 192, 255, 0.3), 0 4px 16px rgba(141, 192, 255, 0.1);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 720px) {
+  .remote-install-row.two-col,
+  .remote-install-row.three-col,
+  .install-scope-switch {
+    grid-template-columns: 1fr;
+  }
 }
 
 .install-cmd-block {
@@ -8522,7 +8765,7 @@ button.about-link-card {
 }
 
 [data-theme="light"] .install-method-card {
-  background: rgba(0, 0, 0, 0.02);
+  background: rgba(0, 0, 0, 0.015);
   border-color: rgba(0, 0, 0, 0.08);
 }
 
@@ -8533,7 +8776,8 @@ button.about-link-card {
 }
 
 [data-theme="light"] .imc-cmd {
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(0, 0, 0, 0.035);
+  border-color: rgba(0, 0, 0, 0.04);
   color: rgba(50, 100, 180, 0.7);
 }
 
@@ -8546,16 +8790,17 @@ button.about-link-card {
 }
 
 [data-theme="light"] .imc-icon {
-  color: #475569;
+  background: rgba(50, 120, 220, 0.08);
+  color: #3b82f6;
 }
 
 [data-theme="light"] .imc-tag {
-  background: rgba(50, 120, 220, 0.1);
+  background: rgba(50, 120, 220, 0.08);
   color: #2563eb;
 }
 
 [data-theme="light"] .install-method-opt {
-  background: rgba(0, 0, 0, 0.02);
+  background: rgba(0, 0, 0, 0.015);
   border-color: rgba(0, 0, 0, 0.08);
   color: #1e293b;
 }
@@ -8563,6 +8808,7 @@ button.about-link-card {
 [data-theme="light"] .install-method-opt:hover {
   background: rgba(50, 120, 220, 0.04);
   border-color: rgba(50, 120, 220, 0.18);
+  box-shadow: 0 2px 16px rgba(50, 120, 220, 0.06);
 }
 
 [data-theme="light"] .imo-title {
@@ -8574,7 +8820,56 @@ button.about-link-card {
 }
 
 [data-theme="light"] .imo-icon {
-  color: #475569;
+  background: rgba(50, 120, 220, 0.08);
+  color: #3b82f6;
+}
+
+[data-theme="light"] .install-scope-switch {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .install-scope-btn {
+  background: transparent;
+  color: #64748b;
+}
+
+[data-theme="light"] .install-scope-btn:hover {
+  color: #1e293b;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .install-scope-btn.is-active {
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .remote-install-form {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .remote-install-row input,
+[data-theme="light"] .remote-install-row select {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #0f172a;
+}
+
+[data-theme="light"] .remote-install-note {
+  color: #64748b;
+}
+
+[data-theme="light"] .remote-install-submit-btn {
+  background: rgba(50, 120, 220, 0.08);
+  border-color: rgba(50, 120, 220, 0.26);
+  color: #1e293b;
+}
+
+[data-theme="light"] .remote-install-submit-btn:hover {
+  background: rgba(50, 120, 220, 0.14);
+  border-color: rgba(50, 120, 220, 0.34);
 }
 
 [data-theme="light"] .install-cmd-block {
@@ -8593,26 +8888,26 @@ button.about-link-card {
 .uninstall-choice-dialog {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .uninstall-choice-hint {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgba(251, 191, 36, 0.06);
-  border: 1px solid rgba(251, 191, 36, 0.12);
-  font-size: 0.8rem;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(251, 191, 36, 0.05);
+  border: 1px solid rgba(251, 191, 36, 0.1);
+  font-size: 0.78rem;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .ucd-hint-icon {
   flex-shrink: 0;
   color: #fbbf24;
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
 .uninstall-choice-opt {
@@ -8621,8 +8916,8 @@ button.about-link-card {
   gap: 14px;
   padding: 16px 18px;
   border-radius: 14px;
-  border: 1.5px solid var(--line-soft);
-  background: var(--bg-panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.018);
   cursor: pointer;
   transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   text-align: left;
@@ -8633,28 +8928,29 @@ button.about-link-card {
 }
 
 .uninstall-choice-opt:hover {
-  border-color: rgba(141, 192, 255, 0.25);
-  background: rgba(141, 192, 255, 0.06);
+  border-color: rgba(141, 192, 255, 0.22);
+  background: rgba(141, 192, 255, 0.055);
   box-shadow: 0 4px 20px rgba(141, 192, 255, 0.08);
   transform: translateY(-1px);
 }
 
 .uninstall-choice-opt.uninstall-choice-danger:hover {
-  border-color: rgba(248, 113, 113, 0.3);
-  background: rgba(248, 113, 113, 0.06);
-  box-shadow: 0 4px 20px rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.25);
+  background: rgba(248, 113, 113, 0.05);
+  box-shadow: 0 4px 20px rgba(248, 113, 113, 0.08);
 }
 
 .uco-icon {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: 11px;
   background: rgba(255, 255, 255, 0.04);
   transition: all 0.2s ease;
+  margin-top: 1px;
 }
 
 .uco-icon-keep {
@@ -8681,12 +8977,12 @@ button.about-link-card {
 }
 
 .uco-title {
-  font-size: 0.88rem;
-  font-weight: 650;
+  font-size: 0.86rem;
+  font-weight: 640;
   display: flex;
   align-items: center;
-  gap: 6px;
-  line-height: 1.4;
+  gap: 7px;
+  line-height: 1.35;
 }
 
 .uco-title svg {
@@ -8710,8 +9006,9 @@ button.about-link-card {
 .uco-desc {
   font-size: 0.76rem;
   color: var(--muted);
-  margin-top: 5px;
+  margin-top: 6px;
   line-height: 1.55;
+  opacity: 0.85;
 }
 
 .uco-desc strong {
@@ -9308,7 +9605,7 @@ button.about-link-card {
 }
 
 .update-dialog.install-tracker-mode .update-dialog-panel {
-  width: min(960px, calc(100vw - 24px)) !important;
+  width: min(1120px, calc(100vw - 24px)) !important;
   max-height: calc(100vh - 56px);
   margin: 0 auto;
   display: flex;
@@ -9442,7 +9739,7 @@ button.about-link-card {
 
 @media (max-width: 980px) {
   .update-dialog.install-tracker-mode .update-dialog-panel {
-    width: min(100vw - 16px, 1000px);
+    width: min(100vw - 16px, 1120px);
   }
 
   .install-tracker-grid {
@@ -9675,4 +9972,368 @@ button.about-link-card {
 
 [data-theme="light"] .tpi-progress {
   background: rgba(0, 0, 0, 0.04);
+}
+
+/* ═══ OpenClaw Onboard Model Config ═══ */
+.onboard-model-config {
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 16px;
+}
+
+.onboard-model-config .omc-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.onboard-model-config .omc-title svg {
+  opacity: 0.6;
+}
+
+.onboard-model-config .omc-subtitle {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.4;
+}
+
+/* Source tabs - local / manual / paste */
+.omc-source-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0;
+  background: rgba(255, 255, 255, 0.035);
+  border-radius: 10px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  margin-bottom: 14px;
+}
+
+.omc-source-tab {
+  height: 30px !important;
+  padding: 0 10px !important;
+  border-radius: 8px !important;
+  font-size: 0.74rem !important;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 140ms ease;
+  white-space: nowrap;
+}
+
+.omc-source-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.omc-source-tab.is-active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+/* Source panels */
+.omc-source-panel {
+  display: none;
+}
+
+.omc-source-panel.is-active {
+  display: block;
+}
+
+/* Local provider cards */
+.omc-local-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.omc-local-list::-webkit-scrollbar {
+  width: 3px;
+}
+
+.omc-local-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+.omc-local-group-label {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 0 4px;
+  opacity: 0.7;
+}
+
+.omc-local-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  transition: all 140ms ease;
+  width: 100%;
+  text-align: left;
+  color: var(--text);
+}
+
+.omc-local-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(141, 192, 255, 0.15);
+}
+
+.omc-local-card.is-selected {
+  background: rgba(99, 160, 255, 0.08);
+  border-color: rgba(99, 160, 255, 0.3);
+  box-shadow: 0 0 0 1px rgba(99, 160, 255, 0.12);
+}
+
+.omc-local-card .olc-icon {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.74rem;
+}
+
+.omc-local-card .olc-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.omc-local-card .olc-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omc-local-card .olc-url {
+  font-size: 0.66rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omc-local-card .olc-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 140ms ease;
+  flex-shrink: 0;
+}
+
+.omc-local-card.is-selected .olc-check {
+  background: rgba(99, 160, 255, 0.85);
+  border-color: rgba(99, 160, 255, 0.9);
+}
+
+.omc-local-empty {
+  font-size: 0.76rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 18px 10px;
+  opacity: 0.7;
+  line-height: 1.5;
+}
+
+/* Manual form */
+.omc-manual-form {
+  display: grid;
+  gap: 10px;
+}
+
+.omc-manual-form .omc-field {
+  display: grid;
+  gap: 4px;
+}
+
+.omc-manual-form .omc-field > span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.omc-manual-form .omc-field input {
+  height: 34px;
+  font-size: 0.82rem;
+}
+
+.omc-manual-form .omc-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* Paste import area */
+.omc-paste-area {
+  display: grid;
+  gap: 10px;
+}
+
+.omc-paste-area textarea {
+  min-height: 72px;
+  max-height: 120px;
+  font-size: 0.76rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.omc-paste-result {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(99, 200, 130, 0.06);
+  border: 1px solid rgba(99, 200, 130, 0.15);
+  color: var(--text);
+}
+
+.omc-paste-result.error {
+  background: rgba(255, 100, 100, 0.06);
+  border-color: rgba(255, 100, 100, 0.15);
+}
+
+.omc-paste-hint {
+  font-size: 0.68rem;
+  color: var(--muted);
+  opacity: 0.7;
+  line-height: 1.4;
+}
+
+/* Detect row */
+.omc-detect-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.omc-detect-row button {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.omc-detect-status {
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Model select area */
+.omc-model-area {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.omc-model-area > span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.omc-model-area select {
+  height: 34px;
+  font-size: 0.82rem;
+}
+
+/* Filled status badge */
+.omc-filled-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.66rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(99, 200, 130, 0.1);
+  color: #7dd3a0;
+  font-weight: 500;
+}
+
+/* Confirm area */
+.omc-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.omc-confirm-row button {
+  height: 34px;
+  padding: 0 20px;
+  font-size: 0.8rem;
+}
+
+.omc-confirm-status {
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex: 1;
+}
+
+/* Light theme overrides */
+[data-theme="light"] .omc-source-tabs {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .omc-source-tab.is-active {
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .omc-local-card {
+  background: rgba(0, 0, 0, 0.015);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .omc-local-card:hover {
+  background: rgba(0, 0, 0, 0.035);
+  border-color: rgba(50, 120, 220, 0.2);
+}
+
+[data-theme="light"] .omc-local-card.is-selected {
+  background: rgba(50, 120, 220, 0.06);
+  border-color: rgba(50, 120, 220, 0.25);
+}
+
+[data-theme="light"] .omc-local-card .olc-check {
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] .omc-local-card.is-selected .olc-check {
+  background: rgba(50, 120, 220, 0.85);
+  border-color: rgba(50, 120, 220, 0.9);
 }

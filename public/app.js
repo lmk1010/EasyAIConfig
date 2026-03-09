@@ -25,6 +25,7 @@ const state = {
   updateDialogOpen: false,
   updateDialogTimer: null,
   updateDialogResolver: null,
+  updateDialogCancelHandler: null,
   updateDialogLocked: false,
   aboutOpen: false,
   aboutTimer: null,
@@ -50,6 +51,8 @@ const state = {
     lastLogsText: '',
     pauseUntil: 0,
     pendingTask: null,
+    activeTaskId: '',
+    cancelBusy: false,
   },
   openClawSetupFlowId: 0,
   openClawSetupContext: null,
@@ -164,13 +167,16 @@ function renderTasksPage() {
     } else if (t.status === 'done') {
       indicator = '<svg class="sti-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-6"/></svg>';
       statusClass = 'done';
+    } else if (t.status === 'cancelled') {
+      indicator = '<svg class="sti-fail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 8l8 8"/><path d="M16 8l-8 8"/></svg>';
+      statusClass = 'error';
     } else {
       indicator = '<svg class="sti-fail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
       statusClass = 'error';
     }
 
     const elapsed = _formatElapsed((t.endTime || now) - t.startTime);
-    const statusLabel = t.status === 'running' ? '进行中' : (t.status === 'done' ? '完成' : '失败');
+    const statusLabel = t.status === 'running' ? '进行中' : t.status === 'done' ? '完成' : t.status === 'cancelled' ? '已中断' : '失败';
     const timeStr = new Date(t.startTime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 
     const progressBar = t.status === 'running'
@@ -1209,8 +1215,8 @@ function renderOpenClawInstallMethods(container) {
   const methods = [
     {
       id: 'script', icon: _s('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'), title: '一键脚本', desc: '推荐方式，自动检测 Node.js 并安装', tag: '推荐',
-      cmdMac: 'curl -fsSL https://openclaw.ai/install.sh | bash',
-      cmdWin: 'iwr -useb https://openclaw.ai/install.ps1 | iex'
+      cmdMac: 'curl -fsSL https://openclaw.ai/install.sh | OPENCLAW_NO_ONBOARD=1 bash -s -- --no-onboard --install-method npm',
+      cmdWin: "$env:OPENCLAW_NO_ONBOARD='1'; iwr -useb https://openclaw.ai/install.ps1 | iex"
     },
     {
       id: 'npm', icon: _s('<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>'), title: 'npm / pnpm', desc: '已有 Node 22+ 环境时的最快方式', tag: '',
@@ -1229,31 +1235,103 @@ function renderOpenClawInstallMethods(container) {
   const isWin = navigator.platform?.startsWith('Win');
 
   container.innerHTML = `
-    <div class="openclaw-install-methods">
+    <div class="openclaw-install-methods install-method-dialog">
       <div class="install-methods-title">选择安装方式</div>
-      <div class="install-methods-grid">
-        ${methods.map(m => `
-          <button class="install-method-card" data-install-method="${m.id}">
-            <div class="imc-head">
-              <span class="imc-icon">${m.icon}</span>
-              <span class="imc-title">${m.title}</span>
-              ${m.tag ? `<span class="imc-tag">${m.tag}</span>` : ''}
-            </div>
-            <div class="imc-desc">${m.desc}</div>
-            <div class="imc-cmd">${escapeHtml(isWin ? m.cmdWin : m.cmdMac)}</div>
-          </button>
-        `).join('')}
+      <div class="install-scope-switch">
+        <button class="install-scope-btn is-active" data-install-scope="local">本地安装</button>
+        <button class="install-scope-btn" data-install-scope="remote">远程服务器安装</button>
       </div>
-      <div class="install-methods-hint">点击卡片开始安装，源码和 Docker 方式会显示终端命令。</div>
+      <div class="install-scope-panel is-active" data-install-scope-panel="local">
+        <div class="install-methods-grid">
+          ${methods.map(m => `
+            <button class="install-method-card" data-install-method="${m.id}">
+              <div class="imc-head">
+                <span class="imc-icon">${m.icon}</span>
+                <span class="imc-title">${m.title}</span>
+                ${m.tag ? `<span class="imc-tag">${m.tag}</span>` : ''}
+              </div>
+              <div class="imc-desc">${m.desc}</div>
+              <div class="imc-cmd">${escapeHtml(isWin ? m.cmdWin : m.cmdMac)}</div>
+            </button>
+          `).join('')}
+        </div>
+        <div class="install-methods-hint">本地推荐四种安装方式，点击卡片开始安装。</div>
+      </div>
+      <div class="install-scope-panel" data-install-scope-panel="remote">
+        <div class="remote-install-form">
+          <div class="remote-install-row two-col">
+            <label>
+              <span>服务器 IP / 域名</span>
+              <input type="text" placeholder="例如 10.10.10.8 或 server.example.com" data-remote-host>
+            </label>
+            <label>
+              <span>SSH 端口</span>
+              <input type="text" value="22" data-remote-port>
+            </label>
+          </div>
+          <div class="remote-install-row">
+            <label>
+              <span>用户名</span>
+              <input type="text" placeholder="root / ubuntu / admin" data-remote-username>
+            </label>
+          </div>
+          <div class="remote-install-row three-col">
+            <label>
+              <span>远程系统</span>
+              <div class="select-wrap"><select data-remote-os>
+                <option value="unix">Linux / macOS</option>
+                <option value="windows">Windows</option>
+              </select></div>
+            </label>
+            <label>
+              <span>登录方式</span>
+              <div class="select-wrap"><select data-remote-auth-method>
+                <option value="agent">SSH Agent（推荐）</option>
+                <option value="password">密码登录</option>
+                <option value="key">私钥文件</option>
+              </select></div>
+            </label>
+            <label>
+              <span>安装方式</span>
+              <div class="select-wrap"><select data-remote-install-method>
+                <option value="script">官方脚本（推荐）</option>
+                <option value="npm">npm 全局安装</option>
+              </select></div>
+            </label>
+          </div>
+          <div class="remote-install-row" data-remote-auth-extra="password" hidden>
+            <label>
+              <span>登录密码</span>
+              <input type="password" placeholder="输入远程服务器密码" data-remote-password>
+            </label>
+          </div>
+          <div class="remote-install-row" data-remote-auth-extra="key" hidden>
+            <label>
+              <span>私钥路径</span>
+              <input type="text" placeholder="~/.ssh/id_ed25519" data-remote-key-path>
+            </label>
+          </div>
+          <div class="remote-install-note">将通过 SSH 登录到远程服务器并执行安装命令。</div>
+          <button class="remote-install-submit-btn" data-remote-openclaw-install>连接并安装 OpenClaw</button>
+        </div>
+      </div>
     </div>
   `;
 
-  container.addEventListener('click', async (e) => {
-    const card = e.target.closest('[data-install-method]');
-    if (!card) return;
-    const method = card.dataset.installMethod;
-    await executeOpenClawInstall(method, card);
-  });
+  // Upgrade selects to custom dropdowns
+  if (window.initCustomSelect) {
+    container.querySelectorAll('.select-wrap > select').forEach(s => window.initCustomSelect(s));
+  }
+
+  if (!container._openclawInstallMethodsBound) {
+    container._openclawInstallMethodsBound = true;
+    container.addEventListener('click', async (e) => {
+      const card = e.target.closest('[data-install-method]');
+      if (!card || !container.contains(card)) return;
+      const method = card.dataset.installMethod;
+      await executeOpenClawInstall(method, card);
+    });
+  }
 }
 
 function renderOpenClawInstalledView(container, data) {
@@ -1298,22 +1376,276 @@ function renderOpenClawInstalledView(container, data) {
   container.querySelector('#openclawRefreshBtn')?.addEventListener('click', () => loadOpenClawQuickState());
 }
 
+/** Build the local provider list for the onboard model config UI */
+function _buildOnboardLocalProviders() {
+  const providers = state.current?.providers || [];
+  const claudeProviders = [];
+  const openaiProviders = [];
+  for (const p of providers) {
+    const url = (p.baseUrl || '').toLowerCase();
+    const key = (p.key || '').toLowerCase();
+    const name = (p.name || '').toLowerCase();
+    if (url.includes('anthropic') || url.includes('claude') || key.includes('anthropic') || key.includes('claude') || name.includes('anthropic') || name.includes('claude')) {
+      claudeProviders.push(p);
+    } else {
+      openaiProviders.push(p);
+    }
+  }
+  const ccState = state.claudeCodeState;
+  if (ccState?.env) {
+    const ev = ccState.env;
+    const ccBaseUrl = ev.ANTHROPIC_BASE_URL?.set ? ev.ANTHROPIC_BASE_URL.value : '';
+    const ccHasKey = ev.ANTHROPIC_AUTH_TOKEN?.set || ev.ANTHROPIC_API_KEY?.set;
+    if (ccBaseUrl || ccHasKey) {
+      claudeProviders.push({
+        key: '__claude_code__',
+        name: 'Claude Code (本地认证)',
+        baseUrl: ccBaseUrl || 'https://api.anthropic.com',
+        hasApiKey: ccHasKey,
+        _isClaudeCode: true,
+      });
+    }
+  }
+  return { claudeProviders, openaiProviders };
+}
+
+/** Render the model config section HTML for onboard dialog */
+function renderOnboardModelConfigHtml() {
+  const { claudeProviders, openaiProviders } = _buildOnboardLocalProviders();
+  const totalCount = claudeProviders.length + openaiProviders.length;
+  const checkSvg = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>';
+
+  let localCardsHtml = '';
+  if (totalCount === 0) {
+    localCardsHtml = '<div class="omc-local-empty">暂无本地已保存的 Provider<br><span style="font-size:0.68rem;opacity:0.6">可切换到「手动输入」或「粘贴导入」</span></div>';
+  } else {
+    if (claudeProviders.length) {
+      localCardsHtml += '<div class="omc-local-group-label">Claude / Anthropic</div>';
+      localCardsHtml += claudeProviders.map((p) => {
+        const claudeAttr = p._isClaudeCode ? ' data-omc-claude-code="1"' : '';
+        return ''
+          + '<button class="omc-local-card" data-omc-provider-key="' + escapeHtml(p.key) + '"' + claudeAttr + '>'
+          + '<span class="olc-icon">A</span>'
+          + '<span class="olc-info">'
+          + '<span class="olc-name">' + escapeHtml(p.name || p.key) + '</span>'
+          + '<span class="olc-url">' + escapeHtml(p.baseUrl || '-') + '</span>'
+          + '</span>'
+          + '<span class="olc-check">' + checkSvg + '</span>'
+          + '</button>';
+      }).join('');
+    }
+    if (openaiProviders.length) {
+      localCardsHtml += '<div class="omc-local-group-label">OpenAI / Codex / 其他</div>';
+      localCardsHtml += openaiProviders.map((p) => ''
+        + '<button class="omc-local-card" data-omc-provider-key="' + escapeHtml(p.key) + '">'
+        + '<span class="olc-icon">O</span>'
+        + '<span class="olc-info">'
+        + '<span class="olc-name">' + escapeHtml(p.name || p.key) + '</span>'
+        + '<span class="olc-url">' + escapeHtml(p.baseUrl || '-') + '</span>'
+        + '</span>'
+        + '<span class="olc-check">' + checkSvg + '</span>'
+        + '</button>').join('');
+    }
+  }
+
+  return `
+    <div class="onboard-model-config">
+      <div class="omc-title">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/><circle cx="8" cy="8" r="3"/></svg>
+        配置模型连接
+        <span id="omcFilledBadge" class="omc-filled-badge" style="display:none">&#10003; 已填入</span>
+      </div>
+      <div class="omc-subtitle">选择或输入你的 AI 模型 Provider，支持自动加载本地 Codex / Claude Code 配置</div>
+
+      <div class="omc-source-tabs">
+        <button class="omc-source-tab is-active" data-omc-tab="local">本地配置</button>
+        <button class="omc-source-tab" data-omc-tab="manual">手动输入</button>
+        <button class="omc-source-tab" data-omc-tab="paste">粘贴导入</button>
+      </div>
+
+      <div class="omc-source-panel is-active" data-omc-panel="local">
+        <div class="omc-local-list">${localCardsHtml}</div>
+      </div>
+
+      <div class="omc-source-panel" data-omc-panel="manual">
+        <div class="omc-manual-form">
+          <div class="omc-field-row">
+            <div class="omc-field">
+              <span>Base URL</span>
+              <input id="omcManualBaseUrl" placeholder="https://api.openai.com/v1" />
+            </div>
+            <div class="omc-field">
+              <span>API Key</span>
+              <input id="omcManualApiKey" type="password" placeholder="sk-..." />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="omc-source-panel" data-omc-panel="paste">
+        <div class="omc-paste-area">
+          <textarea id="omcPasteTextarea" placeholder="粘贴 export 语句，例如：\nexport OPENAI_BASE_URL=https://api.openai.com/v1\nexport OPENAI_API_KEY=sk-xxxx"></textarea>
+          <div class="omc-paste-hint">支持 export VAR=VALUE 格式，自动识别 OpenAI / Anthropic / Codex 环境变量</div>
+          <button id="omcPasteParseBtn" class="secondary" style="width:fit-content;font-size:0.76rem;">识别并填入</button>
+          <div id="omcPasteResult"></div>
+        </div>
+      </div>
+
+      <div class="omc-detect-row">
+        <button id="omcDetectBtn" class="secondary">检测模型</button>
+        <span id="omcDetectStatus" class="omc-detect-status"></span>
+      </div>
+      <div class="omc-model-area" id="omcModelArea" style="display:none">
+        <span>选择模型</span>
+        <div class="select-wrap"><select id="omcModelSelect"><option value="">选择模型</option></select></div>
+      </div>
+
+      <div class="omc-confirm-row">
+        <button id="omcConfirmBtn">确认模型配置</button>
+        <span id="omcConfirmStatus" class="omc-confirm-status"></span>
+      </div>
+    </div>
+  `;
+}
+
+function ensureOnboardModelConfigState() {
+  if (!state._omcState) {
+    state._omcState = {
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      confirmed: false,
+      detectedModels: [],
+      detectStatus: '',
+      confirmStatus: '',
+      selectedProviderKey: '',
+      selectedProviderKind: '',
+    };
+  }
+  return state._omcState;
+}
+
+function inferOnboardOpenClawApiMode(baseUrl = '', modelRef = '', providerKind = '') {
+  const base = String(baseUrl || '').toLowerCase();
+  const provider = String(providerKind || '').toLowerCase();
+  if (provider.includes('claude') || base.includes('anthropic')) {
+    return 'anthropic-messages';
+  }
+  return inferOpenClawApiMode(modelRef || '');
+}
+
+function syncOnboardModelSelect(models = [], preferred = '') {
+  const area = document.getElementById('omcModelArea');
+  const select = document.getElementById('omcModelSelect');
+  if (!area || !select) return;
+
+  const uniqueModels = [...new Set([preferred, ...(models || [])].map(item => String(item || '').trim()).filter(Boolean))];
+  area.style.display = uniqueModels.length ? '' : 'none';
+  select.innerHTML = '<option value="">选择模型</option>' + uniqueModels.map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+  if (preferred && uniqueModels.includes(preferred)) {
+    select.value = preferred;
+  }
+  if (select._customSelect) {
+    select._customSelect.renderOptions();
+  } else if (window.initCustomSelect) {
+    window.initCustomSelect(select);
+  }
+}
+
+function syncOnboardModelConfigForm() {
+  const omc = ensureOnboardModelConfigState();
+  const baseUrlInput = document.getElementById('omcManualBaseUrl');
+  const apiKeyInput = document.getElementById('omcManualApiKey');
+  const pasteTextarea = document.getElementById('omcPasteTextarea');
+  const detectStatus = document.getElementById('omcDetectStatus');
+  const confirmStatus = document.getElementById('omcConfirmStatus');
+
+  if (baseUrlInput && document.activeElement !== baseUrlInput) baseUrlInput.value = omc.baseUrl || '';
+  if (apiKeyInput && document.activeElement !== apiKeyInput) apiKeyInput.value = omc.apiKey || '';
+  if (pasteTextarea && typeof omc.pasteText === 'string' && document.activeElement !== pasteTextarea) pasteTextarea.value = omc.pasteText;
+  if (detectStatus) detectStatus.textContent = omc.detectStatus || '';
+  if (confirmStatus) confirmStatus.innerHTML = omc.confirmStatus || '';
+  syncOnboardModelSelect(omc.detectedModels || [], omc.model || '');
+
+  document.querySelectorAll('#updateDialogBody .omc-local-card').forEach((card) => {
+    const cardKey = `${card.dataset.omcClaudeCode === '1' ? 'claudecode' : 'codex'}:${card.dataset.omcProviderKey || ''}`;
+    card.classList.toggle('is-selected', cardKey === omc.selectedProviderKey);
+  });
+  _updateOmcFilledBadge();
+}
+
+function buildOpenClawConfigFromOnboardModelState() {
+  const omc = ensureOnboardModelConfigState();
+  const baseUrlInput = String(omc.baseUrl || '').trim();
+  const apiKey = String(omc.apiKey || '').trim();
+  const apiMode = inferOnboardOpenClawApiMode(baseUrlInput, omc.model || '', omc.selectedProviderKind || '');
+  const modelRef = String(omc.model || getOpenClawDefaultModel(apiMode)).trim();
+  const normalizedBaseUrl = normalizeOpenClawBaseUrl(baseUrlInput || getOpenClawDefaultBaseUrl(apiMode), modelRef, apiMode);
+  const config = cloneJson(state.openclawState?.config || {});
+  const currentQuick = deriveOpenClawQuickConfig(state.openclawState || {});
+  const envKey = inferOpenClawBuiltInEnvKey(modelRef, apiMode) || getOpenClawDefaultEnvKey(apiMode);
+  const modelId = extractOpenClawCustomModelId(modelRef) || modelRef;
+  const providerAlias = normalizedBaseUrl
+    ? buildOpenClawCustomProviderAlias(modelRef, apiMode)
+    : (String(modelRef).split('/')[0] || inferOpenClawProviderFromEnvKey(envKey, apiMode) || 'openai');
+  const previousAlias = String(currentQuick.storedModel || '').split('/')[0] || '';
+  const existingProvider = cloneJson(config.models?.providers?.[providerAlias] || {});
+
+  config.env = config.env || {};
+  if (apiKey) config.env[envKey] = apiKey;
+
+  config.agents = config.agents || {};
+  config.agents.defaults = config.agents.defaults || {};
+  config.agents.defaults.model = config.agents.defaults.model || {};
+  config.agents.defaults.model.primary = `${providerAlias}/${modelId}`;
+
+  config.models = config.models || {};
+  config.models.mode = config.models.mode || 'merge';
+  config.models.providers = config.models.providers || {};
+  if (previousAlias && previousAlias !== providerAlias && config.models.providers[previousAlias]?.baseUrl) {
+    delete config.models.providers[previousAlias];
+  }
+  config.models.providers[providerAlias] = {
+    ...existingProvider,
+    baseUrl: normalizedBaseUrl,
+    api: apiMode,
+    apiKey: apiKey ? '${' + envKey + '}' : existingProvider.apiKey,
+    models: [
+      buildOpenClawModelDefinition({
+        modelRef,
+        apiMode,
+        modelName: inferOpenClawModelName(modelRef),
+      }),
+    ],
+  };
+
+  return { config, modelRef };
+}
+
+function syncOpenClawSetupDialogSurface() {
+  const panel = el('updateDialog')?.querySelector('.update-dialog-panel');
+  if (panel) panel.classList.add('install-dialog-wide');
+  bindOnboardModelConfigEvents();
+  syncOnboardModelConfigForm();
+}
+
 function renderOpenClawSetupDialog({ stateData, command = '', terminalMessage = '', autoOpenDashboard = false, elapsedMs = 0, timedOut = false }) {
   const steps = [
     { title: '已自动打开终端', done: Boolean(terminalMessage), desc: terminalMessage || '正在准备终端窗口…' },
     { title: '按终端向导完成初始化', done: Boolean(stateData?.configExists), desc: stateData?.configExists ? '已检测到 OpenClaw 配置文件。' : '终端里会引导你完成首次配置，这一步你只需要按提示继续。' },
     { title: '等待本地 Gateway 就绪', done: Boolean(stateData?.gatewayReachable), desc: stateData?.gatewayReachable ? `Dashboard 已在线：${stateData.gatewayUrl}` : '完成终端向导后，这里会自动检测本地 Dashboard 是否已启动。' },
   ];
+  const showModelConfig = Boolean(stateData?.configExists || stateData?.gatewayReachable || timedOut);
   return `
     <div class="install-tracker">
       <div class="install-tracker-top">
         <div>
           <div class="install-tracker-status">${stateData?.gatewayReachable ? '初始化完成' : timedOut ? '等待你完成终端向导' : '正在自动初始化'}</div>
-          <div class="install-tracker-summary">${stateData?.gatewayReachable ? 'OpenClaw 已准备好，可以直接打开 Dashboard。' : stateData?.configExists ? '配置已生成，正在等待 Gateway 启动。' : '终端已经自动打开，请跟着向导完成。'}</div>
+          <div class="install-tracker-summary">${stateData?.gatewayReachable ? 'OpenClaw 已准备好，建议先确认模型配置再打开 Dashboard。' : stateData?.configExists ? '配置已生成，正在等待 Gateway 启动。' : '终端已经自动打开，请跟着向导完成。'}</div>
         </div>
         <div class="install-tracker-percent">${stateData?.gatewayReachable ? '100%' : stateData?.configExists ? '75%' : '35%'}</div>
       </div>
-      <div class="install-tracker-hint">${timedOut ? '如果终端还在运行，不用重新安装；完成后点“刷新状态”即可。' : '这个步骤已经尽量自动化了；你只需要处理终端里真正必须人工确认的内容。'}</div>
+      <div class="install-tracker-hint">${timedOut ? '如果终端还在运行，不用重新安装；完成后点"刷新状态"即可。' : '这个步骤已经尽量自动化了；你只需要处理终端里真正必须人工确认的内容。'}</div>
       <div class="install-tracker-detail">${escapeHtml(command || 'openclaw onboard --install-daemon')}</div>
       <div class="install-tracker-grid">
         <div class="install-tracker-col">${steps.map((step, index) => renderOpenClawInstallStep({ title: step.title, description: step.desc, status: step.done ? 'done' : (index === steps.findIndex((item) => !item.done) ? 'running' : 'pending') }, index, 0)).join('')}</div>
@@ -1343,13 +1675,267 @@ function renderOpenClawSetupDialog({ stateData, command = '', terminalMessage = 
       <div class="install-tracker-note-card">
         <div class="install-tracker-detail">${escapeHtml(terminalMessage || '终端命令准备中…')}</div>
       </div>
+      ${showModelConfig ? renderOnboardModelConfigHtml() : ''}
     </div>
   `;
+}
+
+/** Bind events for the onboard model config UI inside the update dialog */
+function bindOnboardModelConfigEvents() {
+  const dialogBody = el('updateDialogBody');
+  if (!dialogBody) return;
+
+  const omc = ensureOnboardModelConfigState();
+
+  // Tab switching
+  dialogBody.querySelectorAll('[data-omc-tab]').forEach(tab => {
+    tab.addEventListener('click', () => {
+      dialogBody.querySelectorAll('[data-omc-tab]').forEach(t => t.classList.toggle('is-active', t === tab));
+      dialogBody.querySelectorAll('[data-omc-panel]').forEach(p => p.classList.toggle('is-active', p.dataset.omcPanel === tab.dataset.omcTab));
+    });
+  });
+
+  // Local provider card click
+  dialogBody.querySelectorAll('.omc-local-card').forEach(card => {
+    card.addEventListener('click', async () => {
+      dialogBody.querySelectorAll('.omc-local-card').forEach(c => c.classList.remove('is-selected'));
+      card.classList.add('is-selected');
+
+      const providerKey = card.dataset.omcProviderKey;
+      const isClaudeCode = card.dataset.omcClaudeCode === '1';
+      let baseUrl = '';
+      let apiKeyVal = '';
+      let detectedModel = '';
+
+      if (isClaudeCode) {
+        const ccState = state.claudeCodeState;
+        if (ccState?.env) {
+          const ev = ccState.env;
+          baseUrl = ev.ANTHROPIC_BASE_URL?.set ? ev.ANTHROPIC_BASE_URL.value : 'https://api.anthropic.com';
+          apiKeyVal = ev.ANTHROPIC_AUTH_TOKEN?.set ? ev.ANTHROPIC_AUTH_TOKEN.value : (ev.ANTHROPIC_API_KEY?.set ? ev.ANTHROPIC_API_KEY.value : '');
+          detectedModel = ccState.model || '';
+        }
+      } else {
+        const provider = (state.current?.providers || []).find(p => p.key === providerKey);
+        if (provider) {
+          baseUrl = provider.baseUrl || '';
+          if (provider.hasApiKey) {
+            try {
+              const json = await api('/api/provider/secret', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ providerKey }),
+              });
+              if (json.ok && json.data) apiKeyVal = json.data.apiKey || json.data.secret || '';
+            } catch { /* silent */ }
+          }
+        }
+        detectedModel = state.current?.config?.model || '';
+      }
+
+      omc.selectedProviderKey = `${isClaudeCode ? 'claudecode' : 'codex'}:${providerKey}`;
+      omc.selectedProviderKind = isClaudeCode ? 'claudecode' : 'codex';
+      omc.baseUrl = baseUrl;
+      omc.apiKey = apiKeyVal;
+      omc.model = detectedModel || omc.model || getOpenClawDefaultModel(inferOnboardOpenClawApiMode(baseUrl, detectedModel, omc.selectedProviderKind));
+      omc.detectedModels = omc.model ? [omc.model] : [];
+      omc.detectStatus = detectedModel ? '已从本机配置预填模型，可直接确认。' : '已加载本机 URL / Key，可继续检测模型。';
+      omc.confirmStatus = '';
+      syncOnboardModelConfigForm();
+      flash('已加载 ' + (card.querySelector('.olc-name')?.textContent || providerKey) + ' 的配置', 'success');
+    });
+  });
+
+  // Manual input sync
+  const manualUrl = document.getElementById('omcManualBaseUrl');
+  const manualKey = document.getElementById('omcManualApiKey');
+  if (manualUrl) manualUrl.addEventListener('input', () => { omc.baseUrl = manualUrl.value.trim(); omc.confirmStatus = ''; _updateOmcFilledBadge(); });
+  if (manualKey) manualKey.addEventListener('input', () => { omc.apiKey = manualKey.value.trim(); omc.confirmStatus = ''; _updateOmcFilledBadge(); });
+
+  // Paste import
+  const pasteBtn = document.getElementById('omcPasteParseBtn');
+  if (pasteBtn) {
+    pasteBtn.addEventListener('click', () => {
+      const textarea = document.getElementById('omcPasteTextarea');
+      const resultEl = document.getElementById('omcPasteResult');
+      if (!textarea || !resultEl) return;
+      const text = textarea.value.trim();
+      omc.pasteText = textarea.value;
+      if (!text) { resultEl.innerHTML = ''; return; }
+
+      const envVars = parseExportStatements(text);
+      if (Object.keys(envVars).length === 0) {
+        resultEl.innerHTML = '<div class="omc-paste-result error">未识别到有效的环境变量。请确认格式如：export OPENAI_BASE_URL=https://...</div>';
+        return;
+      }
+
+      let baseUrl = '';
+      let apiKeyParsed = '';
+      let providerType = '';
+      const anthropicBaseUrl = envVars.ANTHROPIC_BASE_URL || '';
+      const anthropicAuthToken = envVars.ANTHROPIC_AUTH_TOKEN || '';
+      const anthropicApiKey = envVars.ANTHROPIC_API_KEY || '';
+      const openaiBaseUrl = envVars.OPENAI_BASE_URL || '';
+      const openaiApiKey = envVars.OPENAI_API_KEY || '';
+      const codexApiKey = envVars.CODEX_API_KEY || envVars.CODEX_CLI_API_KEY || '';
+
+      if (anthropicBaseUrl || anthropicAuthToken || anthropicApiKey) {
+        providerType = 'Claude / Anthropic';
+        baseUrl = anthropicBaseUrl || 'https://api.anthropic.com';
+        apiKeyParsed = anthropicAuthToken || anthropicApiKey;
+      } else if (openaiBaseUrl || openaiApiKey) {
+        providerType = 'OpenAI';
+        baseUrl = openaiBaseUrl || 'https://api.openai.com/v1';
+        apiKeyParsed = openaiApiKey;
+      } else if (codexApiKey) {
+        providerType = 'Codex';
+        baseUrl = envVars.CODEX_BASE_URL || 'https://api.openai.com/v1';
+        apiKeyParsed = codexApiKey;
+      }
+
+      if (!providerType) {
+        resultEl.innerHTML = '<div class="omc-paste-result error">未识别到支持的环境变量 (ANTHROPIC_* / OPENAI_* / CODEX_*)</div>';
+        return;
+      }
+
+      omc.baseUrl = baseUrl;
+      omc.apiKey = apiKeyParsed;
+      omc.selectedProviderKey = '';
+      omc.selectedProviderKind = providerType.includes('Claude') ? 'claudecode' : 'codex';
+      omc.model = omc.model || getOpenClawDefaultModel(inferOnboardOpenClawApiMode(baseUrl, '', omc.selectedProviderKind));
+      omc.detectedModels = omc.model ? [omc.model] : [];
+      omc.detectStatus = '已从粘贴内容识别 URL / Key，可直接确认或重新检测。';
+      omc.confirmStatus = '';
+      syncOnboardModelConfigForm();
+      resultEl.innerHTML = '<div class="omc-paste-result">&#10003; 已识别为 <strong>' + providerType + '</strong>，自动填写 Base URL 和 API Key</div>';
+    });
+  }
+
+  // Detect models button
+  const detectBtn = document.getElementById('omcDetectBtn');
+  if (detectBtn) {
+    detectBtn.addEventListener('click', async () => {
+      const baseUrl = omc.baseUrl || document.getElementById('omcManualBaseUrl')?.value?.trim() || '';
+      const apiKeyVal = omc.apiKey || document.getElementById('omcManualApiKey')?.value?.trim() || '';
+      const statusEl = document.getElementById('omcDetectStatus');
+      if (!baseUrl) { if (statusEl) statusEl.textContent = '请先填入 Base URL'; return; }
+
+      detectBtn.disabled = true;
+      detectBtn.textContent = '检测中...';
+      if (statusEl) statusEl.textContent = '正在连接...';
+
+      try {
+        const json = await api('/api/provider/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseUrl: baseUrl, apiKey: apiKeyVal }),
+          timeoutMs: 18000,
+        });
+        if (!json.ok) { if (statusEl) statusEl.textContent = json.error || '检测失败'; return; }
+
+        const models = json.data?.models || [];
+        omc.detectStatus = '检测成功 - ' + models.length + ' 个模型';
+        if (statusEl) statusEl.textContent = omc.detectStatus;
+
+        const modelArea = document.getElementById('omcModelArea');
+        const modelSelect = document.getElementById('omcModelSelect');
+        if (modelArea && modelSelect && models.length > 0) {
+          omc.detectedModels = models.map(m => typeof m === 'string' ? m : m.id || m.name || '').filter(Boolean);
+          const recommended = json.data?.recommendedModel;
+          omc.model = recommended && omc.detectedModels.includes(recommended)
+            ? recommended
+            : (omc.model && omc.detectedModels.includes(omc.model) ? omc.model : omc.detectedModels[0] || omc.model);
+          syncOnboardModelConfigForm();
+        }
+      } catch (e) {
+        omc.detectStatus = e.message || '检测失败';
+        if (statusEl) statusEl.textContent = omc.detectStatus;
+      } finally {
+        detectBtn.disabled = false;
+        detectBtn.textContent = '检测模型';
+      }
+    });
+  }
+
+  // Model select change
+  const modelSelect = document.getElementById('omcModelSelect');
+  if (modelSelect) {
+    modelSelect.addEventListener('change', () => { omc.model = modelSelect.value; omc.confirmStatus = ''; });
+  }
+
+  // Confirm button
+  const confirmBtn = document.getElementById('omcConfirmBtn');
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', async () => {
+      const baseUrl = omc.baseUrl || document.getElementById('omcManualBaseUrl')?.value?.trim() || '';
+      const apiKeyVal = omc.apiKey || document.getElementById('omcManualApiKey')?.value?.trim() || '';
+      const model = omc.model || document.getElementById('omcModelSelect')?.value || '';
+      const confirmStatus = document.getElementById('omcConfirmStatus');
+
+      if (!baseUrl || !apiKeyVal) {
+        if (confirmStatus) confirmStatus.textContent = '请先选择或填入 URL 和 API Key';
+        return;
+      }
+
+      omc.baseUrl = baseUrl;
+      omc.apiKey = apiKeyVal;
+      omc.model = model || getOpenClawDefaultModel(inferOnboardOpenClawApiMode(baseUrl, model, omc.selectedProviderKind));
+
+      if (baseUrl && el('ocCfgProviderBaseUrl')) el('ocCfgProviderBaseUrl').value = baseUrl;
+      if (apiKeyVal && el('ocCfgProviderApiKey')) el('ocCfgProviderApiKey').value = apiKeyVal;
+      if (omc.model && el('ocCfgModelPrimary')) el('ocCfgModelPrimary').value = omc.model;
+
+      try {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = '保存中...';
+        const { config, modelRef } = buildOpenClawConfigFromOnboardModelState();
+        const json = await api('/api/openclaw/config-save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ configJson: JSON.stringify(config, null, 2) }),
+          timeoutMs: 12000,
+        });
+        if (json.ok) {
+          omc.model = modelRef;
+          omc.confirmed = true;
+          omc.confirmStatus = '&#10003; 已保存到 openclaw.json';
+          flash('模型配置已保存', 'success');
+          if (confirmStatus) confirmStatus.innerHTML = omc.confirmStatus;
+          await loadOpenClawQuickState();
+          if (state.openClawSetupContext?.autoOpenDashboard && state.openclawState?.gatewayReachable) {
+            openOpenClawDashboard(state.openclawState.gatewayUrl || `http://127.0.0.1:${state.openclawState.gatewayPort}/`);
+          }
+        } else {
+          throw new Error(json.error || '模型配置保存失败');
+        }
+      } catch (error) {
+        omc.confirmStatus = error.message || '模型配置保存失败';
+        flash(error.message || '模型配置保存失败', 'error');
+        if (confirmStatus) confirmStatus.textContent = omc.confirmStatus;
+      } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = '确认模型配置';
+      }
+    });
+  }
+}
+
+function _updateOmcFilledBadge() {
+  const badge = document.getElementById('omcFilledBadge');
+  const hasData = !!(state._omcState?.baseUrl || state._omcState?.apiKey);
+  if (badge) badge.style.display = hasData ? '' : 'none';
 }
 
 async function runOpenClawOnboardFlow({ autoOpenDashboard = false } = {}) {
   const flowId = Date.now();
   state.openClawSetupFlowId = flowId;
+  ensureOnboardModelConfigState();
+  if (!state.current) {
+    await loadState({ preserveForm: true }).catch(() => {});
+  }
+  if (!state.claudeCodeState) {
+    await loadClaudeCodeQuickState().catch(() => {});
+  }
 
   const launchJson = await api('/api/openclaw/onboard', {
     method: 'POST',
@@ -1382,7 +1968,9 @@ async function runOpenClawOnboardFlow({ autoOpenDashboard = false } = {}) {
     }),
     confirmText: '关闭',
     confirmOnly: true,
+    trackerMode: true,
   });
+  syncOpenClawSetupDialogSurface();
 
   for (let attempt = 0; attempt < 120; attempt += 1) {
     if (state.openClawSetupFlowId !== flowId) return null;
@@ -1392,6 +1980,7 @@ async function runOpenClawOnboardFlow({ autoOpenDashboard = false } = {}) {
       patchUpdateDialog({
         eyebrow: 'OpenClaw',
         title: latestState.gatewayReachable ? '初始化完成' : '正在自动初始化',
+        trackerMode: true,
         body: renderOpenClawSetupDialog({
           stateData: latestState,
           command: launchJson.data.command,
@@ -1400,12 +1989,10 @@ async function runOpenClawOnboardFlow({ autoOpenDashboard = false } = {}) {
           elapsedMs: Date.now() - startedAt,
         }),
       });
+      syncOpenClawSetupDialogSurface();
       if (latestState.gatewayReachable) {
         await loadOpenClawQuickState();
-        flash('OpenClaw 初始化完成', 'success');
-        if (autoOpenDashboard) {
-          openOpenClawDashboard(latestState.gatewayUrl || `http://127.0.0.1:${latestState.gatewayPort}/`);
-        }
+        flash('OpenClaw 初始化完成，请确认模型配置', 'success');
         return latestState;
       }
     } catch {
@@ -1416,6 +2003,7 @@ async function runOpenClawOnboardFlow({ autoOpenDashboard = false } = {}) {
   patchUpdateDialog({
     eyebrow: 'OpenClaw',
     title: '请完成终端向导',
+    trackerMode: true,
     body: renderOpenClawSetupDialog({
       stateData: latestState,
       command: launchJson.data.command,
@@ -1425,6 +2013,7 @@ async function runOpenClawOnboardFlow({ autoOpenDashboard = false } = {}) {
       timedOut: true,
     }),
   });
+  syncOpenClawSetupDialogSurface();
   flash('终端向导可能仍在运行，完成后点“刷新状态”即可', 'info');
   return latestState;
 }
@@ -1432,6 +2021,17 @@ async function runOpenClawOnboardFlow({ autoOpenDashboard = false } = {}) {
 async function fetchOpenClawInstallTask(taskId) {
   const json = await api(`/api/openclaw/install/status?taskId=${encodeURIComponent(taskId)}`, { timeoutMs: 12000 });
   if (!json.ok) throw new Error(json.error || '获取安装进度失败');
+  return json.data;
+}
+
+async function cancelOpenClawInstallTask(taskId) {
+  const json = await api('/api/openclaw/install/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId }),
+    timeoutMs: 120000,
+  });
+  if (!json.ok) throw new Error(json.error || '中断安装失败');
   return json.data;
 }
 
@@ -1450,7 +2050,7 @@ async function runTrackedOpenClawInstall(method, onUpdate) {
   if (typeof onUpdate === 'function') onUpdate(task);
 
   let refreshFailures = 0;
-  while (task.status === 'running') {
+  while (task.status === 'running' || task.status === 'cancelling') {
     await sleep(900);
     try {
       task = await fetchOpenClawInstallTask(task.taskId);
@@ -1512,8 +2112,34 @@ async function executeOpenClawInstall(method, card) {
   }
   const isWin = navigator.platform?.startsWith('Win');
   const cmdText = method === 'script'
-    ? (isWin ? 'iwr -useb https://openclaw.ai/install.ps1 | iex' : 'curl -fsSL https://openclaw.ai/install.sh | bash')
+    ? (isWin ? "$env:OPENCLAW_NO_ONBOARD='1'; iwr -useb https://openclaw.ai/install.ps1 | iex" : 'curl -fsSL https://openclaw.ai/install.sh | OPENCLAW_NO_ONBOARD=1 bash -s -- --no-onboard --install-method npm')
     : 'npm install -g openclaw@latest';
+
+  // ── Confirmation dialog ──
+  const methodLabel = method === 'script' ? '一键安装脚本' : 'npm 全局安装';
+  const confirmBody = `
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div style="font-size:0.86rem;color:var(--text);line-height:1.55;">
+        即将使用 <strong>${escapeHtml(methodLabel)}</strong> 安装 OpenClaw，安装过程可能需要 1–3 分钟，期间请勿关闭窗口。
+      </div>
+      <div style="font-size:0.72rem;font-family:'SF Mono','JetBrains Mono',monospace;color:var(--muted);background:rgba(0,0,0,0.12);padding:8px 12px;border-radius:8px;word-break:break-all;line-height:1.5;border:1px solid rgba(255,255,255,0.04);">
+        ${escapeHtml(cmdText)}
+      </div>
+      <div style="font-size:0.76rem;color:var(--muted);opacity:0.7;">
+        安装将在后台执行，你可以实时查看进度和日志。
+      </div>
+    </div>
+  `;
+  const confirmed = await openUpdateDialog({
+    eyebrow: 'OpenClaw',
+    title: '确认安装',
+    body: confirmBody,
+    confirmText: '开始安装',
+    cancelText: '取消',
+  });
+  if (!confirmed) return;
+
+  // ── Start tracked install ──
   const taskId = addTask('安装 OpenClaw', { progress: 4, message: '正在创建安装任务…' });
 
   openUpdateDialog({
@@ -1521,24 +2147,55 @@ async function executeOpenClawInstall(method, card) {
     title: '安装中',
     body: `<div class="install-tracker-empty">正在连接安装器…<br><code>${escapeHtml(cmdText)}</code></div>`,
     confirmText: '安装中…',
-    confirmOnly: true,
+    cancelText: '中断安装',
   });
-  setUpdateDialogLocked(true, '安装进行中，请先等待完成');
-  patchUpdateDialog({ trackerMode: true, confirmDisabled: true });
+  state.openClawInstallView.activeTaskId = '';
+  state.openClawInstallView.cancelBusy = false;
+  state.updateDialogCancelHandler = async () => {
+    const activeTaskId = state.openClawInstallView.activeTaskId;
+    if (!activeTaskId || state.openClawInstallView.cancelBusy) return;
+    state.openClawInstallView.cancelBusy = true;
+    patchUpdateDialog({
+      cancelText: '中断中…',
+      cancelDisabled: true,
+      confirmText: '清理中…',
+      confirmDisabled: true,
+      trackerMode: true,
+    });
+    try {
+      await cancelOpenClawInstallTask(activeTaskId);
+      flash('已发送中断请求，正在清理残留…', 'info');
+    } catch (error) {
+      state.openClawInstallView.cancelBusy = false;
+      patchUpdateDialog({ cancelText: '重试中断', cancelDisabled: false, confirmText: '安装中…', confirmDisabled: true, trackerMode: true });
+      flash(error.message || '中断安装失败', 'error');
+    }
+  };
+  setUpdateDialogLocked(true, '安装进行中，请等待完成或点击“中断安装”');
+  patchUpdateDialog({ trackerMode: true, confirmDisabled: true, cancelDisabled: false, cancelHidden: false });
 
   try {
     const finalTask = await runTrackedOpenClawInstall(method, (task) => {
+      state.openClawInstallView.activeTaskId = task.taskId || state.openClawInstallView.activeTaskId;
+      state.openClawInstallView.cancelBusy = task.status === 'cancelling';
       renderTrackedOpenClawDialog(task);
       updateTask(taskId, {
         name: '安装 OpenClaw',
-        status: task.status === 'running' ? 'running' : task.status === 'success' ? 'done' : 'error',
+        status: task.status === 'running' || task.status === 'cancelling'
+          ? 'running'
+          : task.status === 'success'
+            ? 'done'
+            : task.status === 'cancelled'
+              ? 'cancelled'
+              : 'error',
         progress: Math.max(4, task.progress || 0),
         message: task.summary || '',
       });
     });
 
+    state.updateDialogCancelHandler = null;
     setUpdateDialogLocked(false);
-    patchUpdateDialog({ confirmText: '关闭', confirmDisabled: false, trackerMode: true });
+    patchUpdateDialog({ confirmText: '关闭', confirmDisabled: false, trackerMode: true, cancelHidden: true, cancelDisabled: false });
     if (state.openClawInstallView.pendingTask) {
       renderTrackedOpenClawDialog(state.openClawInstallView.pendingTask, { force: true });
     }
@@ -1552,11 +2209,15 @@ async function executeOpenClawInstall(method, card) {
       runOpenClawOnboardFlow({ autoOpenDashboard: true }).catch(error => {
         flash(error.message || '自动启动 OpenClaw 初始化失败', 'error');
       });
+    } else if (finalTask.status === 'cancelled') {
+      flash(finalTask.error ? `安装已中断：${finalTask.error}` : 'OpenClaw 安装已中断并清理', finalTask.error ? 'error' : 'info');
+      updateTask(taskId, { status: 'cancelled', progress: 100, message: finalTask.summary || '安装已中断' });
     } else {
       flash(finalTask.error || 'OpenClaw 安装失败', 'error');
       updateTask(taskId, { status: 'error', message: finalTask.error || '安装失败' });
     }
   } catch (e) {
+    state.updateDialogCancelHandler = null;
     setUpdateDialogLocked(false);
     patchUpdateDialog({
       eyebrow: 'OpenClaw',
@@ -1564,10 +2225,131 @@ async function executeOpenClawInstall(method, card) {
       body: `<div class="install-tracker-empty">${escapeHtml(e.message || '无法获取安装进度，请重试。')}</div>`,
       confirmText: '关闭',
       confirmDisabled: false,
+      cancelHidden: true,
       trackerMode: true,
     });
     flash(e.message || '安装失败', 'error');
     updateTask(taskId, { status: 'error', message: e.message || '安装失败' });
+  }
+}
+
+function switchOpenClawInstallScope(root, scope) {
+  if (!root) return;
+  const selected = scope === 'remote' ? 'remote' : 'local';
+  root.querySelectorAll('[data-install-scope]').forEach((btn) => {
+    const active = btn.dataset.installScope === selected;
+    btn.classList.toggle('is-active', active);
+  });
+  root.querySelectorAll('[data-install-scope-panel]').forEach((panel) => {
+    const active = panel.dataset.installScopePanel === selected;
+    panel.classList.toggle('is-active', active);
+  });
+}
+
+function syncRemoteAuthFields(root) {
+  if (!root) return;
+  const authSelect = root.querySelector('[data-remote-auth-method]');
+  const authMethod = String(authSelect?.value || 'agent').toLowerCase();
+  root.querySelectorAll('[data-remote-auth-extra]').forEach((row) => {
+    const show = row.dataset.remoteAuthExtra === authMethod;
+    row.hidden = !show;
+  });
+}
+
+function readRemoteInstallPayload(root) {
+  if (!root) throw new Error('安装面板未就绪，请重试');
+  const host = String(root.querySelector('[data-remote-host]')?.value || '').trim();
+  const port = String(root.querySelector('[data-remote-port]')?.value || '').trim() || '22';
+  const username = String(root.querySelector('[data-remote-username]')?.value || '').trim();
+  const remoteOs = String(root.querySelector('[data-remote-os]')?.value || 'unix').trim();
+  const authMethod = String(root.querySelector('[data-remote-auth-method]')?.value || 'agent').trim();
+  const password = String(root.querySelector('[data-remote-password]')?.value || '');
+  const keyPath = String(root.querySelector('[data-remote-key-path]')?.value || '').trim();
+  const installMethod = String(root.querySelector('[data-remote-install-method]')?.value || 'script').trim();
+
+  if (!host) throw new Error('请填写远程服务器 IP 或域名');
+  if (!username) throw new Error('请填写远程登录用户名');
+  if (authMethod === 'password' && !password.trim()) throw new Error('密码登录需要填写密码');
+  if (authMethod === 'key' && !keyPath) throw new Error('私钥登录需要填写私钥路径');
+
+  return {
+    host,
+    port,
+    username,
+    remoteOs,
+    authMethod,
+    password,
+    keyPath,
+    installMethod,
+  };
+}
+
+async function executeOpenClawRemoteInstall(trigger) {
+  const root = trigger?.closest('.install-method-dialog');
+  const payload = readRemoteInstallPayload(root);
+  const target = `${payload.username}@${payload.host}:${payload.port || 22}`;
+  const taskId = addTask('远程安装 OpenClaw', { progress: 14, message: `正在连接 ${target}…` });
+
+  if (!state.updateDialogOpen) {
+    void openUpdateDialog({
+      eyebrow: 'OpenClaw',
+      title: '远程安装中',
+      body: `<div class="install-tracker-empty">正在连接服务器并执行安装…<br><code>${escapeHtml(target)}</code></div>`,
+      confirmText: '安装中…',
+      confirmOnly: true,
+    });
+  }
+
+  setUpdateDialogLocked(true, '远程安装进行中，请等待完成');
+  patchUpdateDialog({
+    eyebrow: 'OpenClaw',
+    title: '远程安装中',
+    body: `<div class="install-tracker-empty">正在连接服务器并执行安装…<br><code>${escapeHtml(target)}</code></div>`,
+    confirmText: '安装中…',
+    confirmDisabled: true,
+  });
+
+  try {
+    const json = await api('/api/openclaw/install/remote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      timeoutMs: 180000,
+    });
+    if (!json.ok || !json.data?.ok) {
+      throw new Error(json.error || json.data?.error || '远程安装失败');
+    }
+
+    setUpdateDialogLocked(false);
+    patchUpdateDialog({
+      eyebrow: 'OpenClaw',
+      title: '远程安装完成',
+      body: `
+        <div class="install-tracker-empty">
+          已完成远程安装：<code>${escapeHtml(json.data.remote?.target || target)}</code><br>
+          ${json.data.version ? `远程版本：<code>${escapeHtml(json.data.version)}</code>` : '已执行安装命令，请在服务器运行 `openclaw --version` 复核。'}
+        </div>
+      `,
+      confirmText: '关闭',
+      confirmDisabled: false,
+    });
+    updateTask(taskId, {
+      status: 'done',
+      progress: 100,
+      message: json.data.version ? `已安装 ${json.data.version}` : '远程安装命令已完成',
+    });
+    flash('远程服务器安装完成', 'success');
+  } catch (error) {
+    setUpdateDialogLocked(false);
+    patchUpdateDialog({
+      eyebrow: 'OpenClaw',
+      title: '远程安装失败',
+      body: `<div class="install-tracker-empty">${escapeHtml(error.message || '远程安装失败')}</div>`,
+      confirmText: '关闭',
+      confirmDisabled: false,
+    });
+    updateTask(taskId, { status: 'error', message: error.message || '远程安装失败' });
+    flash(error.message || '远程安装失败', 'error');
   }
 }
 
@@ -1581,47 +2363,123 @@ async function openClawInstallMethodDialog(btn) {
 
   const body = `
     <div class="install-method-dialog">
-      <button class="install-method-opt" data-method="script">
-        <span class="imo-icon">${icoScript}</span>
-        <div class="imo-content">
-          <div class="imo-title">一键安装脚本 <span class="imc-tag">推荐</span></div>
-          <div class="imo-cmd">${escapeHtml(isWin ? 'iwr -useb https://openclaw.ai/install.ps1 | iex' : 'curl -fsSL https://openclaw.ai/install.sh | bash')}</div>
+      <div class="install-scope-switch">
+        <button class="install-scope-btn is-active" data-install-scope="local">本地安装</button>
+        <button class="install-scope-btn" data-install-scope="remote">远程服务器安装</button>
+      </div>
+
+      <div class="install-scope-panel is-active" data-install-scope-panel="local">
+        <div class="install-scope-hint">推荐先选本地安装，下面四种方式都可用。</div>
+        <button class="install-method-opt" data-method="script">
+          <span class="imo-icon">${icoScript}</span>
+          <div class="imo-content">
+            <div class="imo-title">一键安装脚本 <span class="imc-tag">推荐</span></div>
+            <div class="imo-cmd">${escapeHtml(isWin ? "$env:OPENCLAW_NO_ONBOARD='1'; iwr -useb https://openclaw.ai/install.ps1 | iex" : 'curl -fsSL https://openclaw.ai/install.sh | OPENCLAW_NO_ONBOARD=1 bash -s -- --no-onboard --install-method npm')}</div>
+          </div>
+        </button>
+        <button class="install-method-opt" data-method="npm">
+          <span class="imo-icon">${icoNpm}</span>
+          <div class="imo-content">
+            <div class="imo-title">npm 全局安装</div>
+            <div class="imo-cmd">npm install -g openclaw@latest</div>
+          </div>
+        </button>
+        <button class="install-method-opt" data-method="source">
+          <span class="imo-icon">${icoSource}</span>
+          <div class="imo-content">
+            <div class="imo-title">源码构建 <span class="imc-tag">开发者</span></div>
+            <div class="imo-cmd">git clone + pnpm build</div>
+          </div>
+        </button>
+        <button class="install-method-opt" data-method="docker">
+          <span class="imo-icon">${icoDocker}</span>
+          <div class="imo-content">
+            <div class="imo-title">Docker 部署 <span class="imc-tag">服务器</span></div>
+            <div class="imo-cmd">./docker-setup.sh</div>
+          </div>
+        </button>
+      </div>
+
+      <div class="install-scope-panel" data-install-scope-panel="remote">
+        <div class="remote-install-form">
+          <div class="remote-install-row two-col">
+            <label>
+              <span>服务器 IP / 域名</span>
+              <input type="text" placeholder="例如 10.10.10.8 或 server.example.com" data-remote-host>
+            </label>
+            <label>
+              <span>SSH 端口</span>
+              <input type="text" value="22" data-remote-port>
+            </label>
+          </div>
+          <div class="remote-install-row">
+            <label>
+              <span>用户名</span>
+              <input type="text" placeholder="root / ubuntu / admin" data-remote-username>
+            </label>
+          </div>
+          <div class="remote-install-row three-col">
+            <label>
+              <span>远程系统</span>
+              <div class="select-wrap"><select data-remote-os>
+                <option value="unix">Linux / macOS</option>
+                <option value="windows">Windows</option>
+              </select></div>
+            </label>
+            <label>
+              <span>登录方式</span>
+              <div class="select-wrap"><select data-remote-auth-method>
+                <option value="agent">SSH Agent（推荐）</option>
+                <option value="password">密码登录</option>
+                <option value="key">私钥文件</option>
+              </select></div>
+            </label>
+            <label>
+              <span>安装方式</span>
+              <div class="select-wrap"><select data-remote-install-method>
+                <option value="script">官方脚本（推荐）</option>
+                <option value="npm">npm 全局安装</option>
+              </select></div>
+            </label>
+          </div>
+          <div class="remote-install-row" data-remote-auth-extra="password" hidden>
+            <label>
+              <span>登录密码</span>
+              <input type="password" placeholder="输入远程服务器密码" data-remote-password>
+            </label>
+          </div>
+          <div class="remote-install-row" data-remote-auth-extra="key" hidden>
+            <label>
+              <span>私钥路径</span>
+              <input type="text" placeholder="~/.ssh/id_ed25519" data-remote-key-path>
+            </label>
+          </div>
+          <div class="remote-install-note">将通过 SSH 登录到远程服务器并执行安装命令。</div>
+          <button class="remote-install-submit-btn" data-remote-openclaw-install>连接并安装 OpenClaw</button>
         </div>
-      </button>
-      <button class="install-method-opt" data-method="npm">
-        <span class="imo-icon">${icoNpm}</span>
-        <div class="imo-content">
-          <div class="imo-title">npm 全局安装</div>
-          <div class="imo-cmd">npm install -g openclaw@latest</div>
-        </div>
-      </button>
-      <button class="install-method-opt" data-method="source">
-        <span class="imo-icon">${icoSource}</span>
-        <div class="imo-content">
-          <div class="imo-title">源码构建 <span class="imc-tag">开发者</span></div>
-          <div class="imo-cmd">git clone + pnpm build</div>
-        </div>
-      </button>
-      <button class="install-method-opt" data-method="docker">
-        <span class="imo-icon">${icoDocker}</span>
-        <div class="imo-content">
-          <div class="imo-title">Docker 部署 <span class="imc-tag">服务器</span></div>
-          <div class="imo-cmd">./docker-setup.sh</div>
-        </div>
-      </button>
+      </div>
     </div>
   `;
 
-  const confirmed = await openUpdateDialog({
+  await openUpdateDialog({
     eyebrow: 'OpenClaw',
     title: '选择安装方式',
     body,
-    confirmText: '取消',
     confirmOnly: true,
+    hideActions: true,
   });
 
-  // Since we use confirmOnly, the actual method is picked via click in the dialog body.
-  // We add a listener for the method buttons.
+  // Widen dialog panel for install content (fallback for :has())
+  const panel = el('updateDialog')?.querySelector('.update-dialog-panel');
+  if (panel) panel.classList.add('install-dialog-wide');
+
+  // Upgrade selects in the remote panel to custom dropdowns
+  requestAnimationFrame(() => {
+    const dialogBody = el('updateDialogBody');
+    if (dialogBody && window.initCustomSelect) {
+      dialogBody.querySelectorAll('.select-wrap > select').forEach(s => window.initCustomSelect(s));
+    }
+  });
 }
 
 /* ── OpenClaw Uninstall Dialog (choice → progress → result) ── */
@@ -1695,7 +2553,7 @@ document.addEventListener('click', async (e) => {
     </div>
   `;
 
-  await openUpdateDialog({
+  void openUpdateDialog({
     eyebrow: 'OpenClaw',
     title: purge ? '完整卸载中…' : '卸载中…',
     body: progressBody,
@@ -1815,6 +2673,27 @@ document.addEventListener('click', async (e) => {
 });
 
 // Attach delegated listener for install method dialog
+document.addEventListener('click', (e) => {
+  const scopeBtn = e.target.closest('[data-install-scope]');
+  if (!scopeBtn) return;
+  const root = scopeBtn.closest('.install-method-dialog');
+  switchOpenClawInstallScope(root, scopeBtn.dataset.installScope || 'local');
+});
+
+document.addEventListener('change', (e) => {
+  const authSelect = e.target.closest('[data-remote-auth-method]');
+  if (!authSelect) return;
+  const root = authSelect.closest('.install-method-dialog');
+  syncRemoteAuthFields(root);
+});
+
+document.addEventListener('click', async (e) => {
+  const submitBtn = e.target.closest('[data-remote-openclaw-install]');
+  if (!submitBtn) return;
+  e.preventDefault();
+  await executeOpenClawRemoteInstall(submitBtn);
+});
+
 document.addEventListener('click', async (e) => {
   const opt = e.target.closest('.install-method-opt[data-method]');
   if (!opt) return;
@@ -1863,6 +2742,7 @@ document.addEventListener('click', async (e) => {
       patchUpdateDialog({
         eyebrow: 'OpenClaw',
         title: data.gatewayReachable ? '初始化完成' : '请继续完成终端向导',
+        trackerMode: true,
         body: renderOpenClawSetupDialog({
           stateData: data,
           command: ctx.command,
@@ -1871,6 +2751,7 @@ document.addEventListener('click', async (e) => {
           elapsedMs: Date.now() - ctx.startedAt,
         }),
       });
+      syncOpenClawSetupDialogSurface();
     }
     await loadOpenClawQuickState();
     flash('OpenClaw 状态已刷新', 'success');
@@ -2616,8 +3497,14 @@ function formatRelativeDuration(startedAt, completedAt) {
   return minutes > 0 ? `${minutes}分 ${seconds}秒` : `${seconds}秒`;
 }
 
-function renderOpenClawInstallStep(step, index, currentIndex) {
-  const statusText = step.status === 'done' ? '已完成' : step.status === 'running' ? '进行中' : step.status === 'error' ? '失败' : '等待中';
+function renderOpenClawInstallStep(step, index, currentStatus) {
+  const statusText = step.status === 'done'
+    ? '已完成'
+    : step.status === 'running'
+      ? '进行中'
+      : step.status === 'error'
+        ? (currentStatus === 'cancelled' || currentStatus === 'cancelling' ? '已中断' : '失败')
+        : '等待中';
   const icon = step.status === 'done'
     ? '<svg class="sti-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>'
     : step.status === 'error'
@@ -2670,8 +3557,21 @@ function shouldPauseOpenClawInstallRender() {
 function renderOpenClawInstallDialog(task) {
   const logs = getOpenClawInstallLogsText(task);
   const nextActions = (task.nextActions || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
-  const statusLabel = task.status === 'success' ? '安装完成' : task.status === 'error' ? '安装失败' : '安装进行中';
-  const detailText = task.detail || (task.status === 'running' ? '正在等待新的安装输出…' : '');
+  const statusLabel = task.status === 'success'
+    ? '安装完成'
+    : task.status === 'cancelled'
+      ? '安装已中断'
+      : task.status === 'cancelling'
+        ? '正在中断'
+        : task.status === 'error'
+          ? '安装失败'
+          : '安装进行中';
+  const detailText = task.detail || (task.status === 'running' || task.status === 'cancelling' ? '正在等待新的安装输出…' : '');
+  const todoItems = task.status === 'cancelling'
+    ? ['正在停止安装进程。', '正在清理本次安装残留。', '请先不要关闭窗口，清理完成后会自动提示。']
+    : task.status === 'cancelled'
+      ? ['本次安装已经停止。', '残留清理结果在下方日志里。', '如需继续，重新点安装即可。']
+      : ['先别关窗口，也别重复点安装按钮。', '如果 30~90 秒没新日志，通常只是网络下载中。', '安装结束后，这里会直接告诉你下一步。'];
   return `
     <div class="install-tracker">
       <div class="install-tracker-top">
@@ -2685,11 +3585,11 @@ function renderOpenClawInstallDialog(task) {
       <div class="install-tracker-hint">${escapeHtml(task.hint || '你现在不需要操作，等它自己完成即可。')}</div>
       <div class="install-tracker-detail">${escapeHtml(detailText)}</div>
       <div class="install-tracker-grid">
-        <div class="install-tracker-col">${(task.steps || []).map((step, index) => renderOpenClawInstallStep(step, index, task.stepIndex)).join('')}</div>
+        <div class="install-tracker-col">${(task.steps || []).map((step, index) => renderOpenClawInstallStep(step, index, task.status)).join('')}</div>
         <div class="install-tracker-col">
           <div class="install-tracker-note-card">
             <div class="install-tracker-note-title">你现在该做什么</div>
-            <ul class="install-tracker-list"><li>先别关窗口，也别重复点安装按钮。</li><li>如果 30~90 秒没新日志，通常只是网络下载中。</li><li>安装结束后，这里会直接告诉你下一步。</li></ul>
+            <ul class="install-tracker-list">${todoItems.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
           </div>
           <div class="install-tracker-note-card">
             <div class="install-tracker-note-title">安装信息</div>
@@ -2729,12 +3629,19 @@ function renderTrackedOpenClawDialog(task, { force = false } = {}) {
 
   patchUpdateDialog({
     eyebrow: 'OpenClaw',
-    title: task.status === 'success' ? '安装完成' : task.status === 'error' ? '安装失败' : '安装中',
+    title: task.status === 'success' ? '安装完成' : task.status === 'cancelled' ? '安装已中断' : task.status === 'cancelling' ? '中断中' : task.status === 'error' ? '安装失败' : '安装中',
     body: renderOpenClawInstallDialog(task),
-    confirmText: task.status === 'running' ? '安装中…' : '关闭',
-    confirmDisabled: task.status === 'running',
+    confirmText: task.status === 'running' ? '安装中…' : task.status === 'cancelling' ? '清理中…' : '关闭',
+    confirmDisabled: task.status === 'running' || task.status === 'cancelling',
+    cancelText: task.status === 'running' ? '中断安装' : task.status === 'cancelling' ? '中断中…' : '取消',
+    cancelDisabled: task.status === 'cancelling',
+    cancelHidden: !(task.status === 'running' || task.status === 'cancelling'),
     trackerMode: true,
   });
+
+  if (task.status !== 'running' && task.status !== 'cancelling') {
+    state.updateDialogCancelHandler = null;
+  }
 
   const newBody = el('updateDialogBody');
   const newLog = newBody?.querySelector('.install-tracker-log');
@@ -2936,12 +3843,20 @@ function closeUpdateDialog(result = false) {
   clearTimeout(state.updateDialogTimer);
   state.updateDialogOpen = false;
   state.updateDialogLocked = false;
+  state.updateDialogCancelHandler = null;
   state.openClawInstallView.lastRenderKey = '';
   state.openClawInstallView.lastLogsText = '';
   state.openClawInstallView.pauseUntil = 0;
   state.openClawInstallView.pendingTask = null;
+  state.openClawInstallView.activeTaskId = '';
+  state.openClawInstallView.cancelBusy = false;
   state.openClawSetupContext = null;
   panel.classList.remove('dialog-locked', 'install-tracker-mode');
+  // Clean up install dialog wide class and restore actions bar
+  const panelInner = panel.querySelector('.update-dialog-panel');
+  if (panelInner) panelInner.classList.remove('install-dialog-wide');
+  const actionsBar = el('updateDialogConfirmBtn')?.parentElement;
+  if (actionsBar) actionsBar.style.display = '';
   panel.classList.remove('open');
   panel.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('update-dialog-open');
@@ -2953,12 +3868,13 @@ function closeUpdateDialog(result = false) {
   }
 }
 
-function openUpdateDialog({ eyebrow = 'Update', title, body = '', meta = '', confirmText = '继续', cancelText = '取消', tone = 'default', confirmOnly = false, trackerMode = false }) {
+function openUpdateDialog({ eyebrow = 'Update', title, body = '', meta = '', confirmText = '继续', cancelText = '取消', tone = 'default', confirmOnly = false, trackerMode = false, hideActions = false }) {
   const panel = el('updateDialog');
   if (!panel) return Promise.resolve(false);
   clearTimeout(state.updateDialogTimer);
   state.updateDialogOpen = true;
   state.updateDialogLocked = false;
+  state.updateDialogCancelHandler = null;
   panel.classList.remove('dialog-locked');
   panel.classList.toggle('install-tracker-mode', trackerMode);
   el('updateDialogEyebrow').textContent = eyebrow;
@@ -2968,8 +3884,13 @@ function openUpdateDialog({ eyebrow = 'Update', title, body = '', meta = '', con
   el('updateDialogMeta').classList.toggle('hide', !meta);
   el('updateDialogConfirmBtn').textContent = confirmText;
   el('updateDialogConfirmBtn').dataset.tone = tone;
+  el('updateDialogConfirmBtn').disabled = false;
   el('updateDialogCancelBtn').textContent = cancelText;
+  el('updateDialogCancelBtn').disabled = false;
   el('updateDialogCancelBtn').hidden = Boolean(confirmOnly);
+  // Hide the entire actions bar when requested (e.g. install dialog where × suffices)
+  const actionsBar = el('updateDialogConfirmBtn')?.parentElement;
+  if (actionsBar) actionsBar.style.display = hideActions ? 'none' : '';
   panel.classList.remove('hide');
   panel.setAttribute('aria-hidden', 'false');
   document.body.classList.add('update-dialog-open');
@@ -2979,7 +3900,7 @@ function openUpdateDialog({ eyebrow = 'Update', title, body = '', meta = '', con
   });
 }
 
-function patchUpdateDialog({ eyebrow, title, body, meta, confirmText, cancelText, tone, confirmDisabled, trackerMode } = {}) {
+function patchUpdateDialog({ eyebrow, title, body, meta, confirmText, cancelText, tone, confirmDisabled, cancelDisabled, cancelHidden, trackerMode } = {}) {
   const panel = el('updateDialog');
   if (!panel) return;
   if (typeof eyebrow === 'string') el('updateDialogEyebrow').textContent = eyebrow;
@@ -2993,6 +3914,8 @@ function patchUpdateDialog({ eyebrow, title, body, meta, confirmText, cancelText
   if (typeof cancelText === 'string') el('updateDialogCancelBtn').textContent = cancelText;
   if (typeof tone === 'string') el('updateDialogConfirmBtn').dataset.tone = tone;
   if (typeof confirmDisabled === 'boolean') el('updateDialogConfirmBtn').disabled = confirmDisabled;
+  if (typeof cancelDisabled === 'boolean') el('updateDialogCancelBtn').disabled = cancelDisabled;
+  if (typeof cancelHidden === 'boolean') el('updateDialogCancelBtn').hidden = cancelHidden;
   if (typeof trackerMode === 'boolean') panel.classList.toggle('install-tracker-mode', trackerMode);
 }
 
@@ -3117,6 +4040,23 @@ async function setConfigEditorOpen(open) {
 
 function configValue(path, fallback = '') {
   return path.split('.').reduce((obj, key) => (obj && obj[key] !== undefined ? obj[key] : undefined), state.current?.config) ?? fallback;
+}
+
+function compactPromptEnabled(value = configValue('compact_prompt', null)) {
+  if (value === null || value === undefined || value === '') return true;
+  if (typeof value === 'string') return value.trim().toLowerCase() !== 'false';
+  return Boolean(value);
+}
+
+function buildCompactPromptSetting() {
+  if (!el('cfgCompactPromptCheck').checked) return 'false';
+
+  const currentValue = configValue('compact_prompt', null);
+  if (typeof currentValue === 'string' && currentValue.trim() && currentValue.trim().toLowerCase() !== 'false') {
+    return currentValue;
+  }
+
+  return null;
 }
 
 const CONFIG_NUMBER_FIELDS = {
@@ -3294,7 +4234,7 @@ function populateConfigEditor() {
   el('cfgShowRawReasoningCheck').checked = Boolean(configValue('show_raw_agent_reasoning', false));
   el('cfgDisableStorageCheck').checked = Boolean(configValue('disable_response_storage', false));
   el('cfgShellSnapshotCheck').checked = Boolean(configValue('features.shell_snapshot', false));
-  el('cfgCompactPromptCheck').checked = Boolean(configValue('compact_prompt', false));
+  el('cfgCompactPromptCheck').checked = compactPromptEnabled();
   el('cfgUpdateCheck').checked = Boolean(configValue('check_for_update_on_startup', false));
   el('cfgInstructionsTextarea').value = configValue('instructions', '');
   el('cfgBaseInstructionsTextarea').value = configValue('base_instructions', '');
@@ -3934,7 +4874,7 @@ function applyCodexRecipePatch(patch) {
     const field = el(elId);
     if (!field) continue;
     if (field.type === 'checkbox') {
-      field.checked = Boolean(value);
+      field.checked = key === 'compact_prompt' ? compactPromptEnabled(value) : Boolean(value);
     } else {
       field.value = value === null || value === undefined ? '' : String(value);
     }
@@ -4712,7 +5652,7 @@ function buildSettingsPatch() {
     hide_agent_reasoning: el('cfgHideReasoningCheck').checked,
     show_raw_agent_reasoning: el('cfgShowRawReasoningCheck').checked,
     disable_response_storage: el('cfgDisableStorageCheck').checked,
-    compact_prompt: el('cfgCompactPromptCheck').checked,
+    compact_prompt: buildCompactPromptSetting(),
     check_for_update_on_startup: el('cfgUpdateCheck').checked,
     instructions: el('cfgInstructionsTextarea').value.trim() || null,
     base_instructions: el('cfgBaseInstructionsTextarea').value.trim() || null,
@@ -6497,7 +7437,7 @@ const WIZARD_TOOL_META = {
     package: 'openclaw',
     installApi: '/api/openclaw/install',
     methods: [
-      { id: 'script', label: '一键脚本', cmd: navigator.platform?.startsWith('Win') ? 'iwr -useb https://openclaw.ai/install.ps1 | iex' : 'curl -fsSL https://openclaw.ai/install.sh | bash', tag: '推荐' },
+      { id: 'script', label: '一键脚本', cmd: navigator.platform?.startsWith('Win') ? "$env:OPENCLAW_NO_ONBOARD='1'; iwr -useb https://openclaw.ai/install.ps1 | iex" : 'curl -fsSL https://openclaw.ai/install.sh | OPENCLAW_NO_ONBOARD=1 bash -s -- --no-onboard --install-method npm', tag: '推荐' },
       { id: 'npm', label: 'npm', cmd: 'npm install -g openclaw@latest' },
       { id: 'source', label: '源码', cmd: 'git clone + pnpm build', tag: '开发者' },
       { id: 'docker', label: 'Docker', cmd: './docker-setup.sh', tag: '服务器' },
@@ -7453,7 +8393,13 @@ function bindEvents() {
   });
   el('aboutOpenAdvancedBtn').addEventListener('click', () => setConfigEditorOpen(true));
   el('closeUpdateDialogBtn').addEventListener('click', () => closeUpdateDialog(false));
-  el('updateDialogCancelBtn').addEventListener('click', () => closeUpdateDialog(false));
+  el('updateDialogCancelBtn').addEventListener('click', () => {
+    if (typeof state.updateDialogCancelHandler === 'function') {
+      state.updateDialogCancelHandler();
+      return;
+    }
+    closeUpdateDialog(false);
+  });
   el('updateDialogConfirmBtn').addEventListener('click', () => closeUpdateDialog(true));
   document.querySelectorAll('[data-close-update-dialog]').forEach((node) => node.addEventListener('click', () => closeUpdateDialog(false)));
 
