@@ -680,10 +680,16 @@
 
                 <!-- ═══ OpenClaw Config Editor — Control Panel ═══ -->
                 <section class="config-editor-main hide" data-tool-editor="openclaw">
-                  <div class="oc-panel-hint">点击面板展开配置，未修改的项会使用 OpenClaw 默认值。</div>
+                  <div class="oc-panel-toolbar">
+                    <div class="oc-panel-hint">点击面板展开配置，未修改的项会使用 OpenClaw 默认值。</div>
+                    <div class="oc-config-view-switch" id="ocConfigViewSwitch">
+                      <button type="button" class="secondary tiny-btn active" data-oc-config-view="minimal">最小化配置</button>
+                      <button type="button" class="secondary tiny-btn" data-oc-config-view="full">完整配置</button>
+                    </div>
+                  </div>
 
                   <!-- ── 📦 模型配置 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" open>
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -700,13 +706,13 @@
                               autocomplete="off" />
                           </div>
                         </label>
-                        <label class="field"><span>Fallback 模型</span>
+                        <label class="field" data-oc-view="advanced"><span>Fallback 模型</span>
                           <div class="model-combobox" id="ocModelFallbacksCombobox" data-input-id="ocCfgModelFallbacks">
                             <input id="ocCfgModelFallbacks" placeholder="逗号分隔，如: openai/gpt-5.2, google/gemini-3-pro"
                               autocomplete="off" />
                           </div>
                         </label>
-                        <label class="field"><span>默认推理级别</span>
+                        <label class="field" data-oc-view="advanced"><span>默认推理级别</span>
                           <div class="select-wrap"><select id="ocCfgThinkingDefault">
                               <option value="">默认 (off)</option>
                               <option value="off">off</option>
@@ -718,17 +724,17 @@
                               <option value="adaptive">adaptive (自适应)</option>
                             </select></div>
                         </label>
-                        <label class="field"><span>工作目录</span><input id="ocCfgWorkspace" placeholder="默认 ~" /></label>
-                        <label class="field"><span>图像模型</span><input id="ocCfgImageModel"
+                        <label class="field" data-oc-view="advanced"><span>工作目录</span><input id="ocCfgWorkspace" placeholder="默认 ~" /></label>
+                        <label class="field" data-oc-view="advanced"><span>图像模型</span><input id="ocCfgImageModel"
                             placeholder="留空 = 使用主模型" /></label>
-                        <label class="field"><span>上下文窗口</span><input id="ocCfgContextTokens" inputmode="numeric"
+                        <label class="field" data-oc-view="advanced"><span>上下文窗口</span><input id="ocCfgContextTokens" inputmode="numeric"
                             placeholder="默认 200000" /></label>
                       </div>
                     </div>
                   </details>
 
                   <!-- ── 🔗 Provider 连接 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" open>
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -770,9 +776,9 @@
                         <div id="ocEnvImportResult"></div>
                       </div>
                       <div class="editor-grid dense-grid">
-                        <label class="field"><span>Provider 标识</span><input id="ocCfgProviderAlias"
+                        <label class="field" data-oc-view="advanced"><span>Provider 标识</span><input id="ocCfgProviderAlias"
                             placeholder="如 openai / anthropic" /></label>
-                        <label class="field"><span>协议</span>
+                        <label class="field" data-oc-view="advanced"><span>协议</span>
                           <div class="select-wrap"><select id="ocCfgProviderApi">
                               <option value="openai-completions">OpenAI Chat / Completions</option>
                               <option value="openai-responses">OpenAI Responses</option>
@@ -783,16 +789,16 @@
                             placeholder="留空使用官方默认端点" /></label>
                         <label class="field"><span>API Key</span><input id="ocCfgProviderApiKey" type="password"
                             placeholder="自动写入 env + provider.apiKey" /></label>
-                        <label class="field"><span>Token 变量名</span><input id="ocCfgProviderEnvKey"
+                        <label class="field" data-oc-view="advanced"><span>Token 变量名</span><input id="ocCfgProviderEnvKey"
                             placeholder="如 OPENAI_API_KEY" /></label>
-                        <label class="field"><span>模型显示名</span>
+                        <label class="field" data-oc-view="advanced"><span>模型显示名</span>
                           <div class="model-combobox" id="ocModelNameCombobox" data-input-id="ocCfgProviderModelName">
                             <input id="ocCfgProviderModelName" placeholder="自动生成" autocomplete="off" />
                           </div>
                         </label>
-                        <label class="field"><span>Context Window</span><input id="ocCfgProviderContextWindow"
+                        <label class="field" data-oc-view="advanced"><span>Context Window</span><input id="ocCfgProviderContextWindow"
                             inputmode="numeric" placeholder="默认 200000" /></label>
-                        <label class="field"><span>Max Tokens</span><input id="ocCfgProviderMaxTokens"
+                        <label class="field" data-oc-view="advanced"><span>Max Tokens</span><input id="ocCfgProviderMaxTokens"
                             inputmode="numeric" placeholder="默认 8192" /></label>
                       </div>
                     </div>
@@ -857,6 +863,45 @@
                                 placeholder="默认不限" /></label>
                             <label class="field"><span>消息分段大小</span><input id="ocCfgTgTextChunkLimit"
                                 inputmode="numeric" placeholder="默认 4000" /></label>
+                            <label class="field" data-oc-view="advanced"><span>默认账号</span><input id="ocCfgTgDefaultAccount"
+                                placeholder="多账号时使用" /></label>
+                            <label class="field" data-oc-view="advanced"><span>默认发送目标</span><input id="ocCfgTgDefaultTo"
+                                placeholder="chat_id / username" /></label>
+                            <label class="field" data-oc-view="advanced"><span>群组白名单</span><input id="ocCfgTgGroupAllowFrom"
+                                placeholder="用户ID，逗号分隔" /></label>
+                            <label class="field" data-oc-view="advanced"><span>DM 历史条数</span><input id="ocCfgTgDmHistoryLimit" inputmode="numeric"
+                                placeholder="默认不限" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Chunk 模式</span>
+                              <div class="select-wrap"><select id="ocCfgTgChunkMode">
+                                  <option value="">默认 (length)</option>
+                                  <option value="length">length</option>
+                                  <option value="newline">newline</option>
+                                </select></div>
+                            </label>
+                            <label class="field" data-oc-view="advanced"><span>Reaction 通知</span>
+                              <div class="select-wrap"><select id="ocCfgTgReactionNotifications">
+                                  <option value="">默认 (off)</option>
+                                  <option value="off">off</option>
+                                  <option value="own">own</option>
+                                  <option value="all">all</option>
+                                </select></div>
+                            </label>
+                            <label class="field" data-oc-view="advanced"><span>ReplyTo 模式</span>
+                              <div class="select-wrap"><select id="ocCfgTgReplyToMode">
+                                  <option value="">默认 (off)</option>
+                                  <option value="off">off</option>
+                                  <option value="first">first</option>
+                                  <option value="all">all</option>
+                                </select></div>
+                            </label>
+                            <label class="field" data-oc-view="advanced"><span>Webhook Port</span><input id="ocCfgTgWebhookPort" inputmode="numeric"
+                                placeholder="可选" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Webhook Path</span><input id="ocCfgTgWebhookPath"
+                                placeholder="如 /telegram" /></label>
+                            <label class="field" data-oc-view="advanced"><span>回复前缀</span><input id="ocCfgTgResponsePrefix"
+                                placeholder="可选" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Ack Reaction</span><input id="ocCfgTgAckReaction"
+                                placeholder="如 👀" /></label>
                           </div>
                           <div class="toggle-grid">
                             <label class="toggle-item"><input id="ocCfgTgBlockStreaming"
@@ -864,6 +909,8 @@
                             <label class="toggle-item"><input id="ocCfgTgLinkPreview" type="checkbox"
                                 checked /><span>链接预览</span></label>
                           </div>
+                          <label class="field field-wide" data-oc-view="advanced"><span>channels.telegram JSON</span><textarea id="ocCfgTelegramJson" rows="7"
+                              placeholder='例如：{"accounts":{"work":{"botToken":"123:abc"}},"defaultAccount":"work"}'></textarea></label>
                         </div>
                       </details>
                       <!-- Discord -->
@@ -903,6 +950,36 @@
                             </label>
                             <label class="field"><span>消息分段大小</span><input id="ocCfgDcTextChunkLimit"
                                 inputmode="numeric" placeholder="默认 2000" /></label>
+                            <label class="field" data-oc-view="advanced"><span>默认账号</span><input id="ocCfgDcDefaultAccount"
+                                placeholder="多账号时使用" /></label>
+                            <label class="field" data-oc-view="advanced"><span>默认发送目标</span><input id="ocCfgDcDefaultTo"
+                                placeholder="channel / user / thread" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Response Prefix</span><input id="ocCfgDcResponsePrefix"
+                                placeholder="可选" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Ack Reaction</span><input id="ocCfgDcAckReaction"
+                                placeholder="如 👀 或自定义 emoji" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Ack Scope</span>
+                              <div class="select-wrap"><select id="ocCfgDcAckReactionScope">
+                                  <option value="">默认</option>
+                                  <option value="group-mentions">group-mentions</option>
+                                  <option value="group-all">group-all</option>
+                                  <option value="direct">direct</option>
+                                  <option value="all">all</option>
+                                  <option value="off">off</option>
+                                  <option value="none">none</option>
+                                </select></div>
+                            </label>
+                            <label class="field" data-oc-view="advanced"><span>Activity</span><input id="ocCfgDcActivity"
+                                placeholder="如 Watching OpenClaw" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Status</span>
+                              <div class="select-wrap"><select id="ocCfgDcStatus">
+                                  <option value="">默认 (online)</option>
+                                  <option value="online">online</option>
+                                  <option value="idle">idle</option>
+                                  <option value="dnd">dnd</option>
+                                  <option value="invisible">invisible</option>
+                                </select></div>
+                            </label>
                           </div>
                           <div class="toggle-grid">
                             <label class="toggle-item"><input id="ocCfgDcAllowBots" type="checkbox" /><span>允许 Bot
@@ -910,6 +987,8 @@
                             <label class="toggle-item"><input id="ocCfgDcVoiceEnabled" type="checkbox"
                                 checked /><span>语音频道</span></label>
                           </div>
+                          <label class="field field-wide" data-oc-view="advanced"><span>channels.discord JSON</span><textarea id="ocCfgDiscordJson" rows="7"
+                              placeholder='例如：{"accounts":{"main":{"token":"..."}},"defaultAccount":"main"}'></textarea></label>
                         </div>
                       </details>
                       <!-- Slack -->
@@ -922,19 +1001,315 @@
                                 placeholder="xoxb-..." /></label>
                             <label class="field"><span>App Token</span><input id="ocCfgSlackAppToken" type="password"
                                 placeholder="xapp-..." /></label>
+                            <label class="field" data-oc-view="advanced"><span>Signing Secret</span><input id="ocCfgSlackSigningSecret" type="password"
+                                placeholder="可选" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Webhook Path</span><input id="ocCfgSlackWebhookPath"
+                                placeholder="如 /slack/events" /></label>
+                            <label class="field" data-oc-view="advanced"><span>默认账号</span><input id="ocCfgSlackDefaultAccount"
+                                placeholder="多账号时使用" /></label>
+                            <label class="field" data-oc-view="advanced"><span>默认发送目标</span><input id="ocCfgSlackDefaultTo"
+                                placeholder="channel / user / thread" /></label>
+                            <label class="field" data-oc-view="advanced"><span>群组策略</span>
+                              <div class="select-wrap"><select id="ocCfgSlackGroupPolicy">
+                                  <option value="">默认 (open)</option>
+                                  <option value="open">open</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field" data-oc-view="advanced"><span>消息分段大小</span><input id="ocCfgSlackTextChunkLimit" inputmode="numeric"
+                                placeholder="默认 4000" /></label>
+                            <label class="field" data-oc-view="advanced"><span>流式预览</span>
+                              <div class="select-wrap"><select id="ocCfgSlackStreaming">
+                                  <option value="">默认 (off)</option>
+                                  <option value="off">off</option>
+                                  <option value="partial">partial</option>
+                                  <option value="block">block</option>
+                                </select></div>
+                            </label>
+                            <label class="field" data-oc-view="advanced"><span>Response Prefix</span><input id="ocCfgSlackResponsePrefix"
+                                placeholder="可选" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Ack Reaction</span><input id="ocCfgSlackAckReaction"
+                                placeholder="如 eyes" /></label>
+                            <label class="field" data-oc-view="advanced"><span>Typing Reaction</span><input id="ocCfgSlackTypingReaction"
+                                placeholder="如 hourglass_flowing_sand" /></label>
                           </div>
+                          <div class="toggle-grid" data-oc-view="advanced">
+                            <label class="toggle-item"><input id="ocCfgSlackAllowBots" type="checkbox" /><span>允许 Bot 触发</span></label>
+                            <label class="toggle-item"><input id="ocCfgSlackRequireMention" type="checkbox" /><span>需要 @ 提及</span></label>
+                          </div>
+                          <label class="field field-wide" data-oc-view="advanced"><span>channels.slack JSON</span><textarea id="ocCfgSlackJson" rows="7"
+                              placeholder='例如：{"accounts":{"ops":{"botToken":"xoxb-..."}},"defaultAccount":"ops"}'></textarea></label>
                         </div>
                       </details>
                       <!-- WhatsApp -->
                       <details class="oc-subpanel">
-                        <summary class="oc-subpanel-head"><span>WhatsApp</span><span class="oc-sub-badge">未配置</span>
+                        <summary class="oc-subpanel-head"><span>WhatsApp</span><span class="oc-sub-badge"
+                            id="ocBadgeWhatsApp">未配置</span>
                         </summary>
                         <div class="oc-subpanel-body">
-                          <div class="oc-panel-empty">需要在 openclaw.json 的 channels.whatsapp 中配置</div>
+                          <div class="editor-grid dense-grid">
+                            <label class="field"><span>默认发送目标</span><input id="ocCfgWhatsAppDefaultTo"
+                                placeholder="手机号或群组 JID" /></label>
+                            <label class="field"><span>私聊策略</span>
+                              <div class="select-wrap"><select id="ocCfgWhatsAppDmPolicy">
+                                  <option value="">默认 (pairing)</option>
+                                  <option value="pairing">pairing</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="open">open</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>群组策略</span>
+                              <div class="select-wrap"><select id="ocCfgWhatsAppGroupPolicy">
+                                  <option value="">默认 (open)</option>
+                                  <option value="open">open</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>DM 白名单</span><input id="ocCfgWhatsAppAllowFrom"
+                                placeholder="手机号，逗号分隔" /></label>
+                            <label class="field" data-oc-view="advanced"><span>群组白名单</span><input id="ocCfgWhatsAppGroupAllowFrom"
+                                placeholder="手机号，逗号分隔" /></label>
+                            <label class="field" data-oc-view="advanced"><span>历史条数</span><input id="ocCfgWhatsAppHistoryLimit" inputmode="numeric"
+                                placeholder="默认不限" /></label>
+                            <label class="field" data-oc-view="advanced"><span>DM 历史条数</span><input id="ocCfgWhatsAppDmHistoryLimit" inputmode="numeric"
+                                placeholder="默认不限" /></label>
+                            <label class="field" data-oc-view="advanced"><span>消息分段大小</span><input id="ocCfgWhatsAppTextChunkLimit" inputmode="numeric"
+                                placeholder="默认 4000" /></label>
+                            <label class="field" data-oc-view="advanced"><span>媒体大小上限 (MB)</span><input id="ocCfgWhatsAppMediaMaxMb" inputmode="numeric"
+                                placeholder="默认 50" /></label>
+                            <label class="field" data-oc-view="advanced"><span>回复前缀</span><input id="ocCfgWhatsAppResponsePrefix"
+                                placeholder="可选" /></label>
+                          </div>
+                          <div class="toggle-grid">
+                            <label class="toggle-item"><input id="ocCfgWhatsAppEnabled" type="checkbox" checked /><span>启用渠道</span></label>
+                            <label class="toggle-item"><input id="ocCfgWhatsAppSelfChatMode" type="checkbox" /><span>同号自聊模式</span></label>
+                            <label class="toggle-item" data-oc-view="advanced"><input id="ocCfgWhatsAppSendReadReceipts" type="checkbox" checked /><span>发送已读回执</span></label>
+                          </div>
+                        </div>
+                      </details>
+                      <details class="oc-subpanel" data-oc-view="advanced">
+                        <summary class="oc-subpanel-head"><span>Signal</span><span class="oc-sub-badge"
+                            id="ocBadgeSignal">未配置</span></summary>
+                        <div class="oc-subpanel-body">
+                          <div class="editor-grid dense-grid">
+                            <label class="field"><span>账号</span><input id="ocCfgSignalAccount" placeholder="+86138..." /></label>
+                            <label class="field"><span>HTTP URL</span><input id="ocCfgSignalHttpUrl" placeholder="http://127.0.0.1:8080" /></label>
+                            <label class="field"><span>CLI 路径</span><input id="ocCfgSignalCliPath" placeholder="signal-cli" /></label>
+                            <label class="field"><span>私聊策略</span>
+                              <div class="select-wrap"><select id="ocCfgSignalDmPolicy">
+                                  <option value="">默认 (pairing)</option>
+                                  <option value="pairing">pairing</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="open">open</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>群组策略</span>
+                              <div class="select-wrap"><select id="ocCfgSignalGroupPolicy">
+                                  <option value="">默认 (open)</option>
+                                  <option value="open">open</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>DM 白名单</span><input id="ocCfgSignalAllowFrom" placeholder="号码/ID，逗号分隔" /></label>
+                            <label class="field"><span>反应通知</span>
+                              <div class="select-wrap"><select id="ocCfgSignalReactionNotifications">
+                                  <option value="">默认 (own)</option>
+                                  <option value="off">off</option>
+                                  <option value="own">own</option>
+                                  <option value="all">all</option>
+                                  <option value="allowlist">allowlist</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>消息分段大小</span><input id="ocCfgSignalTextChunkLimit" inputmode="numeric" placeholder="默认 4000" /></label>
+                            <label class="field"><span>回复前缀</span><input id="ocCfgSignalResponsePrefix" placeholder="可选" /></label>
+                          </div>
+                          <div class="toggle-grid">
+                            <label class="toggle-item"><input id="ocCfgSignalEnabled" type="checkbox" checked /><span>启用渠道</span></label>
+                            <label class="toggle-item"><input id="ocCfgSignalAutoStart" type="checkbox" checked /><span>自动启动 daemon</span></label>
+                            <label class="toggle-item"><input id="ocCfgSignalReadReceipts" type="checkbox" /><span>发送已读回执</span></label>
+                          </div>
+                          <label class="field field-wide"><span>channels.signal JSON</span><textarea id="ocCfgSignalJson" rows="8"
+                              placeholder='例如：{"account":"+86138...","httpUrl":"http://127.0.0.1:8080","dmPolicy":"pairing"}'></textarea></label>
+                        </div>
+                      </details>
+                      <details class="oc-subpanel" data-oc-view="advanced">
+                        <summary class="oc-subpanel-head"><span>Google Chat</span><span class="oc-sub-badge"
+                            id="ocBadgeGoogleChat">未配置</span></summary>
+                        <div class="oc-subpanel-body">
+                          <div class="editor-grid dense-grid">
+                            <label class="field"><span>Service Account 文件</span><input id="ocCfgGoogleChatServiceAccountFile" placeholder="/path/to/service-account.json" /></label>
+                            <label class="field"><span>Webhook Path</span><input id="ocCfgGoogleChatWebhookPath" placeholder="/googlechat" /></label>
+                            <label class="field"><span>默认发送目标</span><input id="ocCfgGoogleChatDefaultTo" placeholder="spaces/AAA..." /></label>
+                            <label class="field"><span>私聊策略</span>
+                              <div class="select-wrap"><select id="ocCfgGoogleChatDmPolicy">
+                                  <option value="">默认 (pairing)</option>
+                                  <option value="pairing">pairing</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="open">open</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>群组策略</span>
+                              <div class="select-wrap"><select id="ocCfgGoogleChatGroupPolicy">
+                                  <option value="">默认 (open)</option>
+                                  <option value="open">open</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>DM 白名单</span><input id="ocCfgGoogleChatAllowFrom" placeholder="用户ID/邮箱，逗号分隔" /></label>
+                            <label class="field"><span>群组白名单</span><input id="ocCfgGoogleChatGroupAllowFrom" placeholder="用户ID/邮箱，逗号分隔" /></label>
+                            <label class="field"><span>Typing Indicator</span>
+                              <div class="select-wrap"><select id="ocCfgGoogleChatTypingIndicator">
+                                  <option value="">默认 (message)</option>
+                                  <option value="none">none</option>
+                                  <option value="message">message</option>
+                                  <option value="reaction">reaction</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>消息分段大小</span><input id="ocCfgGoogleChatTextChunkLimit" inputmode="numeric" placeholder="默认 4000" /></label>
+                            <label class="field"><span>回复前缀</span><input id="ocCfgGoogleChatResponsePrefix" placeholder="可选" /></label>
+                          </div>
+                          <div class="toggle-grid">
+                            <label class="toggle-item"><input id="ocCfgGoogleChatEnabled" type="checkbox" checked /><span>启用渠道</span></label>
+                            <label class="toggle-item"><input id="ocCfgGoogleChatAllowBots" type="checkbox" /><span>允许 Bot 消息</span></label>
+                          </div>
+                          <label class="field field-wide"><span>channels.googlechat JSON</span><textarea id="ocCfgGoogleChatJson" rows="8"
+                              placeholder='例如：{"serviceAccountFile":"/path/to/service-account.json","webhookPath":"/googlechat"}'></textarea></label>
+                        </div>
+                      </details>
+                      <details class="oc-subpanel" data-oc-view="advanced">
+                        <summary class="oc-subpanel-head"><span>iMessage</span><span class="oc-sub-badge"
+                            id="ocBadgeImessage">未配置</span></summary>
+                        <div class="oc-subpanel-body">
+                          <div class="editor-grid dense-grid">
+                            <label class="field"><span>CLI 路径</span><input id="ocCfgImessageCliPath" placeholder="imsg" /></label>
+                            <label class="field"><span>默认服务</span>
+                              <div class="select-wrap"><select id="ocCfgImessageService">
+                                  <option value="">默认 (auto)</option>
+                                  <option value="auto">auto</option>
+                                  <option value="imessage">imessage</option>
+                                  <option value="sms">sms</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>远程主机</span><input id="ocCfgImessageRemoteHost" placeholder="user@mac-host" /></label>
+                            <label class="field"><span>默认发送目标</span><input id="ocCfgImessageDefaultTo" placeholder="手机号 / 聊天标识" /></label>
+                            <label class="field"><span>私聊策略</span>
+                              <div class="select-wrap"><select id="ocCfgImessageDmPolicy">
+                                  <option value="">默认 (pairing)</option>
+                                  <option value="pairing">pairing</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="open">open</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>群组策略</span>
+                              <div class="select-wrap"><select id="ocCfgImessageGroupPolicy">
+                                  <option value="">默认 (open)</option>
+                                  <option value="open">open</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>DM 白名单</span><input id="ocCfgImessageAllowFrom" placeholder="handle / chat_id，逗号分隔" /></label>
+                            <label class="field"><span>消息分段大小</span><input id="ocCfgImessageTextChunkLimit" inputmode="numeric" placeholder="默认 4000" /></label>
+                            <label class="field"><span>回复前缀</span><input id="ocCfgImessageResponsePrefix" placeholder="可选" /></label>
+                          </div>
+                          <div class="toggle-grid">
+                            <label class="toggle-item"><input id="ocCfgImessageEnabled" type="checkbox" checked /><span>启用渠道</span></label>
+                            <label class="toggle-item"><input id="ocCfgImessageIncludeAttachments" type="checkbox" /><span>包含附件</span></label>
+                          </div>
+                          <label class="field field-wide"><span>channels.imessage JSON</span><textarea id="ocCfgImessageJson" rows="8"
+                              placeholder='例如：{"cliPath":"imsg","service":"imessage","dmPolicy":"pairing"}'></textarea></label>
+                        </div>
+                      </details>
+                      <details class="oc-subpanel" data-oc-view="advanced">
+                        <summary class="oc-subpanel-head"><span>IRC</span><span class="oc-sub-badge"
+                            id="ocBadgeIrc">未配置</span></summary>
+                        <div class="oc-subpanel-body">
+                          <div class="editor-grid dense-grid">
+                            <label class="field"><span>服务器</span><input id="ocCfgIrcHost" placeholder="irc.libera.chat" /></label>
+                            <label class="field"><span>端口</span><input id="ocCfgIrcPort" inputmode="numeric" placeholder="6697" /></label>
+                            <label class="field"><span>昵称</span><input id="ocCfgIrcNick" placeholder="openclaw" /></label>
+                            <label class="field"><span>用户名</span><input id="ocCfgIrcUsername" placeholder="默认同昵称" /></label>
+                            <label class="field"><span>密码</span><input id="ocCfgIrcPassword" type="password" placeholder="可选" /></label>
+                            <label class="field"><span>自动加入频道</span><input id="ocCfgIrcChannels" placeholder="#openclaw, #general" /></label>
+                            <label class="field"><span>私聊策略</span>
+                              <div class="select-wrap"><select id="ocCfgIrcDmPolicy">
+                                  <option value="">默认 (pairing)</option>
+                                  <option value="pairing">pairing</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="open">open</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>群组策略</span>
+                              <div class="select-wrap"><select id="ocCfgIrcGroupPolicy">
+                                  <option value="">默认 (open)</option>
+                                  <option value="open">open</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>DM 白名单</span><input id="ocCfgIrcAllowFrom" placeholder="昵称/ID，逗号分隔" /></label>
+                            <label class="field"><span>消息分段大小</span><input id="ocCfgIrcTextChunkLimit" inputmode="numeric" placeholder="默认 350" /></label>
+                            <label class="field"><span>Mention Patterns</span><input id="ocCfgIrcMentionPatterns" placeholder="@openclaw, openclaw:" /></label>
+                          </div>
+                          <div class="toggle-grid">
+                            <label class="toggle-item"><input id="ocCfgIrcEnabled" type="checkbox" checked /><span>启用渠道</span></label>
+                            <label class="toggle-item"><input id="ocCfgIrcTls" type="checkbox" checked /><span>TLS</span></label>
+                          </div>
+                          <label class="field field-wide"><span>channels.irc JSON</span><textarea id="ocCfgIrcJson" rows="8"
+                              placeholder='例如：{"host":"irc.libera.chat","port":6697,"tls":true,"nick":"openclaw"}'></textarea></label>
+                        </div>
+                      </details>
+                      <details class="oc-subpanel" data-oc-view="advanced">
+                        <summary class="oc-subpanel-head"><span>Microsoft Teams</span><span class="oc-sub-badge"
+                            id="ocBadgeMSTeams">未配置</span></summary>
+                        <div class="oc-subpanel-body">
+                          <div class="editor-grid dense-grid">
+                            <label class="field"><span>App ID</span><input id="ocCfgMSTeamsAppId" placeholder="Azure Bot App ID" /></label>
+                            <label class="field"><span>App Password</span><input id="ocCfgMSTeamsAppPassword" type="password" placeholder="Client Secret" /></label>
+                            <label class="field"><span>Tenant ID</span><input id="ocCfgMSTeamsTenantId" placeholder="Azure Tenant ID" /></label>
+                            <label class="field"><span>Webhook Port</span><input id="ocCfgMSTeamsWebhookPort" inputmode="numeric" placeholder="3978" /></label>
+                            <label class="field"><span>Webhook Path</span><input id="ocCfgMSTeamsWebhookPath" placeholder="/api/messages" /></label>
+                            <label class="field"><span>默认发送目标</span><input id="ocCfgMSTeamsDefaultTo" placeholder="会话 / 频道 ID" /></label>
+                            <label class="field"><span>私聊策略</span>
+                              <div class="select-wrap"><select id="ocCfgMSTeamsDmPolicy">
+                                  <option value="">默认 (pairing)</option>
+                                  <option value="pairing">pairing</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="open">open</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>群组策略</span>
+                              <div class="select-wrap"><select id="ocCfgMSTeamsGroupPolicy">
+                                  <option value="">默认 (open)</option>
+                                  <option value="open">open</option>
+                                  <option value="allowlist">allowlist</option>
+                                  <option value="disabled">disabled</option>
+                                </select></div>
+                            </label>
+                            <label class="field"><span>DM 白名单</span><input id="ocCfgMSTeamsAllowFrom" placeholder="AAD ID / UPN，逗号分隔" /></label>
+                            <label class="field"><span>消息分段大小</span><input id="ocCfgMSTeamsTextChunkLimit" inputmode="numeric" placeholder="默认 4000" /></label>
+                            <label class="field"><span>回复前缀</span><input id="ocCfgMSTeamsResponsePrefix" placeholder="可选" /></label>
+                          </div>
+                          <div class="toggle-grid">
+                            <label class="toggle-item"><input id="ocCfgMSTeamsEnabled" type="checkbox" checked /><span>启用渠道</span></label>
+                            <label class="toggle-item"><input id="ocCfgMSTeamsRequireMention" type="checkbox" /><span>需要 @ 提及</span></label>
+                          </div>
+                          <label class="field field-wide"><span>channels.msteams JSON</span><textarea id="ocCfgMSTeamsJson" rows="8"
+                              placeholder='例如：{"appId":"...","appPassword":"...","tenantId":"...","webhook":{"port":3978}}'></textarea></label>
                         </div>
                       </details>
                       <!-- 微信公众号 -->
-                      <details class="oc-subpanel">
+                      <details class="oc-subpanel" data-oc-view="advanced">
                         <summary class="oc-subpanel-head"><span>微信公众号</span><span class="oc-sub-badge"
                             id="ocBadgeWechat">未配置</span></summary>
                         <div class="oc-subpanel-body">
@@ -949,7 +1324,7 @@
                         </div>
                       </details>
                       <!-- 企业微信 -->
-                      <details class="oc-subpanel">
+                      <details class="oc-subpanel" data-oc-view="advanced">
                         <summary class="oc-subpanel-head"><span>企业微信</span><span class="oc-sub-badge"
                             id="ocBadgeWechatWork">未配置</span></summary>
                         <div class="oc-subpanel-body">
@@ -964,7 +1339,7 @@
                         </div>
                       </details>
                       <!-- LINE -->
-                      <details class="oc-subpanel">
+                      <details class="oc-subpanel" data-oc-view="advanced">
                         <summary class="oc-subpanel-head"><span>LINE</span><span class="oc-sub-badge"
                             id="ocBadgeLine">未配置</span></summary>
                         <div class="oc-subpanel-body">
@@ -977,7 +1352,7 @@
                         </div>
                       </details>
                       <!-- Matrix -->
-                      <details class="oc-subpanel">
+                      <details class="oc-subpanel" data-oc-view="advanced">
                         <summary class="oc-subpanel-head"><span>Matrix</span><span class="oc-sub-badge"
                             id="ocBadgeMatrix">未配置</span></summary>
                         <div class="oc-subpanel-body">
@@ -1000,12 +1375,14 @@
                               <option value="disabled">disabled</option>
                             </select></div>
                         </label>
+                        <label class="field field-wide" data-oc-view="advanced"><span>按渠道覆盖模型 JSON</span><textarea id="ocCfgChannelModelByChannelJson" rows="6"
+                            placeholder='例如：{"telegram":{"123456":"anthropic/claude-sonnet-4-6"},"discord":{"guild:general":"openai/gpt-5.2"}}'></textarea></label>
                       </div>
                     </div>
                   </details>
 
                   <!-- ── 🤖 Agent & 回复 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" data-oc-view="advanced">
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -1090,7 +1467,7 @@
                   </details>
 
                   <!-- ── 🔧 工具权限 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" data-oc-view="advanced">
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -1159,7 +1536,7 @@
                   </details>
 
                   <!-- ── 🔒 安全 & 权限 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" data-oc-view="advanced">
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -1206,7 +1583,7 @@
                   </details>
 
                   <!-- ── 🧠 会话 & 记忆 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" data-oc-view="advanced">
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -1268,8 +1645,18 @@
                               <option value="lan">lan (所有接口)</option>
                               <option value="auto">auto</option>
                               <option value="tailnet">tailnet</option>
+                              <option value="custom">custom</option>
                             </select></div>
                         </label>
+                        <label class="field" data-oc-view="advanced"><span>Gateway 模式</span>
+                          <div class="select-wrap"><select id="ocCfgGatewayMode">
+                              <option value="">默认 (local)</option>
+                              <option value="local">local</option>
+                              <option value="remote">remote</option>
+                            </select></div>
+                        </label>
+                        <label class="field" data-oc-view="advanced"><span>自定义绑定主机</span><input id="ocCfgGatewayCustomBindHost"
+                            placeholder="bind=custom 时使用" /></label>
                         <label class="field"><span>认证模式</span>
                           <div class="select-wrap"><select id="ocCfgGatewayAuthMode">
                               <option value="">默认 (token)</option>
@@ -1281,6 +1668,8 @@
                         </label>
                         <label class="field"><span>Token</span><input id="ocCfgGatewayToken" type="password"
                             placeholder="Gateway 认证 Token" /></label>
+                        <label class="field" data-oc-view="advanced"><span>Password</span><input id="ocCfgGatewayPassword" type="password"
+                            placeholder="password 模式使用" /></label>
                         <label class="field"><span>热重载</span>
                           <div class="select-wrap"><select id="ocCfgGatewayReload">
                               <option value="">默认 (hybrid)</option>
@@ -1292,6 +1681,39 @@
                         </label>
                         <label class="field"><span>健康检查 (分钟)</span><input id="ocCfgGatewayHealthCheck"
                             inputmode="numeric" placeholder="默认 5（0=禁用）" /></label>
+                        <label class="field" data-oc-view="advanced"><span>Trusted Proxy 用户头</span><input id="ocCfgGatewayTrustedProxyUserHeader"
+                            placeholder="如 x-forwarded-user" /></label>
+                        <label class="field" data-oc-view="advanced"><span>Trusted Proxy 必需头</span><input id="ocCfgGatewayTrustedProxyRequiredHeaders"
+                            placeholder="逗号分隔，如 x-forwarded-proto" /></label>
+                        <label class="field" data-oc-view="advanced"><span>Trusted Proxy 允许用户</span><input id="ocCfgGatewayTrustedProxyAllowUsers"
+                            placeholder="邮箱/用户，逗号分隔" /></label>
+                      </div>
+                      <div class="toggle-grid" data-oc-view="advanced">
+                        <label class="toggle-item"><input id="ocCfgGatewayAllowTailscale" type="checkbox" /><span>允许 Tailscale 身份头</span></label>
+                      </div>
+                      <div class="oc-panel-divider" data-oc-view="advanced"></div>
+                      <div class="oc-inline-title" data-oc-view="advanced">Tailscale / TLS / Control UI</div>
+                      <div class="editor-grid dense-grid" data-oc-view="advanced">
+                        <label class="field"><span>Tailscale 模式</span>
+                          <div class="select-wrap"><select id="ocCfgGatewayTailscaleMode">
+                              <option value="">默认 (off)</option>
+                              <option value="off">off</option>
+                              <option value="serve">serve</option>
+                              <option value="funnel">funnel</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>TLS 证书</span><input id="ocCfgGatewayTlsCertPath" placeholder="cert.pem" /></label>
+                        <label class="field"><span>TLS 私钥</span><input id="ocCfgGatewayTlsKeyPath" placeholder="key.pem" /></label>
+                        <label class="field"><span>TLS CA Bundle</span><input id="ocCfgGatewayTlsCaPath" placeholder="ca.pem（可选）" /></label>
+                        <label class="field"><span>Control UI Base Path</span><input id="ocCfgGatewayControlUiBasePath" placeholder="如 /openclaw" /></label>
+                        <label class="field"><span>Control UI Allowed Origins</span><input id="ocCfgGatewayControlUiAllowedOrigins" placeholder="逗号分隔" /></label>
+                        <label class="field"><span>Chat Body Bytes</span><input id="ocCfgGatewayHttpChatBodyBytes" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>Responses Body Bytes</span><input id="ocCfgGatewayHttpResponsesBodyBytes" inputmode="numeric" placeholder="可选" /></label>
+                      </div>
+                      <div class="toggle-grid" data-oc-view="advanced">
+                        <label class="toggle-item"><input id="ocCfgGatewayTlsEnabled" type="checkbox" /><span>启用 TLS</span></label>
+                        <label class="toggle-item"><input id="ocCfgGatewayTlsAutoGenerate" type="checkbox" checked /><span>自动生成自签证书</span></label>
+                        <label class="toggle-item"><input id="ocCfgGatewayControlUiEnabled" type="checkbox" checked /><span>启用 Control UI</span></label>
                       </div>
                       <!-- HTTP API -->
                       <div class="oc-panel-divider"></div>
@@ -1305,8 +1727,148 @@
                     </div>
                   </details>
 
+                  <!-- ── 🧩 扩展能力 ── -->
+                  <details class="oc-panel" data-oc-view="advanced">
+                    <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
+                          viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M6 2h4v3h2a2 2 0 0 1 2 2v2h-3v4H7V9H4V7a2 2 0 0 1 2-2h0z" />
+                        </svg></span><span class="oc-panel-title">扩展能力</span><span class="oc-panel-badge"
+                        id="ocBadgeExtensions">未配置</span></summary>
+                    <div class="oc-panel-body">
+                      <div class="editor-grid dense-grid">
+                        <label class="field"><span>Memory Backend</span>
+                          <div class="select-wrap"><select id="ocCfgMemoryBackend">
+                              <option value="">默认 (builtin)</option>
+                              <option value="builtin">builtin</option>
+                              <option value="qmd">qmd</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>Citations</span>
+                          <div class="select-wrap"><select id="ocCfgMemoryCitations">
+                              <option value="">默认 (auto)</option>
+                              <option value="auto">auto</option>
+                              <option value="on">on</option>
+                              <option value="off">off</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>QMD Command</span><input id="ocCfgMemoryQmdCommand" placeholder="qmd" /></label>
+                        <label class="field"><span>Search Mode</span>
+                          <div class="select-wrap"><select id="ocCfgMemoryQmdSearchMode">
+                              <option value="">默认 (query)</option>
+                              <option value="query">query</option>
+                              <option value="search">search</option>
+                              <option value="vsearch">vsearch</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>Session Export Dir</span><input id="ocCfgMemorySessionExportDir" placeholder="~/memory/sessions" /></label>
+                        <label class="field"><span>Retention Days</span><input id="ocCfgMemorySessionRetentionDays" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>Update Interval</span><input id="ocCfgMemoryUpdateInterval" placeholder="如 10m / 1h" /></label>
+                        <label class="field"><span>Embed Interval</span><input id="ocCfgMemoryEmbedInterval" placeholder="如 1h" /></label>
+                        <label class="field"><span>Max Results</span><input id="ocCfgMemoryMaxResults" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>Mcporter Server</span><input id="ocCfgMemoryMcporterServerName" placeholder="qmd" /></label>
+                      </div>
+                      <div class="toggle-grid">
+                        <label class="toggle-item"><input id="ocCfgMemoryIncludeDefaultMemory" type="checkbox" /><span>包含默认记忆</span></label>
+                        <label class="toggle-item"><input id="ocCfgMemorySessionsEnabled" type="checkbox" /><span>导出会话到记忆</span></label>
+                        <label class="toggle-item"><input id="ocCfgMemoryMcporterEnabled" type="checkbox" /><span>启用 Mcporter</span></label>
+                        <label class="toggle-item"><input id="ocCfgMemoryMcporterStartDaemon" type="checkbox" checked /><span>自动启动 Mcporter</span></label>
+                      </div>
+                      <div class="oc-panel-divider"></div>
+                      <div class="editor-grid dense-grid">
+                        <label class="field"><span>Skills Extra Dirs</span><input id="ocCfgSkillsExtraDirs" placeholder="逗号分隔目录" /></label>
+                        <label class="field"><span>Node Manager</span>
+                          <div class="select-wrap"><select id="ocCfgSkillsNodeManager">
+                              <option value="">默认</option>
+                              <option value="npm">npm</option>
+                              <option value="pnpm">pnpm</option>
+                              <option value="yarn">yarn</option>
+                              <option value="bun">bun</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>Max Skills In Prompt</span><input id="ocCfgSkillsMaxInPrompt" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>Skills Prompt Chars</span><input id="ocCfgSkillsPromptChars" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>Plugins Allow</span><input id="ocCfgPluginsAllow" placeholder="插件 ID，逗号分隔" /></label>
+                        <label class="field"><span>Plugins Deny</span><input id="ocCfgPluginsDeny" placeholder="插件 ID，逗号分隔" /></label>
+                        <label class="field"><span>Plugin Paths</span><input id="ocCfgPluginsPaths" placeholder="额外插件目录，逗号分隔" /></label>
+                        <label class="field"><span>Memory Slot</span><input id="ocCfgPluginsMemorySlot" placeholder="如 lossless-claw / none" /></label>
+                        <label class="field"><span>ContextEngine Slot</span><input id="ocCfgPluginsContextEngineSlot" placeholder="插件 ID" /></label>
+                        <label class="field"><span>Browser CDP URL</span><input id="ocCfgBrowserCdpUrl" placeholder="http://127.0.0.1:9222" /></label>
+                        <label class="field"><span>Browser Executable</span><input id="ocCfgBrowserExecutablePath" placeholder="可选" /></label>
+                        <label class="field"><span>Default Profile</span><input id="ocCfgBrowserDefaultProfile" placeholder="默认 chrome" /></label>
+                        <label class="field"><span>CDP Port Range Start</span><input id="ocCfgBrowserCdpPortRangeStart" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>Browser Color</span><input id="ocCfgBrowserColor" placeholder="#FF4500" /></label>
+                        <label class="field"><span>Extra Args</span><input id="ocCfgBrowserExtraArgs" placeholder="逗号分隔，如 --window-size=1920,1080" /></label>
+                      </div>
+                      <div class="toggle-grid">
+                        <label class="toggle-item"><input id="ocCfgSkillsWatch" type="checkbox" /><span>监听 Skills 目录</span></label>
+                        <label class="toggle-item"><input id="ocCfgSkillsPreferBrew" type="checkbox" /><span>安装优先 Brew</span></label>
+                        <label class="toggle-item"><input id="ocCfgPluginsEnabled" type="checkbox" /><span>启用 Plugins</span></label>
+                        <label class="toggle-item"><input id="ocCfgBrowserEnabled" type="checkbox" /><span>启用 Browser</span></label>
+                        <label class="toggle-item"><input id="ocCfgBrowserHeadless" type="checkbox" /><span>Headless</span></label>
+                        <label class="toggle-item"><input id="ocCfgBrowserAttachOnly" type="checkbox" /><span>仅附加现有浏览器</span></label>
+                        <label class="toggle-item"><input id="ocCfgBrowserNoSandbox" type="checkbox" /><span>禁用 Browser Sandbox</span></label>
+                        <label class="toggle-item"><input id="ocCfgBrowserEvaluateEnabled" type="checkbox" checked /><span>允许 act:evaluate</span></label>
+                      </div>
+                      <div class="oc-panel-divider"></div>
+                      <div class="editor-grid dense-grid">
+                        <label class="field"><span>Web Provider 心跳 (秒)</span><input id="ocCfgWebHeartbeatSeconds" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>Web 初始重连 (ms)</span><input id="ocCfgWebReconnectInitialMs" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>Web 最大重连 (ms)</span><input id="ocCfgWebReconnectMaxMs" inputmode="numeric" placeholder="可选" /></label>
+                        <label class="field"><span>NodeHost Allow Profiles</span><input id="ocCfgNodeHostAllowProfiles" placeholder="逗号分隔 profile" /></label>
+                        <label class="field"><span>Discovery Domain</span><input id="ocCfgDiscoveryDomain" placeholder="如 openclaw.internal" /></label>
+                        <label class="field"><span>mDNS 模式</span>
+                          <div class="select-wrap"><select id="ocCfgDiscoveryMdnsMode">
+                              <option value="">默认 (minimal)</option>
+                              <option value="off">off</option>
+                              <option value="minimal">minimal</option>
+                              <option value="full">full</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>Canvas Root</span><input id="ocCfgCanvasRoot" placeholder="~/openclaw/workspace/canvas" /></label>
+                        <label class="field"><span>Canvas Port</span><input id="ocCfgCanvasPort" inputmode="numeric" placeholder="18793" /></label>
+                        <label class="field"><span>Talk Provider</span><input id="ocCfgTalkProvider" placeholder="如 elevenlabs" /></label>
+                        <label class="field"><span>Talk Voice ID</span><input id="ocCfgTalkVoiceId" placeholder="可选" /></label>
+                        <label class="field"><span>Talk Model ID</span><input id="ocCfgTalkModelId" placeholder="可选" /></label>
+                        <label class="field"><span>Talk Output Format</span><input id="ocCfgTalkOutputFormat" placeholder="如 pcm_44100" /></label>
+                        <label class="field"><span>Talk API Key</span><input id="ocCfgTalkApiKey" type="password" placeholder="可选" /></label>
+                        <label class="field"><span>Secrets 默认 Env Provider</span><input id="ocCfgSecretsDefaultEnv" placeholder="default" /></label>
+                        <label class="field"><span>Secrets 默认 File Provider</span><input id="ocCfgSecretsDefaultFile" placeholder="可选" /></label>
+                        <label class="field"><span>Secrets 默认 Exec Provider</span><input id="ocCfgSecretsDefaultExec" placeholder="可选" /></label>
+                        <label class="field"><span>Secrets 并发上限</span><input id="ocCfgSecretsMaxProviderConcurrency" inputmode="numeric" placeholder="可选" /></label>
+                      </div>
+                      <div class="toggle-grid">
+                        <label class="toggle-item"><input id="ocCfgWebEnabled" type="checkbox" checked /><span>启用 Web Provider</span></label>
+                        <label class="toggle-item"><input id="ocCfgNodeHostBrowserProxyEnabled" type="checkbox" /><span>启用 NodeHost BrowserProxy</span></label>
+                        <label class="toggle-item"><input id="ocCfgDiscoveryWideAreaEnabled" type="checkbox" /><span>启用 Wide Area Discovery</span></label>
+                        <label class="toggle-item"><input id="ocCfgCanvasEnabled" type="checkbox" /><span>启用 Canvas Host</span></label>
+                        <label class="toggle-item"><input id="ocCfgCanvasLiveReload" type="checkbox" checked /><span>Canvas Live Reload</span></label>
+                        <label class="toggle-item"><input id="ocCfgTalkInterruptOnSpeech" type="checkbox" checked /><span>Talk 打断即停</span></label>
+                      </div>
+                      <div class="oc-panel-divider"></div>
+                      <div class="editor-grid dense-grid">
+                        <label class="field field-wide"><span>Memory JSON</span><textarea id="ocCfgMemoryJson" rows="7"
+                            placeholder='例如：{"backend":"qmd","citations":"auto","qmd":{"command":"qmd","includeDefaultMemory":true}}'></textarea></label>
+                        <label class="field field-wide"><span>Skills JSON</span><textarea id="ocCfgSkillsJson" rows="7"
+                            placeholder='例如：{"load":{"extraDirs":["~/skills"],"watch":true},"install":{"nodeManager":"pnpm"}}'></textarea></label>
+                        <label class="field field-wide"><span>Plugins JSON</span><textarea id="ocCfgPluginsJson" rows="7"
+                            placeholder='例如：{"enabled":true,"allow":["plugin-a"],"slots":{"memory":"lossless-claw"}}'></textarea></label>
+                        <label class="field field-wide"><span>Browser JSON</span><textarea id="ocCfgBrowserJson" rows="6"
+                            placeholder='例如：{"enabled":true,"headless":false,"cdpUrl":"http://127.0.0.1:9222"}'></textarea></label>
+                        <label class="field field-wide"><span>Media JSON</span><textarea id="ocCfgMediaJson" rows="5"
+                            placeholder='例如：{"preserveFilenames":true,"ttlHours":72}'></textarea></label>
+                        <label class="field field-wide"><span>Discovery / Canvas / Talk JSON</span><textarea id="ocCfgInfraJson" rows="8"
+                            placeholder='例如：{"discovery":{"mdns":{"mode":"minimal"}},"canvasHost":{"enabled":true,"port":18793},"talk":{"provider":"elevenlabs"}}'></textarea></label>
+                        <label class="field field-wide"><span>Web / NodeHost / Secrets JSON</span><textarea id="ocCfgRuntimeJson" rows="8"
+                            placeholder='例如：{"web":{"allowedOrigins":["http://127.0.0.1:3000"]},"nodeHost":{"enabled":true},"secrets":{"defaults":{"env":"default"}}}'></textarea></label>
+                        <label class="field field-wide"><span>Auth / ACP / CLI / Bindings / Broadcast / Audio JSON</span><textarea id="ocCfgSystemJson" rows="8"
+                            placeholder='例如：{"auth":{"...":"..."},"acp":{"...":"..."},"cli":{"banner":{"taglineMode":"off"}},"bindings":[],"broadcast":{},"audio":{}}'></textarea></label>
+                      </div>
+                    </div>
+                  </details>
+
                   <!-- ── 📅 定时 & 钩子 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" data-oc-view="advanced">
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -1343,7 +1905,7 @@
                   </details>
 
                   <!-- ── 🎨 助手身份 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" data-oc-view="advanced">
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -1373,7 +1935,7 @@
                   </details>
 
                   <!-- ── 📝 日志 & 诊断 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" data-oc-view="advanced">
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">
@@ -1413,7 +1975,7 @@
                   </details>
 
                   <!-- ── ⚙️ 更新 & 环境 ── -->
-                  <details class="oc-panel">
+                  <details class="oc-panel" data-oc-view="advanced">
                     <summary class="oc-panel-head"><span class="oc-panel-icon"><svg width="14" height="14"
                           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
                           stroke-linecap="round" stroke-linejoin="round">

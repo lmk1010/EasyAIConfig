@@ -478,6 +478,35 @@ select {
   padding-bottom: 4px;
 }
 
+.oc-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.oc-config-view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.oc-config-view-switch .tiny-btn.active {
+  background: rgba(99, 160, 255, 0.14);
+  color: #8dc0ff;
+  border-color: rgba(99, 160, 255, 0.28);
+}
+
+[data-tool-editor="openclaw"][data-oc-config-view="minimal"] [data-oc-view="advanced"] {
+  display: none !important;
+}
+
+[data-tool-editor="openclaw"][data-oc-config-view="minimal"] .oc-panel[data-oc-view="advanced"] {
+  display: none !important;
+}
+
 .oc-panel {
   border: 1px solid rgba(255, 255, 255, 0.04);
   border-radius: 14px;
@@ -683,6 +712,14 @@ select {
   opacity: 0.65;
   text-align: center;
   padding: 14px 0;
+}
+
+.oc-panel-body textarea {
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  resize: vertical;
 }
 
 /* ═══════ Config Search ═══════ */

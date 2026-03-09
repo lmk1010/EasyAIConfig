@@ -56,6 +56,7 @@ const state = {
   },
   openClawSetupFlowId: 0,
   openClawSetupContext: null,
+  openClawConfigView: localStorage.getItem('easyaiconfig_oc_config_view') === 'minimal' ? 'minimal' : 'full',
 };
 
 const el = (id) => document.getElementById(id);
@@ -3237,6 +3238,78 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value || {}));
 }
 
+function isEmptyConfigValue(value) {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  return false;
+}
+
+function setDeepConfigValue(target, path, value) {
+  const keys = Array.isArray(path) ? path : String(path || '').split('.').filter(Boolean);
+  if (!keys.length) return;
+
+  const parents = [];
+  let current = target;
+  for (let index = 0; index < keys.length - 1; index += 1) {
+    const key = keys[index];
+    if (!current[key] || typeof current[key] !== 'object' || Array.isArray(current[key])) {
+      current[key] = {};
+    }
+    parents.push([current, key]);
+    current = current[key];
+  }
+
+  const leaf = keys[keys.length - 1];
+  if (isEmptyConfigValue(value)) {
+    delete current[leaf];
+  } else {
+    current[leaf] = value;
+  }
+
+  for (let index = parents.length - 1; index >= 0; index -= 1) {
+    const [parent, key] = parents[index];
+    if (isEmptyConfigValue(parent[key])) {
+      delete parent[key];
+    }
+  }
+}
+
+function readJsonFragmentInput(inputId, label) {
+  const raw = String(el(inputId)?.value || '').trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${label} JSON 解析失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function writeJsonFragmentInput(inputId, value) {
+  const target = el(inputId);
+  if (!target) return;
+  target.value = isEmptyConfigValue(value) ? '' : JSON.stringify(value, null, 2);
+}
+
+function syncOpenClawConfigView() {
+  const editor = document.querySelector('[data-tool-editor="openclaw"]');
+  if (!editor) return;
+  const mode = state.openClawConfigView === 'minimal' ? 'minimal' : 'full';
+  editor.dataset.ocConfigView = mode;
+  document.querySelectorAll('[data-oc-config-view]').forEach((button) => {
+    const active = button.dataset.ocConfigView === mode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function setOpenClawConfigView(mode = 'full') {
+  state.openClawConfigView = mode === 'minimal' ? 'minimal' : 'full';
+  localStorage.setItem('easyaiconfig_oc_config_view', state.openClawConfigView);
+  syncOpenClawConfigView();
+}
+
 function maskSecret(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -4282,6 +4355,7 @@ function syncConfigEditorForTool() {
 function populateOpenClawConfigEditor() {
   const cfg = state.openclawState?.config || {};
   const quick = deriveOpenClawQuickConfig(state.openclawState || {});
+  syncOpenClawConfigView();
 
   // ── Model ──
   const modelCfg = cfg.agents?.defaults?.model;
@@ -4317,8 +4391,20 @@ function populateOpenClawConfigEditor() {
   if (el('ocCfgTgReactionLevel')) el('ocCfgTgReactionLevel').value = tg.reactionLevel || '';
   if (el('ocCfgTgHistoryLimit')) el('ocCfgTgHistoryLimit').value = tg.historyLimit || '';
   if (el('ocCfgTgTextChunkLimit')) el('ocCfgTgTextChunkLimit').value = tg.textChunkLimit || '';
+  if (el('ocCfgTgDefaultAccount')) el('ocCfgTgDefaultAccount').value = cfg.channels?.telegram?.defaultAccount || '';
+  if (el('ocCfgTgDefaultTo')) el('ocCfgTgDefaultTo').value = tg.defaultTo || '';
+  if (el('ocCfgTgGroupAllowFrom')) el('ocCfgTgGroupAllowFrom').value = (tg.groupAllowFrom || []).join(', ');
+  if (el('ocCfgTgDmHistoryLimit')) el('ocCfgTgDmHistoryLimit').value = tg.dmHistoryLimit || '';
+  if (el('ocCfgTgChunkMode')) el('ocCfgTgChunkMode').value = tg.chunkMode || '';
+  if (el('ocCfgTgReactionNotifications')) el('ocCfgTgReactionNotifications').value = tg.reactionNotifications || '';
+  if (el('ocCfgTgReplyToMode')) el('ocCfgTgReplyToMode').value = tg.replyToMode || '';
+  if (el('ocCfgTgWebhookPort')) el('ocCfgTgWebhookPort').value = tg.webhookPort || '';
+  if (el('ocCfgTgWebhookPath')) el('ocCfgTgWebhookPath').value = tg.webhookPath || '';
+  if (el('ocCfgTgResponsePrefix')) el('ocCfgTgResponsePrefix').value = tg.responsePrefix || '';
+  if (el('ocCfgTgAckReaction')) el('ocCfgTgAckReaction').value = tg.ackReaction || '';
   if (el('ocCfgTgBlockStreaming')) el('ocCfgTgBlockStreaming').checked = Boolean(tg.blockStreaming);
   if (el('ocCfgTgLinkPreview')) el('ocCfgTgLinkPreview').checked = tg.linkPreview !== false;
+  writeJsonFragmentInput('ocCfgTelegramJson', cfg.channels?.telegram || null);
 
   // ── Channels — Discord ──
   const dc = cfg.channels?.discord || {};
@@ -4328,12 +4414,222 @@ function populateOpenClawConfigEditor() {
   if (el('ocCfgDcAllowFrom')) el('ocCfgDcAllowFrom').value = (dc.dm?.allowFrom || []).join(', ');
   if (el('ocCfgDcStreaming')) el('ocCfgDcStreaming').value = dc.streaming || '';
   if (el('ocCfgDcTextChunkLimit')) el('ocCfgDcTextChunkLimit').value = dc.textChunkLimit || '';
+  if (el('ocCfgDcDefaultAccount')) el('ocCfgDcDefaultAccount').value = cfg.channels?.discord?.defaultAccount || '';
+  if (el('ocCfgDcDefaultTo')) el('ocCfgDcDefaultTo').value = dc.defaultTo || '';
+  if (el('ocCfgDcResponsePrefix')) el('ocCfgDcResponsePrefix').value = dc.responsePrefix || '';
+  if (el('ocCfgDcAckReaction')) el('ocCfgDcAckReaction').value = dc.ackReaction || '';
+  if (el('ocCfgDcAckReactionScope')) el('ocCfgDcAckReactionScope').value = dc.ackReactionScope || '';
+  if (el('ocCfgDcActivity')) el('ocCfgDcActivity').value = dc.activity || '';
+  if (el('ocCfgDcStatus')) el('ocCfgDcStatus').value = dc.status || '';
   if (el('ocCfgDcAllowBots')) el('ocCfgDcAllowBots').checked = Boolean(dc.allowBots);
   if (el('ocCfgDcVoiceEnabled')) el('ocCfgDcVoiceEnabled').checked = dc.voice?.enabled !== false;
+  writeJsonFragmentInput('ocCfgDiscordJson', cfg.channels?.discord || null);
 
   // ── Channels — Slack ──
   el('ocCfgSlackBotToken').value = cfg.channels?.slack?.botToken || '';
   el('ocCfgSlackAppToken').value = cfg.channels?.slack?.appToken || '';
+  if (el('ocCfgSlackSigningSecret')) el('ocCfgSlackSigningSecret').value = cfg.channels?.slack?.signingSecret || '';
+  if (el('ocCfgSlackWebhookPath')) el('ocCfgSlackWebhookPath').value = cfg.channels?.slack?.webhookPath || '';
+  if (el('ocCfgSlackDefaultAccount')) el('ocCfgSlackDefaultAccount').value = cfg.channels?.slack?.defaultAccount || '';
+  if (el('ocCfgSlackDefaultTo')) el('ocCfgSlackDefaultTo').value = cfg.channels?.slack?.defaultTo || '';
+  if (el('ocCfgSlackGroupPolicy')) el('ocCfgSlackGroupPolicy').value = cfg.channels?.slack?.groupPolicy || '';
+  if (el('ocCfgSlackTextChunkLimit')) el('ocCfgSlackTextChunkLimit').value = cfg.channels?.slack?.textChunkLimit || '';
+  if (el('ocCfgSlackStreaming')) el('ocCfgSlackStreaming').value = cfg.channels?.slack?.streaming || '';
+  if (el('ocCfgSlackResponsePrefix')) el('ocCfgSlackResponsePrefix').value = cfg.channels?.slack?.responsePrefix || '';
+  if (el('ocCfgSlackAckReaction')) el('ocCfgSlackAckReaction').value = cfg.channels?.slack?.ackReaction || '';
+  if (el('ocCfgSlackTypingReaction')) el('ocCfgSlackTypingReaction').value = cfg.channels?.slack?.typingReaction || '';
+  if (el('ocCfgSlackAllowBots')) el('ocCfgSlackAllowBots').checked = Boolean(cfg.channels?.slack?.allowBots);
+  if (el('ocCfgSlackRequireMention')) el('ocCfgSlackRequireMention').checked = Boolean(cfg.channels?.slack?.requireMention);
+  writeJsonFragmentInput('ocCfgSlackJson', cfg.channels?.slack || null);
+
+  // ── Channels — WhatsApp ──
+  const wa = cfg.channels?.whatsapp || {};
+  if (el('ocCfgWhatsAppEnabled')) el('ocCfgWhatsAppEnabled').checked = wa.enabled !== false;
+  if (el('ocCfgWhatsAppDefaultTo')) el('ocCfgWhatsAppDefaultTo').value = wa.defaultTo || '';
+  if (el('ocCfgWhatsAppDmPolicy')) el('ocCfgWhatsAppDmPolicy').value = wa.dmPolicy || '';
+  if (el('ocCfgWhatsAppGroupPolicy')) el('ocCfgWhatsAppGroupPolicy').value = wa.groupPolicy || '';
+  if (el('ocCfgWhatsAppAllowFrom')) el('ocCfgWhatsAppAllowFrom').value = (wa.allowFrom || []).join(', ');
+  if (el('ocCfgWhatsAppGroupAllowFrom')) el('ocCfgWhatsAppGroupAllowFrom').value = (wa.groupAllowFrom || []).join(', ');
+  if (el('ocCfgWhatsAppHistoryLimit')) el('ocCfgWhatsAppHistoryLimit').value = wa.historyLimit || '';
+  if (el('ocCfgWhatsAppDmHistoryLimit')) el('ocCfgWhatsAppDmHistoryLimit').value = wa.dmHistoryLimit || '';
+  if (el('ocCfgWhatsAppTextChunkLimit')) el('ocCfgWhatsAppTextChunkLimit').value = wa.textChunkLimit || '';
+  if (el('ocCfgWhatsAppMediaMaxMb')) el('ocCfgWhatsAppMediaMaxMb').value = wa.mediaMaxMb || '';
+  if (el('ocCfgWhatsAppResponsePrefix')) el('ocCfgWhatsAppResponsePrefix').value = wa.responsePrefix || '';
+  if (el('ocCfgWhatsAppSelfChatMode')) el('ocCfgWhatsAppSelfChatMode').checked = Boolean(wa.selfChatMode);
+  if (el('ocCfgWhatsAppSendReadReceipts')) el('ocCfgWhatsAppSendReadReceipts').checked = wa.sendReadReceipts !== false;
+
+  // ── Channels — JSON fragments ──
+  const signal = cfg.channels?.signal || {};
+  if (el('ocCfgSignalAccount')) el('ocCfgSignalAccount').value = signal.account || '';
+  if (el('ocCfgSignalHttpUrl')) el('ocCfgSignalHttpUrl').value = signal.httpUrl || '';
+  if (el('ocCfgSignalCliPath')) el('ocCfgSignalCliPath').value = signal.cliPath || '';
+  if (el('ocCfgSignalDmPolicy')) el('ocCfgSignalDmPolicy').value = signal.dmPolicy || '';
+  if (el('ocCfgSignalGroupPolicy')) el('ocCfgSignalGroupPolicy').value = signal.groupPolicy || '';
+  if (el('ocCfgSignalAllowFrom')) el('ocCfgSignalAllowFrom').value = (signal.allowFrom || []).join(', ');
+  if (el('ocCfgSignalReactionNotifications')) el('ocCfgSignalReactionNotifications').value = signal.reactionNotifications || '';
+  if (el('ocCfgSignalTextChunkLimit')) el('ocCfgSignalTextChunkLimit').value = signal.textChunkLimit || '';
+  if (el('ocCfgSignalResponsePrefix')) el('ocCfgSignalResponsePrefix').value = signal.responsePrefix || '';
+  if (el('ocCfgSignalEnabled')) el('ocCfgSignalEnabled').checked = signal.enabled !== false;
+  if (el('ocCfgSignalAutoStart')) el('ocCfgSignalAutoStart').checked = signal.autoStart !== false;
+  if (el('ocCfgSignalReadReceipts')) el('ocCfgSignalReadReceipts').checked = Boolean(signal.sendReadReceipts);
+  writeJsonFragmentInput('ocCfgSignalJson', cfg.channels?.signal || null);
+
+  const gc = cfg.channels?.googlechat || {};
+  if (el('ocCfgGoogleChatServiceAccountFile')) el('ocCfgGoogleChatServiceAccountFile').value = gc.serviceAccountFile || '';
+  if (el('ocCfgGoogleChatWebhookPath')) el('ocCfgGoogleChatWebhookPath').value = gc.webhookPath || '';
+  if (el('ocCfgGoogleChatDefaultTo')) el('ocCfgGoogleChatDefaultTo').value = gc.defaultTo || '';
+  if (el('ocCfgGoogleChatDmPolicy')) el('ocCfgGoogleChatDmPolicy').value = gc.dm?.policy || '';
+  if (el('ocCfgGoogleChatGroupPolicy')) el('ocCfgGoogleChatGroupPolicy').value = gc.groupPolicy || '';
+  if (el('ocCfgGoogleChatAllowFrom')) el('ocCfgGoogleChatAllowFrom').value = (gc.dm?.allowFrom || []).join(', ');
+  if (el('ocCfgGoogleChatGroupAllowFrom')) el('ocCfgGoogleChatGroupAllowFrom').value = (gc.groupAllowFrom || []).join(', ');
+  if (el('ocCfgGoogleChatTypingIndicator')) el('ocCfgGoogleChatTypingIndicator').value = gc.typingIndicator || '';
+  if (el('ocCfgGoogleChatTextChunkLimit')) el('ocCfgGoogleChatTextChunkLimit').value = gc.textChunkLimit || '';
+  if (el('ocCfgGoogleChatResponsePrefix')) el('ocCfgGoogleChatResponsePrefix').value = gc.responsePrefix || '';
+  if (el('ocCfgGoogleChatEnabled')) el('ocCfgGoogleChatEnabled').checked = gc.enabled !== false;
+  if (el('ocCfgGoogleChatAllowBots')) el('ocCfgGoogleChatAllowBots').checked = Boolean(gc.allowBots);
+  writeJsonFragmentInput('ocCfgGoogleChatJson', cfg.channels?.googlechat || null);
+
+  const imsg = cfg.channels?.imessage || {};
+  if (el('ocCfgImessageCliPath')) el('ocCfgImessageCliPath').value = imsg.cliPath || '';
+  if (el('ocCfgImessageService')) el('ocCfgImessageService').value = imsg.service || '';
+  if (el('ocCfgImessageRemoteHost')) el('ocCfgImessageRemoteHost').value = imsg.remoteHost || '';
+  if (el('ocCfgImessageDefaultTo')) el('ocCfgImessageDefaultTo').value = imsg.defaultTo || '';
+  if (el('ocCfgImessageDmPolicy')) el('ocCfgImessageDmPolicy').value = imsg.dmPolicy || '';
+  if (el('ocCfgImessageGroupPolicy')) el('ocCfgImessageGroupPolicy').value = imsg.groupPolicy || '';
+  if (el('ocCfgImessageAllowFrom')) el('ocCfgImessageAllowFrom').value = (imsg.allowFrom || []).join(', ');
+  if (el('ocCfgImessageTextChunkLimit')) el('ocCfgImessageTextChunkLimit').value = imsg.textChunkLimit || '';
+  if (el('ocCfgImessageResponsePrefix')) el('ocCfgImessageResponsePrefix').value = imsg.responsePrefix || '';
+  if (el('ocCfgImessageEnabled')) el('ocCfgImessageEnabled').checked = imsg.enabled !== false;
+  if (el('ocCfgImessageIncludeAttachments')) el('ocCfgImessageIncludeAttachments').checked = Boolean(imsg.includeAttachments);
+  writeJsonFragmentInput('ocCfgImessageJson', cfg.channels?.imessage || null);
+
+  const irc = cfg.channels?.irc || {};
+  if (el('ocCfgIrcHost')) el('ocCfgIrcHost').value = irc.host || '';
+  if (el('ocCfgIrcPort')) el('ocCfgIrcPort').value = irc.port || '';
+  if (el('ocCfgIrcNick')) el('ocCfgIrcNick').value = irc.nick || '';
+  if (el('ocCfgIrcUsername')) el('ocCfgIrcUsername').value = irc.username || '';
+  if (el('ocCfgIrcPassword')) el('ocCfgIrcPassword').value = irc.password || '';
+  if (el('ocCfgIrcChannels')) el('ocCfgIrcChannels').value = (irc.channels || []).join(', ');
+  if (el('ocCfgIrcDmPolicy')) el('ocCfgIrcDmPolicy').value = irc.dmPolicy || '';
+  if (el('ocCfgIrcGroupPolicy')) el('ocCfgIrcGroupPolicy').value = irc.groupPolicy || '';
+  if (el('ocCfgIrcAllowFrom')) el('ocCfgIrcAllowFrom').value = (irc.allowFrom || []).join(', ');
+  if (el('ocCfgIrcTextChunkLimit')) el('ocCfgIrcTextChunkLimit').value = irc.textChunkLimit || '';
+  if (el('ocCfgIrcMentionPatterns')) el('ocCfgIrcMentionPatterns').value = (irc.mentionPatterns || []).join(', ');
+  if (el('ocCfgIrcEnabled')) el('ocCfgIrcEnabled').checked = irc.enabled !== false;
+  if (el('ocCfgIrcTls')) el('ocCfgIrcTls').checked = irc.tls !== false;
+  writeJsonFragmentInput('ocCfgIrcJson', cfg.channels?.irc || null);
+
+  const teams = cfg.channels?.msteams || {};
+  if (el('ocCfgMSTeamsAppId')) el('ocCfgMSTeamsAppId').value = teams.appId || '';
+  if (el('ocCfgMSTeamsAppPassword')) el('ocCfgMSTeamsAppPassword').value = teams.appPassword || '';
+  if (el('ocCfgMSTeamsTenantId')) el('ocCfgMSTeamsTenantId').value = teams.tenantId || '';
+  if (el('ocCfgMSTeamsWebhookPort')) el('ocCfgMSTeamsWebhookPort').value = teams.webhook?.port || '';
+  if (el('ocCfgMSTeamsWebhookPath')) el('ocCfgMSTeamsWebhookPath').value = teams.webhook?.path || '';
+  if (el('ocCfgMSTeamsDefaultTo')) el('ocCfgMSTeamsDefaultTo').value = teams.defaultTo || '';
+  if (el('ocCfgMSTeamsDmPolicy')) el('ocCfgMSTeamsDmPolicy').value = teams.dmPolicy || '';
+  if (el('ocCfgMSTeamsGroupPolicy')) el('ocCfgMSTeamsGroupPolicy').value = teams.groupPolicy || '';
+  if (el('ocCfgMSTeamsAllowFrom')) el('ocCfgMSTeamsAllowFrom').value = (teams.allowFrom || []).join(', ');
+  if (el('ocCfgMSTeamsTextChunkLimit')) el('ocCfgMSTeamsTextChunkLimit').value = teams.textChunkLimit || '';
+  if (el('ocCfgMSTeamsResponsePrefix')) el('ocCfgMSTeamsResponsePrefix').value = teams.responsePrefix || '';
+  if (el('ocCfgMSTeamsEnabled')) el('ocCfgMSTeamsEnabled').checked = teams.enabled !== false;
+  if (el('ocCfgMSTeamsRequireMention')) el('ocCfgMSTeamsRequireMention').checked = Boolean(teams.requireMention);
+  writeJsonFragmentInput('ocCfgMSTeamsJson', cfg.channels?.msteams || null);
+  writeJsonFragmentInput('ocCfgChannelModelByChannelJson', cfg.channels?.modelByChannel || null);
+  if (el('ocCfgMatrixHomeserver')) el('ocCfgMatrixHomeserver').value = cfg.channels?.matrix?.homeserver || '';
+  if (el('ocCfgMatrixToken')) el('ocCfgMatrixToken').value = cfg.channels?.matrix?.accessToken || '';
+  if (el('ocCfgLineSecret')) el('ocCfgLineSecret').value = cfg.channels?.line?.channelSecret || '';
+  if (el('ocCfgLineToken')) el('ocCfgLineToken').value = cfg.channels?.line?.accessToken || '';
+  if (el('ocCfgWechatAppId')) el('ocCfgWechatAppId').value = cfg.channels?.wechat?.appId || '';
+  if (el('ocCfgWechatToken')) el('ocCfgWechatToken').value = cfg.channels?.wechat?.token || '';
+  if (el('ocCfgWechatAesKey')) el('ocCfgWechatAesKey').value = cfg.channels?.wechat?.encodingAESKey || '';
+  if (el('ocCfgWechatWorkCorpId')) el('ocCfgWechatWorkCorpId').value = cfg.channels?.wechatwork?.corpId || '';
+  if (el('ocCfgWechatWorkAgentId')) el('ocCfgWechatWorkAgentId').value = cfg.channels?.wechatwork?.agentId || '';
+  if (el('ocCfgWechatWorkSecret')) el('ocCfgWechatWorkSecret').value = cfg.channels?.wechatwork?.secret || '';
+
+  // ── Extension / runtime JSON fragments ──
+  if (el('ocCfgMemoryBackend')) el('ocCfgMemoryBackend').value = cfg.memory?.backend || '';
+  if (el('ocCfgMemoryCitations')) el('ocCfgMemoryCitations').value = cfg.memory?.citations || '';
+  if (el('ocCfgMemoryQmdCommand')) el('ocCfgMemoryQmdCommand').value = cfg.memory?.qmd?.command || '';
+  if (el('ocCfgMemoryQmdSearchMode')) el('ocCfgMemoryQmdSearchMode').value = cfg.memory?.qmd?.searchMode || '';
+  if (el('ocCfgMemorySessionExportDir')) el('ocCfgMemorySessionExportDir').value = cfg.memory?.qmd?.sessions?.exportDir || '';
+  if (el('ocCfgMemorySessionRetentionDays')) el('ocCfgMemorySessionRetentionDays').value = cfg.memory?.qmd?.sessions?.retentionDays || '';
+  if (el('ocCfgMemoryUpdateInterval')) el('ocCfgMemoryUpdateInterval').value = cfg.memory?.qmd?.update?.interval || '';
+  if (el('ocCfgMemoryEmbedInterval')) el('ocCfgMemoryEmbedInterval').value = cfg.memory?.qmd?.update?.embedInterval || '';
+  if (el('ocCfgMemoryMaxResults')) el('ocCfgMemoryMaxResults').value = cfg.memory?.qmd?.limits?.maxResults || '';
+  if (el('ocCfgMemoryMcporterServerName')) el('ocCfgMemoryMcporterServerName').value = cfg.memory?.qmd?.mcporter?.serverName || '';
+  if (el('ocCfgMemoryIncludeDefaultMemory')) el('ocCfgMemoryIncludeDefaultMemory').checked = Boolean(cfg.memory?.qmd?.includeDefaultMemory);
+  if (el('ocCfgMemorySessionsEnabled')) el('ocCfgMemorySessionsEnabled').checked = Boolean(cfg.memory?.qmd?.sessions?.enabled);
+  if (el('ocCfgMemoryMcporterEnabled')) el('ocCfgMemoryMcporterEnabled').checked = Boolean(cfg.memory?.qmd?.mcporter?.enabled);
+  if (el('ocCfgMemoryMcporterStartDaemon')) el('ocCfgMemoryMcporterStartDaemon').checked = cfg.memory?.qmd?.mcporter?.startDaemon !== false;
+  writeJsonFragmentInput('ocCfgMemoryJson', cfg.memory || null);
+  if (el('ocCfgSkillsExtraDirs')) el('ocCfgSkillsExtraDirs').value = (cfg.skills?.load?.extraDirs || []).join(', ');
+  if (el('ocCfgSkillsNodeManager')) el('ocCfgSkillsNodeManager').value = cfg.skills?.install?.nodeManager || '';
+  if (el('ocCfgSkillsMaxInPrompt')) el('ocCfgSkillsMaxInPrompt').value = cfg.skills?.limits?.maxSkillsInPrompt || '';
+  if (el('ocCfgSkillsPromptChars')) el('ocCfgSkillsPromptChars').value = cfg.skills?.limits?.maxSkillsPromptChars || '';
+  if (el('ocCfgSkillsWatch')) el('ocCfgSkillsWatch').checked = Boolean(cfg.skills?.load?.watch);
+  if (el('ocCfgSkillsPreferBrew')) el('ocCfgSkillsPreferBrew').checked = Boolean(cfg.skills?.install?.preferBrew);
+  writeJsonFragmentInput('ocCfgSkillsJson', cfg.skills || null);
+  if (el('ocCfgPluginsAllow')) el('ocCfgPluginsAllow').value = (cfg.plugins?.allow || []).join(', ');
+  if (el('ocCfgPluginsDeny')) el('ocCfgPluginsDeny').value = (cfg.plugins?.deny || []).join(', ');
+  if (el('ocCfgPluginsPaths')) el('ocCfgPluginsPaths').value = (cfg.plugins?.load?.paths || []).join(', ');
+  if (el('ocCfgPluginsMemorySlot')) el('ocCfgPluginsMemorySlot').value = cfg.plugins?.slots?.memory || '';
+  if (el('ocCfgPluginsContextEngineSlot')) el('ocCfgPluginsContextEngineSlot').value = cfg.plugins?.slots?.contextEngine || '';
+  if (el('ocCfgPluginsEnabled')) el('ocCfgPluginsEnabled').checked = Boolean(cfg.plugins?.enabled);
+  writeJsonFragmentInput('ocCfgPluginsJson', cfg.plugins || null);
+  if (el('ocCfgBrowserCdpUrl')) el('ocCfgBrowserCdpUrl').value = cfg.browser?.cdpUrl || '';
+  if (el('ocCfgBrowserExecutablePath')) el('ocCfgBrowserExecutablePath').value = cfg.browser?.executablePath || '';
+  if (el('ocCfgBrowserDefaultProfile')) el('ocCfgBrowserDefaultProfile').value = cfg.browser?.defaultProfile || '';
+  if (el('ocCfgBrowserCdpPortRangeStart')) el('ocCfgBrowserCdpPortRangeStart').value = cfg.browser?.cdpPortRangeStart || '';
+  if (el('ocCfgBrowserColor')) el('ocCfgBrowserColor').value = cfg.browser?.color || '';
+  if (el('ocCfgBrowserExtraArgs')) el('ocCfgBrowserExtraArgs').value = (cfg.browser?.extraArgs || []).join(', ');
+  if (el('ocCfgBrowserEnabled')) el('ocCfgBrowserEnabled').checked = Boolean(cfg.browser?.enabled);
+  if (el('ocCfgBrowserHeadless')) el('ocCfgBrowserHeadless').checked = Boolean(cfg.browser?.headless);
+  if (el('ocCfgBrowserAttachOnly')) el('ocCfgBrowserAttachOnly').checked = Boolean(cfg.browser?.attachOnly);
+  if (el('ocCfgBrowserNoSandbox')) el('ocCfgBrowserNoSandbox').checked = Boolean(cfg.browser?.noSandbox);
+  if (el('ocCfgBrowserEvaluateEnabled')) el('ocCfgBrowserEvaluateEnabled').checked = cfg.browser?.evaluateEnabled !== false;
+  writeJsonFragmentInput('ocCfgBrowserJson', cfg.browser || null);
+  if (el('ocCfgWebHeartbeatSeconds')) el('ocCfgWebHeartbeatSeconds').value = cfg.web?.heartbeatSeconds || '';
+  if (el('ocCfgWebReconnectInitialMs')) el('ocCfgWebReconnectInitialMs').value = cfg.web?.reconnect?.initialMs || '';
+  if (el('ocCfgWebReconnectMaxMs')) el('ocCfgWebReconnectMaxMs').value = cfg.web?.reconnect?.maxMs || '';
+  if (el('ocCfgWebEnabled')) el('ocCfgWebEnabled').checked = cfg.web?.enabled !== false;
+  if (el('ocCfgNodeHostAllowProfiles')) el('ocCfgNodeHostAllowProfiles').value = (cfg.nodeHost?.browserProxy?.allowProfiles || []).join(', ');
+  if (el('ocCfgNodeHostBrowserProxyEnabled')) el('ocCfgNodeHostBrowserProxyEnabled').checked = Boolean(cfg.nodeHost?.browserProxy?.enabled);
+  if (el('ocCfgDiscoveryDomain')) el('ocCfgDiscoveryDomain').value = cfg.discovery?.wideArea?.domain || '';
+  if (el('ocCfgDiscoveryMdnsMode')) el('ocCfgDiscoveryMdnsMode').value = cfg.discovery?.mdns?.mode || '';
+  if (el('ocCfgDiscoveryWideAreaEnabled')) el('ocCfgDiscoveryWideAreaEnabled').checked = Boolean(cfg.discovery?.wideArea?.enabled);
+  if (el('ocCfgCanvasRoot')) el('ocCfgCanvasRoot').value = cfg.canvasHost?.root || '';
+  if (el('ocCfgCanvasPort')) el('ocCfgCanvasPort').value = cfg.canvasHost?.port || '';
+  if (el('ocCfgCanvasEnabled')) el('ocCfgCanvasEnabled').checked = Boolean(cfg.canvasHost?.enabled);
+  if (el('ocCfgCanvasLiveReload')) el('ocCfgCanvasLiveReload').checked = cfg.canvasHost?.liveReload !== false;
+  if (el('ocCfgTalkProvider')) el('ocCfgTalkProvider').value = cfg.talk?.provider || '';
+  if (el('ocCfgTalkVoiceId')) el('ocCfgTalkVoiceId').value = cfg.talk?.voiceId || '';
+  if (el('ocCfgTalkModelId')) el('ocCfgTalkModelId').value = cfg.talk?.modelId || '';
+  if (el('ocCfgTalkOutputFormat')) el('ocCfgTalkOutputFormat').value = cfg.talk?.outputFormat || '';
+  if (el('ocCfgTalkApiKey')) el('ocCfgTalkApiKey').value = cfg.talk?.apiKey || '';
+  if (el('ocCfgTalkInterruptOnSpeech')) el('ocCfgTalkInterruptOnSpeech').checked = cfg.talk?.interruptOnSpeech !== false;
+  if (el('ocCfgSecretsDefaultEnv')) el('ocCfgSecretsDefaultEnv').value = cfg.secrets?.defaults?.env || '';
+  if (el('ocCfgSecretsDefaultFile')) el('ocCfgSecretsDefaultFile').value = cfg.secrets?.defaults?.file || '';
+  if (el('ocCfgSecretsDefaultExec')) el('ocCfgSecretsDefaultExec').value = cfg.secrets?.defaults?.exec || '';
+  if (el('ocCfgSecretsMaxProviderConcurrency')) el('ocCfgSecretsMaxProviderConcurrency').value = cfg.secrets?.resolution?.maxProviderConcurrency || '';
+  writeJsonFragmentInput('ocCfgMediaJson', cfg.media || null);
+  writeJsonFragmentInput('ocCfgInfraJson', {
+    ...(cfg.discovery ? { discovery: cfg.discovery } : {}),
+    ...(cfg.canvasHost ? { canvasHost: cfg.canvasHost } : {}),
+    ...(cfg.talk ? { talk: cfg.talk } : {}),
+  });
+  writeJsonFragmentInput('ocCfgRuntimeJson', {
+    ...(cfg.web ? { web: cfg.web } : {}),
+    ...(cfg.nodeHost ? { nodeHost: cfg.nodeHost } : {}),
+    ...(cfg.secrets ? { secrets: cfg.secrets } : {}),
+  });
+  writeJsonFragmentInput('ocCfgSystemJson', {
+    ...(cfg.auth ? { auth: cfg.auth } : {}),
+    ...(cfg.acp ? { acp: cfg.acp } : {}),
+    ...(cfg.cli ? { cli: cfg.cli } : {}),
+    ...(cfg.bindings ? { bindings: cfg.bindings } : {}),
+    ...(cfg.broadcast ? { broadcast: cfg.broadcast } : {}),
+    ...(cfg.audio ? { audio: cfg.audio } : {}),
+  });
 
   // ── Channels defaults ──
   if (el('ocCfgChannelDefaultGroupPolicy')) el('ocCfgChannelDefaultGroupPolicy').value = cfg.channels?.defaults?.groupPolicy || '';
@@ -4384,13 +4680,31 @@ function populateOpenClawConfigEditor() {
 
   // ── Gateway ──
   el('ocCfgGatewayPort').value = cfg.gateway?.port || 18789;
+  if (el('ocCfgGatewayMode')) el('ocCfgGatewayMode').value = cfg.gateway?.mode || '';
   el('ocCfgGatewayBind').value = cfg.gateway?.bind || 'loopback';
+  if (el('ocCfgGatewayCustomBindHost')) el('ocCfgGatewayCustomBindHost').value = cfg.gateway?.customBindHost || '';
   el('ocCfgGatewayAuthMode').value = cfg.gateway?.auth?.mode || 'token';
   el('ocCfgGatewayToken').value = cfg.gateway?.auth?.token || '';
+  if (el('ocCfgGatewayPassword')) el('ocCfgGatewayPassword').value = cfg.gateway?.auth?.password || '';
+  if (el('ocCfgGatewayTrustedProxyUserHeader')) el('ocCfgGatewayTrustedProxyUserHeader').value = cfg.gateway?.auth?.trustedProxy?.userHeader || '';
+  if (el('ocCfgGatewayTrustedProxyRequiredHeaders')) el('ocCfgGatewayTrustedProxyRequiredHeaders').value = (cfg.gateway?.auth?.trustedProxy?.requiredHeaders || []).join(', ');
+  if (el('ocCfgGatewayTrustedProxyAllowUsers')) el('ocCfgGatewayTrustedProxyAllowUsers').value = (cfg.gateway?.auth?.trustedProxy?.allowUsers || []).join(', ');
+  if (el('ocCfgGatewayAllowTailscale')) el('ocCfgGatewayAllowTailscale').checked = Boolean(cfg.gateway?.auth?.allowTailscale);
   if (el('ocCfgGatewayReload')) el('ocCfgGatewayReload').value = cfg.gateway?.reload || '';
   if (el('ocCfgGatewayHealthCheck')) el('ocCfgGatewayHealthCheck').value = cfg.gateway?.channelHealthCheckMinutes || '';
+  if (el('ocCfgGatewayTailscaleMode')) el('ocCfgGatewayTailscaleMode').value = cfg.gateway?.tailscale?.mode || '';
+  if (el('ocCfgGatewayTlsEnabled')) el('ocCfgGatewayTlsEnabled').checked = Boolean(cfg.gateway?.tls?.enabled);
+  if (el('ocCfgGatewayTlsAutoGenerate')) el('ocCfgGatewayTlsAutoGenerate').checked = cfg.gateway?.tls?.autoGenerate !== false;
+  if (el('ocCfgGatewayTlsCertPath')) el('ocCfgGatewayTlsCertPath').value = cfg.gateway?.tls?.certPath || '';
+  if (el('ocCfgGatewayTlsKeyPath')) el('ocCfgGatewayTlsKeyPath').value = cfg.gateway?.tls?.keyPath || '';
+  if (el('ocCfgGatewayTlsCaPath')) el('ocCfgGatewayTlsCaPath').value = cfg.gateway?.tls?.caPath || '';
+  if (el('ocCfgGatewayControlUiEnabled')) el('ocCfgGatewayControlUiEnabled').checked = cfg.gateway?.controlUi?.enabled !== false;
+  if (el('ocCfgGatewayControlUiBasePath')) el('ocCfgGatewayControlUiBasePath').value = cfg.gateway?.controlUi?.basePath || '';
+  if (el('ocCfgGatewayControlUiAllowedOrigins')) el('ocCfgGatewayControlUiAllowedOrigins').value = (cfg.gateway?.controlUi?.allowedOrigins || []).join(', ');
   if (el('ocCfgGatewayHttpChatCompletions')) el('ocCfgGatewayHttpChatCompletions').checked = Boolean(cfg.gateway?.http?.endpoints?.chatCompletions);
   if (el('ocCfgGatewayHttpResponses')) el('ocCfgGatewayHttpResponses').checked = Boolean(cfg.gateway?.http?.endpoints?.responses);
+  if (el('ocCfgGatewayHttpChatBodyBytes')) el('ocCfgGatewayHttpChatBodyBytes').value = cfg.gateway?.http?.endpoints?.chatCompletions?.maxBodyBytes || '';
+  if (el('ocCfgGatewayHttpResponsesBodyBytes')) el('ocCfgGatewayHttpResponsesBodyBytes').value = cfg.gateway?.http?.endpoints?.responses?.maxBodyBytes || '';
 
   // ── Cron & Hooks ──
   if (el('ocCfgCronEnabled')) el('ocCfgCronEnabled').checked = Boolean(cfg.cron?.enabled);
@@ -4433,6 +4747,7 @@ function updateOcPanelBadges(cfg) {
     badge.textContent = text;
     badge.classList.toggle('active', active);
   };
+  const _hasAccounts = (value) => Boolean(value && typeof value === 'object' && Object.keys(value).length);
   // Model
   const model = cfg.agents?.defaults?.model?.primary;
   _b('ocBadgeModel', model ? model.split('/').pop() : '未配置', Boolean(model));
@@ -4441,13 +4756,33 @@ function updateOcPanelBadges(cfg) {
   _b('ocBadgeProvider', hasProvider ? '已配置' : '未配置', hasProvider);
   // Channels
   const chans = [];
-  if (cfg.channels?.telegram?.botToken) chans.push('TG');
-  if (cfg.channels?.discord?.token) chans.push('DC');
-  if (cfg.channels?.slack?.botToken) chans.push('Slack');
+  if (cfg.channels?.telegram?.botToken || _hasAccounts(cfg.channels?.telegram?.accounts)) chans.push('TG');
+  if (cfg.channels?.discord?.token || _hasAccounts(cfg.channels?.discord?.accounts)) chans.push('DC');
+  if (cfg.channels?.slack?.botToken || _hasAccounts(cfg.channels?.slack?.accounts)) chans.push('Slack');
+  if (cfg.channels?.whatsapp) chans.push('WA');
+  if (cfg.channels?.signal) chans.push('Signal');
+  if (cfg.channels?.googlechat) chans.push('GC');
+  if (cfg.channels?.imessage) chans.push('iMsg');
+  if (cfg.channels?.irc) chans.push('IRC');
+  if (cfg.channels?.msteams) chans.push('Teams');
+  if (cfg.channels?.matrix) chans.push('Matrix');
+  if (cfg.channels?.line) chans.push('LINE');
+  if (cfg.channels?.wechat) chans.push('微信');
+  if (cfg.channels?.wechatwork) chans.push('企微');
   _b('ocBadgeChannels', chans.length ? `${chans.join(' + ')}` : '未启用', chans.length > 0);
-  _b('ocBadgeTelegram', cfg.channels?.telegram?.botToken ? '已配置' : '未配置', Boolean(cfg.channels?.telegram?.botToken));
-  _b('ocBadgeDiscord', cfg.channels?.discord?.token ? '已配置' : '未配置', Boolean(cfg.channels?.discord?.token));
-  _b('ocBadgeSlack', cfg.channels?.slack?.botToken ? '已配置' : '未配置', Boolean(cfg.channels?.slack?.botToken));
+  _b('ocBadgeTelegram', (cfg.channels?.telegram?.botToken || _hasAccounts(cfg.channels?.telegram?.accounts)) ? '已配置' : '未配置', Boolean(cfg.channels?.telegram?.botToken || _hasAccounts(cfg.channels?.telegram?.accounts)));
+  _b('ocBadgeDiscord', (cfg.channels?.discord?.token || _hasAccounts(cfg.channels?.discord?.accounts)) ? '已配置' : '未配置', Boolean(cfg.channels?.discord?.token || _hasAccounts(cfg.channels?.discord?.accounts)));
+  _b('ocBadgeSlack', (cfg.channels?.slack?.botToken || _hasAccounts(cfg.channels?.slack?.accounts)) ? '已配置' : '未配置', Boolean(cfg.channels?.slack?.botToken || _hasAccounts(cfg.channels?.slack?.accounts)));
+  _b('ocBadgeWhatsApp', cfg.channels?.whatsapp ? '已配置' : '未配置', Boolean(cfg.channels?.whatsapp));
+  _b('ocBadgeSignal', cfg.channels?.signal ? '已配置' : '未配置', Boolean(cfg.channels?.signal));
+  _b('ocBadgeGoogleChat', cfg.channels?.googlechat ? '已配置' : '未配置', Boolean(cfg.channels?.googlechat));
+  _b('ocBadgeImessage', cfg.channels?.imessage ? '已配置' : '未配置', Boolean(cfg.channels?.imessage));
+  _b('ocBadgeIrc', cfg.channels?.irc ? '已配置' : '未配置', Boolean(cfg.channels?.irc));
+  _b('ocBadgeMSTeams', cfg.channels?.msteams ? '已配置' : '未配置', Boolean(cfg.channels?.msteams));
+  _b('ocBadgeMatrix', cfg.channels?.matrix ? '已配置' : '未配置', Boolean(cfg.channels?.matrix));
+  _b('ocBadgeLine', cfg.channels?.line ? '已配置' : '未配置', Boolean(cfg.channels?.line));
+  _b('ocBadgeWechat', cfg.channels?.wechat ? '已配置' : '未配置', Boolean(cfg.channels?.wechat));
+  _b('ocBadgeWechatWork', cfg.channels?.wechatwork ? '已配置' : '未配置', Boolean(cfg.channels?.wechatwork));
   // Agent
   const agentCustom = cfg.agents?.defaults?.maxConcurrent || cfg.agents?.defaults?.timeoutSeconds || cfg.agents?.defaults?.heartbeat;
   _b('ocBadgeAgent', agentCustom ? '已定制' : '默认', Boolean(agentCustom));
@@ -4472,6 +4807,9 @@ function updateOcPanelBadges(cfg) {
   _b('ocBadgeLogging', cfg.logging?.level || 'info', Boolean(cfg.logging?.level));
   // Update
   _b('ocBadgeUpdate', cfg.update?.channel || 'stable', Boolean(cfg.update?.channel));
+  // Extensions
+  const extCustom = cfg.memory || cfg.skills || cfg.plugins || cfg.browser || cfg.web || cfg.secrets || cfg.nodeHost || cfg.discovery || cfg.canvasHost || cfg.talk || cfg.auth || cfg.acp || cfg.cli || cfg.bindings || cfg.broadcast || cfg.audio;
+  _b('ocBadgeExtensions', extCustom ? '已配置' : '未配置', Boolean(extCustom));
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -5407,6 +5745,29 @@ function buildOpenClawConfigFromForm() {
     if (el('ocCfgTgBlockStreaming')?.checked) base.channels.telegram.blockStreaming = true; else delete base.channels.telegram.blockStreaming;
     if (el('ocCfgTgLinkPreview') && !el('ocCfgTgLinkPreview').checked) base.channels.telegram.linkPreview = false; else delete base.channels.telegram.linkPreview;
   }
+  const tgConfig = cloneJson(readJsonFragmentInput('ocCfgTelegramJson', 'Telegram') || base.channels?.telegram || {});
+  setDeepConfigValue(tgConfig, 'botToken', el('ocCfgTelegramToken').value.trim() || null);
+  setDeepConfigValue(tgConfig, 'dmPolicy', _sv('ocCfgTgDmPolicy'));
+  setDeepConfigValue(tgConfig, 'groupPolicy', _sv('ocCfgTgGroupPolicy'));
+  setDeepConfigValue(tgConfig, 'allowFrom', _csvArr('ocCfgTgAllowFrom'));
+  setDeepConfigValue(tgConfig, 'streaming', _sv('ocCfgTgStreaming'));
+  setDeepConfigValue(tgConfig, 'reactionLevel', _sv('ocCfgTgReactionLevel'));
+  setDeepConfigValue(tgConfig, 'historyLimit', _sv('ocCfgTgHistoryLimit') ? Number(_sv('ocCfgTgHistoryLimit')) : null);
+  setDeepConfigValue(tgConfig, 'textChunkLimit', _sv('ocCfgTgTextChunkLimit') ? Number(_sv('ocCfgTgTextChunkLimit')) : null);
+  setDeepConfigValue(tgConfig, 'blockStreaming', el('ocCfgTgBlockStreaming')?.checked ? true : null);
+  setDeepConfigValue(tgConfig, 'linkPreview', el('ocCfgTgLinkPreview')?.checked === false ? false : null);
+  setDeepConfigValue(tgConfig, 'defaultAccount', _sv('ocCfgTgDefaultAccount'));
+  setDeepConfigValue(tgConfig, 'defaultTo', _sv('ocCfgTgDefaultTo'));
+  setDeepConfigValue(tgConfig, 'groupAllowFrom', _csvArr('ocCfgTgGroupAllowFrom'));
+  setDeepConfigValue(tgConfig, 'dmHistoryLimit', _sv('ocCfgTgDmHistoryLimit') ? Number(_sv('ocCfgTgDmHistoryLimit')) : null);
+  setDeepConfigValue(tgConfig, 'chunkMode', _sv('ocCfgTgChunkMode'));
+  setDeepConfigValue(tgConfig, 'reactionNotifications', _sv('ocCfgTgReactionNotifications'));
+  setDeepConfigValue(tgConfig, 'replyToMode', _sv('ocCfgTgReplyToMode'));
+  setDeepConfigValue(tgConfig, 'webhookPort', _sv('ocCfgTgWebhookPort') ? Number(_sv('ocCfgTgWebhookPort')) : null);
+  setDeepConfigValue(tgConfig, 'webhookPath', _sv('ocCfgTgWebhookPath'));
+  setDeepConfigValue(tgConfig, 'responsePrefix', _sv('ocCfgTgResponsePrefix'));
+  setDeepConfigValue(tgConfig, 'ackReaction', _sv('ocCfgTgAckReaction'));
+  setDeepConfigValue(base, 'channels.telegram', tgConfig);
 
   const dcToken = el('ocCfgDiscordToken').value.trim();
   if (dcToken) {
@@ -5431,6 +5792,25 @@ function buildOpenClawConfigFromForm() {
       base.channels.discord.voice.enabled = false;
     } else if (base.channels?.discord?.voice) { delete base.channels.discord.voice; }
   }
+  const dcConfig = cloneJson(readJsonFragmentInput('ocCfgDiscordJson', 'Discord') || base.channels?.discord || {});
+  setDeepConfigValue(dcConfig, 'token', el('ocCfgDiscordToken').value.trim() || null);
+  const dcDmConfig = cloneJson(dcConfig.dm || {});
+  setDeepConfigValue(dcDmConfig, 'policy', _sv('ocCfgDcDmPolicy'));
+  setDeepConfigValue(dcDmConfig, 'allowFrom', _csvArr('ocCfgDcAllowFrom'));
+  setDeepConfigValue(dcConfig, 'dm', dcDmConfig);
+  setDeepConfigValue(dcConfig, 'groupPolicy', _sv('ocCfgDcGroupPolicy'));
+  setDeepConfigValue(dcConfig, 'streaming', _sv('ocCfgDcStreaming'));
+  setDeepConfigValue(dcConfig, 'textChunkLimit', _sv('ocCfgDcTextChunkLimit') ? Number(_sv('ocCfgDcTextChunkLimit')) : null);
+  setDeepConfigValue(dcConfig, 'allowBots', el('ocCfgDcAllowBots')?.checked ? true : null);
+  setDeepConfigValue(dcConfig, 'voice.enabled', el('ocCfgDcVoiceEnabled')?.checked === false ? false : null);
+  setDeepConfigValue(dcConfig, 'defaultAccount', _sv('ocCfgDcDefaultAccount'));
+  setDeepConfigValue(dcConfig, 'defaultTo', _sv('ocCfgDcDefaultTo'));
+  setDeepConfigValue(dcConfig, 'responsePrefix', _sv('ocCfgDcResponsePrefix'));
+  setDeepConfigValue(dcConfig, 'ackReaction', _sv('ocCfgDcAckReaction'));
+  setDeepConfigValue(dcConfig, 'ackReactionScope', _sv('ocCfgDcAckReactionScope'));
+  setDeepConfigValue(dcConfig, 'activity', _sv('ocCfgDcActivity'));
+  setDeepConfigValue(dcConfig, 'status', _sv('ocCfgDcStatus'));
+  setDeepConfigValue(base, 'channels.discord', dcConfig);
 
   const slackBot = el('ocCfgSlackBotToken').value.trim();
   const slackApp = el('ocCfgSlackAppToken').value.trim();
@@ -5440,6 +5820,53 @@ function buildOpenClawConfigFromForm() {
     if (slackBot) base.channels.slack.botToken = slackBot;
     if (slackApp) base.channels.slack.appToken = slackApp;
   }
+  const slackConfig = cloneJson(readJsonFragmentInput('ocCfgSlackJson', 'Slack') || base.channels?.slack || {});
+  setDeepConfigValue(slackConfig, 'botToken', slackBot || null);
+  setDeepConfigValue(slackConfig, 'appToken', slackApp || null);
+  setDeepConfigValue(slackConfig, 'signingSecret', _sv('ocCfgSlackSigningSecret'));
+  setDeepConfigValue(slackConfig, 'webhookPath', _sv('ocCfgSlackWebhookPath'));
+  setDeepConfigValue(slackConfig, 'defaultAccount', _sv('ocCfgSlackDefaultAccount'));
+  setDeepConfigValue(slackConfig, 'defaultTo', _sv('ocCfgSlackDefaultTo'));
+  setDeepConfigValue(slackConfig, 'groupPolicy', _sv('ocCfgSlackGroupPolicy'));
+  setDeepConfigValue(slackConfig, 'textChunkLimit', _sv('ocCfgSlackTextChunkLimit') ? Number(_sv('ocCfgSlackTextChunkLimit')) : null);
+  setDeepConfigValue(slackConfig, 'streaming', _sv('ocCfgSlackStreaming'));
+  setDeepConfigValue(slackConfig, 'responsePrefix', _sv('ocCfgSlackResponsePrefix'));
+  setDeepConfigValue(slackConfig, 'ackReaction', _sv('ocCfgSlackAckReaction'));
+  setDeepConfigValue(slackConfig, 'typingReaction', _sv('ocCfgSlackTypingReaction'));
+  setDeepConfigValue(slackConfig, 'allowBots', el('ocCfgSlackAllowBots')?.checked ? true : null);
+  setDeepConfigValue(slackConfig, 'requireMention', el('ocCfgSlackRequireMention')?.checked ? true : null);
+  setDeepConfigValue(base, 'channels.slack', slackConfig);
+
+  const waEnabled = el('ocCfgWhatsAppEnabled')?.checked;
+  const waDefaultTo = _sv('ocCfgWhatsAppDefaultTo');
+  const waDmPolicy = _sv('ocCfgWhatsAppDmPolicy');
+  const waGroupPolicy = _sv('ocCfgWhatsAppGroupPolicy');
+  const waAllowFrom = _csvArr('ocCfgWhatsAppAllowFrom');
+  const waGroupAllowFrom = _csvArr('ocCfgWhatsAppGroupAllowFrom');
+  const waHistoryLimit = _sv('ocCfgWhatsAppHistoryLimit');
+  const waDmHistoryLimit = _sv('ocCfgWhatsAppDmHistoryLimit');
+  const waTextChunkLimit = _sv('ocCfgWhatsAppTextChunkLimit');
+  const waMediaMaxMb = _sv('ocCfgWhatsAppMediaMaxMb');
+  const waResponsePrefix = _sv('ocCfgWhatsAppResponsePrefix');
+  const waSelfChatMode = el('ocCfgWhatsAppSelfChatMode')?.checked;
+  const waSendReadReceipts = el('ocCfgWhatsAppSendReadReceipts')?.checked;
+  if (waDefaultTo || waDmPolicy || waGroupPolicy || waAllowFrom.length || waGroupAllowFrom.length || waHistoryLimit || waDmHistoryLimit || waTextChunkLimit || waMediaMaxMb || waResponsePrefix || waSelfChatMode || waEnabled === false || waSendReadReceipts === false) {
+    if (!base.channels) base.channels = {};
+    if (!base.channels.whatsapp) base.channels.whatsapp = {};
+    if (waEnabled === false) base.channels.whatsapp.enabled = false; else delete base.channels.whatsapp.enabled;
+    if (waDefaultTo) base.channels.whatsapp.defaultTo = waDefaultTo; else delete base.channels.whatsapp.defaultTo;
+    if (waDmPolicy) base.channels.whatsapp.dmPolicy = waDmPolicy; else delete base.channels.whatsapp.dmPolicy;
+    if (waGroupPolicy) base.channels.whatsapp.groupPolicy = waGroupPolicy; else delete base.channels.whatsapp.groupPolicy;
+    if (waAllowFrom.length) base.channels.whatsapp.allowFrom = waAllowFrom; else delete base.channels.whatsapp.allowFrom;
+    if (waGroupAllowFrom.length) base.channels.whatsapp.groupAllowFrom = waGroupAllowFrom; else delete base.channels.whatsapp.groupAllowFrom;
+    if (waHistoryLimit) base.channels.whatsapp.historyLimit = Number(waHistoryLimit); else delete base.channels.whatsapp.historyLimit;
+    if (waDmHistoryLimit) base.channels.whatsapp.dmHistoryLimit = Number(waDmHistoryLimit); else delete base.channels.whatsapp.dmHistoryLimit;
+    if (waTextChunkLimit) base.channels.whatsapp.textChunkLimit = Number(waTextChunkLimit); else delete base.channels.whatsapp.textChunkLimit;
+    if (waMediaMaxMb) base.channels.whatsapp.mediaMaxMb = Number(waMediaMaxMb); else delete base.channels.whatsapp.mediaMaxMb;
+    if (waResponsePrefix) base.channels.whatsapp.responsePrefix = waResponsePrefix; else delete base.channels.whatsapp.responsePrefix;
+    if (waSelfChatMode) base.channels.whatsapp.selfChatMode = true; else delete base.channels.whatsapp.selfChatMode;
+    if (waSendReadReceipts === false) base.channels.whatsapp.sendReadReceipts = false; else delete base.channels.whatsapp.sendReadReceipts;
+  }
 
   // Channel defaults
   const chanDefGp = _sv('ocCfgChannelDefaultGroupPolicy');
@@ -5448,6 +5875,136 @@ function buildOpenClawConfigFromForm() {
     if (!base.channels.defaults) base.channels.defaults = {};
     base.channels.defaults.groupPolicy = chanDefGp;
   } else if (base.channels?.defaults) { delete base.channels.defaults.groupPolicy; if (Object.keys(base.channels.defaults).length === 0) delete base.channels.defaults; }
+
+  const signalConfig = cloneJson(readJsonFragmentInput('ocCfgSignalJson', 'Signal') || base.channels?.signal || {});
+  setDeepConfigValue(signalConfig, 'account', _sv('ocCfgSignalAccount'));
+  setDeepConfigValue(signalConfig, 'httpUrl', _sv('ocCfgSignalHttpUrl'));
+  setDeepConfigValue(signalConfig, 'cliPath', _sv('ocCfgSignalCliPath'));
+  setDeepConfigValue(signalConfig, 'dmPolicy', _sv('ocCfgSignalDmPolicy'));
+  setDeepConfigValue(signalConfig, 'groupPolicy', _sv('ocCfgSignalGroupPolicy'));
+  setDeepConfigValue(signalConfig, 'allowFrom', _csvArr('ocCfgSignalAllowFrom'));
+  setDeepConfigValue(signalConfig, 'reactionNotifications', _sv('ocCfgSignalReactionNotifications'));
+  setDeepConfigValue(signalConfig, 'textChunkLimit', _sv('ocCfgSignalTextChunkLimit') ? Number(_sv('ocCfgSignalTextChunkLimit')) : null);
+  setDeepConfigValue(signalConfig, 'responsePrefix', _sv('ocCfgSignalResponsePrefix'));
+  setDeepConfigValue(signalConfig, 'enabled', el('ocCfgSignalEnabled')?.checked === false ? false : null);
+  setDeepConfigValue(signalConfig, 'autoStart', el('ocCfgSignalAutoStart')?.checked === false ? false : null);
+  setDeepConfigValue(signalConfig, 'sendReadReceipts', el('ocCfgSignalReadReceipts')?.checked ? true : null);
+  setDeepConfigValue(base, 'channels.signal', signalConfig);
+
+  const googleChatConfig = cloneJson(readJsonFragmentInput('ocCfgGoogleChatJson', 'Google Chat') || base.channels?.googlechat || {});
+  setDeepConfigValue(googleChatConfig, 'serviceAccountFile', _sv('ocCfgGoogleChatServiceAccountFile'));
+  setDeepConfigValue(googleChatConfig, 'webhookPath', _sv('ocCfgGoogleChatWebhookPath'));
+  setDeepConfigValue(googleChatConfig, 'defaultTo', _sv('ocCfgGoogleChatDefaultTo'));
+  setDeepConfigValue(googleChatConfig, 'groupPolicy', _sv('ocCfgGoogleChatGroupPolicy'));
+  setDeepConfigValue(googleChatConfig, 'groupAllowFrom', _csvArr('ocCfgGoogleChatGroupAllowFrom'));
+  setDeepConfigValue(googleChatConfig, 'typingIndicator', _sv('ocCfgGoogleChatTypingIndicator'));
+  setDeepConfigValue(googleChatConfig, 'textChunkLimit', _sv('ocCfgGoogleChatTextChunkLimit') ? Number(_sv('ocCfgGoogleChatTextChunkLimit')) : null);
+  setDeepConfigValue(googleChatConfig, 'responsePrefix', _sv('ocCfgGoogleChatResponsePrefix'));
+  setDeepConfigValue(googleChatConfig, 'enabled', el('ocCfgGoogleChatEnabled')?.checked === false ? false : null);
+  setDeepConfigValue(googleChatConfig, 'allowBots', el('ocCfgGoogleChatAllowBots')?.checked ? true : null);
+  const googleChatDm = cloneJson(googleChatConfig.dm || {});
+  setDeepConfigValue(googleChatDm, 'policy', _sv('ocCfgGoogleChatDmPolicy'));
+  setDeepConfigValue(googleChatDm, 'allowFrom', _csvArr('ocCfgGoogleChatAllowFrom'));
+  setDeepConfigValue(googleChatConfig, 'dm', googleChatDm);
+  setDeepConfigValue(base, 'channels.googlechat', googleChatConfig);
+
+  const imessageConfig = cloneJson(readJsonFragmentInput('ocCfgImessageJson', 'iMessage') || base.channels?.imessage || {});
+  setDeepConfigValue(imessageConfig, 'cliPath', _sv('ocCfgImessageCliPath'));
+  setDeepConfigValue(imessageConfig, 'service', _sv('ocCfgImessageService'));
+  setDeepConfigValue(imessageConfig, 'remoteHost', _sv('ocCfgImessageRemoteHost'));
+  setDeepConfigValue(imessageConfig, 'defaultTo', _sv('ocCfgImessageDefaultTo'));
+  setDeepConfigValue(imessageConfig, 'dmPolicy', _sv('ocCfgImessageDmPolicy'));
+  setDeepConfigValue(imessageConfig, 'groupPolicy', _sv('ocCfgImessageGroupPolicy'));
+  setDeepConfigValue(imessageConfig, 'allowFrom', _csvArr('ocCfgImessageAllowFrom'));
+  setDeepConfigValue(imessageConfig, 'textChunkLimit', _sv('ocCfgImessageTextChunkLimit') ? Number(_sv('ocCfgImessageTextChunkLimit')) : null);
+  setDeepConfigValue(imessageConfig, 'responsePrefix', _sv('ocCfgImessageResponsePrefix'));
+  setDeepConfigValue(imessageConfig, 'enabled', el('ocCfgImessageEnabled')?.checked === false ? false : null);
+  setDeepConfigValue(imessageConfig, 'includeAttachments', el('ocCfgImessageIncludeAttachments')?.checked ? true : null);
+  setDeepConfigValue(base, 'channels.imessage', imessageConfig);
+
+  const ircConfig = cloneJson(readJsonFragmentInput('ocCfgIrcJson', 'IRC') || base.channels?.irc || {});
+  setDeepConfigValue(ircConfig, 'host', _sv('ocCfgIrcHost'));
+  setDeepConfigValue(ircConfig, 'port', _sv('ocCfgIrcPort') ? Number(_sv('ocCfgIrcPort')) : null);
+  setDeepConfigValue(ircConfig, 'nick', _sv('ocCfgIrcNick'));
+  setDeepConfigValue(ircConfig, 'username', _sv('ocCfgIrcUsername'));
+  setDeepConfigValue(ircConfig, 'password', _sv('ocCfgIrcPassword'));
+  setDeepConfigValue(ircConfig, 'channels', _csvArr('ocCfgIrcChannels'));
+  setDeepConfigValue(ircConfig, 'dmPolicy', _sv('ocCfgIrcDmPolicy'));
+  setDeepConfigValue(ircConfig, 'groupPolicy', _sv('ocCfgIrcGroupPolicy'));
+  setDeepConfigValue(ircConfig, 'allowFrom', _csvArr('ocCfgIrcAllowFrom'));
+  setDeepConfigValue(ircConfig, 'textChunkLimit', _sv('ocCfgIrcTextChunkLimit') ? Number(_sv('ocCfgIrcTextChunkLimit')) : null);
+  setDeepConfigValue(ircConfig, 'mentionPatterns', _csvArr('ocCfgIrcMentionPatterns'));
+  setDeepConfigValue(ircConfig, 'enabled', el('ocCfgIrcEnabled')?.checked === false ? false : null);
+  setDeepConfigValue(ircConfig, 'tls', el('ocCfgIrcTls')?.checked === false ? false : null);
+  setDeepConfigValue(base, 'channels.irc', ircConfig);
+
+  const msTeamsConfig = cloneJson(readJsonFragmentInput('ocCfgMSTeamsJson', 'Microsoft Teams') || base.channels?.msteams || {});
+  setDeepConfigValue(msTeamsConfig, 'appId', _sv('ocCfgMSTeamsAppId'));
+  setDeepConfigValue(msTeamsConfig, 'appPassword', _sv('ocCfgMSTeamsAppPassword'));
+  setDeepConfigValue(msTeamsConfig, 'tenantId', _sv('ocCfgMSTeamsTenantId'));
+  const msWebhook = cloneJson(msTeamsConfig.webhook || {});
+  setDeepConfigValue(msWebhook, 'port', _sv('ocCfgMSTeamsWebhookPort') ? Number(_sv('ocCfgMSTeamsWebhookPort')) : null);
+  setDeepConfigValue(msWebhook, 'path', _sv('ocCfgMSTeamsWebhookPath'));
+  setDeepConfigValue(msTeamsConfig, 'webhook', msWebhook);
+  setDeepConfigValue(msTeamsConfig, 'defaultTo', _sv('ocCfgMSTeamsDefaultTo'));
+  setDeepConfigValue(msTeamsConfig, 'dmPolicy', _sv('ocCfgMSTeamsDmPolicy'));
+  setDeepConfigValue(msTeamsConfig, 'groupPolicy', _sv('ocCfgMSTeamsGroupPolicy'));
+  setDeepConfigValue(msTeamsConfig, 'allowFrom', _csvArr('ocCfgMSTeamsAllowFrom'));
+  setDeepConfigValue(msTeamsConfig, 'textChunkLimit', _sv('ocCfgMSTeamsTextChunkLimit') ? Number(_sv('ocCfgMSTeamsTextChunkLimit')) : null);
+  setDeepConfigValue(msTeamsConfig, 'responsePrefix', _sv('ocCfgMSTeamsResponsePrefix'));
+  setDeepConfigValue(msTeamsConfig, 'enabled', el('ocCfgMSTeamsEnabled')?.checked === false ? false : null);
+  setDeepConfigValue(msTeamsConfig, 'requireMention', el('ocCfgMSTeamsRequireMention')?.checked ? true : null);
+  setDeepConfigValue(base, 'channels.msteams', msTeamsConfig);
+
+  setDeepConfigValue(base, 'channels.modelByChannel', readJsonFragmentInput('ocCfgChannelModelByChannelJson', '按渠道模型覆盖'));
+
+  const matrixHomeserver = _sv('ocCfgMatrixHomeserver');
+  const matrixToken = _sv('ocCfgMatrixToken');
+  if (matrixHomeserver || matrixToken) {
+    if (!base.channels) base.channels = {};
+    if (!base.channels.matrix) base.channels.matrix = {};
+    if (matrixHomeserver) base.channels.matrix.homeserver = matrixHomeserver; else delete base.channels.matrix.homeserver;
+    if (matrixToken) base.channels.matrix.accessToken = matrixToken; else delete base.channels.matrix.accessToken;
+  } else if (base.channels?.matrix) {
+    delete base.channels.matrix;
+  }
+
+  const lineSecret = _sv('ocCfgLineSecret');
+  const lineToken = _sv('ocCfgLineToken');
+  if (lineSecret || lineToken) {
+    if (!base.channels) base.channels = {};
+    if (!base.channels.line) base.channels.line = {};
+    if (lineSecret) base.channels.line.channelSecret = lineSecret; else delete base.channels.line.channelSecret;
+    if (lineToken) base.channels.line.accessToken = lineToken; else delete base.channels.line.accessToken;
+  } else if (base.channels?.line) {
+    delete base.channels.line;
+  }
+
+  const wechatAppId = _sv('ocCfgWechatAppId');
+  const wechatToken = _sv('ocCfgWechatToken');
+  const wechatAesKey = _sv('ocCfgWechatAesKey');
+  if (wechatAppId || wechatToken || wechatAesKey) {
+    if (!base.channels) base.channels = {};
+    if (!base.channels.wechat) base.channels.wechat = {};
+    if (wechatAppId) base.channels.wechat.appId = wechatAppId; else delete base.channels.wechat.appId;
+    if (wechatToken) base.channels.wechat.token = wechatToken; else delete base.channels.wechat.token;
+    if (wechatAesKey) base.channels.wechat.encodingAESKey = wechatAesKey; else delete base.channels.wechat.encodingAESKey;
+  } else if (base.channels?.wechat) {
+    delete base.channels.wechat;
+  }
+
+  const weworkCorpId = _sv('ocCfgWechatWorkCorpId');
+  const weworkAgentId = _sv('ocCfgWechatWorkAgentId');
+  const weworkSecret = _sv('ocCfgWechatWorkSecret');
+  if (weworkCorpId || weworkAgentId || weworkSecret) {
+    if (!base.channels) base.channels = {};
+    if (!base.channels.wechatwork) base.channels.wechatwork = {};
+    if (weworkCorpId) base.channels.wechatwork.corpId = weworkCorpId; else delete base.channels.wechatwork.corpId;
+    if (weworkAgentId) base.channels.wechatwork.agentId = Number(weworkAgentId); else delete base.channels.wechatwork.agentId;
+    if (weworkSecret) base.channels.wechatwork.secret = weworkSecret; else delete base.channels.wechatwork.secret;
+  } else if (base.channels?.wechatwork) {
+    delete base.channels.wechatwork;
+  }
 
   // ── Tools ──
   const toolProfile = _sv('ocCfgToolsProfile');
@@ -5528,34 +6085,95 @@ function buildOpenClawConfigFromForm() {
 
   // ── Gateway ──
   const gwPort = el('ocCfgGatewayPort').value.trim();
+  const gwMode = _sv('ocCfgGatewayMode');
   const gwBind = el('ocCfgGatewayBind').value;
+  const gwCustomBindHost = _sv('ocCfgGatewayCustomBindHost');
   const gwAuthMode = el('ocCfgGatewayAuthMode').value;
   const gwToken = el('ocCfgGatewayToken').value.trim();
+  const gwPassword = _sv('ocCfgGatewayPassword');
+  const gwTrustedProxyUserHeader = _sv('ocCfgGatewayTrustedProxyUserHeader');
+  const gwTrustedProxyRequiredHeaders = _csvArr('ocCfgGatewayTrustedProxyRequiredHeaders');
+  const gwTrustedProxyAllowUsers = _csvArr('ocCfgGatewayTrustedProxyAllowUsers');
+  const gwAllowTailscale = el('ocCfgGatewayAllowTailscale')?.checked;
   const gwReload = _sv('ocCfgGatewayReload');
   const gwHealth = _sv('ocCfgGatewayHealthCheck');
-  if (gwPort || gwBind || gwAuthMode || gwToken || gwReload || gwHealth) {
+  if (gwPort || gwMode || gwBind || gwCustomBindHost || gwAuthMode || gwToken || gwPassword || gwTrustedProxyUserHeader || gwTrustedProxyRequiredHeaders.length || gwTrustedProxyAllowUsers.length || gwAllowTailscale || gwReload || gwHealth) {
     if (!base.gateway) base.gateway = {};
     if (gwPort) base.gateway.port = Number(gwPort) || 18789; else delete base.gateway.port;
+    if (gwMode) base.gateway.mode = gwMode; else delete base.gateway.mode;
     if (gwBind) base.gateway.bind = gwBind; else delete base.gateway.bind;
+    if (gwCustomBindHost) base.gateway.customBindHost = gwCustomBindHost; else delete base.gateway.customBindHost;
     if (gwReload) base.gateway.reload = gwReload; else delete base.gateway.reload;
     if (gwHealth) base.gateway.channelHealthCheckMinutes = Number(gwHealth); else delete base.gateway.channelHealthCheckMinutes;
-    if (gwAuthMode || gwToken) {
+    if (gwAuthMode || gwToken || gwPassword || gwTrustedProxyUserHeader || gwTrustedProxyRequiredHeaders.length || gwTrustedProxyAllowUsers.length || gwAllowTailscale) {
       if (!base.gateway.auth) base.gateway.auth = {};
       if (gwAuthMode) base.gateway.auth.mode = gwAuthMode; else delete base.gateway.auth.mode;
       if (gwToken) base.gateway.auth.token = gwToken; else delete base.gateway.auth.token;
+      if (gwPassword) base.gateway.auth.password = gwPassword; else delete base.gateway.auth.password;
+      if (gwAllowTailscale) base.gateway.auth.allowTailscale = true; else delete base.gateway.auth.allowTailscale;
+      if (gwTrustedProxyUserHeader || gwTrustedProxyRequiredHeaders.length || gwTrustedProxyAllowUsers.length) {
+        if (!base.gateway.auth.trustedProxy) base.gateway.auth.trustedProxy = {};
+        if (gwTrustedProxyUserHeader) base.gateway.auth.trustedProxy.userHeader = gwTrustedProxyUserHeader; else delete base.gateway.auth.trustedProxy.userHeader;
+        if (gwTrustedProxyRequiredHeaders.length) base.gateway.auth.trustedProxy.requiredHeaders = gwTrustedProxyRequiredHeaders; else delete base.gateway.auth.trustedProxy.requiredHeaders;
+        if (gwTrustedProxyAllowUsers.length) base.gateway.auth.trustedProxy.allowUsers = gwTrustedProxyAllowUsers; else delete base.gateway.auth.trustedProxy.allowUsers;
+        if (Object.keys(base.gateway.auth.trustedProxy).length === 0) delete base.gateway.auth.trustedProxy;
+      }
       if (Object.keys(base.gateway.auth).length === 0) delete base.gateway.auth;
+    }
+    const gwTailscaleMode = _sv('ocCfgGatewayTailscaleMode');
+    if (gwTailscaleMode) {
+      if (!base.gateway.tailscale) base.gateway.tailscale = {};
+      base.gateway.tailscale.mode = gwTailscaleMode;
+    } else if (base.gateway?.tailscale) {
+      delete base.gateway.tailscale;
+    }
+    const gwTlsEnabled = el('ocCfgGatewayTlsEnabled')?.checked;
+    const gwTlsAutoGenerate = el('ocCfgGatewayTlsAutoGenerate')?.checked;
+    const gwTlsCertPath = _sv('ocCfgGatewayTlsCertPath');
+    const gwTlsKeyPath = _sv('ocCfgGatewayTlsKeyPath');
+    const gwTlsCaPath = _sv('ocCfgGatewayTlsCaPath');
+    if (gwTlsEnabled || gwTlsCertPath || gwTlsKeyPath || gwTlsCaPath || gwTlsAutoGenerate === false) {
+      if (!base.gateway.tls) base.gateway.tls = {};
+      if (gwTlsEnabled) base.gateway.tls.enabled = true; else delete base.gateway.tls.enabled;
+      if (gwTlsAutoGenerate === false) base.gateway.tls.autoGenerate = false; else delete base.gateway.tls.autoGenerate;
+      if (gwTlsCertPath) base.gateway.tls.certPath = gwTlsCertPath; else delete base.gateway.tls.certPath;
+      if (gwTlsKeyPath) base.gateway.tls.keyPath = gwTlsKeyPath; else delete base.gateway.tls.keyPath;
+      if (gwTlsCaPath) base.gateway.tls.caPath = gwTlsCaPath; else delete base.gateway.tls.caPath;
+      if (Object.keys(base.gateway.tls).length === 0) delete base.gateway.tls;
+    } else if (base.gateway?.tls) {
+      delete base.gateway.tls;
+    }
+    const gwControlUiEnabled = el('ocCfgGatewayControlUiEnabled')?.checked;
+    const gwControlUiBasePath = _sv('ocCfgGatewayControlUiBasePath');
+    const gwControlUiAllowedOrigins = _csvArr('ocCfgGatewayControlUiAllowedOrigins');
+    if (gwControlUiBasePath || gwControlUiAllowedOrigins.length || gwControlUiEnabled === false) {
+      if (!base.gateway.controlUi) base.gateway.controlUi = {};
+      if (gwControlUiEnabled === false) base.gateway.controlUi.enabled = false; else delete base.gateway.controlUi.enabled;
+      if (gwControlUiBasePath) base.gateway.controlUi.basePath = gwControlUiBasePath; else delete base.gateway.controlUi.basePath;
+      if (gwControlUiAllowedOrigins.length) base.gateway.controlUi.allowedOrigins = gwControlUiAllowedOrigins; else delete base.gateway.controlUi.allowedOrigins;
+      if (Object.keys(base.gateway.controlUi).length === 0) delete base.gateway.controlUi;
+    } else if (base.gateway?.controlUi) {
+      delete base.gateway.controlUi;
     }
     if (Object.keys(base.gateway).length === 0) delete base.gateway;
   }
   // Gateway HTTP endpoints
   const httpChat = el('ocCfgGatewayHttpChatCompletions')?.checked;
   const httpResp = el('ocCfgGatewayHttpResponses')?.checked;
-  if (httpChat || httpResp) {
+  const httpChatBodyBytes = _sv('ocCfgGatewayHttpChatBodyBytes');
+  const httpResponsesBodyBytes = _sv('ocCfgGatewayHttpResponsesBodyBytes');
+  if (httpChat || httpResp || httpChatBodyBytes || httpResponsesBodyBytes) {
     if (!base.gateway) base.gateway = {};
     if (!base.gateway.http) base.gateway.http = {};
     if (!base.gateway.http.endpoints) base.gateway.http.endpoints = {};
-    if (httpChat) base.gateway.http.endpoints.chatCompletions = true; else delete base.gateway.http.endpoints.chatCompletions;
-    if (httpResp) base.gateway.http.endpoints.responses = true; else delete base.gateway.http.endpoints.responses;
+    if (httpChat || httpChatBodyBytes) {
+      base.gateway.http.endpoints.chatCompletions = {};
+      if (httpChatBodyBytes) base.gateway.http.endpoints.chatCompletions.maxBodyBytes = Number(httpChatBodyBytes);
+    } else delete base.gateway.http.endpoints.chatCompletions;
+    if (httpResp || httpResponsesBodyBytes) {
+      base.gateway.http.endpoints.responses = {};
+      if (httpResponsesBodyBytes) base.gateway.http.endpoints.responses.maxBodyBytes = Number(httpResponsesBodyBytes);
+    } else delete base.gateway.http.endpoints.responses;
     if (Object.keys(base.gateway.http.endpoints).length === 0) delete base.gateway.http.endpoints;
     if (Object.keys(base.gateway.http).length === 0) delete base.gateway.http;
   }
@@ -5626,6 +6244,93 @@ function buildOpenClawConfigFromForm() {
     if (Object.keys(base.update).length === 0) delete base.update;
   }
 
+  const memoryJson = cloneJson(readJsonFragmentInput('ocCfgMemoryJson', 'Memory') || base.memory || {});
+  setDeepConfigValue(memoryJson, 'backend', _sv('ocCfgMemoryBackend'));
+  setDeepConfigValue(memoryJson, 'citations', _sv('ocCfgMemoryCitations'));
+  setDeepConfigValue(memoryJson, 'qmd.command', _sv('ocCfgMemoryQmdCommand'));
+  setDeepConfigValue(memoryJson, 'qmd.searchMode', _sv('ocCfgMemoryQmdSearchMode'));
+  setDeepConfigValue(memoryJson, 'qmd.includeDefaultMemory', el('ocCfgMemoryIncludeDefaultMemory')?.checked ? true : null);
+  setDeepConfigValue(memoryJson, 'qmd.sessions.enabled', el('ocCfgMemorySessionsEnabled')?.checked ? true : null);
+  setDeepConfigValue(memoryJson, 'qmd.sessions.exportDir', _sv('ocCfgMemorySessionExportDir'));
+  setDeepConfigValue(memoryJson, 'qmd.sessions.retentionDays', _sv('ocCfgMemorySessionRetentionDays') ? Number(_sv('ocCfgMemorySessionRetentionDays')) : null);
+  setDeepConfigValue(memoryJson, 'qmd.update.interval', _sv('ocCfgMemoryUpdateInterval'));
+  setDeepConfigValue(memoryJson, 'qmd.update.embedInterval', _sv('ocCfgMemoryEmbedInterval'));
+  setDeepConfigValue(memoryJson, 'qmd.limits.maxResults', _sv('ocCfgMemoryMaxResults') ? Number(_sv('ocCfgMemoryMaxResults')) : null);
+  setDeepConfigValue(memoryJson, 'qmd.mcporter.enabled', el('ocCfgMemoryMcporterEnabled')?.checked ? true : null);
+  setDeepConfigValue(memoryJson, 'qmd.mcporter.serverName', _sv('ocCfgMemoryMcporterServerName'));
+  setDeepConfigValue(memoryJson, 'qmd.mcporter.startDaemon', el('ocCfgMemoryMcporterStartDaemon')?.checked === false ? false : null);
+  const skillsJson = cloneJson(readJsonFragmentInput('ocCfgSkillsJson', 'Skills') || base.skills || {});
+  setDeepConfigValue(skillsJson, 'load.extraDirs', _csvArr('ocCfgSkillsExtraDirs'));
+  setDeepConfigValue(skillsJson, 'load.watch', el('ocCfgSkillsWatch')?.checked ? true : null);
+  setDeepConfigValue(skillsJson, 'install.preferBrew', el('ocCfgSkillsPreferBrew')?.checked ? true : null);
+  setDeepConfigValue(skillsJson, 'install.nodeManager', _sv('ocCfgSkillsNodeManager'));
+  setDeepConfigValue(skillsJson, 'limits.maxSkillsInPrompt', _sv('ocCfgSkillsMaxInPrompt') ? Number(_sv('ocCfgSkillsMaxInPrompt')) : null);
+  setDeepConfigValue(skillsJson, 'limits.maxSkillsPromptChars', _sv('ocCfgSkillsPromptChars') ? Number(_sv('ocCfgSkillsPromptChars')) : null);
+  const pluginsJson = cloneJson(readJsonFragmentInput('ocCfgPluginsJson', 'Plugins') || base.plugins || {});
+  setDeepConfigValue(pluginsJson, 'enabled', el('ocCfgPluginsEnabled')?.checked ? true : null);
+  setDeepConfigValue(pluginsJson, 'allow', _csvArr('ocCfgPluginsAllow'));
+  setDeepConfigValue(pluginsJson, 'deny', _csvArr('ocCfgPluginsDeny'));
+  setDeepConfigValue(pluginsJson, 'load.paths', _csvArr('ocCfgPluginsPaths'));
+  setDeepConfigValue(pluginsJson, 'slots.memory', _sv('ocCfgPluginsMemorySlot'));
+  setDeepConfigValue(pluginsJson, 'slots.contextEngine', _sv('ocCfgPluginsContextEngineSlot'));
+  const browserJson = cloneJson(readJsonFragmentInput('ocCfgBrowserJson', 'Browser') || base.browser || {});
+  setDeepConfigValue(browserJson, 'enabled', el('ocCfgBrowserEnabled')?.checked ? true : null);
+  setDeepConfigValue(browserJson, 'headless', el('ocCfgBrowserHeadless')?.checked ? true : null);
+  setDeepConfigValue(browserJson, 'attachOnly', el('ocCfgBrowserAttachOnly')?.checked ? true : null);
+  setDeepConfigValue(browserJson, 'noSandbox', el('ocCfgBrowserNoSandbox')?.checked ? true : null);
+  setDeepConfigValue(browserJson, 'evaluateEnabled', el('ocCfgBrowserEvaluateEnabled')?.checked === false ? false : null);
+  setDeepConfigValue(browserJson, 'cdpUrl', _sv('ocCfgBrowserCdpUrl'));
+  setDeepConfigValue(browserJson, 'executablePath', _sv('ocCfgBrowserExecutablePath'));
+  setDeepConfigValue(browserJson, 'defaultProfile', _sv('ocCfgBrowserDefaultProfile'));
+  setDeepConfigValue(browserJson, 'cdpPortRangeStart', _sv('ocCfgBrowserCdpPortRangeStart') ? Number(_sv('ocCfgBrowserCdpPortRangeStart')) : null);
+  setDeepConfigValue(browserJson, 'color', _sv('ocCfgBrowserColor'));
+  setDeepConfigValue(browserJson, 'extraArgs', _csvArr('ocCfgBrowserExtraArgs'));
+  const mediaJson = readJsonFragmentInput('ocCfgMediaJson', 'Media');
+  const infraJson = cloneJson(readJsonFragmentInput('ocCfgInfraJson', 'Discovery / Canvas / Talk') || {});
+  setDeepConfigValue(infraJson, 'discovery.wideArea.enabled', el('ocCfgDiscoveryWideAreaEnabled')?.checked ? true : null);
+  setDeepConfigValue(infraJson, 'discovery.wideArea.domain', _sv('ocCfgDiscoveryDomain'));
+  setDeepConfigValue(infraJson, 'discovery.mdns.mode', _sv('ocCfgDiscoveryMdnsMode'));
+  setDeepConfigValue(infraJson, 'canvasHost.enabled', el('ocCfgCanvasEnabled')?.checked ? true : null);
+  setDeepConfigValue(infraJson, 'canvasHost.root', _sv('ocCfgCanvasRoot'));
+  setDeepConfigValue(infraJson, 'canvasHost.port', _sv('ocCfgCanvasPort') ? Number(_sv('ocCfgCanvasPort')) : null);
+  setDeepConfigValue(infraJson, 'canvasHost.liveReload', el('ocCfgCanvasLiveReload')?.checked === false ? false : null);
+  setDeepConfigValue(infraJson, 'talk.provider', _sv('ocCfgTalkProvider'));
+  setDeepConfigValue(infraJson, 'talk.voiceId', _sv('ocCfgTalkVoiceId'));
+  setDeepConfigValue(infraJson, 'talk.modelId', _sv('ocCfgTalkModelId'));
+  setDeepConfigValue(infraJson, 'talk.outputFormat', _sv('ocCfgTalkOutputFormat'));
+  setDeepConfigValue(infraJson, 'talk.apiKey', _sv('ocCfgTalkApiKey'));
+  setDeepConfigValue(infraJson, 'talk.interruptOnSpeech', el('ocCfgTalkInterruptOnSpeech')?.checked === false ? false : null);
+  const runtimeJson = cloneJson(readJsonFragmentInput('ocCfgRuntimeJson', 'Web / NodeHost / Secrets') || {});
+  setDeepConfigValue(runtimeJson, 'web.enabled', el('ocCfgWebEnabled')?.checked === false ? false : null);
+  setDeepConfigValue(runtimeJson, 'web.heartbeatSeconds', _sv('ocCfgWebHeartbeatSeconds') ? Number(_sv('ocCfgWebHeartbeatSeconds')) : null);
+  setDeepConfigValue(runtimeJson, 'web.reconnect.initialMs', _sv('ocCfgWebReconnectInitialMs') ? Number(_sv('ocCfgWebReconnectInitialMs')) : null);
+  setDeepConfigValue(runtimeJson, 'web.reconnect.maxMs', _sv('ocCfgWebReconnectMaxMs') ? Number(_sv('ocCfgWebReconnectMaxMs')) : null);
+  setDeepConfigValue(runtimeJson, 'nodeHost.browserProxy.enabled', el('ocCfgNodeHostBrowserProxyEnabled')?.checked ? true : null);
+  setDeepConfigValue(runtimeJson, 'nodeHost.browserProxy.allowProfiles', _csvArr('ocCfgNodeHostAllowProfiles'));
+  setDeepConfigValue(runtimeJson, 'secrets.defaults.env', _sv('ocCfgSecretsDefaultEnv'));
+  setDeepConfigValue(runtimeJson, 'secrets.defaults.file', _sv('ocCfgSecretsDefaultFile'));
+  setDeepConfigValue(runtimeJson, 'secrets.defaults.exec', _sv('ocCfgSecretsDefaultExec'));
+  setDeepConfigValue(runtimeJson, 'secrets.resolution.maxProviderConcurrency', _sv('ocCfgSecretsMaxProviderConcurrency') ? Number(_sv('ocCfgSecretsMaxProviderConcurrency')) : null);
+  const systemJson = readJsonFragmentInput('ocCfgSystemJson', 'Auth / ACP / CLI / Bindings / Broadcast / Audio');
+
+  setDeepConfigValue(base, 'memory', memoryJson);
+  setDeepConfigValue(base, 'skills', skillsJson);
+  setDeepConfigValue(base, 'plugins', pluginsJson);
+  setDeepConfigValue(base, 'browser', browserJson);
+  setDeepConfigValue(base, 'media', mediaJson);
+  setDeepConfigValue(base, 'discovery', infraJson?.discovery || null);
+  setDeepConfigValue(base, 'canvasHost', infraJson?.canvasHost || null);
+  setDeepConfigValue(base, 'talk', infraJson?.talk || null);
+  setDeepConfigValue(base, 'web', runtimeJson?.web || null);
+  setDeepConfigValue(base, 'nodeHost', runtimeJson?.nodeHost || null);
+  setDeepConfigValue(base, 'secrets', runtimeJson?.secrets || null);
+  setDeepConfigValue(base, 'auth', systemJson?.auth || null);
+  setDeepConfigValue(base, 'acp', systemJson?.acp || null);
+  setDeepConfigValue(base, 'cli', systemJson?.cli || null);
+  setDeepConfigValue(base, 'bindings', systemJson?.bindings || null);
+  setDeepConfigValue(base, 'broadcast', systemJson?.broadcast || null);
+  setDeepConfigValue(base, 'audio', systemJson?.audio || null);
+
   return base;
 }
 
@@ -5676,7 +6381,15 @@ async function saveConfigEditor() {
   if (getConfigEditorTool() === 'openclaw') {
     const rawEl = el('ocCfgRawJsonTextarea');
     const rawEdited = rawEl && rawEl.value.trim() && rawEl.value !== (state.openclawState?.configJson || '');
-    const configJson = rawEdited ? rawEl.value : JSON.stringify(buildOpenClawConfigFromForm(), null, 2);
+    let configJson = rawEl?.value || '';
+    if (!rawEdited) {
+      try {
+        configJson = JSON.stringify(buildOpenClawConfigFromForm(), null, 2);
+      } catch (error) {
+        setBusy('saveConfigEditorBtn', false);
+        return flash(error instanceof Error ? error.message : String(error), 'error');
+      }
+    }
     const json = await api('/api/openclaw/config-save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5749,7 +6462,15 @@ async function applyConfigEditor() {
   if (getConfigEditorTool() === 'openclaw') {
     const rawEl = el('ocCfgRawJsonTextarea');
     const rawEdited = rawEl && rawEl.value.trim() && rawEl.value !== (state.openclawState?.configJson || '');
-    const configJson = rawEdited ? rawEl.value : JSON.stringify(buildOpenClawConfigFromForm(), null, 2);
+    let configJson = rawEl?.value || '';
+    if (!rawEdited) {
+      try {
+        configJson = JSON.stringify(buildOpenClawConfigFromForm(), null, 2);
+      } catch (error) {
+        setBusy('applyConfigEditorBtn', false);
+        return flash(error instanceof Error ? error.message : String(error), 'error');
+      }
+    }
     const json = await api('/api/openclaw/config-save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -8090,6 +8811,11 @@ function bindEvents() {
   });
 
   el('editConfigQuickBtn').addEventListener('click', () => setConfigEditorOpen(true));
+  el('ocConfigViewSwitch')?.addEventListener('click', (e) => {
+    const button = e.target.closest('[data-oc-config-view]');
+    if (!button) return;
+    setOpenClawConfigView(button.dataset.ocConfigView || 'full');
+  });
   // ── Sync from environment buttons ──
   el('syncFromCodexBtn')?.addEventListener('click', syncFromCodexEnv);
   el('syncFromClaudeBtn')?.addEventListener('click', syncFromClaudeCodeEnv);
