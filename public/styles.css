@@ -4868,6 +4868,80 @@ select {
   }
 }
 
+/* ═══════════════  Sync‑from‑environment (inline section-title buttons)  ═══════════════ */
+.section-sync-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.sync-env-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(99, 102, 241, 0.14);
+  background: rgba(99, 102, 241, 0.07);
+  color: rgba(141, 192, 255, 0.72);
+  font-size: 0.62rem;
+  font-weight: 560;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+.sync-env-btn:hover {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.28);
+  color: rgba(165, 210, 255, 0.95);
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.14);
+  transform: translateY(-1px);
+}
+
+.sync-env-btn:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.sync-env-btn svg {
+  opacity: 0.65;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+.sync-env-btn:hover svg {
+  opacity: 1;
+}
+
+.sync-env-btn.loading {
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.sync-env-btn.loading svg {
+  animation: spin-refresh 0.8s linear infinite;
+}
+
+/* Light theme */
+[data-theme="light"] .sync-env-btn {
+  background: rgba(99, 102, 241, 0.05);
+  border-color: rgba(99, 102, 241, 0.14);
+  color: #6366f1;
+}
+
+[data-theme="light"] .sync-env-btn:hover {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.24);
+  color: #4f46e5;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.1);
+}
+
+
 .primary-actions {
   margin-top: 18px;
   gap: 8px;

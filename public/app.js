@@ -529,6 +529,10 @@ function setActiveTool(toolId) {
   const ocDashRow = el('ocDashboardQuickRow');
   if (ocDashRow) ocDashRow.classList.add('hide');
 
+  // Hide sync-env buttons (only shown for OpenClaw)
+  const syncActions = el('sectionSyncActions');
+  if (syncActions) syncActions.style.display = 'none';
+
   if (toolId === 'claudecode') {
     if (baseUrlField) baseUrlField.style.display = '';
     if (modelField) modelField.style.display = '';
@@ -602,6 +606,9 @@ function setActiveTool(toolId) {
   if (heroTitle) heroTitle.textContent = 'OpenClaw';
   if (heroSubtitle) heroSubtitle.textContent = '支持 Claude / OpenAI / OpenAI Responses 三种常用协议，先填 URL 和 Token 就能跑。';
   if (sectionTitle) sectionTitle.textContent = 'OpenClaw 模型配置';
+  // Show sync-env buttons for OpenClaw
+  const syncActionsOc = el('sectionSyncActions');
+  if (syncActionsOc) syncActionsOc.style.display = '';
   if (baseUrlLabel) baseUrlLabel.textContent = 'Base URL（可选，留空自动走官方）';
   if (apiKeyLabel) apiKeyLabel.textContent = '模型 API Key';
   if (modelLabel) modelLabel.textContent = '默认模型';
@@ -2777,7 +2784,7 @@ document.addEventListener('click', async (e) => {
 
 
 const PAGE_META = {
-  quick: { eyebrow: 'Quick Setup', title: '一键配置 Codex 工具', subtitle: '输入 URL 和 API Key，剩下交给 EasyAIConfig。' },
+  quick: { eyebrow: 'QUICK SETUP', title: '一键配置', subtitle: '输入 URL 和 API Key，剩下交给 EasyAIConfig。' },
   providers: { eyebrow: 'Providers', title: 'Provider 与备份', subtitle: '集中查看已发现配置、检测状态与历史备份。' },
   tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新、重装或卸载 AI 编程工具。' },
   tasks: { eyebrow: 'Tasks', title: '任务管理', subtitle: '查看当前进行中和历史安装任务。' },
@@ -6268,6 +6275,181 @@ function fillFromProvider(provider) {
     : `已载入 ${provider.name || provider.key}，但未发现 Key`;
 }
 
+/* ── Sync from Codex environment → OpenClaw quick-setup form ── */
+async function syncFromCodexEnv() {
+  const btn = el('syncFromCodexBtn');
+  if (btn) btn.classList.add('loading');
+  try {
+    if (!state.current) {
+      const params = new URLSearchParams({
+        scope: el('scopeSelect')?.value || 'global',
+        projectPath: el('projectPathInput')?.value?.trim() || '',
+        codexHome: el('codexHomeInput')?.value?.trim() || '',
+      });
+      const json = await api(`/api/state?${params.toString()}`);
+      if (json.ok && json.data) state.current = json.data;
+    }
+    const providers = state.current?.providers || [];
+    const active = state.current?.activeProvider || providers[0];
+    if (!active) {
+      flash('未检测到 Codex Provider 配置，请先在 Codex 中完成配置', 'info');
+      return;
+    }
+    const parts = [];
+
+    // Protocol → openai-responses (Codex uses OpenAI Responses API)
+    // Set protocol FIRST so the change handler resets placeholders,
+    // then we overwrite with actual synced values below.
+    const protocolSelect = el('openClawProtocolSelect');
+    if (protocolSelect) {
+      protocolSelect.value = 'openai-responses';
+      protocolSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    // Base URL (after protocol change so URL normalization is correct)
+    if (active.baseUrl) {
+      el('baseUrlInput').value = active.baseUrl;
+      parts.push('Base URL');
+    }
+
+    // API Key (after protocol change so placeholder isn't overwritten)
+    if (active.hasApiKey || active.maskedApiKey) {
+      const apiKeyInput = el('apiKeyInput');
+      if (apiKeyInput) {
+        apiKeyInput.value = '';
+        apiKeyInput.type = 'password';
+        apiKeyInput.placeholder = active.maskedApiKey
+          ? `${active.maskedApiKey} (来自 Codex)`
+          : '已检测到 Key (来自 Codex)';
+      }
+      syncApiKeyToggle();
+      parts.push('API Key');
+    }
+
+    // Model
+    const model = state.current?.summary?.model || '';
+    if (model) {
+      const prefixed = model.includes('/') ? model : `openai/${model}`;
+      const modelSelect = el('modelSelect');
+      if (modelSelect) {
+        let found = false;
+        for (const opt of modelSelect.options) { if (opt.value === prefixed) { found = true; break; } }
+        if (!found) {
+          const opt = document.createElement('option');
+          opt.value = prefixed;
+          opt.textContent = prefixed;
+          modelSelect.appendChild(opt);
+        }
+        modelSelect.value = prefixed;
+      }
+      parts.push(`模型 (${prefixed})`);
+    }
+
+    const detectionMeta = el('detectionMeta');
+    if (parts.length) {
+      flash(`已从 Codex 同步：${parts.join('、')}`, 'success');
+      if (detectionMeta) detectionMeta.textContent = `已同步 Codex — ${active.name || active.key}`;
+    } else {
+      flash('Codex 环境中未找到有效配置', 'info');
+    }
+  } catch (err) {
+    flash('读取 Codex 环境失败：' + (err.message || '未知错误'), 'error');
+  } finally {
+    if (btn) btn.classList.remove('loading');
+  }
+}
+
+/* ── Sync from Claude Code environment → OpenClaw quick-setup form ── */
+async function syncFromClaudeCodeEnv() {
+  const btn = el('syncFromClaudeBtn');
+  if (btn) btn.classList.add('loading');
+  try {
+    const json = await api('/api/claudecode/state');
+    if (!json.ok || !json.data) {
+      flash('未检测到 Claude Code 环境，请确认已安装并配置', 'info');
+      return;
+    }
+    const data = json.data;
+    state.claudeCodeState = data;
+    const ev = data.envVars || {};
+    const parts = [];
+
+    // Protocol → anthropic-messages
+    const protocolSelect = el('openClawProtocolSelect');
+    if (protocolSelect) {
+      protocolSelect.value = 'anthropic-messages';
+      protocolSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    // Base URL
+    if (ev.ANTHROPIC_BASE_URL?.set && ev.ANTHROPIC_BASE_URL.value) {
+      el('baseUrlInput').value = ev.ANTHROPIC_BASE_URL.value;
+      parts.push('Base URL');
+    }
+
+    // API Key
+    const apiKeyInput = el('apiKeyInput');
+    if (apiKeyInput) {
+      if (ev.ANTHROPIC_API_KEY?.set) {
+        apiKeyInput.value = '';
+        apiKeyInput.type = 'password';
+        apiKeyInput.placeholder = `${ev.ANTHROPIC_API_KEY.masked} (来自 Claude Code)`;
+        parts.push('API Key');
+      } else if (ev.ANTHROPIC_AUTH_TOKEN?.set) {
+        apiKeyInput.value = '';
+        apiKeyInput.type = 'password';
+        apiKeyInput.placeholder = `${ev.ANTHROPIC_AUTH_TOKEN.masked} (Auth Token)`;
+        parts.push('Auth Token');
+      } else if (data.maskedApiKey) {
+        apiKeyInput.value = '';
+        apiKeyInput.type = 'password';
+        apiKeyInput.placeholder = `${data.maskedApiKey} (来自 Claude Code)`;
+        parts.push('API Key');
+      }
+    }
+    syncApiKeyToggle();
+
+    // Model
+    const ccModel = data.model;
+    if (ccModel) {
+      const ALIAS_MAP = {
+        'sonnet': 'anthropic/claude-sonnet-4-6',
+        'opus': 'anthropic/claude-opus-4-6',
+        'haiku': 'anthropic/claude-haiku-3-5',
+      };
+      const mapped = ALIAS_MAP[ccModel] || (ccModel.includes('/') ? ccModel : `anthropic/${ccModel}`);
+      const modelSelect = el('modelSelect');
+      if (modelSelect) {
+        let found = false;
+        for (const opt of modelSelect.options) { if (opt.value === mapped) { found = true; break; } }
+        if (!found) {
+          const opt = document.createElement('option');
+          opt.value = mapped;
+          opt.textContent = mapped;
+          modelSelect.appendChild(opt);
+        }
+        modelSelect.value = mapped;
+      }
+      parts.push(`模型 (${mapped})`);
+    }
+
+    const detectionMeta = el('detectionMeta');
+    if (parts.length) {
+      const loginInfo = data.login || {};
+      const source = loginInfo.loggedIn ? (loginInfo.email || loginInfo.orgName || 'Claude Code') : 'Claude Code';
+      flash(`已从 Claude Code 同步：${parts.join('、')}`, 'success');
+      if (detectionMeta) detectionMeta.textContent = `已同步 Claude Code — ${source}`;
+    } else {
+      flash('Claude Code 环境中未找到可同步的配置', 'info');
+    }
+  } catch (err) {
+    flash('读取 Claude Code 环境失败：' + (err.message || '未知错误'), 'error');
+  } finally {
+    if (btn) btn.classList.remove('loading');
+  }
+}
+
+
 async function loadState({ preserveForm = true } = {}) {
   const snapshot = preserveForm ? {
     baseUrl: el('baseUrlInput').value,
@@ -7908,6 +8090,9 @@ function bindEvents() {
   });
 
   el('editConfigQuickBtn').addEventListener('click', () => setConfigEditorOpen(true));
+  // ── Sync from environment buttons ──
+  el('syncFromCodexBtn')?.addEventListener('click', syncFromCodexEnv);
+  el('syncFromClaudeBtn')?.addEventListener('click', syncFromClaudeCodeEnv);
   // Task filter buttons
   el('taskFilters')?.addEventListener('click', (e) => {
     const btn = e.target.closest('.task-filter');

@@ -98,8 +98,8 @@
         <div class="workspace-drag-region" data-tauri-drag-region></div>
         <header class="workspace-topbar" data-tauri-drag-region>
           <div>
-            <div id="pageEyebrow" class="eyebrow">Quick Setup</div>
-            <h1 id="pageTitle">一键配置 Codex 工具</h1>
+            <div id="pageEyebrow" class="eyebrow">QUICK SETUP</div>
+            <h1 id="pageTitle">一键配置</h1>
             <p id="pageSubtitle">输入 URL 和 API Key，剩下交给 EasyAIConfig。</p>
           </div>
           <div class="workspace-actions" id="defaultActions">
@@ -217,6 +217,16 @@
                       <div class="section-title-row">
                         <div class="section-title">连接配置</div>
                         <span class="section-badge success">保持极简</span>
+                        <span class="section-sync-actions" id="sectionSyncActions" style="display:none">
+                          <button id="syncFromCodexBtn" type="button" class="sync-env-btn" title="从 Codex 环境同步 URL、Key、模型">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" opacity="0.5"/><path d="M12 12l9-5M12 12v10M12 12L3 7"/></svg>
+                            <span>Codex</span>
+                          </button>
+                          <button id="syncFromClaudeBtn" type="button" class="sync-env-btn" title="从 Claude Code 环境同步 URL、Key、模型">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity="0.5"/><path d="M8 12h8M12 8v8"/></svg>
+                            <span>Claude</span>
+                          </button>
+                        </span>
                       </div>
                     </div>
                   </div>
