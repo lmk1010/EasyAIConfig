@@ -1,9 +1,14 @@
 import {
   enrichConfigStoreRecipes,
   getConfigStoreSuggestionChips,
+  normalizeStoreText,
   runConfigStoreAssistant,
   searchConfigStoreRecipes,
 } from './config-store-engine.js';
+import {
+  getAllConfigStoreRecipes,
+  getConfigStoreRecipesByTool,
+} from './config-store-recipes.js';
 
 const state = {
   current: null,
@@ -48,6 +53,8 @@ const state = {
   activeTool: 'codex',
   tools: [],
   toolLastPage: {},
+  consoleTool: 'codex',
+  consoleRefreshing: false,
   // Wizard
   wizardSelectedTool: 'codex',
   wizardSelectedMethod: 'npm',
@@ -761,6 +768,7 @@ async function loadClaudeCodeQuickState() {
 
     // Update right-side panel with Claude Code data
     renderCurrentConfig();
+    renderToolConsole();
   } catch { /* silent */ }
 }
 
@@ -854,6 +862,7 @@ async function loadOpenClawQuickState() {
 
     // Update right-side panel with OpenClaw data
     renderCurrentConfig();
+    renderToolConsole();
 
     // Auto-fetch models from URL if we have both URL and key
     if (quick.baseUrl && quick.hasApiKey) {
@@ -2796,11 +2805,433 @@ document.addEventListener('click', async (e) => {
 const PAGE_META = {
   quick: { eyebrow: 'QUICK SETUP', title: '一键配置', subtitle: '输入 URL 和 API Key，剩下交给 EasyAIConfig。' },
   providers: { eyebrow: 'Providers', title: 'Provider 与备份', subtitle: '集中查看已发现配置、检测状态与历史备份。' },
+  console: { eyebrow: 'Console', title: '运行控制台', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的运行状态、异常检测与快速修复入口。' },
   tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新、重装或卸载 AI 编程工具。' },
   tasks: { eyebrow: 'Tasks', title: '任务管理', subtitle: '查看当前进行中和历史安装任务。' },
   about: { eyebrow: 'About', title: '关于 EasyAIConfig', subtitle: '查看桌面版本、更新源与当前运行信息。' },
   configEditor: { eyebrow: 'Current Config', title: '配置编辑', subtitle: '表单编辑 + 原始配置，选择工具后搜索预设方案快速配置。' },
 };
+
+const TOOL_CONSOLE_META = {
+  codex: { label: 'Codex', actionLabel: 'Codex CLI' },
+  claudecode: { label: 'Claude Code', actionLabel: 'Claude Code' },
+  openclaw: { label: 'OpenClaw', actionLabel: 'OpenClaw' },
+};
+
+const OPENCLAW_CHANNEL_LABELS = {
+  telegram: 'Telegram',
+  discord: 'Discord',
+  slack: 'Slack',
+  wechat: '微信公众号',
+  wechatWork: '企业微信',
+  wechatwork: '企业微信',
+  line: 'LINE',
+  whatsapp: 'WhatsApp',
+  matrix: 'Matrix',
+  webhook: 'Webhook',
+  signal: 'Signal',
+  googlechat: 'Google Chat',
+  imessage: 'iMessage',
+  irc: 'IRC',
+  msteams: 'Teams',
+};
+
+function getToolConsoleLabel(tool = 'codex') {
+  return TOOL_CONSOLE_META[tool]?.label || tool;
+}
+
+function renderToolConsoleStat(label, value, sub = '') {
+  return `
+    <div class="tool-console-stat">
+      <div class="tool-console-stat-label">${escapeHtml(label)}</div>
+      <div class="tool-console-stat-value">${escapeHtml(value || '-')}</div>
+      ${sub ? `<div class="tool-console-stat-sub">${sub}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderToolConsoleAction(action = {}) {
+  const attrs = [
+    `data-console-action="${escapeHtml(action.type || '')}"`,
+    action.page ? `data-console-page="${escapeHtml(action.page)}"` : '',
+    action.tool ? `data-console-tool-target="${escapeHtml(action.tool)}"` : '',
+  ].filter(Boolean).join(' ');
+  const klass = action.primary ? 'tiny-btn' : 'secondary tiny-btn';
+  return `<button type="button" class="${klass}" ${attrs}>${escapeHtml(action.label || '操作')}</button>`;
+}
+
+function renderToolConsoleIssue(issue = {}) {
+  return `
+    <div class="tool-console-issue ${escapeHtml(issue.tone || 'warn')}">
+      <div class="tool-console-issue-title">${escapeHtml(issue.title || '提醒')}</div>
+      <div class="tool-console-issue-copy">${escapeHtml(issue.copy || '')}</div>
+      ${issue.action ? `<div class="tool-console-actions">${renderToolConsoleAction(issue.action)}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderToolConsoleIssueList(issues = [], emptyText = '暂未发现明显异常。') {
+  if (!issues.length) return `<div class="tool-console-empty">${escapeHtml(emptyText)}</div>`;
+  return `<div class="tool-console-issues">${issues.map(renderToolConsoleIssue).join('')}</div>`;
+}
+
+function renderToolConsoleRow(label, value, { html = false } = {}) {
+  const renderedValue = html ? value : escapeHtml(value || '-');
+  return `<div class="tool-console-row"><div class="tool-console-row-label">${escapeHtml(label)}</div><div class="tool-console-row-value">${renderedValue}</div></div>`;
+}
+
+function renderToolConsoleCard(title, copy, body) {
+  return `
+    <section class="tool-console-card">
+      <div class="tool-console-card-head">
+        <div class="tool-console-card-title">${escapeHtml(title)}</div>
+        ${copy ? `<div class="tool-console-card-copy">${escapeHtml(copy)}</div>` : ''}
+      </div>
+      ${body}
+    </section>
+  `;
+}
+
+function renderToolConsoleGroupLabel(text) {
+  return `<div class="tool-console-group-label">${escapeHtml(text)}</div>`;
+}
+
+function renderToolConsoleItem({ title = '', meta = '', chips = [], body = '' } = {}) {
+  return `
+    <div class="tool-console-item">
+      <div class="tool-console-item-head">
+        <div>
+          <div class="tool-console-item-title">${escapeHtml(title)}</div>
+          ${meta ? `<div class="tool-console-item-meta">${escapeHtml(meta)}</div>` : ''}
+        </div>
+      </div>
+      ${chips.length ? `<div class="tool-console-badges">${chips.map(renderToolConsoleChip).join('')}</div>` : ''}
+      ${body ? `<div class="tool-console-item-body">${body}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderToolConsoleChip(text) {
+  return `<span class="tool-console-chip">${escapeHtml(text)}</span>`;
+}
+
+function getOpenClawConsoleChannels(config = {}) {
+  return Object.entries(config.channels || {})
+    .filter(([key, value]) => !['defaults', 'modelByChannel'].includes(key) && value && (typeof value !== 'object' || Object.keys(value).length > 0))
+    .map(([key]) => ({ key, label: OPENCLAW_CHANNEL_LABELS[key] || key }));
+}
+
+function getOpenClawConsoleProviders(config = {}) {
+  return Object.entries(config.models?.providers || {}).map(([key, provider]) => ({
+    key,
+    api: provider?.api || '-',
+    baseUrl: provider?.baseUrl || '',
+    modelCount: Array.isArray(provider?.models) ? provider.models.length : 0,
+  }));
+}
+
+function getOpenClawConsoleAgents(config = {}) {
+  const agents = config.agents || {};
+  const defaults = agents.defaults || {};
+  const customAgents = Object.entries(agents)
+    .filter(([key, value]) => key !== 'defaults' && value && typeof value === 'object')
+    .map(([key, value]) => ({
+      key,
+      model: value?.model?.primary || value?.model || '-',
+      workspace: value?.workspace || '默认',
+    }));
+  return {
+    defaults,
+    customAgents,
+  };
+}
+
+function buildCodexConsoleView() {
+  const data = state.current || {};
+  const providers = data.providers || [];
+  const active = data.activeProvider || null;
+  const health = active ? state.providerHealth[active.key] : null;
+  const issues = [];
+
+  if (!data.codexBinary?.installed) {
+    issues.push({ tone: 'error', title: 'Codex 未安装', copy: '还没检测到 codex 命令，先去“工具安装”里安装。', action: { type: 'goto-page', page: 'tools', label: '去安装' } });
+  }
+  if (!data.configExists) {
+    issues.push({ tone: 'warn', title: '还没有 Codex 配置', copy: '当前作用域尚未写入 config.toml，建议先完成一次快速配置。', action: { type: 'goto-quick-tool', tool: 'codex', label: '去快速配置' } });
+  }
+  if (!providers.length) {
+    issues.push({ tone: 'error', title: '没有可用 Provider', copy: '当前配置里还没有保存任何 Provider，Codex 启动后通常无法正常请求模型。', action: { type: 'goto-page', page: 'providers', label: '去看 Provider' } });
+  }
+  if (active && !active.hasApiKey) {
+    issues.push({ tone: 'error', title: '当前 Provider 缺少密钥', copy: `活动 Provider “${active.name}” 已选中，但没有检测到可用 API Key。`, action: { type: 'goto-quick-tool', tool: 'codex', label: '去补 Key' } });
+  }
+  if (health?.checked && !health.ok) {
+    issues.push({ tone: 'warn', title: '当前 Provider 连通性异常', copy: `已对 “${active?.name || '当前 Provider'}” 做过检测，但结果不通过。`, action: { type: 'refresh-console', label: '重新检测' } });
+  }
+
+  const summary = [
+    renderToolConsoleStat('安装状态', data.codexBinary?.installed ? (data.codexBinary.version || '已安装') : '未安装', data.codexBinary?.path ? `<span class="tool-console-code">${escapeHtml(data.codexBinary.path)}</span>` : ''),
+    renderToolConsoleStat('作用域', data.scope === 'project' ? '项目级' : '全局', data.rootPath ? `<span class="tool-console-code">${escapeHtml(data.rootPath)}</span>` : ''),
+    renderToolConsoleStat('活动 Provider', active?.name || '未选择', active?.baseUrl ? `<span class="tool-console-code">${escapeHtml(active.baseUrl)}</span>` : '还没有可用 Provider'),
+    renderToolConsoleStat('健康检测', health?.loading ? '检测中' : health?.checked ? (health.ok ? '通过' : '失败') : '未检测', active ? `模型：${escapeHtml(data.summary?.model || '-')}` : '先保存 Provider 再检测'),
+  ].join('');
+
+  const providerBody = providers.length
+    ? `<div class="tool-console-item-list">${providers.map((provider) => {
+        const itemHealth = state.providerHealth[provider.key];
+        const chips = [
+          provider.isActive ? '当前使用' : '已保存',
+          provider.hasApiKey ? 'Key 就绪' : '缺少 Key',
+          itemHealth?.loading ? '检测中' : itemHealth?.checked ? (itemHealth.ok ? '连通通过' : '连通失败') : '待检测',
+        ];
+        return renderToolConsoleItem({
+          title: provider.name,
+          meta: provider.isActive ? '当前活动 Provider' : '已保存 Provider',
+          chips,
+          body: `<div class="tool-console-list compact">${renderToolConsoleRow('Base URL', `<span class="tool-console-code">${escapeHtml(provider.baseUrl || '-')}</span>`, { html: true })}${renderToolConsoleRow('密钥来源', provider.keySource || provider.resolvedKeyName || '-')}</div>`,
+        });
+      }).join('')}</div>`
+    : '<div class="tool-console-empty">当前没有已保存的 Codex Provider。</div>';
+
+  const main = [
+    renderToolConsoleCard('状态总览', '安装、配置与当前模型', `<div class="tool-console-list">${renderToolConsoleRow('配置文件', `<span class="tool-console-code">${escapeHtml(data.configPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('环境变量文件', `<span class="tool-console-code">${escapeHtml(data.envPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('Sandbox', data.summary?.sandboxMode || '默认')}${renderToolConsoleRow('审批策略', data.summary?.approvalPolicy || '默认')}${renderToolConsoleRow('推理强度', data.summary?.reasoningEffort || '默认')}</div>`),
+    renderToolConsoleCard('Provider 检测', '已保存 Provider 与密钥状态', providerBody),
+    renderToolConsoleCard('异常检测', '会优先指出最影响启动与请求的问题', renderToolConsoleIssueList(issues, 'Codex 侧暂未发现明显阻塞项。')),
+  ].join('');
+
+  const side = [
+    renderToolConsoleCard('推荐操作', '常用排错入口', `<div class="tool-console-actions">${[
+      { type: 'refresh-console', label: '重新检测', primary: true },
+      { type: 'goto-page', page: 'providers', label: '查看 Provider' },
+      { type: 'goto-config-editor-tool', tool: 'codex', label: '打开配置编辑' },
+      { type: 'goto-quick-tool', tool: 'codex', label: '切到快速配置' },
+    ].map(renderToolConsoleAction).join('')}</div>`),
+  ].join('');
+
+  return { summary, main, side };
+}
+
+function buildClaudeConsoleView() {
+  const data = state.claudeCodeState || {};
+  const login = data.login || {};
+  const issues = [];
+
+  if (!data.binary?.installed) issues.push({ tone: 'error', title: 'Claude Code 未安装', copy: '还没检测到 Claude Code 命令，先去“工具安装”完成安装。', action: { type: 'goto-page', page: 'tools', label: '去安装' } });
+  if (!login.loggedIn && !data.hasApiKey) issues.push({ tone: 'error', title: 'Claude Code 尚未认证', copy: '当前既没有登录态，也没有检测到可用 API Key。', action: { type: 'goto-quick-tool', tool: 'claudecode', label: '去快速配置' } });
+  if (!data.model) issues.push({ tone: 'warn', title: '默认模型未显式指定', copy: 'Claude Code 会回退到自身默认模型；如果你想可控，建议手动指定。', action: { type: 'goto-quick-tool', tool: 'claudecode', label: '设置模型' } });
+
+  const summary = [
+    renderToolConsoleStat('安装状态', data.binary?.installed ? (data.binary.version || '已安装') : '未安装', data.binary?.path ? `<span class="tool-console-code">${escapeHtml(data.binary.path)}</span>` : ''),
+    renderToolConsoleStat('认证状态', login.loggedIn ? (login.method === 'oauth' ? 'OAuth 已登录' : 'API Key 已就绪') : '未认证', login.email || login.orgName ? escapeHtml([login.email, login.orgName].filter(Boolean).join(' · ')) : '建议先完成认证'),
+    renderToolConsoleStat('默认模型', data.model || '由 Claude Code 决定', data.alwaysThinkingEnabled ? 'Always thinking 已开启' : '按默认推理策略运行'),
+    renderToolConsoleStat('历史模型', String((data.usedModels || []).length || 0), (data.usedModels || []).length ? `${data.usedModels.length} 个历史模型别名/全名` : '还没有历史模型记录'),
+  ].join('');
+
+  const modelsBody = (data.usedModels || []).length
+    ? `<div class="tool-console-badges">${data.usedModels.map(renderToolConsoleChip).join('')}</div>`
+    : '<div class="tool-console-empty">当前还没有历史模型记录。</div>';
+
+  const main = [
+    renderToolConsoleCard('状态总览', '登录、配置与行为开关', `<div class="tool-console-list">${renderToolConsoleRow('settings.json', `<span class="tool-console-code">${escapeHtml(data.settingsPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('登录方式', login.loggedIn ? (login.method || '已登录') : '未登录')}${renderToolConsoleRow('Always thinking', data.alwaysThinkingEnabled ? '开启' : '关闭')}${renderToolConsoleRow('危险权限提示', data.skipDangerousModePermissionPrompt ? '已跳过' : '保持提示')}</div>`),
+    renderToolConsoleCard('历史模型', '便于回看最近用过什么模型', modelsBody),
+    renderToolConsoleCard('异常检测', '优先指出安装、登录和模型配置问题', renderToolConsoleIssueList(issues, 'Claude Code 侧暂未发现明显阻塞项。')),
+  ].join('');
+
+  const side = [
+    renderToolConsoleCard('推荐操作', '常用入口', `<div class="tool-console-actions">${[
+      { type: 'refresh-console', label: '重新检测', primary: true },
+      { type: 'goto-quick-tool', tool: 'claudecode', label: '切到快速配置' },
+      { type: 'goto-page', page: 'tools', label: '查看安装状态' },
+    ].map(renderToolConsoleAction).join('')}</div>`),
+  ].join('');
+
+  return { summary, main, side };
+}
+
+function buildOpenClawConsoleView() {
+  const data = state.openclawState || {};
+  const quick = deriveOpenClawQuickConfig(data);
+  const config = data.config || {};
+  const channels = getOpenClawConsoleChannels(config);
+  const providers = getOpenClawConsoleProviders(config);
+  const agentInfo = getOpenClawConsoleAgents(config);
+  const defaults = agentInfo.defaults || {};
+  const gatewayBind = String(config.gateway?.bind || 'local');
+  const gatewayAuth = String(config.gateway?.auth?.mode || 'token');
+  const issues = [];
+
+  if (!data.binary?.installed) issues.push({ tone: 'error', title: 'OpenClaw 未安装', copy: '当前还没检测到 openclaw 命令，先去“工具安装”完成安装。', action: { type: 'goto-page', page: 'tools', label: '去安装' } });
+  if (!data.configExists) issues.push({ tone: 'warn', title: 'openclaw.json 尚未生成', copy: '说明还没完成初始化或还没真正保存过配置。', action: { type: 'goto-quick-tool', tool: 'openclaw', label: '去快速配置' } });
+  if (data.needsOnboarding) issues.push({ tone: 'warn', title: 'OpenClaw 仍需初始化', copy: '安装后还没完成 onboard，或 Gateway 尚未真正启动。', action: { type: 'launch-openclaw', label: '启动并初始化' } });
+  if (!data.gatewayReachable) issues.push({ tone: 'warn', title: 'Dashboard 未在线', copy: '当前没探测到本地 Gateway，很多渠道回调和控制面板操作都会失效。', action: { type: 'launch-openclaw', label: '启动 Gateway' } });
+  if (!providers.length) issues.push({ tone: 'error', title: '没有配置模型 Provider', copy: 'OpenClaw 已安装，但 `models.providers` 里还没有可用模型源。', action: { type: 'goto-config-editor-tool', tool: 'openclaw', label: '去配置 Provider' } });
+  if (!quick.model) issues.push({ tone: 'error', title: '默认 Agent 模型未设置', copy: '当前没有检测到 `agents.defaults.model.primary`，聊天入口通常无法正常出结果。', action: { type: 'goto-config-editor-tool', tool: 'openclaw', label: '去设置模型' } });
+  if (providers.length && !quick.hasApiKey) issues.push({ tone: 'error', title: '默认 Provider 缺少 API Key', copy: `已检测到默认模型 ${quick.model || '-'}，但没有找到它对应的 API Key。`, action: { type: 'goto-quick-tool', tool: 'openclaw', label: '去补 Key' } });
+  if ((gatewayBind === 'lan' || gatewayBind === '0.0.0.0') && gatewayAuth === 'none') issues.push({ tone: 'error', title: '网络已暴露但未启用认证', copy: '当前 Gateway 允许局域网/公网访问，但认证模式为 none，风险较高。', action: { type: 'goto-config-editor-tool', tool: 'openclaw', label: '去修安全配置' } });
+  if (channels.some((item) => ['wechat', 'wechatWork', 'wechatwork', 'webhook'].includes(item.key)) && !config.gateway?.tls && !config.gateway?.trustProxy) issues.push({ tone: 'warn', title: '公网回调场景建议补 HTTPS / 反代', copy: '你已经在配公众号、企微或 Webhook，一般需要公网 HTTPS 或反向代理才能稳定接入。', action: { type: 'goto-config-editor-tool', tool: 'openclaw', label: '去配网关' } });
+
+  const summary = [
+    renderToolConsoleStat('安装状态', data.binary?.installed ? (data.binary.version || '已安装') : '未安装', data.binary?.path ? `<span class="tool-console-code">${escapeHtml(data.binary.path)}</span>` : ''),
+    renderToolConsoleStat('Dashboard', data.gatewayReachable ? '在线' : '未启动', data.gatewayUrl ? `<span class="tool-console-code">${escapeHtml(data.gatewayUrl)}</span>` : '等待本地 Gateway 启动'),
+    renderToolConsoleStat('默认 Agent', quick.model || defaults.model?.primary || '未设置', defaults.thinkingDefault ? `thinking=${escapeHtml(defaults.thinkingDefault)}` : '建议先固定默认模型'),
+    renderToolConsoleStat('接入渠道', String(channels.length), channels.length ? channels.map((item) => item.label).slice(0, 3).join(' · ') : '尚未接入任何聊天渠道'),
+  ].join('');
+
+  const customAgentsBody = agentInfo.customAgents.length
+    ? `<div class="tool-console-item-list">${agentInfo.customAgents.map((agent) => renderToolConsoleItem({
+        title: agent.key,
+        meta: '自定义 Agent',
+        body: `<div class="tool-console-list compact">${renderToolConsoleRow('模型', agent.model)}${renderToolConsoleRow('Workspace', agent.workspace)}</div>`,
+      })).join('')}</div>`
+    : '<div class="tool-console-empty">当前只有默认 Agent，没有单独定义的命名 Agent。</div>';
+
+  const providerBody = providers.length
+    ? `<div class="tool-console-item-list">${providers.map((provider) => renderToolConsoleItem({
+        title: provider.key,
+        meta: provider.api,
+        body: `<div class="tool-console-list compact">${renderToolConsoleRow('Base URL', provider.baseUrl ? `<span class="tool-console-code">${escapeHtml(provider.baseUrl)}</span>` : '-', { html: Boolean(provider.baseUrl) })}${renderToolConsoleRow('模型数量', provider.modelCount ? String(provider.modelCount) : '未显式配置')}</div>`,
+      })).join('')}</div>`
+    : '<div class="tool-console-empty">当前还没有配置任何 OpenClaw Provider。</div>';
+
+  const channelBody = channels.length
+    ? `<div class="tool-console-badges">${channels.map((item) => renderToolConsoleChip(item.label)).join('')}</div>`
+    : '<div class="tool-console-empty">当前还没有接入聊天渠道。</div>';
+
+  const main = [
+    renderToolConsoleCard('运行状态', 'Gateway、配置与认证风险', `<div class="tool-console-list">${renderToolConsoleRow('配置文件', `<span class="tool-console-code">${escapeHtml(data.configPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('Gateway', data.gatewayReachable ? '在线' : '未就绪')}${renderToolConsoleRow('Bind', gatewayBind)}${renderToolConsoleRow('Auth', gatewayAuth)}${renderToolConsoleRow('Onboarding', data.needsOnboarding ? '待完成' : '已完成')}</div>`),
+    renderToolConsoleCard('Agent 总览', '默认 Agent + 自定义 Agent', `<div class="tool-console-list">${renderToolConsoleRow('默认模型', quick.model || defaults.model?.primary || '-')}${renderToolConsoleRow('Thinking', defaults.thinkingDefault || '默认')}${renderToolConsoleRow('并发', defaults.maxConcurrent ? String(defaults.maxConcurrent) : '默认')}${renderToolConsoleRow('Heartbeat', defaults.heartbeat?.every || '关闭')}</div>${renderToolConsoleGroupLabel('自定义 Agent')}${customAgentsBody}`),
+    renderToolConsoleCard('异常检测', '优先指出启动、模型、认证和暴露风险', renderToolConsoleIssueList(issues, 'OpenClaw 侧暂未发现明显阻塞项。')),
+  ].join('');
+
+  const side = [
+    renderToolConsoleCard('渠道与 Provider', '看当前这台 OpenClaw 正在接什么、用什么模型源', `${channelBody}${renderToolConsoleGroupLabel('Provider')}${providerBody}`),
+    renderToolConsoleCard('快速操作', '检测、启动、停止、跳转排错入口', `<div class="tool-console-actions">${[
+      { type: 'refresh-console', label: '重新检测', primary: true },
+      data.gatewayReachable ? { type: 'open-openclaw-dashboard', label: '打开 Dashboard' } : { type: 'launch-openclaw', label: '启动 OpenClaw' },
+      { type: 'stop-openclaw', label: '停止 Gateway' },
+      { type: 'goto-config-editor-tool', tool: 'openclaw', label: '打开配置编辑' },
+      { type: 'goto-quick-tool', tool: 'openclaw', label: '切到快速配置' },
+    ].map(renderToolConsoleAction).join('')}</div>`),
+  ].join('');
+
+  return { summary, main, side };
+}
+
+function renderToolConsole() {
+  const summary = el('toolConsoleSummary');
+  const main = el('toolConsoleMain');
+  const side = el('toolConsoleSide');
+  if (!summary || !main || !side) return;
+
+  const tool = state.consoleTool || 'codex';
+  document.querySelectorAll('[data-console-tool]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.consoleTool === tool);
+  });
+
+  const view = tool === 'openclaw'
+    ? buildOpenClawConsoleView()
+    : tool === 'claudecode'
+      ? buildClaudeConsoleView()
+      : buildCodexConsoleView();
+
+  summary.innerHTML = view.summary;
+  main.innerHTML = view.main;
+  side.innerHTML = view.side;
+}
+
+async function stopOpenClawGateway({ manual = true } = {}) {
+  const result = await api('/api/openclaw/stop', { method: 'POST' });
+  if (!result.ok) {
+    if (manual) flash(result.error || '停止 OpenClaw 失败', 'error');
+    return result;
+  }
+  await sleep(700);
+  await loadOpenClawQuickState();
+  if (manual) flash('OpenClaw Gateway 已停止', 'success');
+  return result;
+}
+
+async function refreshToolConsoleData({ manual = false } = {}) {
+  if (state.consoleRefreshing) return;
+  state.consoleRefreshing = true;
+  const btn = el('toolConsoleRefreshBtn');
+  const original = btn?.textContent || '↻ 刷新检测';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '检测中...';
+  }
+  try {
+    await loadState({ preserveForm: true });
+    await loadClaudeCodeQuickState();
+    await loadOpenClawQuickState();
+    renderToolConsole();
+    if (manual) flash(`${getToolConsoleLabel(state.consoleTool)} 控制台已刷新`, 'success');
+  } finally {
+    state.consoleRefreshing = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+}
+
+async function handleToolConsoleAction(button) {
+  const action = button?.dataset.consoleAction;
+  const targetTool = button?.dataset.consoleToolTarget || '';
+  if (!action) return;
+
+  if (action === 'refresh-console') {
+    await refreshToolConsoleData({ manual: true });
+    return;
+  }
+
+  if (action === 'goto-page') {
+    setPage(button.dataset.consolePage || 'quick');
+    return;
+  }
+
+  if (action === 'goto-quick-tool') {
+    if (targetTool) setActiveTool(targetTool);
+    setPage('quick');
+    return;
+  }
+
+  if (action === 'goto-config-editor-tool') {
+    if (targetTool === 'openclaw' && !state.openclawState) {
+      await loadOpenClawQuickState();
+    }
+    if (targetTool !== 'openclaw' && !state.current) {
+      await loadState({ preserveForm: true });
+    }
+    state.configEditorTool = targetTool === 'openclaw' ? 'openclaw' : 'codex';
+    syncConfigEditorForTool();
+    populateConfigEditor();
+    if (window.refreshCustomSelects) window.refreshCustomSelects();
+    setPage('configEditor');
+    return;
+  }
+
+  if (action === 'launch-openclaw') {
+    await launchOpenClawOnly();
+    renderToolConsole();
+    return;
+  }
+
+  if (action === 'open-openclaw-dashboard') {
+    const data = state.openclawState || await fetchOpenClawStateData();
+    if (!data.gatewayReachable) {
+      flash('Dashboard 还没准备好，请先启动 OpenClaw', 'info');
+      return;
+    }
+    openOpenClawDashboard(data.gatewayUrl || `http://127.0.0.1:${data.gatewayPort || 18789}/`);
+    return;
+  }
+
+  if (action === 'stop-openclaw') {
+    await stopOpenClawGateway({ manual: true });
+    renderToolConsole();
+  }
+}
 
 function parseApiRequest(url, options = {}) {
   const target = new URL(url, window.location.origin);
@@ -4046,6 +4477,13 @@ function setPage(page = 'quick') {
 
   // Render tasks page on navigate
   if (page === 'tasks') renderTasksPage();
+  if (page === 'console') {
+    renderToolConsole();
+    if (!state.consoleRefreshing) void refreshToolConsoleData();
+  }
+  if (page === 'configEditor') {
+    applyConfigEditorSearch();
+  }
 }
 
 function populateAboutPanel() {
@@ -4301,6 +4739,7 @@ function populateConfigEditor() {
 
   if (getConfigEditorTool() === 'openclaw') {
     populateOpenClawConfigEditor();
+    applyConfigEditorSearch();
     return;
   }
 
@@ -4330,6 +4769,118 @@ function populateConfigEditor() {
   el('cfgRawTomlTextarea').value = state.current?.configToml || '';
   refreshConfigNumberFields();
   syncShortcutActiveState();
+  applyConfigEditorSearch();
+}
+
+function getConfigEditorFieldSearchText(node) {
+  const parts = [];
+  const title = node.querySelector('span')?.textContent || node.textContent || '';
+  parts.push(title);
+  node.querySelectorAll('input, textarea, select').forEach((control) => {
+    parts.push(control.id || '', control.placeholder || '');
+  });
+  return normalizeStoreText(parts.join(' '));
+}
+
+function rememberSearchOpenState(details) {
+  if (details && details.dataset.searchPrevOpen === undefined) {
+    details.dataset.searchPrevOpen = details.open ? '1' : '0';
+  }
+}
+
+function restoreSearchOpenState(details) {
+  if (details && details.dataset.searchPrevOpen !== undefined) {
+    details.open = details.dataset.searchPrevOpen === '1';
+    delete details.dataset.searchPrevOpen;
+  }
+}
+
+function resetConfigEditorSearch(root) {
+  if (!root) return;
+  root.querySelectorAll('label.field, label.toggle-item').forEach((node) => {
+    node.style.display = '';
+  });
+  root.querySelectorAll('details.oc-panel, details.oc-subpanel').forEach((node) => {
+    node.style.display = '';
+    restoreSearchOpenState(node);
+  });
+}
+
+function filterCodexConfigEditor(root, query) {
+  const items = [...root.querySelectorAll('label.field, label.toggle-item')];
+  let matched = 0;
+  items.forEach((node) => {
+    const visible = !query || getConfigEditorFieldSearchText(node).includes(query);
+    node.style.display = visible ? '' : 'none';
+    if (visible) matched += 1;
+  });
+  return matched;
+}
+
+function filterOpenClawConfigEditor(root, query) {
+  const panels = [...root.querySelectorAll('details.oc-panel')];
+  let matched = 0;
+
+  panels.forEach((panel) => {
+    const panelHeadText = normalizeStoreText(panel.querySelector('.oc-panel-head')?.textContent || '');
+    const panelMatch = panelHeadText.includes(query);
+    const subpanels = [...panel.querySelectorAll(':scope > .oc-panel-body > details.oc-subpanel')];
+
+    if (subpanels.length) {
+      let anySubpanelVisible = false;
+      subpanels.forEach((subpanel) => {
+        const text = normalizeStoreText(subpanel.textContent || '');
+        const visible = panelMatch || text.includes(query);
+        subpanel.style.display = visible ? 'block' : 'none';
+        if (visible) {
+          anySubpanelVisible = true;
+          matched += 1;
+          rememberSearchOpenState(subpanel);
+          subpanel.open = true;
+        } else {
+          rememberSearchOpenState(subpanel);
+        }
+      });
+
+      const visible = panelMatch || anySubpanelVisible;
+      panel.style.display = visible ? 'block' : 'none';
+      rememberSearchOpenState(panel);
+      panel.open = visible;
+      if (visible && panelMatch && !anySubpanelVisible) matched += 1;
+      return;
+    }
+
+    const text = normalizeStoreText(panel.textContent || '');
+    const visible = text.includes(query);
+    panel.style.display = visible ? 'block' : 'none';
+    rememberSearchOpenState(panel);
+    panel.open = visible;
+    if (visible) matched += 1;
+  });
+
+  return matched;
+}
+
+function applyConfigEditorSearch() {
+  const input = el('configEditorSearchInput');
+  const clearBtn = el('configEditorSearchClearBtn');
+  const empty = el('configEditorSearchEmpty');
+  const root = document.querySelector(`[data-tool-editor="${getConfigEditorTool()}"]`);
+  const query = normalizeStoreText(input?.value || '');
+  if (!root) return;
+
+  if (!query) {
+    resetConfigEditorSearch(root);
+    if (clearBtn) clearBtn.classList.add('hide');
+    if (empty) empty.classList.add('hide');
+    return;
+  }
+
+  if (clearBtn) clearBtn.classList.remove('hide');
+  const matched = getConfigEditorTool() === 'openclaw'
+    ? filterOpenClawConfigEditor(root, query)
+    : filterCodexConfigEditor(root, query);
+  if (empty) empty.classList.toggle('hide', matched > 0);
 }
 
 /** Show/hide the correct editor panel and sidebar based on active tool. */
@@ -4358,6 +4909,13 @@ function syncConfigEditorForTool() {
   }
   const searchResults = el('ocRecipeResults');
   if (searchResults) searchResults.classList.add('hide');
+
+  const fieldSearchInput = el('configEditorSearchInput');
+  if (fieldSearchInput) {
+    fieldSearchInput.placeholder = tool === 'openclaw'
+      ? '搜索配置项…如 Telegram、网关、日志、Agent'
+      : '搜索配置项…如 沙箱、审批、推理、SQLite';
+  }
 }
 
 /** Populate the OpenClaw config editor form from state.openclawState. */
@@ -4820,333 +5378,8 @@ function updateOcPanelBadges(cfg) {
   const extCustom = cfg.memory || cfg.skills || cfg.plugins || cfg.browser || cfg.web || cfg.secrets || cfg.nodeHost || cfg.discovery || cfg.canvasHost || cfg.talk || cfg.auth || cfg.acp || cfg.cli || cfg.bindings || cfg.broadcast || cfg.audio;
   _b('ocBadgeExtensions', extCustom ? '已配置' : '未配置', Boolean(extCustom));
 }
-
-// ════════════════════════════════════════════════════════════════
-// Config Recipes — preset configurations for quick setup
-// ════════════════════════════════════════════════════════════════
-
-const CODEX_CONFIG_RECIPES = [
-  // ── Model Presets ──
-  {
-    id: 'cx-model-o3', name: '使用 o3 模型', cat: '模型', desc: '切换默认模型为 o3', kw: 'o3 model 模型 openai', tool: 'codex',
-    apply: () => ({ model: 'o3' })
-  },
-  {
-    id: 'cx-model-o4-mini', name: '使用 o4-mini 模型', cat: '模型', desc: '切换到更快速的 o4-mini 模型', kw: 'o4-mini model 模型 openai fast 快速', tool: 'codex',
-    apply: () => ({ model: 'o4-mini' })
-  },
-  {
-    id: 'cx-model-custom', name: '自定义模型', cat: '模型', desc: '设置自定义模型名称', kw: 'model 模型 自定义 custom', tool: 'codex',
-    fields: [{ key: 'model', label: '模型名称', placeholder: '如: gpt-5.1, deepseek-r3' }],
-    apply: (v) => ({ model: v.model })
-  },
-  // ── Reasoning ──
-  {
-    id: 'cx-reasoning-high', name: '高推理模式', cat: '推理', desc: '将推理强度设为 high，适合复杂任务', kw: '推理 reasoning high 高 复杂', tool: 'codex',
-    apply: () => ({ model_reasoning_effort: 'high', plan_mode_reasoning_effort: 'high' })
-  },
-  {
-    id: 'cx-reasoning-minimal', name: '快速推理模式', cat: '推理', desc: '最小推理适合简单任务，响应更快', kw: '推理 reasoning minimal 快速 最小 fast', tool: 'codex',
-    apply: () => ({ model_reasoning_effort: 'minimal', plan_mode_reasoning_effort: 'minimal' })
-  },
-  {
-    id: 'cx-reasoning-xhigh', name: '极致推理模式', cat: '推理', desc: '最高推理强度，适合最复杂的编程任务', kw: '推理 reasoning xhigh 极致 最高 最强', tool: 'codex',
-    apply: () => ({ model_reasoning_effort: 'xhigh', plan_mode_reasoning_effort: 'xhigh' })
-  },
-  // ── Context Window ──
-  {
-    id: 'cx-ctx-1m', name: '1M Token 上下文', cat: '上下文', desc: '将上下文窗口扩展到 1048576 tokens', kw: '上下文 context window 1m token 大 扩展', tool: 'codex',
-    apply: () => ({ model_context_window: 1048576, model_auto_compact_token_limit: Math.round(1048576 * 0.9) })
-  },
-  {
-    id: 'cx-ctx-512k', name: '512K Token 上下文', cat: '上下文', desc: '中等大小的上下文窗口', kw: '上下文 context window 512k token', tool: 'codex',
-    apply: () => ({ model_context_window: 512000, model_auto_compact_token_limit: Math.round(512000 * 0.9) })
-  },
-  {
-    id: 'cx-ctx-default', name: '默认上下文', cat: '上下文', desc: '恢复默认 272K 上下文窗口', kw: '上下文 context window 默认 default', tool: 'codex',
-    apply: () => ({ model_context_window: 272000, model_auto_compact_token_limit: Math.round(272000 * 0.9) })
-  },
-  // ── Sandbox / Approval ──
-  {
-    id: 'cx-sandbox-full', name: '完全访问模式', cat: '安全', desc: '关闭沙箱限制，允许完全文件系统访问', kw: '沙箱 sandbox full access 完全 访问 danger', tool: 'codex',
-    apply: () => ({ sandbox_mode: 'danger-full-access', approval_policy: 'on-failure' })
-  },
-  {
-    id: 'cx-sandbox-safe', name: '安全模式', cat: '安全', desc: '只读沙箱 + suggest 审批策略', kw: '安全 sandbox safe 只读 readonly suggest', tool: 'codex',
-    apply: () => ({ sandbox_mode: 'read-only', approval_policy: 'suggest' })
-  },
-  {
-    id: 'cx-workspace-write', name: '工作区写入模式', cat: '安全', desc: '允许向工作区写入文件', kw: '工作区 workspace write 写入', tool: 'codex',
-    apply: () => ({ sandbox_mode: 'workspace-write' })
-  },
-  // ── Service ──
-  {
-    id: 'cx-service-fast', name: '快速服务层', cat: '服务', desc: '使用 Fast 服务层优先响应速度', kw: '服务 service fast 快速', tool: 'codex',
-    apply: () => ({ service_tier: 'fast' })
-  },
-  {
-    id: 'cx-service-flex', name: 'Flex 服务层', cat: '服务', desc: '使用 Flex 服务层平衡性价比', kw: '服务 service flex 灵活 便宜', tool: 'codex',
-    apply: () => ({ service_tier: 'flex' })
-  },
-  // ── Personality ──
-  {
-    id: 'cx-persona-friendly', name: '友好助手风格', cat: '个性', desc: '设置为友好风格', kw: '个性 personality friendly 友好', tool: 'codex',
-    apply: () => ({ personality: 'friendly' })
-  },
-  {
-    id: 'cx-persona-pragmatic', name: '务实风格', cat: '个性', desc: '设置为务实风格，简洁高效', kw: '个性 personality pragmatic 务实 简洁', tool: 'codex',
-    apply: () => ({ personality: 'pragmatic' })
-  },
-  // ── Workflow ──
-  {
-    id: 'cx-max-perf', name: '最大性能模式', cat: '工作流', desc: 'high 推理 + 1M Token + Fast 服务', kw: '最大 max performance 性能 高性能', tool: 'codex',
-    apply: () => ({ model_reasoning_effort: 'high', plan_mode_reasoning_effort: 'high', model_context_window: 1048576, model_auto_compact_token_limit: Math.round(1048576 * 0.9), service_tier: 'fast' })
-  },
-  {
-    id: 'cx-minimal', name: '极简模式', cat: '工作流', desc: '最小推理 + 默认上下文 + 紧凑提示', kw: '极简 minimal 精简 快速', tool: 'codex',
-    apply: () => ({ model_reasoning_effort: 'minimal', plan_mode_reasoning_effort: 'minimal', compact_prompt: true })
-  },
-  {
-    id: 'cx-debug-mode', name: '调试模式', cat: '工作流', desc: '显示原始推理过程，方便调试', kw: '调试 debug 推理 原始 reasoning raw', tool: 'codex',
-    apply: () => ({ show_raw_agent_reasoning: true, hide_agent_reasoning: false })
-  },
-  {
-    id: 'cx-reset-defaults', name: '恢复默认', cat: '工作流', desc: '将所有设置重置为 Codex 默认值', kw: '默认 reset 恢复 重置 default', tool: 'codex',
-    apply: () => ({ model_reasoning_effort: null, plan_mode_reasoning_effort: null, model_context_window: null, model_auto_compact_token_limit: null, service_tier: null, sandbox_mode: null, approval_policy: null, personality: null, compact_prompt: false })
-  },
-];
-
-const OC_CONFIG_RECIPES = [
-  // ── Channels ──
-  {
-    id: 'tg-basic', name: '接入 Telegram Bot', cat: '渠道', desc: '配置 Telegram Bot Token，开启私聊 + 群组', kw: 'telegram tg bot 电报 机器人 聊天 channel 渠道 接入',
-    fields: [{ key: 'token', label: 'Bot Token', placeholder: '123456:ABCDEF...', type: 'password' }],
-    apply: (v) => ({ channels: { telegram: { botToken: v.token, dmPolicy: 'open', groupPolicy: 'open' } } }),
-    panel: 'ocCfgTelegramToken'
-  },
-  {
-    id: 'tg-private', name: 'Telegram 仅私聊', cat: '渠道', desc: '仅允许私聊，关闭群组响应', kw: 'telegram tg 私聊 private dm 电报 channel 渠道',
-    fields: [{ key: 'token', label: 'Bot Token', placeholder: '123456:ABCDEF...', type: 'password' }],
-    apply: (v) => ({ channels: { telegram: { botToken: v.token, dmPolicy: 'open', groupPolicy: 'disabled' } } }),
-    panel: 'ocCfgTelegramToken'
-  },
-  {
-    id: 'tg-whitelist', name: 'Telegram 白名单', cat: '渠道', desc: '仅允许指定用户 ID 发消息', kw: 'telegram tg 白名单 allowlist whitelist 电报 安全 channel 渠道',
-    fields: [{ key: 'token', label: 'Bot Token', placeholder: '123456:ABCDEF...', type: 'password' }, { key: 'users', label: '允许的用户 ID（逗号分隔）', placeholder: '12345, 67890' }],
-    apply: (v) => ({ channels: { telegram: { botToken: v.token, dmPolicy: 'allowlist', allowFrom: v.users.split(',').map(s => s.trim()).filter(Boolean) } } }),
-    panel: 'ocCfgTelegramToken'
-  },
-  {
-    id: 'dc-basic', name: '接入 Discord Bot', cat: '渠道', desc: '配置 Discord Bot Token 接入服务器', kw: 'discord dc bot 机器人 聊天 channel 渠道 接入 服务器',
-    fields: [{ key: 'token', label: 'Bot Token', placeholder: 'Discord Bot Token', type: 'password' }],
-    apply: (v) => ({ channels: { discord: { token: v.token } } }),
-    panel: 'ocCfgDiscordToken'
-  },
-  {
-    id: 'slack-basic', name: '接入 Slack Bot', cat: '渠道', desc: '配置 Slack Bot + App Token 接入工作空间', kw: 'slack 工作空间 workspace bot channel 渠道 接入 企业',
-    fields: [{ key: 'bot', label: 'Bot Token', placeholder: 'xoxb-...', type: 'password' }, { key: 'app', label: 'App Token', placeholder: 'xapp-...', type: 'password' }],
-    apply: (v) => ({ channels: { slack: { botToken: v.bot, appToken: v.app } } }),
-    panel: 'ocCfgSlackBotToken'
-  },
-  {
-    id: 'wechat-mp', name: '接入微信公众号', cat: '渠道', desc: '配置微信公众号 AppID 和 Token 接入', kw: '微信 wechat 公众号 mp 聊天 channel 渠道 接入 weixin',
-    fields: [{ key: 'appId', label: 'AppID', placeholder: 'wx...' }, { key: 'token', label: '验证 Token', placeholder: '公众号后台设置的 Token' }, { key: 'aesKey', label: 'EncodingAESKey', placeholder: '消息加解密密钥', optional: true }],
-    apply: (v) => ({ channels: { wechat: { appId: v.appId, token: v.token, encodingAESKey: v.aesKey || undefined } } })
-  },
-  {
-    id: 'wechat-work', name: '接入企业微信', cat: '渠道', desc: '配置企业微信应用接入', kw: '企业微信 wechat work wecom 公司 channel 渠道 接入 weixin',
-    fields: [{ key: 'corpId', label: 'CorpID', placeholder: '企业 ID' }, { key: 'agentId', label: 'AgentID', placeholder: '应用 ID' }, { key: 'secret', label: 'Secret', placeholder: '应用密钥', type: 'password' }],
-    apply: (v) => ({ channels: { wechatWork: { corpId: v.corpId, agentId: Number(v.agentId), secret: v.secret } } })
-  },
-  {
-    id: 'line-basic', name: '接入 LINE Bot', cat: '渠道', desc: '配置 LINE Messaging API 接入', kw: 'line bot 聊天 channel 渠道 接入 日本 messaging',
-    fields: [{ key: 'secret', label: 'Channel Secret', placeholder: 'Channel Secret', type: 'password' }, { key: 'token', label: 'Access Token', placeholder: 'Long-lived access token', type: 'password' }],
-    apply: (v) => ({ channels: { line: { channelSecret: v.secret, accessToken: v.token } } })
-  },
-  {
-    id: 'whatsapp-basic', name: '接入 WhatsApp', cat: '渠道', desc: '通过 WhatsApp Business API 接入', kw: 'whatsapp wa 聊天 channel 渠道 接入 facebook meta business',
-    fields: [{ key: 'token', label: 'Access Token', placeholder: 'WhatsApp Business API Token', type: 'password' }, { key: 'phoneId', label: 'Phone Number ID', placeholder: '电话号码 ID' }],
-    apply: (v) => ({ channels: { whatsapp: { accessToken: v.token, phoneNumberId: v.phoneId } } })
-  },
-  {
-    id: 'matrix-basic', name: '接入 Matrix', cat: '渠道', desc: '连接 Matrix/Element 聊天网络', kw: 'matrix element 聊天 channel 渠道 接入 开源 federated',
-    fields: [{ key: 'homeserver', label: 'Homeserver URL', placeholder: 'https://matrix.org' }, { key: 'token', label: 'Access Token', placeholder: 'syt_...', type: 'password' }],
-    apply: (v) => ({ channels: { matrix: { homeserver: v.homeserver, accessToken: v.token } } })
-  },
-  {
-    id: 'webhook-channel', name: '自定义 Webhook 渠道', cat: '渠道', desc: '通过 HTTP Webhook 接收消息', kw: 'webhook http 自定义 custom channel 渠道 接入 api 回调',
-    fields: [{ key: 'path', label: 'Webhook 路径', placeholder: '/webhook/my-channel' }],
-    apply: (v) => ({ channels: { webhook: { enabled: true, path: v.path || '/webhook' } } })
-  },
-  // ── Provider ──
-  {
-    id: 'openai-proxy', name: 'OpenAI 代理 / 中转', cat: 'Provider', desc: '设置 OpenAI 兼容 API 代理地址', kw: 'openai proxy 代理 中转 api url base 转发 one-api 模型 provider',
-    fields: [{ key: 'url', label: '代理 Base URL', placeholder: 'https://your-proxy.com/v1' }, { key: 'key', label: 'API Key', placeholder: 'sk-...', type: 'password' }],
-    apply: (v) => ({ models: { mode: 'merge', providers: { openai: { baseUrl: v.url, api: 'openai-completions', apiKey: `$OPENAI_API_KEY` } } }, env: { OPENAI_API_KEY: v.key } }),
-    panel: 'ocCfgProviderBaseUrl'
-  },
-  {
-    id: 'claude-direct', name: 'Claude / Anthropic 直连', cat: 'Provider', desc: '直接使用 Anthropic API', kw: 'claude anthropic 直连 api 模型 provider sonnet opus haiku',
-    fields: [{ key: 'key', label: 'Anthropic API Key', placeholder: 'sk-ant-...', type: 'password' }],
-    apply: (v) => ({ models: { mode: 'merge', providers: { anthropic: { baseUrl: 'https://api.anthropic.com', api: 'anthropic-messages', apiKey: '$ANTHROPIC_API_KEY' } } }, env: { ANTHROPIC_API_KEY: v.key } }),
-    panel: 'ocCfgProviderApiKey'
-  },
-  {
-    id: 'gemini-direct', name: 'Google Gemini 直连', cat: 'Provider', desc: '使用 Google AI Studio / Gemini API', kw: 'gemini google ai studio 谷歌 模型 provider',
-    fields: [{ key: 'key', label: 'Gemini API Key', placeholder: 'AIza...', type: 'password' }],
-    apply: (v) => ({ models: { mode: 'merge', providers: { google: { baseUrl: 'https://generativelanguage.googleapis.com', api: 'google-gemini', apiKey: '$GOOGLE_API_KEY' } } }, env: { GOOGLE_API_KEY: v.key } })
-  },
-  {
-    id: 'deepseek-direct', name: 'DeepSeek 直连', cat: 'Provider', desc: '使用 DeepSeek API（V3/R1）', kw: 'deepseek 深度求索 模型 provider v3 r1 coder chat',
-    fields: [{ key: 'key', label: 'DeepSeek API Key', placeholder: 'sk-...', type: 'password' }],
-    apply: (v) => ({ models: { mode: 'merge', providers: { deepseek: { baseUrl: 'https://api.deepseek.com', api: 'openai-completions', apiKey: '$DEEPSEEK_API_KEY' } } }, env: { DEEPSEEK_API_KEY: v.key } })
-  },
-  {
-    id: 'ollama-local', name: 'Ollama 本地模型', cat: 'Provider', desc: '连接本地 Ollama 服务运行开源模型', kw: 'ollama 本地 local 开源 llama qwen mistral 模型 provider 免费',
-    fields: [{ key: 'url', label: 'Ollama URL', placeholder: 'http://localhost:11434' }],
-    apply: (v) => ({ models: { mode: 'merge', providers: { ollama: { baseUrl: v.url || 'http://localhost:11434', api: 'openai-completions' } } } })
-  },
-  {
-    id: 'azure-openai', name: 'Azure OpenAI', cat: 'Provider', desc: '通过 Azure 部署的 OpenAI 模型', kw: 'azure openai 微软 microsoft 云 模型 provider 企业',
-    fields: [{ key: 'url', label: 'Azure Endpoint', placeholder: 'https://xxx.openai.azure.com' }, { key: 'key', label: 'API Key', placeholder: 'Azure API Key', type: 'password' }, { key: 'deploy', label: '部署名称', placeholder: 'gpt-4o' }],
-    apply: (v) => ({ models: { mode: 'merge', providers: { azure: { baseUrl: v.url, api: 'openai-completions', apiKey: '$AZURE_API_KEY', deployment: v.deploy } } }, env: { AZURE_API_KEY: v.key } })
-  },
-  {
-    id: 'groq-direct', name: 'Groq 极速推理', cat: 'Provider', desc: '使用 Groq LPU 获得超快推理速度', kw: 'groq 极速 fast 快 推理 模型 provider lpu',
-    fields: [{ key: 'key', label: 'Groq API Key', placeholder: 'gsk_...', type: 'password' }],
-    apply: (v) => ({ models: { mode: 'merge', providers: { groq: { baseUrl: 'https://api.groq.com/openai', api: 'openai-completions', apiKey: '$GROQ_API_KEY' } } }, env: { GROQ_API_KEY: v.key } })
-  },
-  // ── Agent ──
-  {
-    id: 'agent-fast', name: '快速响应模式', cat: 'Agent', desc: '最小推理 + 即时响应，适合简单问答', kw: '快速 fast 速度 minimal 推理 响应 agent 回复',
-    apply: () => ({ agents: { defaults: { thinkingDefault: 'minimal', humanDelay: 'off', typingMode: 'never' } } })
-  },
-  {
-    id: 'agent-deep', name: '深度思考模式', cat: 'Agent', desc: '高推理强度 + 详细输出', kw: '深度 deep thinking 推理 high 思考 agent 详细',
-    apply: () => ({ agents: { defaults: { thinkingDefault: 'high', verboseDefault: 'on' } } })
-  },
-  {
-    id: 'agent-concurrent', name: '多并发处理', cat: 'Agent', desc: '允许同时处理多个请求', kw: '并发 concurrent 多任务 parallel agent 同时',
-    fields: [{ key: 'n', label: '最大并发数', placeholder: '3' }],
-    apply: (v) => ({ agents: { defaults: { maxConcurrent: Number(v.n) || 3 } } })
-  },
-  {
-    id: 'heartbeat', name: '开启心跳回复', cat: 'Agent', desc: '定期自动发送心跳消息', kw: '心跳 heartbeat 自动 定期 auto agent 定时',
-    fields: [{ key: 'every', label: '心跳间隔', placeholder: '30m' }],
-    apply: (v) => ({ agents: { defaults: { heartbeat: { every: v.every || '30m', target: 'last' } } } })
-  },
-  {
-    id: 'system-prompt', name: '自定义系统提示词', cat: 'Agent', desc: '设置 AI 的角色和行为指令', kw: '系统 system prompt 提示词 角色 人设 指令 agent persona',
-    fields: [{ key: 'prompt', label: '系统提示词', placeholder: '你是一个有帮助的助手...' }],
-    apply: (v) => ({ agents: { defaults: { systemPrompt: v.prompt } } })
-  },
-  {
-    id: 'max-tokens', name: '控制回复长度', cat: 'Agent', desc: '限制每次回复的最大 Token 数', kw: '长度 token 限制 max 回复 输出 agent 字数',
-    fields: [{ key: 'n', label: '最大 Token 数', placeholder: '4096' }],
-    apply: (v) => ({ agents: { defaults: { maxTokens: Number(v.n) || 4096 } } })
-  },
-  // ── Security ──
-  {
-    id: 'security-lock', name: '安全锁定模式', cat: '安全', desc: '禁用所有危险命令和提权', kw: '安全 security lock 锁定 禁用 命令 限制',
-    apply: () => ({ commands: { bash: false, config: false }, tools: { elevated: { enabled: false }, exec: { security: 'deny' } } })
-  },
-  {
-    id: 'security-open', name: '开发者完全开放', cat: '安全', desc: '允许所有命令和工具（仅限可信环境）', kw: '开放 open 开发 developer 全部 命令 bash 完全',
-    apply: () => ({ commands: { bash: true, config: true, text: true }, tools: { elevated: { enabled: true }, exec: { security: 'full', host: 'gateway' } } })
-  },
-  {
-    id: 'approvals', name: '启用审批转发', cat: '安全', desc: '将执行审批请求转发到聊天渠道', kw: '审批 approval 转发 确认 安全',
-    apply: () => ({ approvals: { enabled: true } })
-  },
-  // ── Tools ──
-  {
-    id: 'tools-minimal', name: '最小工具集', cat: '工具', desc: '仅保留最基础的工具', kw: '工具 tools minimal 最小 精简 基础',
-    apply: () => ({ tools: { profile: 'minimal' } })
-  },
-  {
-    id: 'tools-coding', name: '编程工具集', cat: '工具', desc: '适合编程场景的工具配置', kw: '工具 tools coding 编程 开发 代码 程序',
-    apply: () => ({ tools: { profile: 'coding' } })
-  },
-  {
-    id: 'web-search', name: '启用 Web 搜索', cat: '工具', desc: '配置搜索引擎让 AI 能联网搜索', kw: '搜索 search web 联网 brave perplexity 工具 google 谷歌',
-    fields: [{ key: 'provider', label: '搜索引擎', placeholder: 'brave / perplexity / grok' }, { key: 'key', label: 'API Key', placeholder: '搜索引擎 API Key', type: 'password' }],
-    apply: (v) => ({ tools: { web: { search: { provider: v.provider, apiKey: v.key } } } })
-  },
-  // ── Session ──
-  {
-    id: 'session-global', name: '全局共享会话', cat: '会话', desc: '所有用户共享同一上下文', kw: '会话 session global 全局 共享 上下文',
-    apply: () => ({ session: { scope: 'global' } })
-  },
-  {
-    id: 'session-daily-reset', name: '每日自动重置', cat: '会话', desc: '每天自动清空会话历史', kw: '重置 reset daily 每日 清空 会话 自动',
-    apply: () => ({ session: { reset: 'daily' } })
-  },
-  {
-    id: 'session-per-user', name: '多用户会话隔离', cat: '会话', desc: '每个用户独立会话上下文', kw: '用户 user 隔离 独立 会话 session 多人 multi',
-    apply: () => ({ session: { scope: 'user' } })
-  },
-  {
-    id: 'auto-summary', name: '自动摘要压缩', cat: '会话', desc: '会话过长时自动生成摘要保留上下文', kw: '摘要 summary 压缩 自动 上下文 记忆 会话',
-    apply: () => ({ session: { autoSummary: true } })
-  },
-  // ── Gateway ──
-  {
-    id: 'gw-lan', name: '局域网访问', cat: '网络', desc: '允许局域网内设备访问 Gateway', kw: '局域网 lan 网络 gateway 访问 绑定 内网',
-    apply: () => ({ gateway: { bind: 'lan', auth: { mode: 'token' } } })
-  },
-  {
-    id: 'gw-noauth', name: '关闭 Gateway 认证', cat: '网络', desc: '移除认证（仅限本地使用）', kw: '认证 auth none 关闭 gateway 无密码 网络',
-    apply: () => ({ gateway: { auth: { mode: 'none' } } })
-  },
-  {
-    id: 'gw-https', name: '启用 HTTPS', cat: '网络', desc: '配置 SSL 证书启用加密访问', kw: 'https ssl tls 证书 加密 安全 网络 gateway',
-    fields: [{ key: 'cert', label: '证书路径', placeholder: '/path/to/cert.pem' }, { key: 'key', label: '私钥路径', placeholder: '/path/to/key.pem' }],
-    apply: (v) => ({ gateway: { tls: { cert: v.cert, key: v.key } } })
-  },
-  {
-    id: 'gw-reverse-proxy', name: '反向代理模式', cat: '网络', desc: '配置为反向代理后端（信任 X-Forwarded-For）', kw: '反向代理 reverse proxy nginx caddy 网络 gateway 部署',
-    apply: () => ({ gateway: { trustProxy: true, bind: '0.0.0.0' } })
-  },
-  // ── Cron ──
-  {
-    id: 'cron-enable', name: '启用定时任务', cat: '定时', desc: '开启 Cron 定时任务功能', kw: '定时 cron 任务 计划 schedule 自动',
-    apply: () => ({ cron: { enabled: true } })
-  },
-  {
-    id: 'hooks-enable', name: '启用 Webhooks', cat: '钩子', desc: '开启 Webhook 接收功能', kw: 'webhook hook 钩子 回调 触发',
-    apply: () => ({ hooks: { enabled: true } })
-  },
-  {
-    id: 'hooks-secret', name: 'Webhook 签名验证', cat: '钩子', desc: '设置 Webhook Secret 验证请求签名', kw: 'webhook secret 签名 验证 安全 钩子',
-    fields: [{ key: 'secret', label: 'Webhook Secret', placeholder: '自定义签名密钥', type: 'password' }],
-    apply: (v) => ({ hooks: { enabled: true, secret: v.secret } })
-  },
-  // ── Logging ──
-  {
-    id: 'log-debug', name: '调试日志模式', cat: '日志', desc: '切换到 debug 级别查看详细日志', kw: '日志 log debug 调试 详细 排错',
-    apply: () => ({ logging: { level: 'debug', consoleStyle: 'pretty' } })
-  },
-  {
-    id: 'log-silent', name: '静默日志', cat: '日志', desc: '关闭所有日志输出', kw: '静默 silent 关闭 日志 log quiet 生产',
-    apply: () => ({ logging: { level: 'silent' } })
-  },
-  {
-    id: 'log-file', name: '日志输出到文件', cat: '日志', desc: '将日志写入文件方便排查问题', kw: '日志 log file 文件 输出 记录 保存',
-    fields: [{ key: 'path', label: '日志文件路径', placeholder: './logs/openclaw.log' }],
-    apply: (v) => ({ logging: { level: 'info', file: v.path || './logs/openclaw.log' } })
-  },
-  // ── Identity ──
-  {
-    id: 'identity-custom', name: '自定义助手身份', cat: '身份', desc: '设置助手名称和头像', kw: '身份 identity 名称 头像 avatar 名字 人设 助手',
-    fields: [{ key: 'name', label: '助手名称', placeholder: '小助手' }, { key: 'avatar', label: '头像 URL（可选）', placeholder: 'https://...', optional: true }],
-    apply: (v) => ({ identity: { name: v.name, avatar: v.avatar || undefined } })
-  },
-];
-
 function getActiveRecipesRaw() {
-  const tool = getConfigEditorTool();
-  if (tool === 'openclaw') return OC_CONFIG_RECIPES;
-  return CODEX_CONFIG_RECIPES;
+  return getConfigStoreRecipesByTool(getConfigEditorTool());
 }
 
 /**
@@ -5157,7 +5390,7 @@ function getActiveRecipes() {
 }
 
 function getRecipeById(recipeId, tool = getConfigEditorTool()) {
-  return enrichConfigStoreRecipes(tool === 'openclaw' ? OC_CONFIG_RECIPES : CODEX_CONFIG_RECIPES, tool)
+  return enrichConfigStoreRecipes(getConfigStoreRecipesByTool(tool), tool)
     .find((recipe) => recipe.id === recipeId) || null;
 }
 
@@ -5426,13 +5659,50 @@ function collectConfigStoreGuideValues(recipe) {
   return values;
 }
 
+function normalizeGuidePath(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '/';
+  return raw.startsWith('/') ? raw : `/${raw}`;
+}
+
+function getConfigStoreGuideRuntime(values = {}) {
+  const gatewayPort = state.openclawState?.gatewayPort || state.openclawState?.config?.gateway?.port || 18789;
+  const gatewayUrl = state.openclawState?.gatewayUrl || `http://127.0.0.1:${gatewayPort}/`;
+  const publicBaseUrl = 'https://你的域名';
+  const webhookPath = normalizeGuidePath(values.path || '/webhook/my-channel');
+  return {
+    gatewayUrl,
+    lanDashboardUrl: `http://你的局域网IP:${gatewayPort}/`,
+    publicBaseUrl,
+    publicWechatMpCallbackUrl: `${publicBaseUrl}/wechat/mp`,
+    publicWecomCallbackUrl: `${publicBaseUrl}/wecom/callback`,
+    publicWebhookUrl: `${publicBaseUrl}${webhookPath}`,
+  };
+}
+
+function renderConfigStoreGuideText(text, values = {}) {
+  const runtime = getConfigStoreGuideRuntime(values);
+  const interpolated = String(text || '').replace(/\{\{(\w+)\}\}/g, (_, key) => runtime[key] || '');
+  return escapeHtml(interpolated)
+    .replace(/`([^`]+)`/g, '<code class="config-store-guide-code">$1</code>')
+    .replace(/(https?:\/\/[^\s<]+)/g, '<code class="config-store-guide-code">$1</code>');
+}
+
+function renderConfigStoreGuideList(items = [], values = {}) {
+  return items.map((item) => `<li>${renderConfigStoreGuideText(item, values)}</li>`).join('');
+}
+
 function renderConfigStoreGuide(recipe, values = {}) {
   if (!recipe) return;
   el('configStoreGuideTitle').textContent = recipe.name;
   el('configStoreGuideDesc').textContent = recipe.guide.overview || recipe.desc;
-  el('configStoreGuidePrep').innerHTML = (recipe.guide.prep || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
-  el('configStoreGuideSteps').innerHTML = (recipe.guide.tutorial || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
-  el('configStoreGuideVerify').innerHTML = (recipe.guide.verify || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+  el('configStoreGuidePrep').innerHTML = renderConfigStoreGuideList(recipe.guide.prep || [], values);
+  el('configStoreGuideAccess').innerHTML = renderConfigStoreGuideList(
+    recipe.guide.access?.length ? recipe.guide.access : (getConfigEditorTool() === 'openclaw' ? ['本地 Dashboard：{{gatewayUrl}}'] : []),
+    values,
+  );
+  el('configStoreGuideSteps').innerHTML = renderConfigStoreGuideList(recipe.guide.tutorial || [], values);
+  el('configStoreGuideVerify').innerHTML = renderConfigStoreGuideList(recipe.guide.verify || [], values);
   const related = (recipe.guide.related || []).length
     ? recipe.guide.related.map((item) => `<button type="button" class="secondary tiny-btn" data-store-suggestion="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join('')
     : (recipe.guide.examples || []).slice(0, 4).map((item) => `<button type="button" class="secondary tiny-btn" data-store-suggestion="${escapeHtml(item)}">${escapeHtml(item)}</button>`).join('');
@@ -5441,8 +5711,9 @@ function renderConfigStoreGuide(recipe, values = {}) {
   const questions = recipe.guide.questions || [];
   el('configStoreGuideFields').innerHTML = questions.length
     ? questions.map((field, index) => `
-      <label class="field"><span>${escapeHtml(field.label)}</span>
+      <label class="field config-store-guide-field"><div class="config-store-guide-field-head"><div class="config-store-guide-field-title">${escapeHtml(field.label)}</div><em class="config-store-guide-field-badge ${field.required ? 'required' : 'optional'}">${field.required ? '必填' : '可选'}</em></div>
         <input id="configStoreGuideField_${index}" type="${escapeHtml(field.type || 'text')}" placeholder="${escapeHtml(field.placeholder || '')}" value="${escapeHtml(values[field.key] || '')}" />
+        ${field.help ? `<div class="config-store-guide-field-help">${renderConfigStoreGuideText(field.help, values)}</div>` : ''}
       </label>
     `).join('')
     : '<div class="config-store-assistant-sub">该方案无需额外输入，确认后即可应用。</div>';
@@ -7298,6 +7569,7 @@ async function loadState({ preserveForm = true } = {}) {
   // Skip Codex form restoration when non-Codex tool is active
   if (state.activeTool === 'claudecode' || state.activeTool === 'openclaw') {
     refreshProviderHealth();
+    renderToolConsole();
     return;
   }
 
@@ -7313,6 +7585,7 @@ async function loadState({ preserveForm = true } = {}) {
     renderCurrentConfig();
     refreshProviderHealth();
     syncShortcutActiveState();
+    renderToolConsole();
     return;
   }
   fillFromProvider(state.current.activeProvider || state.current.providers?.[0]);
@@ -7323,6 +7596,7 @@ async function loadState({ preserveForm = true } = {}) {
 
   // Sync shortcut active states based on loaded config
   syncShortcutActiveState();
+  renderToolConsole();
 }
 
 async function loadBackups() {
@@ -9186,7 +9460,7 @@ function bindEvents() {
     recipeResults.addEventListener('click', (e) => {
       const card = e.target.closest('[data-recipe-id]');
       if (!card) return;
-      const recipe = [...CODEX_CONFIG_RECIPES, ...OC_CONFIG_RECIPES].find(r => r.id === card.dataset.recipeId);
+      const recipe = getAllConfigStoreRecipes().find(r => r.id === card.dataset.recipeId);
       if (!recipe) return;
       openConfigStoreGuide(getRecipeById(recipe.id) || recipe);
     });
@@ -9347,6 +9621,36 @@ function bindEvents() {
       if (window.refreshCustomSelects) window.refreshCustomSelects();
     });
   }
+
+  const consoleTabs = el('toolConsoleTabs');
+  if (consoleTabs) {
+    consoleTabs.addEventListener('click', (e) => {
+      const button = e.target.closest('[data-console-tool]');
+      if (!button) return;
+      state.consoleTool = button.dataset.consoleTool || 'codex';
+      renderToolConsole();
+    });
+  }
+
+  el('toolConsoleRefreshBtn')?.addEventListener('click', () => {
+    refreshToolConsoleData({ manual: true });
+  });
+
+  el('toolConsolePage')?.addEventListener('click', async (e) => {
+    const button = e.target.closest('[data-console-action]');
+    if (!button) return;
+    e.preventDefault();
+    await handleToolConsoleAction(button);
+  });
+
+  el('configEditorSearchInput')?.addEventListener('input', applyConfigEditorSearch);
+  el('configEditorSearchClearBtn')?.addEventListener('click', () => {
+    const input = el('configEditorSearchInput');
+    if (!input) return;
+    input.value = '';
+    applyConfigEditorSearch();
+    input.focus();
+  });
   Object.entries(CONFIG_NUMBER_FIELDS).forEach(([inputId, spec]) => {
     el(inputId).addEventListener('input', () => {
       syncConfigNumberField(inputId, 'input');

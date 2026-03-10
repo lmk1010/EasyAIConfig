@@ -39,6 +39,13 @@
                 <line x1="8" y1="4.5" x2="8" y2="8.5" />
               </svg></span><span>Provider</span>
           </button>
+          <button class="nav-item" data-page-target="console">
+            <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
+                stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="9" height="9" rx="1.5" />
+                <path d="M4 4.5h5M4 6.5h5M4 8.5h3" />
+              </svg></span><span>控制台</span>
+          </button>
           <button class="nav-item" data-page-target="configEditor">
             <span class="nav-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 13 13" fill="none"
                 stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
@@ -352,6 +359,24 @@
             <div class="workspace-watermark">ELECTRON</div>
           </section>
 
+          <section class="page-view" data-page="console">
+            <div class="tool-console-page" id="toolConsolePage">
+              <div class="tool-console-head">
+                <div class="tool-console-tabs" id="toolConsoleTabs">
+                  <button type="button" class="tool-console-tab active" data-console-tool="codex">Codex</button>
+                  <button type="button" class="tool-console-tab" data-console-tool="claudecode">Claude Code</button>
+                  <button type="button" class="tool-console-tab" data-console-tool="openclaw">OpenClaw</button>
+                </div>
+                <button type="button" id="toolConsoleRefreshBtn" class="secondary tiny-btn">↻ 刷新检测</button>
+              </div>
+              <div class="tool-console-summary" id="toolConsoleSummary"></div>
+              <div class="tool-console-grid">
+                <section class="tool-console-panel" id="toolConsoleMain"></section>
+                <aside class="tool-console-side" id="toolConsoleSide"></aside>
+              </div>
+            </div>
+          </section>
+
           <section class="page-view" data-page="providers">
             <section class="view-section">
               <div class="section-head slim-head">
@@ -496,6 +521,16 @@
                   </div>
                 </div>
                 <div class="cfg-editor-header-right">
+                  <div class="cfg-editor-search" id="configEditorSearchBar">
+                    <svg class="cfg-editor-search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="7" cy="7" r="4.5" />
+                      <path d="M10.5 10.5 14 14" />
+                    </svg>
+                    <input id="configEditorSearchInput" type="search" placeholder="搜索配置项…如 沙箱、审批、网关、Telegram"
+                      autocomplete="off" />
+                    <button type="button" id="configEditorSearchClearBtn" class="tiny-icon-btn hide" title="清空搜索">×</button>
+                  </div>
                   <button class="config-store-btn" id="openConfigStoreBtn" title="打开配置商店，浏览预设方案">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                       stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -515,6 +550,7 @@
                   <div id="ocRecipeResults" class="oc-recipe-results hide"></div>
                 </div>
               </div>
+              <div id="configEditorSearchEmpty" class="config-editor-search-empty hide">没有找到匹配的配置项，试试更短的关键词。</div>
               <div class="config-editor-layout">
 
                 <!-- ═══ Codex Config Editor ═══ -->
@@ -2428,6 +2464,10 @@
             <div class="config-store-guide-card">
               <div class="config-store-guide-card-title">准备事项</div>
               <ul id="configStoreGuidePrep" class="config-store-guide-list"></ul>
+            </div>
+            <div class="config-store-guide-card">
+              <div class="config-store-guide-card-title">后台入口 / 访问地址</div>
+              <ul id="configStoreGuideAccess" class="config-store-guide-list"></ul>
             </div>
             <div class="config-store-guide-card">
               <div class="config-store-guide-card-title">配置步骤</div>

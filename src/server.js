@@ -35,6 +35,7 @@ import {
   saveRawConfig,
   saveSettings,
   startOpenClawInstallTask,
+  stopOpenClaw,
   testSavedProvider,
   uninstallClaudeCode,
   uninstallCodex,
@@ -354,6 +355,14 @@ export async function startServer() {
   app.post('/api/openclaw/onboard', async (req, res) => {
     try {
       ok(res, { data: await onboardOpenClaw(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/openclaw/stop', async (_req, res) => {
+    try {
+      ok(res, { data: await stopOpenClaw() });
     } catch (error) {
       fail(res, error);
     }

@@ -2081,6 +2081,44 @@ export async function launchOpenClaw({ cwd } = {}) {
   return { ok: true, cwd: targetCwd, mode: 'gateway', gatewayUrl: state.gatewayUrl, command: commandText, message };
 }
 
+export async function stopOpenClaw() {
+  const state = await loadOpenClawState();
+  const attempts = [];
+
+  if (!state.binary?.installed) {
+    return { stopped: true, attempts, gatewayReachable: false, message: 'OpenClaw 未安装，无需停止' };
+  }
+
+  const binaryPath = state.binary.path || 'openclaw';
+  for (const args of [['gateway', 'stop'], ['stop']]) {
+    const result = await runCommand(binaryPath, args, { cwd: openclawHome() });
+    attempts.push({ command: `${binaryPath} ${args.join(' ')}`, ok: result.ok, stdout: result.stdout, stderr: result.stderr });
+    if (result.ok) break;
+  }
+
+  if (process.platform === 'win32') {
+    const result = await runCommand('taskkill', ['/F', '/IM', 'openclaw.exe']);
+    attempts.push({ command: 'taskkill /F /IM openclaw.exe', ok: result.ok, stdout: result.stdout, stderr: result.stderr });
+  } else {
+    const result = await runCommand('pkill', ['-f', 'openclaw']);
+    attempts.push({ command: 'pkill -f openclaw', ok: result.ok, stdout: result.stdout, stderr: result.stderr });
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  const after = await loadOpenClawState();
+  if (after.gatewayReachable) {
+    throw new Error('OpenClaw Gateway 仍在运行，请手动检查终端进程');
+  }
+
+  return {
+    stopped: true,
+    attempts,
+    gatewayReachable: after.gatewayReachable,
+    gatewayUrl: after.gatewayUrl,
+    message: 'OpenClaw Gateway 已停止',
+  };
+}
+
 export async function onboardOpenClaw({ cwd, authChoice, apiKey, apiKeyType } = {}) {
   const targetCwd = path.resolve(cwd || process.cwd());
   const binary = findToolBinary('openclaw');

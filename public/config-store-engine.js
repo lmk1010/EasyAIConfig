@@ -1,3 +1,5 @@
+import { SPECIAL_GUIDES } from './config-store-guides.js';
+
 const TOOL_DEFAULT_PROMPTS = {
   codex: ['切到 GPT-5.4 并开启高推理', '给我一个安全的只读模式', '把上下文窗口调大', '设置成务实风格'],
   openclaw: ['接入 Telegram Bot', '让 Discord 只在被 @ 时回复', '开启局域网访问 Gateway', '启用 QMD 记忆'],
@@ -58,59 +60,6 @@ const CATEGORY_GUIDES = {
   '钩子': { prep: ['准备好 webhook 路径和 secret。'], tutorial: ['开启前先确定谁会调用它。'], verify: ['保存后检查 hooks 配置。'] },
   '日志': { prep: ['确认你想看更多日志还是减少噪声。'], tutorial: ['排错用 debug，稳定运行可降级。'], verify: ['检查 logging 字段。'] },
   '身份': { prep: ['准备助手名称、头像或品牌色。'], tutorial: ['改完后 UI 和消息前缀会更一致。'], verify: ['查看 ui.assistant 配置。'] },
-};
-
-const SPECIAL_GUIDES = {
-  'tg-basic': {
-    intents: ['connect_channel'],
-    entities: ['telegram', 'bot', 'private', 'group'],
-    aliases: ['接入 telegram', 'telegram 机器人', '电报机器人'],
-    examples: ['我想接入 Telegram Bot', '给我配一个 Telegram 机器人'],
-    prep: ['从 BotFather 获取 Bot Token。'],
-    tutorial: ['粘贴 Bot Token。', '决定私聊策略和群组策略。', '保存后先测试 bot 是否在线。'],
-    verify: ['在 Telegram 给机器人发送消息，检查是否能收到回复。'],
-  },
-  'dc-basic': {
-    intents: ['connect_channel'],
-    entities: ['discord', 'bot', 'server'],
-    aliases: ['接入 discord', 'discord 机器人', 'discord 服务器'],
-    examples: ['接入 Discord Bot', '让 Discord 机器人工作'],
-    prep: ['从 Discord Developer Portal 获取 Bot Token。'],
-  },
-  'slack-basic': {
-    intents: ['connect_channel'],
-    entities: ['slack', 'bot', 'workspace'],
-    aliases: ['接入 slack', 'slack bot', 'slack 工作区'],
-    examples: ['接入 Slack Bot', '给我配 Slack 机器人'],
-    prep: ['准备 Slack Bot Token 和 App Token。'],
-  },
-  'whatsapp-basic': {
-    intents: ['connect_channel'],
-    entities: ['whatsapp', 'qr', '手机'],
-    aliases: ['接入 whatsapp', 'whatsapp bot', '扫码登录'],
-    examples: ['接入 WhatsApp', '我想用手机扫码接 WhatsApp'],
-  },
-  'gw-lan': {
-    intents: ['gateway_access'],
-    entities: ['gateway', 'lan', 'dashboard'],
-    aliases: ['局域网访问', '手机访问 dashboard', '内网访问'],
-    examples: ['让手机能打开 Dashboard', '局域网访问 Gateway'],
-  },
-  'gw-https': {
-    intents: ['secure_gateway'],
-    entities: ['https', 'tls', 'gateway'],
-    aliases: ['启用 https', '开启 tls', '配置证书'],
-    examples: ['给 Gateway 上 HTTPS', '配置 TLS 证书'],
-  },
-  'gw-reverse-proxy': {
-    intents: ['secure_gateway'],
-    entities: ['reverse_proxy', 'gateway'],
-    aliases: ['反向代理', 'nginx', 'caddy', 'trusted proxy'],
-    examples: ['让 Gateway 跑在 nginx 后面', '反向代理部署 Gateway'],
-  },
-  'tg-whitelist': { intents: ['restrict_access'], entities: ['telegram', 'whitelist'], aliases: ['telegram 白名单', '只允许指定 tg 用户'] },
-  'memory-qmd': { intents: ['memory_setup'], entities: ['memory', 'qmd'], aliases: ['启用 qmd 记忆', '配置记忆'], examples: ['启用 QMD Memory', '我要开记忆检索'] },
-  'browser-enable': { intents: ['plugin_setup'], entities: ['browser'], aliases: ['启用浏览器', 'browser tool'] },
 };
 
 function uniq(items) {
@@ -174,6 +123,115 @@ function categoryGuide(recipe) {
   };
 }
 
+function ensureGuideSentence(text = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  return /[。！？.!?]$/.test(raw) ? raw : `${raw}。`;
+}
+
+function buildFieldHelp(recipe, field, tool) {
+  if (field.help) return ensureGuideSentence(field.help);
+  const label = String(field.label || '').toLowerCase();
+  const key = String(field.key || '').toLowerCase();
+  const target = `${label} ${key}`;
+  const example = field.placeholder ? `例如 ${field.placeholder}` : '';
+
+  if (target.includes('token')) return ensureGuideSentence(`去对应平台后台复制 ${field.label}${example ? `，${example}` : ''}`);
+  if (target.includes('secret')) return ensureGuideSentence(`去对应平台或应用详情页复制 ${field.label}${example ? `，${example}` : ''}`);
+  if (target.includes('appid')) return ensureGuideSentence(`在对应平台开发设置页查看 ${field.label}${example ? `，${example}` : ''}`);
+  if (target.includes('corpid')) return ensureGuideSentence('在企业管理后台“我的企业”页面复制 CorpID');
+  if (target.includes('agentid')) return ensureGuideSentence('在应用详情页查看 AgentID，通常是纯数字');
+  if (target.includes('私钥')) return ensureGuideSentence(`填写私钥文件路径${example ? `，${example}` : ''}`);
+  if (target.includes('api key') || target.includes('apikey') || label.includes('api')) return ensureGuideSentence(`去对应平台控制台创建并复制 ${field.label}${example ? `，${example}` : ''}`);
+  if (target.includes('url') || target.includes('base url') || target.includes('endpoint') || target.includes('homeserver')) return ensureGuideSentence(`填写完整服务地址${example ? `，${example}` : ''}`);
+  if (target.includes('path') || target.includes('路径')) return ensureGuideSentence(`填写你希望暴露的路径，建议以 / 开头${example ? `，${example}` : ''}`);
+  if (target.includes('port') || target.includes('端口')) return ensureGuideSentence(`填写监听端口${example ? `，${example}` : ''}`);
+  if (target.includes('model') || target.includes('模型')) return ensureGuideSentence(`填写模型名称${example ? `，${example}` : ''}`);
+  if (target.includes('cert') || target.includes('证书')) return ensureGuideSentence(`填写证书文件路径${example ? `，${example}` : ''}`);
+  if (target.includes('prompt') || target.includes('提示词')) return ensureGuideSentence('直接填写你希望助手长期遵循的系统提示词');
+  if (target.includes('name') || target.includes('名称')) return ensureGuideSentence(`填写你想展示给用户的名称${example ? `，${example}` : ''}`);
+  return ensureGuideSentence(example || `按实际值填写 ${field.label}`);
+}
+
+function buildDefaultAccess(recipe, tool) {
+  const items = [];
+  if (tool === 'openclaw') items.push('本地 Dashboard：{{gatewayUrl}}');
+  if (recipe.cat === '网络') items.push('局域网访问示例：{{lanDashboardUrl}}');
+
+  const recipeSpecific = {
+    'claude-direct': ['Anthropic Console：https://console.anthropic.com/'],
+    'gemini-direct': ['Google AI Studio：https://aistudio.google.com/'],
+    'deepseek-direct': ['DeepSeek 平台：https://platform.deepseek.com/'],
+    'ollama-local': ['Ollama 默认地址：http://127.0.0.1:11434/'],
+    'openai-proxy': ['代理 Base URL 示例：https://your-proxy.com/v1'],
+    'web-search': ['搜索 provider 示例：brave / perplexity / grok'],
+    'gw-https': ['公网 HTTPS 示例：{{publicBaseUrl}}/'],
+    'gw-reverse-proxy': ['反向代理后地址示例：{{publicBaseUrl}}/'],
+    'hooks-secret': ['Webhook URL 示例：{{publicWebhookUrl}}'],
+    'log-file': ['日志路径示例：`./logs/openclaw.log`'],
+  };
+  return uniq([...(recipeSpecific[recipe.id] || []), ...items].map(ensureGuideSentence));
+}
+
+function buildDefaultPrep(recipe, tool, catGuide, fieldQuestions) {
+  const items = [...(catGuide.prep || [])];
+  const required = fieldQuestions.filter((field) => field.required).map((field) => `\`${field.label}\``);
+  if (tool === 'openclaw' && recipe.cat !== '模型') items.unshift('先确认 OpenClaw 本地 Dashboard 可以打开：{{gatewayUrl}}。');
+  if (required.length) items.push(`这个方案至少要准备：${required.join('、')}。`);
+  if (tool === 'openclaw' && ['渠道', '网络', '钩子'].includes(recipe.cat)) {
+    items.push('如果外部平台需要主动回调到你的服务，优先准备公网 HTTPS 域名。');
+  }
+  return uniq(items.map(ensureGuideSentence));
+}
+
+function buildDefaultTutorial(recipe, tool, catGuide, fieldQuestions) {
+  const steps = [...(catGuide.tutorial || [])];
+  if (fieldQuestions.length) {
+    fieldQuestions.forEach((field) => {
+      steps.push(`右侧填写 \`${field.label}\`：${buildFieldHelp(recipe, field, tool)}`);
+    });
+  } else {
+    steps.push('右侧无需额外填写，确认变更预览没问题后直接点击“应用配置”。');
+  }
+
+  if (tool === 'openclaw') {
+    const tailByCategory = {
+      '渠道': '应用后先在对应聊天平台发一条真实消息，验证收发链路。',
+      'Provider': '应用后回到 Provider / 模型区域做一次连通测试。',
+      'Agent': '应用后发一条简单消息，观察响应速度和行为是否符合预期。',
+      '工具': '应用后重新进入目标工具或新会话，确认新策略已经生效。',
+      '会话': '应用后新建一个会话，验证共享 / 隔离 / 重置策略。',
+      '网络': '应用后立即用浏览器访问本地或局域网地址，先确认服务可达。',
+      '定时': '应用后补充你的任务定义，再观察是否按计划执行。',
+      '钩子': '应用后用 curl 或 Postman 发送一次请求，确认入口可用。',
+      '日志': '应用后观察控制台或日志文件，确认级别和输出位置变化。',
+      '身份': '应用后刷新 Dashboard 或对话界面，确认名称或头像已变更。',
+      '安全': '应用前确认环境可信；应用后立刻验证权限和审批行为是否符合预期。',
+    };
+    if (tailByCategory[recipe.cat]) steps.push(tailByCategory[recipe.cat]);
+  }
+
+  return uniq(steps.map(ensureGuideSentence));
+}
+
+function buildDefaultVerify(recipe, tool, catGuide, fieldQuestions) {
+  const items = [...(catGuide.verify || [])];
+  if (fieldQuestions.length) items.push('同时对照右侧“变更预览”，确认写入字段和你的预期一致。');
+  if (tool === 'openclaw') {
+    const extraByCategory = {
+      '渠道': '检查对应渠道 badge 是否已变成“已配置”。',
+      'Provider': '检查模型请求是否不再报认证或地址错误。',
+      '网络': '检查本地、局域网或公网地址是否可达。',
+      '钩子': '检查外部回调请求是否能真正到达 OpenClaw。',
+      '日志': '检查日志级别、日志文件或控制台输出是否符合预期。',
+      '身份': '检查 UI 或消息前缀是否显示新的身份信息。',
+      '会话': '检查新会话和旧会话是否按你设置的策略工作。',
+    };
+    if (extraByCategory[recipe.cat]) items.push(extraByCategory[recipe.cat]);
+  }
+  return uniq(items.map(ensureGuideSentence));
+}
+
 function buildDefaultGuide(recipe, tool) {
   const catGuide = categoryGuide(recipe);
   const fieldQuestions = (recipe.fields || []).map((field) => ({
@@ -182,6 +240,7 @@ function buildDefaultGuide(recipe, tool) {
     placeholder: field.placeholder || '',
     required: !field.optional,
     type: field.type || 'text',
+    help: buildFieldHelp(recipe, field, tool),
   }));
   return {
     scenario: recipe.name,
@@ -190,16 +249,16 @@ function buildDefaultGuide(recipe, tool) {
     intents: [],
     entities: [],
     examples: [],
-    prep: catGuide.prep,
-    tutorial: catGuide.tutorial,
-    verify: catGuide.verify,
+    access: buildDefaultAccess(recipe, tool),
+    prep: buildDefaultPrep(recipe, tool, catGuide, fieldQuestions),
+    tutorial: buildDefaultTutorial(recipe, tool, catGuide, fieldQuestions),
+    verify: buildDefaultVerify(recipe, tool, catGuide, fieldQuestions),
     questions: fieldQuestions,
     related: [],
     actionLabel: fieldQuestions.length ? '按引导配置' : '一键应用',
     tool,
   };
 }
-
 function mergeGuide(recipe, tool) {
   const base = buildDefaultGuide(recipe, tool);
   const extra = SPECIAL_GUIDES[recipe.id] || {};
@@ -210,6 +269,7 @@ function mergeGuide(recipe, tool) {
     intents: uniq([...(base.intents || []), ...(extra.intents || [])]),
     entities: uniq([...(base.entities || []), ...(extra.entities || [])]),
     examples: uniq([...(base.examples || []), ...(extra.examples || []), ...(tool === 'openclaw' ? TOOL_DEFAULT_PROMPTS.openclaw : TOOL_DEFAULT_PROMPTS.codex)]),
+    access: uniq([...(base.access || []), ...(extra.access || [])]),
     prep: uniq([...(base.prep || []), ...(extra.prep || [])]),
     tutorial: uniq([...(base.tutorial || []), ...(extra.tutorial || [])]),
     verify: uniq([...(base.verify || []), ...(extra.verify || [])]),
