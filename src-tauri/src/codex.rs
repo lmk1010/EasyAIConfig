@@ -1,7 +1,8 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -79,18 +80,77 @@ struct OpenClawInstallSnapshot {
 /// Resolve the user's full shell PATH.
 /// On macOS / Linux, .app bundles don't inherit the login shell PATH,
 /// so we run `$SHELL -lc 'echo $PATH'` to capture it.
+fn windows_mingit_root() -> Option<PathBuf> {
+  app_home().ok().map(|path| path.join("tools").join("mingit"))
+}
+
+fn windows_mingit_cmd_dirs() -> Vec<String> {
+  let Some(root) = windows_mingit_root() else { return Vec::new(); };
+  let candidates = [root.join("cmd"), root.join("mingw64").join("bin"), root.join("bin")];
+  candidates
+    .into_iter()
+    .filter(|dir| dir.is_dir())
+    .map(|dir| dir.to_string_lossy().to_string())
+    .collect()
+}
+
+fn windows_user_npm_prefix() -> Option<PathBuf> {
+  std::env::var("APPDATA").ok().map(PathBuf::from).map(|path| path.join("npm"))
+}
+
+fn windows_portable_node_root() -> Option<PathBuf> {
+  app_home().ok().map(|path| path.join("tools").join("node"))
+}
+
+fn windows_portable_node_dirs() -> Vec<String> {
+  let Some(root) = windows_portable_node_root() else { return Vec::new(); };
+  let mut dirs = Vec::new();
+  if root.join("node.exe").exists() {
+    dirs.push(root.to_string_lossy().to_string());
+  }
+  if let Ok(entries) = fs::read_dir(&root) {
+    for entry in entries.flatten() {
+      let path = entry.path();
+      if path.is_dir() && path.join("node.exe").exists() {
+        dirs.push(path.to_string_lossy().to_string());
+      }
+    }
+  }
+  dirs
+}
+
+fn build_windows_full_path_env() -> String {
+  let current = std::env::var("PATH").unwrap_or_default();
+  let mut parts: Vec<String> = Vec::new();
+  parts.extend(windows_portable_node_dirs());
+  if let Some(prefix) = windows_user_npm_prefix() {
+    parts.push(prefix.to_string_lossy().to_string());
+  }
+  parts.extend(windows_mingit_cmd_dirs());
+  for p in current.split(';') {
+    let item = p.trim();
+    if !item.is_empty() {
+      parts.push(item.to_string());
+    }
+  }
+  let mut seen = HashSet::new();
+  parts.retain(|p| seen.insert(p.to_ascii_lowercase()));
+  parts.join(";")
+}
+
+/// Resolve the user's full shell PATH.
+/// On macOS / Linux, .app bundles don't inherit the login shell PATH,
+/// so we run `$SHELL -lc 'echo $PATH'` to capture it.
 fn full_path_env() -> String {
+  if cfg!(target_os = "windows") {
+    return build_windows_full_path_env();
+  }
+
   static CACHED: OnceLock<String> = OnceLock::new();
   CACHED
     .get_or_init(|| {
       let current = std::env::var("PATH").unwrap_or_default();
 
-      // On Windows the PATH is usually fine
-      if cfg!(target_os = "windows") {
-        return current;
-      }
-
-      // Try to get PATH from user's login shell
       let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
       let shell_path = Command::new(&shell)
         .args(["-lc", "echo $PATH"])
@@ -100,13 +160,12 @@ fn full_path_env() -> String {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
 
-      // Build comprehensive PATH with common locations
       let home = dirs::home_dir()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_else(|| "/Users/unknown".to_string());
 
       let extra_paths = [
-        format!("{}/.nvm/versions/node/*/bin", home),  // placeholder, expanded below
+        format!("{}/.nvm/versions/node/*/bin", home),
         format!("{}/.npm-global/bin", home),
         format!("{}/.local/bin", home),
         format!("{}/bin", home),
@@ -120,7 +179,6 @@ fn full_path_env() -> String {
         "/sbin".to_string(),
       ];
 
-      // Also try to find nvm node paths
       let nvm_dir = format!("{}/.nvm/versions/node", home);
       let mut nvm_paths = Vec::new();
       if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
@@ -131,32 +189,25 @@ fn full_path_env() -> String {
           }
         }
       }
-      // Sort nvm paths in reverse so the latest version comes first
       nvm_paths.sort();
       nvm_paths.reverse();
 
       let mut all_parts: Vec<String> = Vec::new();
-      // shell_path first (highest priority)
       for p in shell_path.split(':') {
         if !p.is_empty() {
           all_parts.push(p.to_string());
         }
       }
-      // nvm paths
       all_parts.extend(nvm_paths);
-      // current PATH
       for p in current.split(':') {
         if !p.is_empty() {
           all_parts.push(p.to_string());
         }
       }
-      // extra common paths
       all_parts.extend(extra_paths.into_iter().filter(|p| !p.contains('*')));
 
-      // Deduplicate while preserving order
-      let mut seen = std::collections::HashSet::new();
+      let mut seen = HashSet::new();
       all_parts.retain(|p| seen.insert(p.clone()));
-
       all_parts.join(":")
     })
     .clone()
@@ -300,8 +351,8 @@ fn npm_global_output(args: &[&str]) -> String {
 fn capture_openclaw_install_snapshot() -> OpenClawInstallSnapshot {
   let binary = find_tool_binary("openclaw");
   let home = openclaw_home().ok();
-  let npm_prefix = npm_global_output(&["prefix", "-g"]);
-  let npm_root = npm_global_output(&["root", "-g"]);
+  let npm_prefix = if cfg!(target_os = "windows") { windows_user_npm_prefix().map(|p| p.to_string_lossy().to_string()).unwrap_or_default() } else { npm_global_output(&["prefix", "-g"]) };
+  let npm_root = if cfg!(target_os = "windows") { windows_user_npm_prefix().map(|p| p.join("node_modules").to_string_lossy().to_string()).unwrap_or_default() } else { npm_global_output(&["root", "-g"]) };
   let package_path = if npm_root.is_empty() {
     String::new()
   } else {
@@ -652,6 +703,7 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
       }
     } else {
       let mut cmd = create_command(npm_command());
+      apply_windows_openclaw_npm_env(&mut cmd);
       cmd.args(["install", "-g", &format!("{}@latest", OPENCLAW_PACKAGE)]);
       cmd
     };
@@ -673,15 +725,14 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
         if !auto_installed {
           // Auto-install failed — try to fallback to npm
           push_openclaw_install_log(&task_id, "stdout", "Git 自动安装失败，尝试自动切换为 npm 安装方式…");
-          let node_ok = create_command("node").arg("--version").stdin(Stdio::null())
-            .output().map(|o| o.status.success()).unwrap_or(false);
-          let npm_ok = create_command(npm_command()).arg("--version").stdin(Stdio::null())
-            .output().map(|o| o.status.success()).unwrap_or(false);
+          let node_ok = ensure_node_and_npm_available(&task_id);
+          let npm_ok = command_exists(npm_command()).is_some();
           if node_ok && npm_ok {
             push_openclaw_install_log(&task_id, "stdout", "已自动切换为 npm 安装方式");
             // Rebuild command for npm
             command = {
               let mut cmd = create_command(npm_command());
+              apply_windows_openclaw_npm_env(&mut cmd);
               cmd.args(["install", "-g", &format!("{}@latest", OPENCLAW_PACKAGE)]);
               cmd
             };
@@ -704,6 +755,7 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
     }
 
     if method == "npm" {
+      let _ = ensure_node_and_npm_available(&task_id);
       let node_output = create_command("node").arg("--version").output();
       let npm_output = create_command(npm_command()).arg("--version").output();
       match (node_output, npm_output) {
@@ -802,6 +854,272 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
   });
 }
 
+fn parse_mingit_asset_candidates(listing: &str) -> Vec<String> {
+  let mut assets = Vec::new();
+  for token in listing.split(|ch| ch == '"' || ch == '\'' || ch == '<' || ch == '>' || ch == ' ' || ch == '\n' || ch == '\r') {
+    if !token.contains("MinGit-") || !token.ends_with("-64-bit.zip") {
+      continue;
+    }
+    let name = token.rsplit('/').next().unwrap_or(token).trim();
+    if name.starts_with("MinGit-") && name.ends_with("-64-bit.zip") {
+      assets.push(name.to_string());
+    }
+  }
+  assets.sort_by(|left, right| {
+    let lv = left.trim_start_matches("MinGit-").trim_end_matches("-64-bit.zip");
+    let rv = right.trim_start_matches("MinGit-").trim_end_matches("-64-bit.zip");
+    compare_versions(lv, rv).cmp(&Ordering::Equal)
+  });
+  assets.dedup();
+  assets
+}
+
+fn resolve_mingit_download_url(task_id: &str) -> Result<String, String> {
+  let bases = [
+    "https://ipv4.mirrors.cqupt.edu.cn/github-release/git-for-windows/git/LatestRelease/",
+    "https://mirrors.ustc.edu.cn/github-release/git-for-windows/git/LatestRelease/",
+  ];
+
+  let client = reqwest::blocking::Client::builder()
+    .timeout(Duration::from_secs(20))
+    .build()
+    .map_err(|error| error.to_string())?;
+
+  for base in bases {
+    push_openclaw_install_log(task_id, "stdout", &format!("正在获取 MinGit 镜像列表：{}", base));
+    let response = match client.get(base).send() {
+      Ok(resp) => resp,
+      Err(error) => {
+        push_openclaw_install_log(task_id, "stderr", &format!("镜像访问失败：{}", error));
+        continue;
+      }
+    };
+    let body = match response.text() {
+      Ok(text) => text,
+      Err(error) => {
+        push_openclaw_install_log(task_id, "stderr", &format!("镜像页面读取失败：{}", error));
+        continue;
+      }
+    };
+    let mut assets = parse_mingit_asset_candidates(&body);
+    assets.sort_by(|left, right| {
+      let lv = left.trim_start_matches("MinGit-").trim_end_matches("-64-bit.zip");
+      let rv = right.trim_start_matches("MinGit-").trim_end_matches("-64-bit.zip");
+      compare_versions(lv, rv).reverse()
+    });
+    if let Some(asset) = assets.into_iter().next() {
+      return Ok(format!("{}{}", base, asset));
+    }
+  }
+
+  Err("未能从国内镜像获取 MinGit 下载地址".to_string())
+}
+
+fn install_mingit_from_mirror(task_id: &str) -> bool {
+  let Some(root) = windows_mingit_root() else {
+    push_openclaw_install_log(task_id, "stderr", "无法确定 MinGit 安装目录");
+    return false;
+  };
+  let tools_dir = match root.parent() {
+    Some(path) => path.to_path_buf(),
+    None => {
+      push_openclaw_install_log(task_id, "stderr", "无法确定 MinGit 工具目录");
+      return false;
+    }
+  };
+  if let Err(error) = ensure_dir(&tools_dir) {
+    push_openclaw_install_log(task_id, "stderr", &format!("创建工具目录失败：{}", error));
+    return false;
+  }
+
+  let archive_path = tools_dir.join("MinGit.zip");
+  let download_url = match resolve_mingit_download_url(task_id) {
+    Ok(url) => url,
+    Err(error) => {
+      push_openclaw_install_log(task_id, "stderr", &error);
+      return false;
+    }
+  };
+
+  push_openclaw_install_log(task_id, "stdout", &format!("正在下载 MinGit：{}", download_url));
+  let script = format!(
+    "$ProgressPreference='SilentlyContinue'; \
+$zip={zip}; \
+$dst={dst}; \
+if (Test-Path $zip) {{ Remove-Item -Force $zip }}; \
+if (Test-Path $dst) {{ Remove-Item -Recurse -Force $dst }}; \
+Invoke-WebRequest -UseBasicParsing -Uri {url} -OutFile $zip; \
+Expand-Archive -LiteralPath $zip -DestinationPath $dst -Force",
+    zip = format!("'{}'", archive_path.to_string_lossy().replace('\'', "''")),
+    dst = format!("'{}'", root.to_string_lossy().replace('\'', "''")),
+    url = format!("'{}'", download_url.replace('\'', "''")),
+  );
+
+  let output = create_command("powershell.exe")
+    .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
+    .stdin(Stdio::null())
+    .output();
+
+  match output {
+    Ok(out) => {
+      let stdout_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+      let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+      if !stdout_text.is_empty() {
+        push_openclaw_install_log(task_id, "stdout", &stdout_text);
+      }
+      if !stderr_text.is_empty() {
+        push_openclaw_install_log(task_id, "stderr", &stderr_text);
+      }
+      if !out.status.success() {
+        push_openclaw_install_log(task_id, "stderr", "MinGit 下载或解压失败");
+        return false;
+      }
+    }
+    Err(error) => {
+      push_openclaw_install_log(task_id, "stderr", &format!("MinGit 下载执行失败：{}", error));
+      return false;
+    }
+  }
+
+  if command_exists("git").is_some() {
+    push_openclaw_install_log(task_id, "stdout", "✓ 已自动安装 MinGit，将使用应用内置 Git");
+    return true;
+  }
+
+  push_openclaw_install_log(task_id, "stderr", "MinGit 已下载，但仍未检测到 git 命令");
+  false
+}
+
+fn resolve_portable_node_download_url(task_id: &str) -> Result<String, String> {
+  let shasums_url = "https://cdn.npmmirror.com/binaries/node/latest-v22.x/SHASUMS256.txt";
+  push_openclaw_install_log(task_id, "stdout", &format!("正在获取 Node.js 镜像索引：{}", shasums_url));
+  let client = reqwest::blocking::Client::builder()
+    .timeout(Duration::from_secs(20))
+    .build()
+    .map_err(|error| error.to_string())?;
+  let body = client
+    .get(shasums_url)
+    .send()
+    .and_then(|response| response.error_for_status())
+    .map_err(|error| error.to_string())?
+    .text()
+    .map_err(|error| error.to_string())?;
+  let asset = body
+    .lines()
+    .filter_map(|line| line.split_whitespace().last())
+    .find(|name| name.starts_with("node-v") && name.ends_with("-win-x64.zip"))
+    .ok_or_else(|| "未能从镜像索引中找到可用的 Node.js win-x64.zip".to_string())?;
+  Ok(format!("https://cdn.npmmirror.com/binaries/node/latest-v22.x/{}", asset))
+}
+
+fn install_portable_node_from_mirror(task_id: &str) -> bool {
+  let Some(root) = windows_portable_node_root() else {
+    push_openclaw_install_log(task_id, "stderr", "无法确定便携版 Node.js 安装目录");
+    return false;
+  };
+  let tools_dir = match root.parent() {
+    Some(path) => path.to_path_buf(),
+    None => {
+      push_openclaw_install_log(task_id, "stderr", "无法确定便携版 Node.js 工具目录");
+      return false;
+    }
+  };
+  if let Err(error) = ensure_dir(&tools_dir) {
+    push_openclaw_install_log(task_id, "stderr", &format!("创建 Node.js 工具目录失败：{}", error));
+    return false;
+  }
+
+  let archive_path = tools_dir.join("node-win-x64.zip");
+  let download_url = match resolve_portable_node_download_url(task_id) {
+    Ok(url) => url,
+    Err(error) => {
+      push_openclaw_install_log(task_id, "stderr", &error);
+      return false;
+    }
+  };
+
+  push_openclaw_install_log(task_id, "stdout", &format!("正在下载便携版 Node.js：{}", download_url));
+  let script = format!(
+    "$ProgressPreference='SilentlyContinue'; \
+$zip={zip}; \
+$dst={dst}; \
+if (Test-Path $zip) {{ Remove-Item -Force $zip }}; \
+if (Test-Path $dst) {{ Remove-Item -Recurse -Force $dst }}; \
+New-Item -ItemType Directory -Force -Path $dst | Out-Null; \
+Invoke-WebRequest -UseBasicParsing -Uri {url} -OutFile $zip; \
+Expand-Archive -LiteralPath $zip -DestinationPath $dst -Force",
+    zip = format!("'{}'", archive_path.to_string_lossy().replace('\'', "''")),
+    dst = format!("'{}'", root.to_string_lossy().replace('\'', "''")),
+    url = format!("'{}'", download_url.replace('\'', "''")),
+  );
+
+  let output = create_command("powershell.exe")
+    .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
+    .stdin(Stdio::null())
+    .output();
+
+  match output {
+    Ok(out) => {
+      let stdout_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+      let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+      if !stdout_text.is_empty() {
+        push_openclaw_install_log(task_id, "stdout", &stdout_text);
+      }
+      if !stderr_text.is_empty() {
+        push_openclaw_install_log(task_id, "stderr", &stderr_text);
+      }
+      if !out.status.success() {
+        push_openclaw_install_log(task_id, "stderr", "便携版 Node.js 下载或解压失败");
+        return false;
+      }
+    }
+    Err(error) => {
+      push_openclaw_install_log(task_id, "stderr", &format!("便携版 Node.js 下载执行失败：{}", error));
+      return false;
+    }
+  }
+
+  let node_ok = command_exists("node").is_some();
+  let npm_ok = command_exists(npm_command()).is_some();
+  if node_ok && npm_ok {
+    push_openclaw_install_log(task_id, "stdout", "✓ 已自动安装便携版 Node.js / npm，将使用应用内置运行时");
+    return true;
+  }
+
+  push_openclaw_install_log(task_id, "stderr", "便携版 Node.js 已下载，但仍未检测到 node / npm");
+  false
+}
+
+fn ensure_node_and_npm_available(task_id: &str) -> bool {
+  let node_ok = command_exists("node").is_some();
+  let npm_ok = command_exists(npm_command()).is_some();
+  if node_ok && npm_ok {
+    return true;
+  }
+  if cfg!(target_os = "windows") {
+    push_openclaw_install_log(task_id, "stdout", "未检测到可用的 Node.js / npm，正在尝试自动安装便携版 Node.js…");
+    return install_portable_node_from_mirror(task_id);
+  }
+  false
+}
+
+fn apply_windows_openclaw_npm_env(command: &mut Command) {
+  if !cfg!(target_os = "windows") {
+    return;
+  }
+  if let Some(prefix) = windows_user_npm_prefix() {
+    let prefix_str = prefix.to_string_lossy().to_string();
+    let mut path_parts = vec![prefix_str.clone()];
+    let current = full_path_env();
+    path_parts.extend(current.split(';').filter(|entry| !entry.trim().is_empty()).map(|entry| entry.trim().to_string()));
+    let mut seen = HashSet::new();
+    path_parts.retain(|entry| seen.insert(entry.to_ascii_lowercase()));
+    command.env("NPM_CONFIG_PREFIX", &prefix_str);
+    command.env("npm_config_prefix", &prefix_str);
+    command.env("PATH", path_parts.join(";"));
+  }
+}
+
 fn command_exists(command: &str) -> Option<String> {
   // Set PATH before using which
   std::env::set_var("PATH", full_path_env());
@@ -810,8 +1128,12 @@ fn command_exists(command: &str) -> Option<String> {
 
 /// Try to install Git automatically. Returns true if Git becomes available after the attempt.
 fn try_auto_install_git(task_id: &str) -> bool {
+  if command_exists("git").is_some() {
+    push_openclaw_install_log(task_id, "stdout", "✓ 已检测到现有 Git，直接使用用户环境中的 Git");
+    return true;
+  }
+
   if cfg!(target_os = "windows") {
-    // Try winget (available on Windows 10 1709+)
     push_openclaw_install_log(task_id, "stdout", "正在通过 winget 安装 Git…");
     let result = create_command("winget")
       .args([
@@ -835,23 +1157,24 @@ fn try_auto_install_git(task_id: &str) -> bool {
         }
         if out.status.success() {
           push_openclaw_install_log(task_id, "stdout", "winget 安装命令已完成，正在验证 Git…");
-          // Patch PATH to include Git's common install locations
           let current_path = std::env::var("PATH").unwrap_or_default();
           let git_paths = "C:\\Program Files\\Git\\cmd;C:\\Program Files\\Git\\bin;C:\\Program Files (x86)\\Git\\cmd";
           std::env::set_var("PATH", format!("{};{}", git_paths, current_path));
-          if which::which("git").is_ok() {
+          if command_exists("git").is_some() {
             push_openclaw_install_log(task_id, "stdout", "✓ Git 已安装成功");
             return true;
           }
-          push_openclaw_install_log(task_id, "stderr", "winget 已执行但仍未检测到 Git，可能需要重启终端");
+          push_openclaw_install_log(task_id, "stderr", "winget 已执行但仍未检测到 Git，尝试安装内置 MinGit…");
         } else {
-          push_openclaw_install_log(task_id, "stderr", "winget 安装 Git 失败");
+          push_openclaw_install_log(task_id, "stderr", "winget 安装 Git 失败，尝试安装内置 MinGit…");
         }
       }
       Err(e) => {
         push_openclaw_install_log(task_id, "stderr", &format!("winget 不可用或执行出错：{}", e));
       }
     }
+
+    return install_mingit_from_mirror(task_id);
   } else if cfg!(target_os = "macos") {
     // Try Homebrew
     if command_exists("brew").is_some() {
@@ -1197,7 +1520,7 @@ pub(crate) fn check_setup_environment(query: &Value) -> Result<Value, String> {
   }))
 }
 use crate::{
-  compare_versions, default_codex_home, extract_version, home_dir, npm_command,
+  app_home, compare_versions, default_codex_home, extract_version, home_dir, npm_command,
   parse_json_object, parse_toml_config, read_text, OPENAI_CODEX_PACKAGE,
   claude_code_home, openclaw_home, write_text, ensure_dir, CLAUDE_CODE_PACKAGE,
   OPENCLAW_PACKAGE,
@@ -1877,6 +2200,7 @@ pub(crate) fn run_openclaw_install_script(body: &Value) -> Result<Value, String>
     "script" => {
       // Run the install script via curl | bash (macOS/Linux) or PowerShell (Windows)
       if cfg!(target_os = "windows") {
+        let _ = ensure_node_and_npm_available("direct-openclaw-install");
         let result = run_command("powershell", &["-Command", OPENCLAW_INSTALL_SCRIPT_WIN], None)?;
         Ok(json!({
           "ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
@@ -1897,7 +2221,18 @@ pub(crate) fn run_openclaw_install_script(body: &Value) -> Result<Value, String>
       }
     }
     "npm" => {
-      let result = codex_npm_action(&["install", "-g", &format!("{}@latest", OPENCLAW_PACKAGE)])?;
+      let _ = ensure_node_and_npm_available("direct-openclaw-install");
+      let mut cmd = create_command(npm_command());
+      apply_windows_openclaw_npm_env(&mut cmd);
+      cmd.args(["install", "-g", &format!("{}@latest", OPENCLAW_PACKAGE)]);
+      cmd.stdin(Stdio::null());
+      let output = cmd.output().map_err(|error| error.to_string())?;
+      let result = json!({
+        "ok": output.status.success(),
+        "code": output.status.code(),
+        "stdout": String::from_utf8_lossy(&output.stdout).to_string(),
+        "stderr": String::from_utf8_lossy(&output.stderr).to_string(),
+      });
       Ok(json!({
         "ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
         "method": "npm",
