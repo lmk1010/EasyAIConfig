@@ -76,6 +76,33 @@ function toolBinaryCandidates(toolId) {
   const tool = getToolDef(toolId);
   const binaryName = tool.binaryName;
   const candidates = new Set();
+  const addCandidate = (candidate) => {
+    if (candidate) candidates.add(candidate);
+  };
+
+  if (process.platform === 'win32') {
+    const preferredPrefix = toolId === 'openclaw' ? openClawNpmPrefix() : npmGlobalPrefix();
+    const appData = process.env.APPDATA?.trim();
+    const winCandidates = [
+      preferredPrefix ? path.join(preferredPrefix, `${binaryName}.cmd`) : '',
+      preferredPrefix ? path.join(preferredPrefix, `${binaryName}.ps1`) : '',
+      preferredPrefix ? path.join(preferredPrefix, `${binaryName}.exe`) : '',
+      preferredPrefix ? path.join(preferredPrefix, binaryName) : '',
+      appData ? path.join(appData, 'npm', `${binaryName}.cmd`) : '',
+      appData ? path.join(appData, 'npm', `${binaryName}.ps1`) : '',
+      appData ? path.join(appData, 'npm', `${binaryName}.exe`) : '',
+      appData ? path.join(appData, 'npm', binaryName) : '',
+      toolId === 'openclaw' ? path.join(os.homedir(), '.local', 'bin', `${binaryName}.cmd`) : '',
+    ];
+    winCandidates.filter(Boolean).forEach((candidate) => {
+      if (existsSync(candidate)) addCandidate(candidate);
+    });
+  } else {
+    const npmPrefix = npmGlobalPrefix();
+    const unixCandidate = npmPrefix ? path.join(npmPrefix, 'bin', binaryName) : '';
+    if (unixCandidate && existsSync(unixCandidate)) addCandidate(unixCandidate);
+  }
+
   const lookupResult = spawnSync(
     process.platform === 'win32' ? 'where' : 'which',
     [binaryName],
@@ -85,31 +112,8 @@ function toolBinaryCandidates(toolId) {
   if (lookupResult.status === 0) {
     for (const line of String(lookupResult.stdout || '').split(/\r?\n/)) {
       const candidate = line.trim();
-      if (candidate) candidates.add(candidate);
+      if (candidate) addCandidate(candidate);
     }
-  }
-
-  const npmPrefix = npmGlobalPrefix();
-  const home = os.homedir();
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA?.trim();
-    const winCandidates = [
-      npmPrefix ? path.join(npmPrefix, `${binaryName}.cmd`) : '',
-      npmPrefix ? path.join(npmPrefix, `${binaryName}.ps1`) : '',
-      npmPrefix ? path.join(npmPrefix, `${binaryName}.exe`) : '',
-      npmPrefix ? path.join(npmPrefix, binaryName) : '',
-      appData ? path.join(appData, 'npm', `${binaryName}.cmd`) : '',
-      appData ? path.join(appData, 'npm', `${binaryName}.ps1`) : '',
-      appData ? path.join(appData, 'npm', `${binaryName}.exe`) : '',
-      appData ? path.join(appData, 'npm', binaryName) : '',
-      toolId === 'openclaw' ? path.join(home, '.local', 'bin', `${binaryName}.cmd`) : '',
-    ];
-    winCandidates.filter(Boolean).forEach((candidate) => {
-      if (existsSync(candidate)) candidates.add(candidate);
-    });
-  } else if (npmPrefix) {
-    const unixCandidate = path.join(npmPrefix, 'bin', binaryName);
-    if (existsSync(unixCandidate)) candidates.add(unixCandidate);
   }
 
   return [...candidates];
@@ -247,6 +251,12 @@ function tailText(text, count = 10) {
 function summarizeInstallCommandFailure(result) {
   const stderrTail = tailText(result?.stderr, 12);
   const stdoutTail = tailText(result?.stdout, 12);
+  const merged = `${stderrTail}\n${stdoutTail}`.trim();
+  const epermMatch = merged.match(/EPERM:.*?(?:mkdir|open) '([^']+)'/i) || merged.match(/error path\s+(.+)/i);
+  if (epermMatch) {
+    const targetPath = String(epermMatch[1] || "").trim();
+    return `Windows 权限不足：npm 无法写入 ${targetPath || "目标目录"}。应用已自动尝试使用当前用户目录安装；如果仍失败，请以管理员身份启动应用，或先关闭占用该目录的杀毒/编辑器。`;
+  }
   if (stderrTail && stdoutTail && !stderrTail.includes(stdoutTail)) return `${stderrTail}\n${stdoutTail}`.trim();
   return stderrTail || stdoutTail || `安装命令退出码：${result?.code}`;
 }
@@ -263,7 +273,7 @@ function describeOpenClawVerificationFailure(task) {
   const details = [];
   if (packageInstalled) details.push(`已检测到 npm 包目录：${snapshot.packagePath}`);
   if (foundBins.length) details.push(`已检测到可执行文件：${foundBins.join('、')}`);
-  details.push('这通常是 Windows 的 PATH 还没刷新。请重新打开 EasyAIConfig 或终端后再试。');
+  details.push('这通常是 Windows 的 PATH 还没刷新。应用已经自动改用当前用户目录安装，请重新打开 EasyAIConfig 或终端后再试。');
   return `OpenClaw 可能已经装上了，但当前进程还没识别到命令。${details.join(' ')}`;
 }
 
@@ -363,16 +373,106 @@ function npmGlobalRoot() {
   return result.status === 0 ? String(result.stdout || '').trim() : '';
 }
 
+function windowsUserNpmPrefix() {
+  const appData = process.env.APPDATA?.trim();
+  return appData ? path.join(appData, 'npm') : path.join(os.homedir(), 'AppData', 'Roaming', 'npm');
+}
+
+function isProtectedWindowsPath(targetPath) {
+  if (process.platform !== 'win32' || !targetPath) return false;
+  const normalized = path.resolve(targetPath).toLowerCase();
+  const protectedRoots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramW6432]
+    .filter(Boolean)
+    .map((entry) => path.resolve(entry).toLowerCase());
+  return protectedRoots.some((root) => normalized === root || normalized.startsWith(`${root}${path.sep}`));
+}
+
+function openClawNpmPrefix() {
+  if (process.platform !== 'win32') return npmGlobalPrefix();
+  const configuredPrefix = npmGlobalPrefix();
+  if (configuredPrefix && !isProtectedWindowsPath(configuredPrefix)) return configuredPrefix;
+  return windowsUserNpmPrefix();
+}
+
+function openClawInstallEnv() {
+  if (process.platform !== 'win32') return undefined;
+  const prefix = openClawNpmPrefix();
+  const currentPath = process.env.Path || process.env.PATH || '';
+  const entries = currentPath.split(path.delimiter).filter(Boolean);
+  if (!entries.some((entry) => entry.trim().toLowerCase() === prefix.toLowerCase())) {
+    entries.unshift(prefix);
+  }
+  const joinedPath = entries.join(path.delimiter);
+  return {
+    NPM_CONFIG_PREFIX: prefix,
+    npm_config_prefix: prefix,
+    Path: joinedPath,
+    PATH: joinedPath,
+  };
+}
+
+function toPowerShellString(value) {
+  return `'${String(value || '').replace(/'/g, "''")}'`;
+}
+
+async function ensureWindowsUserPathEntry(targetPath) {
+  if (process.platform !== 'win32' || !targetPath) return { ok: true, changed: false };
+  const command = [
+    `$target = ${toPowerShellString(targetPath)}`,
+    "$current = [Environment]::GetEnvironmentVariable('Path','User')",
+    "$entries = @()",
+    "if ($current) { $entries = $current -split ';' | Where-Object { $_ } }",
+    "if (-not ($entries | Where-Object { $_ -ieq $target })) {",
+    `  if ($current -and -not $current.EndsWith(';')) { $current = "$current;" }`,
+    `  [Environment]::SetEnvironmentVariable('Path', "$current$target", 'User')`,
+    "  Write-Output 'changed'",
+    "} else {",
+    "  Write-Output 'unchanged'",
+    "}"
+  ].join('; ');
+  const result = await runCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command]);
+  return { ok: result.ok, changed: /changed/i.test(result.stdout || '') };
+}
+
+async function prepareOpenClawWindowsInstall() {
+  if (process.platform !== 'win32') return { env: undefined, prefix: '', changed: false, pathChanged: false };
+  const prefix = openClawNpmPrefix();
+  await ensureDir(prefix);
+  await ensureDir(path.join(prefix, 'node_modules'));
+  const env = openClawInstallEnv();
+  const pathResult = await ensureWindowsUserPathEntry(prefix);
+  if (!commandExists(npmCommand())) {
+    return {
+      env,
+      prefix,
+      changed: false,
+      pathChanged: Boolean(pathResult.changed),
+    };
+  }
+  const configResult = await runCommand(npmCommand(), ['config', 'set', 'prefix', prefix, '--location=user'], { env });
+  if (!configResult.ok) {
+    throw new Error(`自动配置 npm 用户目录失败：${summarizeInstallCommandFailure(configResult)}`);
+  }
+  return {
+    env,
+    prefix,
+    changed: true,
+    pathChanged: Boolean(pathResult.changed),
+  };
+}
+
 async function captureOpenClawInstallSnapshot() {
   const homePath = openclawHome();
-  const npmPrefix = npmGlobalPrefix();
-  const npmRoot = npmGlobalRoot();
+  const installSetup = await prepareOpenClawWindowsInstall();
+  const installEnv = installSetup.env;
+  const npmPrefix = process.platform === 'win32' ? openClawNpmPrefix() : npmGlobalPrefix();
+  const npmRoot = process.platform === 'win32' && npmPrefix ? path.join(npmPrefix, 'node_modules') : npmGlobalRoot();
   const binary = findToolBinary('openclaw');
   const packagePath = npmRoot ? path.join(npmRoot, 'openclaw') : '';
   const binPaths = !npmPrefix
     ? []
     : process.platform === 'win32'
-      ? [path.join(npmPrefix, 'openclaw'), path.join(npmPrefix, 'openclaw.cmd'), path.join(npmPrefix, 'openclaw.ps1')]
+      ? [path.join(npmPrefix, 'openclaw'), path.join(npmPrefix, 'openclaw.cmd'), path.join(npmPrefix, 'openclaw.ps1'), path.join(npmPrefix, 'openclaw.exe')]
       : [path.join(npmPrefix, 'bin', 'openclaw')];
 
   return {
@@ -381,6 +481,8 @@ async function captureOpenClawInstallSnapshot() {
     homeExisted: await pathExists(homePath),
     packagePath,
     binPaths,
+    npmPrefix,
+    reroutedPrefix: Boolean(installEnv?.NPM_CONFIG_PREFIX && installEnv.NPM_CONFIG_PREFIX !== npmGlobalPrefix()),
   };
 }
 
@@ -660,6 +762,8 @@ function finishOpenClawInstallTask(task, status, payload = {}) {
 
 async function runOpenClawInstallTask(task) {
   const isScript = task.method === 'script';
+  const installSetup = await prepareOpenClawWindowsInstall();
+  const installEnv = installSetup.env;
   const command = isScript
     ? (process.platform === 'win32' ? 'powershell.exe' : 'bash')
     : npmCommand();
@@ -678,6 +782,10 @@ async function runOpenClawInstallTask(task) {
       if (nodeResult.status !== 0) throw new Error('未检测到 Node.js，请先安装 Node.js 18+。');
       if (npmResult.status !== 0) throw new Error('未检测到 npm，请先修复 npm 环境后重试。');
       pushOpenClawInstallLog(task, 'stdout', `Node.js ${String(nodeResult.stdout || '').trim()} / npm ${String(npmResult.stdout || '').trim()}`);
+      if (installSetup?.prefix) {
+        pushOpenClawInstallLog(task, 'stdout', `Windows 安装将使用当前用户 npm 目录：${installSetup.prefix}`);
+        if (installSetup.pathChanged) pushOpenClawInstallLog(task, 'stdout', '已自动把该目录加入用户 PATH，后续新开的终端可直接使用 openclaw。');
+      }
     }
 
     // Mark preflight done, start download step
@@ -692,7 +800,7 @@ async function runOpenClawInstallTask(task) {
       }
     }, 8000);
 
-    const result = await runTrackedCommand(task, command, args);
+    const result = await runTrackedCommand(task, command, args, { env: installEnv });
     clearTimeout(autoAdvanceTimer);
     if (isOpenClawInstallCancelled(task)) return;
     if (!result.ok) throw new Error(summarizeInstallCommandFailure(result));
@@ -2060,7 +2168,8 @@ export async function cancelOpenClawInstallTask({ taskId } = {}) {
 export async function installOpenClaw({ method = 'npm' } = {}) {
   if (method === 'script') {
     if (process.platform === 'win32') {
-      const result = await runCommand('powershell.exe', openClawWindowsPowerShellArgs(OPENCLAW_INSTALL_SCRIPT_WIN));
+      const setup = await prepareOpenClawWindowsInstall();
+      const result = await runCommand('powershell.exe', openClawWindowsPowerShellArgs(OPENCLAW_INSTALL_SCRIPT_WIN), { env: setup.env });
       return { ...result, method: 'script', command: OPENCLAW_INSTALL_SCRIPT_WIN };
     } else {
       const result = await runCommand('bash', ['-c', OPENCLAW_INSTALL_SCRIPT_UNIX]);
@@ -2068,7 +2177,8 @@ export async function installOpenClaw({ method = 'npm' } = {}) {
     }
   }
   if (method === 'npm') {
-    const result = await runCommand(npmCommand(), ['install', '-g', 'openclaw@latest']);
+    const setup = await prepareOpenClawWindowsInstall();
+    const result = await runCommand(npmCommand(), ['install', '-g', 'openclaw@latest'], { env: setup.env });
     return { ...result, method: 'npm', command: `${npmCommand()} install -g openclaw@latest` };
   }
   if (method === 'source') {
@@ -2103,11 +2213,13 @@ export async function installOpenClaw({ method = 'npm' } = {}) {
 }
 
 export async function updateOpenClaw() {
-  return runCommand(npmCommand(), ['install', '-g', 'openclaw@latest']);
+  const setup = await prepareOpenClawWindowsInstall();
+  return runCommand(npmCommand(), ['install', '-g', 'openclaw@latest'], { env: setup.env });
 }
 
 export async function reinstallOpenClaw() {
-  return runCommand(npmCommand(), ['install', '-g', 'openclaw', '--force']);
+  const setup = await prepareOpenClawWindowsInstall();
+  return runCommand(npmCommand(), ['install', '-g', 'openclaw', '--force'], { env: setup.env });
 }
 
 export async function uninstallOpenClaw({ purge = false } = {}) {
@@ -2120,7 +2232,8 @@ export async function uninstallOpenClaw({ purge = false } = {}) {
       purgedPaths.push(home);
     } catch { /* directory may not exist, that's fine */ }
   }
-  const result = await runCommand(npmCommand(), ['uninstall', '-g', 'openclaw']);
+  const setup = await prepareOpenClawWindowsInstall();
+  const result = await runCommand(npmCommand(), ['uninstall', '-g', 'openclaw'], { env: setup.env });
   return { ...result, purge, purgedPaths };
 }
 
