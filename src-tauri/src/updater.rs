@@ -73,6 +73,37 @@ fn build_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater
   Ok(updater)
 }
 
+fn is_github_update_endpoint(endpoint: &str) -> bool {
+  Url::parse(endpoint)
+    .ok()
+    .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+    .map(|host| host.contains("github.com") || host.contains("githubusercontent.com"))
+    .unwrap_or_else(|| endpoint.to_ascii_lowercase().contains("github.com"))
+}
+
+fn looks_like_network_issue(error: &str) -> bool {
+  let lower = error.to_ascii_lowercase();
+  [
+    "dns",
+    "failed to lookup",
+    "failed to connect",
+    "connection refused",
+    "connection reset",
+    "network",
+    "timed out",
+    "timeout",
+    "unreachable",
+    "tls",
+    "certificate",
+    "invalid peer certificate",
+    "could not resolve host",
+    "host not found",
+    "request failed",
+  ]
+  .iter()
+  .any(|needle| lower.contains(needle))
+}
+
 pub(crate) async fn get_app_update_info(app: tauri::AppHandle) -> Result<Value, String> {
   let base = updater_config_state(&app);
   if !base.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
@@ -91,9 +122,10 @@ pub(crate) async fn get_app_update_info(app: tauri::AppHandle) -> Result<Value, 
   let current_version = app.package_info().version.to_string();
   let endpoint = updater_endpoint();
   let repository = updater_repository();
+  let github_endpoint = is_github_update_endpoint(&endpoint);
 
-  if let Some(update) = updater.check().await.map_err(|error| error.to_string())? {
-    return Ok(json!({
+  match updater.check().await {
+    Ok(Some(update)) => Ok(json!({
       "enabled": true,
       "configured": true,
       "available": true,
@@ -106,17 +138,45 @@ pub(crate) async fn get_app_update_info(app: tauri::AppHandle) -> Result<Value, 
       "endpoint": endpoint,
       "repository": repository,
       "rawJson": update.raw_json,
-    }));
+      "githubEndpoint": github_endpoint,
+      "networkIssue": false,
+      "networkBlocked": false,
+    })),
+    Ok(None) => Ok(json!({
+      "enabled": true,
+      "configured": true,
+      "available": false,
+      "currentVersion": current_version,
+      "endpoint": endpoint,
+      "repository": repository,
+      "githubEndpoint": github_endpoint,
+      "networkIssue": false,
+      "networkBlocked": false,
+    })),
+    Err(error) => {
+      let error_text = error.to_string();
+      let network_issue = looks_like_network_issue(&error_text);
+      let network_blocked = github_endpoint && network_issue;
+      let status_message = if network_blocked {
+        "你的网络可能无法访问 GitHub 更新源，暂时无法检查更新。"
+      } else {
+        "检查更新失败，请稍后重试。"
+      };
+      Ok(json!({
+        "enabled": true,
+        "configured": true,
+        "available": false,
+        "currentVersion": current_version,
+        "endpoint": endpoint,
+        "repository": repository,
+        "githubEndpoint": github_endpoint,
+        "networkIssue": network_issue,
+        "networkBlocked": network_blocked,
+        "statusMessage": status_message,
+        "error": error_text,
+      }))
+    }
   }
-
-  Ok(json!({
-    "enabled": true,
-    "configured": true,
-    "available": false,
-    "currentVersion": current_version,
-    "endpoint": endpoint,
-    "repository": repository,
-  }))
 }
 
 pub(crate) async fn install_app_update(app: tauri::AppHandle) -> Result<Value, String> {

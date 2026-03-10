@@ -456,14 +456,24 @@
               <h2 class="about-app-name">EasyAIConfig</h2>
               <p class="about-version">Version <span id="aboutAppVersion">1.0.0</span></p>
               <p class="about-status" id="aboutUpdaterStatus"></p>
-              <button id="aboutCheckUpdateBtn" class="about-update-btn">
-                <svg class="about-update-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"
-                  stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M2.5 8a5.5 5.5 0 0 1 10.3-2.5M13.5 8a5.5 5.5 0 0 1-10.3 2.5" />
-                  <path d="M13.5 3v2.5H11M2.5 13v-2.5H5" />
-                </svg>
-                <span>检查更新</span>
-              </button>
+              <div class="about-update-actions">
+                <button id="aboutCheckUpdateBtn" class="about-update-btn">
+                  <svg class="about-update-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"
+                    stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2.5 8a5.5 5.5 0 0 1 10.3-2.5M13.5 8a5.5 5.5 0 0 1-10.3 2.5" />
+                    <path d="M13.5 3v2.5H11M2.5 13v-2.5H5" />
+                  </svg>
+                  <span>检查更新</span>
+                </button>
+                <button id="aboutInstallUpdateBtn" class="about-update-btn about-update-btn-secondary" hidden>
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M8 2.5v7" />
+                    <path d="M5.5 7.5 8 10l2.5-2.5" />
+                    <path d="M3 12.5h10" />
+                  </svg>
+                  <span>立即更新</span>
+                </button>
+              </div>
             </div>
 
             <div class="about-links">

@@ -4847,20 +4847,35 @@ function setPage(page = 'quick') {
   }
 }
 
+function syncAboutUpdateActions() {
+  const info = state.appUpdate || {};
+  const installBtn = el('aboutInstallUpdateBtn');
+  const checkBtn = el('aboutCheckUpdateBtn');
+  if (!installBtn || !checkBtn) return;
+  installBtn.hidden = !Boolean(info.available);
+  checkBtn.classList.toggle('about-update-btn-secondary', Boolean(info.available));
+}
+
 function populateAboutPanel() {
   const info = state.appUpdate || {};
   const appVersion = info.currentVersion || '1.0.0';
+  const status = el('aboutUpdaterStatus');
   el('aboutAppVersion').textContent = appVersion;
-  // INFO section: show client version
   el('aboutCodexVersion').textContent = appVersion;
   if (info.available) {
-    el('aboutUpdaterStatus').textContent = `可更新到 v${info.version || '-'}`;
+    status.textContent = `可更新到 v${info.version || '-'}`;
+    status.className = 'about-status about-status-update';
+  } else if (info.networkBlocked) {
+    status.textContent = info.statusMessage || '你的网络可能无法访问 GitHub 更新源，暂时无法检查更新。';
+    status.className = 'about-status about-status-error';
   } else if (info.enabled) {
-    el('aboutUpdaterStatus').textContent = '已是最新';
+    status.textContent = '已是最新';
+    status.className = 'about-status about-status-ok';
   } else {
-    el('aboutUpdaterStatus').textContent = '';
+    status.textContent = '';
+    status.className = 'about-status';
   }
-  // Keep hidden elements populated for debug
+  syncAboutUpdateActions();
   el('aboutRepo').textContent = info.repository || '-';
   el('aboutEndpoint').textContent = info.endpoint || '-';
   el('aboutPubkeyStatus').textContent = info.publicKeyConfigured ? '已配置' : '未配置';
@@ -7438,6 +7453,14 @@ function renderAppUpdateStatus() {
     return;
   }
 
+  if (info.networkBlocked) {
+    pill.textContent = '客户端更新源不可达';
+    pill.className = 'badge warning';
+    button.hidden = false;
+    button.textContent = '检查更新';
+    return;
+  }
+
   if (info.available) {
     pill.textContent = `客户端 ${info.currentVersion || '-'} → ${info.version || '-'}`;
     pill.className = 'badge warning';
@@ -8012,18 +8035,23 @@ async function loadAppUpdateState({ manual = false } = {}) {
   return state.appUpdate;
 }
 
-async function handleAppUpdate() {
+async function handleAppUpdate(buttonId = 'appUpdateBtn') {
   const info = state.appUpdate || await loadAppUpdateState({ manual: true });
   if (!info) return;
   if (!info.enabled) return;
   if (!info.available) return;
 
-  const confirmed = window.confirm(`当前版本：${info.currentVersion}\n最新版本：${info.version}\n\n确定下载并安装客户端更新吗？安装后会自动重启。`);
+  const confirmed = window.confirm(`当前版本：${info.currentVersion}
+最新版本：${info.version}
+
+确定下载并安装客户端更新吗？安装后会自动重启。`);
   if (!confirmed) return;
 
   setBusy('appUpdateBtn', true, '下载中...');
+  if (buttonId !== 'appUpdateBtn') setBusy(buttonId, true, '更新中...');
   const json = await api('/api/app/update', { method: 'POST', timeoutMs: 300000 });
   setBusy('appUpdateBtn', false);
+  if (buttonId !== 'appUpdateBtn') setBusy(buttonId, false);
   if (!json.ok) return flash(json.error || '客户端更新失败', 'error');
   flash(`客户端已更新到 ${json.data?.version || info.version}，应用即将重启`, 'success');
 }
@@ -9620,6 +9648,10 @@ function bindEvents() {
       flash('检测客户端更新失败，请检查网络连接', 'error');
       return;
     }
+    if (info.networkBlocked) {
+      flash(info.statusMessage || '你的网络可能无法访问 GitHub 更新源，暂时无法检查更新。', 'error');
+      return;
+    }
     if (info.available) {
       return handleAppUpdate();
     }
@@ -10087,7 +10119,6 @@ function bindEvents() {
   el('aboutCheckUpdateBtn').addEventListener('click', async () => {
     const btn = el('aboutCheckUpdateBtn');
     const status = el('aboutUpdaterStatus');
-    // Start spinning animation
     btn.classList.add('checking');
     btn.querySelector('span').textContent = '检查中...';
     status.textContent = '';
@@ -10095,22 +10126,25 @@ function bindEvents() {
 
     const result = await loadAppUpdateState({ manual: true });
 
-    // Stop spinning
     btn.classList.remove('checking');
     btn.querySelector('span').textContent = '检查更新';
 
     if (!result) {
       status.textContent = '检测失败，请检查网络连接';
       status.className = 'about-status about-status-error';
+    } else if (result.networkBlocked) {
+      status.textContent = result.statusMessage || '你的网络可能无法访问 GitHub 更新源，暂时无法检查更新。';
+      status.className = 'about-status about-status-error';
     } else if (result.available) {
       status.textContent = `发现新版本 v${result.version}`;
       status.className = 'about-status about-status-update';
     } else {
-      status.textContent = `已是最新版本`;
+      status.textContent = '已是最新版本';
       status.className = 'about-status about-status-ok';
     }
     populateAboutPanel();
   });
+  el('aboutInstallUpdateBtn')?.addEventListener('click', () => handleAppUpdate('aboutInstallUpdateBtn'));
   el('aboutOpenAdvancedBtn').addEventListener('click', () => setConfigEditorOpen(true));
   el('closeUpdateDialogBtn').addEventListener('click', () => closeUpdateDialog(false));
   el('updateDialogCancelBtn').addEventListener('click', () => {

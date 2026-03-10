@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -71,28 +72,67 @@ function getToolDef(toolId) {
   return TOOL_REGISTRY[toolId] || TOOL_REGISTRY.codex;
 }
 
-function findToolBinary(toolId) {
+function toolBinaryCandidates(toolId) {
   const tool = getToolDef(toolId);
   const binaryName = tool.binaryName;
-
-  const whichResult = spawnSync(
+  const candidates = new Set();
+  const lookupResult = spawnSync(
     process.platform === 'win32' ? 'where' : 'which',
     [binaryName],
     { encoding: 'utf8' }
   );
 
-  if (whichResult.status === 0) {
-    const binPath = (whichResult.stdout || '').split(/\r?\n/).find(Boolean) || null;
-    if (binPath) {
-      const versionResult = spawnSync(binPath, ['--version'], { encoding: 'utf8' });
-      return {
-        installed: versionResult.status === 0,
-        version: versionResult.status === 0 ? (versionResult.stdout || versionResult.stderr || '').trim() : null,
-        path: binPath,
-      };
+  if (lookupResult.status === 0) {
+    for (const line of String(lookupResult.stdout || '').split(/\r?\n/)) {
+      const candidate = line.trim();
+      if (candidate) candidates.add(candidate);
     }
   }
 
+  const npmPrefix = npmGlobalPrefix();
+  const home = os.homedir();
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA?.trim();
+    const winCandidates = [
+      npmPrefix ? path.join(npmPrefix, `${binaryName}.cmd`) : '',
+      npmPrefix ? path.join(npmPrefix, `${binaryName}.ps1`) : '',
+      npmPrefix ? path.join(npmPrefix, `${binaryName}.exe`) : '',
+      npmPrefix ? path.join(npmPrefix, binaryName) : '',
+      appData ? path.join(appData, 'npm', `${binaryName}.cmd`) : '',
+      appData ? path.join(appData, 'npm', `${binaryName}.ps1`) : '',
+      appData ? path.join(appData, 'npm', `${binaryName}.exe`) : '',
+      appData ? path.join(appData, 'npm', binaryName) : '',
+      toolId === 'openclaw' ? path.join(home, '.local', 'bin', `${binaryName}.cmd`) : '',
+    ];
+    winCandidates.filter(Boolean).forEach((candidate) => {
+      if (existsSync(candidate)) candidates.add(candidate);
+    });
+  } else if (npmPrefix) {
+    const unixCandidate = path.join(npmPrefix, 'bin', binaryName);
+    if (existsSync(unixCandidate)) candidates.add(unixCandidate);
+  }
+
+  return [...candidates];
+}
+
+function readBinaryVersion(binPath) {
+  if (!binPath) return { installed: false, version: null, path: null };
+  const lower = binPath.toLowerCase();
+  const result = process.platform === 'win32' && lower.endsWith('.ps1')
+    ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', binPath, '--version'], { encoding: 'utf8' })
+    : spawnSync(binPath, ['--version'], { encoding: 'utf8' });
+  return {
+    installed: result.status === 0,
+    version: result.status === 0 ? (result.stdout || result.stderr || '').trim() : null,
+    path: binPath,
+  };
+}
+
+function findToolBinary(toolId) {
+  for (const candidate of toolBinaryCandidates(toolId)) {
+    const detected = readBinaryVersion(candidate);
+    if (detected.installed) return detected;
+  }
   return { installed: false, version: null, path: null };
 }
 
@@ -189,6 +229,42 @@ function runCommand(command, args, options = {}) {
       resolve({ ok: code === 0, code, stdout, stderr });
     });
   });
+}
+
+function openClawWindowsPowerShellArgs(scriptText) {
+  return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', scriptText];
+}
+
+function tailText(text, count = 10) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(-count)
+    .join('\n');
+}
+
+function summarizeInstallCommandFailure(result) {
+  const stderrTail = tailText(result?.stderr, 12);
+  const stdoutTail = tailText(result?.stdout, 12);
+  if (stderrTail && stdoutTail && !stderrTail.includes(stdoutTail)) return `${stderrTail}\n${stdoutTail}`.trim();
+  return stderrTail || stdoutTail || `安装命令退出码：${result?.code}`;
+}
+
+function describeOpenClawVerificationFailure(task) {
+  const snapshot = task?._installSnapshot || {};
+  const foundBins = (snapshot.binPaths || []).filter((candidate) => candidate && existsSync(candidate));
+  const packageInstalled = Boolean(snapshot.packagePath && existsSync(snapshot.packagePath));
+
+  if (!packageInstalled && !foundBins.length) {
+    return '安装命令已执行完成，但系统里仍未找到 `openclaw` 命令。';
+  }
+
+  const details = [];
+  if (packageInstalled) details.push(`已检测到 npm 包目录：${snapshot.packagePath}`);
+  if (foundBins.length) details.push(`已检测到可执行文件：${foundBins.join('、')}`);
+  details.push('这通常是 Windows 的 PATH 还没刷新。请重新打开 EasyAIConfig 或终端后再试。');
+  return `OpenClaw 可能已经装上了，但当前进程还没识别到命令。${details.join(' ')}`;
 }
 
 function nowIso() {
@@ -585,10 +661,10 @@ function finishOpenClawInstallTask(task, status, payload = {}) {
 async function runOpenClawInstallTask(task) {
   const isScript = task.method === 'script';
   const command = isScript
-    ? (process.platform === 'win32' ? 'powershell' : 'bash')
+    ? (process.platform === 'win32' ? 'powershell.exe' : 'bash')
     : npmCommand();
   const args = isScript
-    ? (process.platform === 'win32' ? ['-Command', OPENCLAW_INSTALL_SCRIPT_WIN] : ['-lc', OPENCLAW_INSTALL_SCRIPT_UNIX])
+    ? (process.platform === 'win32' ? openClawWindowsPowerShellArgs(OPENCLAW_INSTALL_SCRIPT_WIN) : ['-lc', OPENCLAW_INSTALL_SCRIPT_UNIX])
     : ['install', '-g', 'openclaw@latest'];
 
   try {
@@ -619,7 +695,7 @@ async function runOpenClawInstallTask(task) {
     const result = await runTrackedCommand(task, command, args);
     clearTimeout(autoAdvanceTimer);
     if (isOpenClawInstallCancelled(task)) return;
-    if (!result.ok) throw new Error(result.stderr || `安装命令退出码：${result.code}`);
+    if (!result.ok) throw new Error(summarizeInstallCommandFailure(result));
 
     // Ensure install step is marked done before moving to verify
     if (task.stepIndex < 2) {
@@ -631,7 +707,7 @@ async function runOpenClawInstallTask(task) {
 
     setOpenClawInstallStep(task, 3, { detail: '安装命令已执行完成，正在验证 openclaw 命令…' });
     const binary = findToolBinary('openclaw');
-    if (!binary.installed) throw new Error('安装命令已执行完成，但系统里仍未找到 `openclaw` 命令。');
+    if (!binary.installed) throw new Error(describeOpenClawVerificationFailure(task));
 
     setOpenClawInstallStep(task, 4, { status: 'done', summary: 'OpenClaw 安装完成，已经可以使用。', detail: binary.version ? `已检测到版本：${binary.version}` : '已检测到 openclaw 命令。' });
     finishOpenClawInstallTask(task, 'success', {
@@ -1984,7 +2060,7 @@ export async function cancelOpenClawInstallTask({ taskId } = {}) {
 export async function installOpenClaw({ method = 'npm' } = {}) {
   if (method === 'script') {
     if (process.platform === 'win32') {
-      const result = await runCommand('powershell', ['-Command', OPENCLAW_INSTALL_SCRIPT_WIN]);
+      const result = await runCommand('powershell.exe', openClawWindowsPowerShellArgs(OPENCLAW_INSTALL_SCRIPT_WIN));
       return { ...result, method: 'script', command: OPENCLAW_INSTALL_SCRIPT_WIN };
     } else {
       const result = await runCommand('bash', ['-c', OPENCLAW_INSTALL_SCRIPT_UNIX]);
