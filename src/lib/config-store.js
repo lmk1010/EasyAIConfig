@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import TOML from '@iarna/toml';
 import { detectProvider } from './provider-check.js';
@@ -2117,11 +2118,14 @@ export async function loadOpenClawState() {
   if (raw.trim()) {
     try { config = JSON.parse(raw); } catch { /* ignore */ }
   }
+  if (configExists && await ensureOpenClawGatewayDefaults(configPath, config)) {
+    config = JSON.parse(await readText(configPath) || '{}');
+  }
 
-  const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || '18789';
+  const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || String(config.gateway?.port || '18789');
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
   const gatewayReachable = await checkOpenClawGatewayReachable(gatewayUrl);
-  const needsOnboarding = binary.installed && (!configExists || !gatewayReachable);
+  const needsOnboarding = binary.installed && !configExists;
 
   return {
     toolId: 'openclaw',
@@ -2131,7 +2135,7 @@ export async function loadOpenClawState() {
     config,
     configJson: JSON.stringify(config, null, 2),
     binary,
-    gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN || null,
+    gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN || config.gateway?.auth?.token || null,
     gatewayPort,
     gatewayUrl,
     gatewayReachable,
@@ -2146,6 +2150,7 @@ export async function saveOpenClawConfig({ configJson }) {
   try { parsed = JSON.parse(configJson); } catch (e) {
     throw new Error(`JSON 解析失败：${e.message}`);
   }
+  applyOpenClawGatewayDefaults(parsed);
   const home = openclawHome();
   const configPath = path.join(home, 'openclaw.json');
   await ensureDir(home);
@@ -2361,12 +2366,14 @@ export async function onboardOpenClaw({ cwd, authChoice, apiKey, apiKeyType } = 
     '--non-interactive',
     '--accept-risk',
     '--flow', 'quickstart',
-    '--install-daemon',
     '--skip-channels',
     '--skip-skills',
     '--skip-search',
     '--json',
   ];
+  if (process.platform !== 'win32') {
+    args.push('--install-daemon');
+  }
 
   // If user provided an auth choice + API key, pass them
   if (authChoice && authChoice !== 'skip') {
@@ -2416,6 +2423,13 @@ export async function onboardOpenClaw({ cwd, authChoice, apiKey, apiKeyType } = 
     try { jsonResult = JSON.parse(jsonMatch[0]); } catch { /* ignore */ }
   }
 
+  const configPath = path.join(openclawHome(), 'openclaw.json');
+  if (existsSync(configPath)) {
+    let config = {};
+    try { config = JSON.parse(await readText(configPath) || '{}'); } catch { /* ignore */ }
+    await ensureOpenClawGatewayDefaults(configPath, config);
+  }
+
   const success = stdout.includes('Updated') || stdout.includes('openclaw.json') || jsonResult != null;
 
   return {
@@ -2427,4 +2441,27 @@ export async function onboardOpenClaw({ cwd, authChoice, apiKey, apiKeyType } = 
     stderr: stderr.trim(),
     result: jsonResult,
   };
+}
+
+function applyOpenClawGatewayDefaults(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return false;
+  if (!config.gateway || typeof config.gateway !== 'object' || Array.isArray(config.gateway)) config.gateway = {};
+  if (!config.gateway.auth || typeof config.gateway.auth !== 'object' || Array.isArray(config.gateway.auth)) config.gateway.auth = {};
+  let changed = false;
+  if (!String(config.gateway.auth.mode || '').trim()) {
+    config.gateway.auth.mode = 'token';
+    changed = true;
+  }
+  if (config.gateway.auth.mode === 'token' && !String(config.gateway.auth.token || '').trim()) {
+    config.gateway.auth.token = `oc_${crypto.randomBytes(16).toString('hex')}`;
+    changed = true;
+  }
+  return changed;
+}
+
+async function ensureOpenClawGatewayDefaults(configPath, config) {
+  if (!applyOpenClawGatewayDefaults(config)) return false;
+  await ensureDir(path.dirname(configPath));
+  await writeText(configPath, JSON.stringify(config, null, 2) + '\n');
+  return true;
 }

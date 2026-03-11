@@ -1,6 +1,6 @@
 [package]
 name = "easy_ai_config"
-version = "1.0.14"
+version = "1.0.15"
 description = "EasyAIConfig desktop app"
 authors = ["EasyAIConfig Contributors"]
 license = "MIT"
@@ -22,6 +22,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 semver = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+uuid = { version = "1", features = ["v4"] }
 tauri = { version = "2.10.3", features = ["macos-private-api"] }
 tokio = { version = "1", features = ["rt"] }
 tauri-plugin-dialog = "2"

@@ -3205,7 +3205,7 @@ function buildOpenClawConsoleView() {
 
   if (!data.binary?.installed) issues.push({ tone: 'error', title: 'OpenClaw 未安装', copy: '当前还没检测到 openclaw 命令，先去"工具安装"完成安装。', action: { type: 'goto-page', page: 'tools', label: '去安装' } });
   if (!data.configExists) issues.push({ tone: 'warn', title: 'openclaw.json 尚未生成', copy: '说明还没完成初始化或还没真正保存过配置。', action: { type: 'goto-quick-tool', tool: 'openclaw', label: '去快速配置' } });
-  if (data.needsOnboarding) issues.push({ tone: 'warn', title: 'OpenClaw 仍需初始化', copy: '安装后还没完成 onboard，或 Gateway 尚未真正启动。', action: { type: 'launch-openclaw', label: '启动并初始化' } });
+  if (data.needsOnboarding) issues.push({ tone: 'warn', title: 'OpenClaw 仍需初始化', copy: '当前还没有生成 `openclaw.json`，先完成首次初始化。', action: { type: 'launch-openclaw', label: '启动并初始化' } });
   if (!data.gatewayReachable) issues.push({ tone: 'warn', title: 'Dashboard 未在线', copy: '当前没探测到本地 Gateway，很多渠道回调和控制面板操作都会失效。', action: { type: 'launch-openclaw', label: '启动 Gateway' } });
   if (!providers.length) issues.push({ tone: 'error', title: '没有配置模型 Provider', copy: 'OpenClaw 已安装，但 `models.providers` 里还没有可用模型源。', action: { type: 'goto-config-editor-tool', tool: 'openclaw', label: '去配置 Provider' } });
   if (!quick.model) issues.push({ tone: 'error', title: '默认 Agent 模型未设置', copy: '当前没有检测到 `agents.defaults.model.primary`，聊天入口通常无法正常出结果。', action: { type: 'goto-config-editor-tool', tool: 'openclaw', label: '去设置模型' } });

@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
+use uuid::Uuid;
 
 const OPENCLAW_INSTALL_TASK_KEEP: usize = 12;
 const OPENCLAW_INSTALL_SCRIPT_UNIX: &str = "curl -fsSL https://openclaw.ai/install.sh | OPENCLAW_NO_ONBOARD=1 bash -s -- --no-onboard --install-method npm";
@@ -2067,12 +2068,15 @@ pub(crate) fn load_openclaw_state() -> Result<Value, String> {
   let config_path = home.join("openclaw.json");
   let binary = find_tool_binary("openclaw");
 
-  let config = if config_path.exists() {
+  let mut config = if config_path.exists() {
     read_json_file(&config_path).unwrap_or(json!({}))
   } else {
     json!({})
   };
   let config_exists = config_path.exists();
+  if config_exists && ensure_openclaw_gateway_defaults(&mut config) {
+    write_json_file(&config_path, &config)?;
+  }
 
   let config_json = serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string());
 
@@ -2091,7 +2095,7 @@ pub(crate) fn load_openclaw_state() -> Result<Value, String> {
 
   let gateway_url = format!("http://127.0.0.1:{}/", gateway_port);
   let gateway_reachable = check_openclaw_gateway_reachable(&gateway_url);
-  let needs_onboarding = binary.get("installed").and_then(Value::as_bool).unwrap_or(false) && (!config_exists || !gateway_reachable);
+  let needs_onboarding = binary.get("installed").and_then(Value::as_bool).unwrap_or(false) && !config_exists;
 
   Ok(json!({
     "toolId": "openclaw",
@@ -2125,7 +2129,8 @@ pub(crate) fn save_openclaw_config(body: &Value) -> Result<Value, String> {
   if raw.trim().is_empty() {
     return Err("配置内容不能为空".to_string());
   }
-  let parsed: Value = serde_json::from_str(&raw).map_err(|e| format!("JSON 解析失败：{}", e))?;
+  let mut parsed: Value = serde_json::from_str(&raw).map_err(|e| format!("JSON 解析失败：{}", e))?;
+  ensure_openclaw_gateway_defaults(&mut parsed);
   write_json_file(&config_path, &parsed)?;
   Ok(json!({ "saved": true, "configPath": config_path.to_string_lossy().to_string() }))
 }
@@ -2194,12 +2199,14 @@ pub(crate) fn onboard_openclaw(body: &Value) -> Result<Value, String> {
     "--non-interactive".into(),
     "--accept-risk".into(),
     "--flow".into(), "quickstart".into(),
-    "--install-daemon".into(),
     "--skip-channels".into(),
     "--skip-skills".into(),
     "--skip-search".into(),
     "--json".into(),
   ];
+  if !cfg!(target_os = "windows") {
+    args.push("--install-daemon".into());
+  }
 
   if !auth_choice.is_empty() && auth_choice != "skip" {
     args.push("--auth-choice".into());
@@ -2239,6 +2246,14 @@ pub(crate) fn onboard_openclaw(body: &Value) -> Result<Value, String> {
   let stdout = String::from_utf8_lossy(&output.stdout).to_string();
   let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
+  let config_path = openclaw_home()?.join("openclaw.json");
+  if config_path.exists() {
+    let mut config = read_json_file(&config_path).unwrap_or(json!({}));
+    if ensure_openclaw_gateway_defaults(&mut config) {
+      write_json_file(&config_path, &config)?;
+    }
+  }
+
   let success = stdout.contains("Updated") || stdout.contains("openclaw.json") || output.status.success();
 
   Ok(json!({
@@ -2249,6 +2264,59 @@ pub(crate) fn onboard_openclaw(body: &Value) -> Result<Value, String> {
     "stdout": stdout.trim(),
     "stderr": stderr.trim(),
   }))
+}
+
+fn generate_openclaw_gateway_token() -> String {
+  format!("oc_{}", Uuid::new_v4().simple())
+}
+
+fn ensure_openclaw_gateway_defaults(config: &mut Value) -> bool {
+  let mut changed = false;
+  if !config.is_object() {
+    *config = json!({});
+    changed = true;
+  }
+
+  let root = match config.as_object_mut() {
+    Some(value) => value,
+    None => return changed,
+  };
+  let gateway = root.entry("gateway".to_string()).or_insert_with(|| json!({}));
+  if !gateway.is_object() {
+    *gateway = json!({});
+    changed = true;
+  }
+
+  let gateway_obj = match gateway.as_object_mut() {
+    Some(value) => value,
+    None => return changed,
+  };
+  let auth = gateway_obj.entry("auth".to_string()).or_insert_with(|| json!({}));
+  if !auth.is_object() {
+    *auth = json!({});
+    changed = true;
+  }
+
+  let auth_obj = match auth.as_object_mut() {
+    Some(value) => value,
+    None => return changed,
+  };
+  let mode = auth_obj.get("mode").and_then(Value::as_str).unwrap_or("").trim().to_string();
+  if mode.is_empty() {
+    auth_obj.insert("mode".to_string(), json!("token"));
+    changed = true;
+  }
+
+  let effective_mode = auth_obj.get("mode").and_then(Value::as_str).unwrap_or("token");
+  if effective_mode == "token" {
+    let token = auth_obj.get("token").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if token.is_empty() {
+      auth_obj.insert("token".to_string(), json!(generate_openclaw_gateway_token()));
+      changed = true;
+    }
+  }
+
+  changed
 }
 
 pub(crate) fn start_openclaw_install_task(body: &Value) -> Result<Value, String> {
