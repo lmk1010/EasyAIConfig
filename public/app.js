@@ -8629,6 +8629,8 @@ async function launchOpenClawOnly() {
       if (onboardData.stderr) {
         pushLog(`stderr: ${onboardData.stderr}`);
       }
+      const daemonInstallFailed = /Gateway service install failed|schtasks create failed|Access is denied|拒绝访问/i
+        .test(`${onboardData.stdout || ''}\n${onboardData.stderr || ''}`);
 
       if (!onboardJson.ok && !onboardData.ok) {
         pushLog(`初始化失败：${onboardJson.error || onboardData.message || '未知错误'}`);
@@ -8643,9 +8645,12 @@ async function launchOpenClawOnly() {
       hint = '初始化已完成，正在检查 Gateway…';
       advanceStep(2, { detail, hint });
       updateDialog('启动中', '初始化完成，正在检查 Gateway…');
+      if (daemonInstallFailed) {
+        pushLog('检测到守护服务安装失败，改为手动启动 Gateway…');
+      }
 
       // Brief poll to wait for gateway (daemon should start automatically)
-      for (let attempt = 0; attempt < 20; attempt++) {
+      for (let attempt = 0; attempt < (daemonInstallFailed ? 2 : 20); attempt++) {
         await sleep(1500);
         try {
           const refreshed = await fetchOpenClawStateData();
@@ -8669,11 +8674,53 @@ async function launchOpenClawOnly() {
         } catch { /* ignore */ }
       }
 
-      // Gateway didn't come up in 30s, still show success for init
+      pushLog('Gateway 还未就绪，正在补发手动启动命令…');
+      const launchJson = await api('/api/openclaw/launch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: state.current?.launch?.cwd || '' }),
+      });
+      if (!launchJson.ok) {
+        throw new Error(launchJson.error || '启动 Gateway 失败');
+      }
+
+      terminalMsg = launchJson.data?.message || '启动命令已发送';
+      pushLog(terminalMsg);
+      if (launchJson.data?.command) {
+        pushLog(`命令：${launchJson.data.command}`);
+      }
+      detail = launchJson.data?.command || 'openclaw gateway start';
+      hint = '已补发 Gateway 启动命令，正在等待服务响应…';
+      updateDialog('启动中', 'Gateway 启动命令已发送，等待服务响应…');
+
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await sleep(1500);
+        try {
+          const refreshed = await fetchOpenClawStateData();
+          if (refreshed.gatewayReachable) {
+            pushLog(`✓ Dashboard 已在线：${refreshed.gatewayUrl || gatewayUrl}`);
+            advanceStep(3, { detail: `Dashboard 已在线：${refreshed.gatewayUrl || gatewayUrl}`, hint: '一切就绪！' });
+            launchSteps[2].status = 'done';
+            launchSteps[3].status = 'done';
+            stopTimer();
+            updateDialog('启动完成', 'OpenClaw 已准备好');
+            setUpdateDialogLocked(false);
+            patchUpdateDialog({ confirmText: '关闭', confirmDisabled: false });
+            openOpenClawDashboard(refreshed.gatewayUrl || gatewayUrl);
+            flash('OpenClaw Dashboard 已打开', 'success');
+            await loadOpenClawQuickState();
+            return;
+          }
+          if (attempt % 5 === 4) {
+            pushLog(`第 ${attempt + 1} 次补发后检测：Gateway=${refreshed.gatewayReachable ? '在线' : '未响应'}`);
+          }
+        } catch { /* ignore */ }
+      }
+
       pushLog('Gateway 还未就绪，但初始化已完成');
-      hint = '初始化已完成，Gateway 可能还在启动中。稍后可再点"启动 OpenClaw"。';
+      hint = '初始化已完成，但 Gateway 尚未响应。可稍后再试，或用管理员 PowerShell 重新初始化。';
       stopTimer();
-      updateDialog('初始化完成', 'Gateway 正在启动，稍后可再试');
+      updateDialog('初始化完成', 'Gateway 仍未就绪，请检查终端');
       setUpdateDialogLocked(false);
       patchUpdateDialog({ confirmText: '关闭', confirmDisabled: false });
       return;
