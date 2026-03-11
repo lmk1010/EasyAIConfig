@@ -1,6 +1,6 @@
 [package]
 name = "easy_ai_config"
-version = "1.0.7"
+version = "1.0.8"
 description = "EasyAIConfig desktop app"
 authors = ["EasyAIConfig Contributors"]
 license = "MIT"
@@ -30,3 +30,4 @@ tauri-plugin-updater = "2"
 toml = "0.8"
 url = "2"
 which = "8"
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }

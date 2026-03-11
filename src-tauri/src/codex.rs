@@ -3,7 +3,9 @@ use serde_json::{json, Value};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -915,6 +917,55 @@ fn resolve_mingit_download_url(task_id: &str) -> Result<String, String> {
   Err("未能从国内镜像获取 MinGit 下载地址".to_string())
 }
 
+fn download_archive(url: &str, archive_path: &Path) -> Result<(), String> {
+  let client = reqwest::blocking::Client::builder()
+    .timeout(Duration::from_secs(180))
+    .build()
+    .map_err(|error| error.to_string())?;
+  let mut response = client.get(url).send().map_err(|error| error.to_string())?;
+  if !response.status().is_success() {
+    return Err(format!("下载失败，HTTP {}", response.status()));
+  }
+
+  let mut file = File::create(archive_path).map_err(|error| error.to_string())?;
+  response.copy_to(&mut file).map_err(|error| error.to_string())?;
+  file.flush().map_err(|error| error.to_string())?;
+
+  let data = fs::read(archive_path).map_err(|error| error.to_string())?;
+  if data.len() < 4 || &data[..2] != b"PK" {
+    return Err("下载内容不是有效的 ZIP 文件".to_string());
+  }
+  Ok(())
+}
+
+fn extract_zip_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+  if destination.exists() {
+    fs::remove_dir_all(destination).map_err(|error| error.to_string())?;
+  }
+  ensure_dir(destination)?;
+
+  let file = File::open(archive_path).map_err(|error| error.to_string())?;
+  let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+  for index in 0..archive.len() {
+    let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+    let Some(safe_name) = entry.enclosed_name().map(|path| path.to_path_buf()) else {
+      continue;
+    };
+    let output_path = destination.join(safe_name);
+    if entry.is_dir() {
+      ensure_dir(&output_path)?;
+      continue;
+    }
+    if let Some(parent) = output_path.parent() {
+      ensure_dir(parent)?;
+    }
+    let mut output = File::create(&output_path).map_err(|error| error.to_string())?;
+    std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+    output.flush().map_err(|error| error.to_string())?;
+  }
+  Ok(())
+}
+
 fn install_mingit_from_mirror(task_id: &str) -> bool {
   let Some(root) = windows_mingit_root() else {
     push_openclaw_install_log(task_id, "stderr", "无法确定 MinGit 安装目录");
@@ -942,43 +993,20 @@ fn install_mingit_from_mirror(task_id: &str) -> bool {
   };
 
   push_openclaw_install_log(task_id, "stdout", &format!("正在下载 MinGit：{}", download_url));
-  let script = format!(
-    "$ProgressPreference='SilentlyContinue'; \
-$zip={zip}; \
-$dst={dst}; \
-if (Test-Path $zip) {{ Remove-Item -Force $zip }}; \
-if (Test-Path $dst) {{ Remove-Item -Recurse -Force $dst }}; \
-Invoke-WebRequest -UseBasicParsing -Uri {url} -OutFile $zip; \
-Expand-Archive -LiteralPath $zip -DestinationPath $dst -Force",
-    zip = format!("'{}'", archive_path.to_string_lossy().replace('\'', "''")),
-    dst = format!("'{}'", root.to_string_lossy().replace('\'', "''")),
-    url = format!("'{}'", download_url.replace('\'', "''")),
-  );
-
-  let output = create_command("powershell.exe")
-    .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
-    .stdin(Stdio::null())
-    .output();
-
-  match output {
-    Ok(out) => {
-      let stdout_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-      let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
-      if !stdout_text.is_empty() {
-        push_openclaw_install_log(task_id, "stdout", &stdout_text);
-      }
-      if !stderr_text.is_empty() {
-        push_openclaw_install_log(task_id, "stderr", &stderr_text);
-      }
-      if !out.status.success() {
-        push_openclaw_install_log(task_id, "stderr", "MinGit 下载或解压失败");
-        return false;
-      }
-    }
-    Err(error) => {
-      push_openclaw_install_log(task_id, "stderr", &format!("MinGit 下载执行失败：{}", error));
-      return false;
-    }
+  if archive_path.exists() {
+    let _ = fs::remove_file(&archive_path);
+  }
+  if let Err(error) = download_archive(&download_url, &archive_path) {
+    push_openclaw_install_log(task_id, "stderr", &format!("MinGit 下载失败：{}", error));
+    return false;
+  }
+  if let Err(error) = extract_zip_archive(&archive_path, &root) {
+    push_openclaw_install_log(task_id, "stderr", &format!("MinGit 解压失败：{}", error));
+    return false;
+  }
+  if !root.join("cmd").join("git.exe").exists() {
+    push_openclaw_install_log(task_id, "stderr", "MinGit 解压完成，但未找到 git.exe");
+    return false;
   }
 
   if command_exists("git").is_some() {
@@ -1039,44 +1067,20 @@ fn install_portable_node_from_mirror(task_id: &str) -> bool {
   };
 
   push_openclaw_install_log(task_id, "stdout", &format!("正在下载便携版 Node.js：{}", download_url));
-  let script = format!(
-    "$ProgressPreference='SilentlyContinue'; \
-$zip={zip}; \
-$dst={dst}; \
-if (Test-Path $zip) {{ Remove-Item -Force $zip }}; \
-if (Test-Path $dst) {{ Remove-Item -Recurse -Force $dst }}; \
-New-Item -ItemType Directory -Force -Path $dst | Out-Null; \
-Invoke-WebRequest -UseBasicParsing -Uri {url} -OutFile $zip; \
-Expand-Archive -LiteralPath $zip -DestinationPath $dst -Force",
-    zip = format!("'{}'", archive_path.to_string_lossy().replace('\'', "''")),
-    dst = format!("'{}'", root.to_string_lossy().replace('\'', "''")),
-    url = format!("'{}'", download_url.replace('\'', "''")),
-  );
-
-  let output = create_command("powershell.exe")
-    .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
-    .stdin(Stdio::null())
-    .output();
-
-  match output {
-    Ok(out) => {
-      let stdout_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-      let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
-      if !stdout_text.is_empty() {
-        push_openclaw_install_log(task_id, "stdout", &stdout_text);
-      }
-      if !stderr_text.is_empty() {
-        push_openclaw_install_log(task_id, "stderr", &stderr_text);
-      }
-      if !out.status.success() {
-        push_openclaw_install_log(task_id, "stderr", "便携版 Node.js 下载或解压失败");
-        return false;
-      }
-    }
-    Err(error) => {
-      push_openclaw_install_log(task_id, "stderr", &format!("便携版 Node.js 下载执行失败：{}", error));
-      return false;
-    }
+  if archive_path.exists() {
+    let _ = fs::remove_file(&archive_path);
+  }
+  if let Err(error) = download_archive(&download_url, &archive_path) {
+    push_openclaw_install_log(task_id, "stderr", &format!("便携版 Node.js 下载失败：{}", error));
+    return false;
+  }
+  if let Err(error) = extract_zip_archive(&archive_path, &root) {
+    push_openclaw_install_log(task_id, "stderr", &format!("便携版 Node.js 解压失败：{}", error));
+    return false;
+  }
+  if windows_portable_node_dirs().is_empty() {
+    push_openclaw_install_log(task_id, "stderr", "便携版 Node.js 解压完成，但未找到 node.exe");
+    return false;
   }
 
   let node_ok = command_exists("node").is_some();
