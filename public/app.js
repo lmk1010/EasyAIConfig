@@ -124,7 +124,12 @@ function buildOpenClawDashboardFallbackUrl(baseUrl) {
   if (!raw) return '';
   const url = new URL(raw, window.location.origin);
   const token = state.openclawState?.config?.gateway?.auth?.token || state.openclawState?.gatewayToken || '';
-  if (token && !url.searchParams.get('token')) url.searchParams.set('token', token);
+  if (token) {
+    url.searchParams.delete('token');
+    const hashParams = new URLSearchParams(String(url.hash || '').replace(/^#/, ''));
+    hashParams.set('token', token);
+    url.hash = hashParams.toString();
+  }
   return url.toString();
 }
 
@@ -3424,21 +3429,17 @@ async function repairOpenClawDashboard() {
     flash('OpenClaw 尚未安装', 'error');
     return;
   }
-  if (!data.configExists || !data.gatewayReachable) {
-    await launchOpenClawOnly();
-    return;
-  }
-  const json = await api('/api/openclaw/dashboard-url', {
+  const json = await api('/api/openclaw/repair-dashboard-auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cwd: state.current?.launch?.cwd || '' }),
   });
-  if (!json.ok || !json.data?.url) {
-    throw new Error(json.error || '获取 Dashboard 令牌化链接失败');
+  if (!json.ok || !json.data?.dashboardUrl) {
+    throw new Error(json.error || '修复 Gateway 认证失败');
   }
   await fetchOpenClawStateData();
-  await openOpenClawDashboard(json.data.url);
-  flash('已重新打开带令牌的 Dashboard 链接', 'success');
+  await openOpenClawDashboard(json.data.dashboardUrl);
+  flash(json.data.tokenGenerated ? '已生成新 token 并重新打开 Dashboard' : '已重新打开带令牌的 Dashboard', 'success');
 }
 
 async function refreshToolConsoleData({ manual = false } = {}) {

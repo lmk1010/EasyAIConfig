@@ -17,6 +17,7 @@ import {
   getOpenClawInstallTask,
   getOpenClawDashboardUrl,
   onboardOpenClaw,
+  repairOpenClawDashboardAuth,
   launchClaudeCode,
   launchCodex,
   launchOpenClaw,
@@ -364,6 +365,14 @@ export async function startServer() {
   app.post('/api/openclaw/dashboard-url', async (req, res) => {
     try {
       ok(res, { data: await getOpenClawDashboardUrl(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/openclaw/repair-dashboard-auth', async (req, res) => {
+    try {
+      ok(res, { data: await repairOpenClawDashboardAuth(req.body || {}) });
     } catch (error) {
       fail(res, error);
     }

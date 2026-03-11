@@ -2061,6 +2061,26 @@ fn extract_url_from_text(text: &str) -> Option<String> {
     .map(|part| part.trim_end_matches(|ch: char| [')', ',', '.', ';'].contains(&ch)).to_string())
 }
 
+fn extract_openclaw_gateway_token(text: &str) -> Option<String> {
+  text.split_whitespace()
+    .find(|part| part.starts_with("oc_"))
+    .map(|part| part.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_').to_string())
+    .filter(|token| !token.is_empty())
+}
+
+fn normalize_openclaw_dashboard_bootstrap_url(raw_url: &str, gateway_token: &str) -> String {
+  let input = raw_url.trim();
+  if input.is_empty() {
+    return String::new();
+  }
+  let mut url = reqwest::Url::parse(input).unwrap_or_else(|_| reqwest::Url::parse("http://127.0.0.1:18789/").unwrap());
+  url.query_pairs_mut().clear().finish();
+  if !gateway_token.trim().is_empty() {
+    url.set_fragment(Some(&format!("token={}", gateway_token)));
+  }
+  url.to_string()
+}
+
 pub(crate) fn launch_claudecode(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
@@ -2143,10 +2163,7 @@ fn build_openclaw_dashboard_url(gateway_url: &str, config: &Value, gateway_token
   let base = config.pointer("/gateway/controlUi/basePath").and_then(Value::as_str).unwrap_or("/");
   let mut url = reqwest::Url::parse(gateway_url).unwrap_or_else(|_| reqwest::Url::parse("http://127.0.0.1:18789/").unwrap());
   url.set_path(&normalize_openclaw_control_ui_base_path(base));
-  if !gateway_token.trim().is_empty() {
-    url.query_pairs_mut().append_pair("token", gateway_token);
-  }
-  url.to_string()
+  normalize_openclaw_dashboard_bootstrap_url(url.as_ref(), gateway_token)
 }
 
 pub(crate) fn get_openclaw_dashboard_url(body: &Value) -> Result<Value, String> {
@@ -2172,8 +2189,97 @@ pub(crate) fn get_openclaw_dashboard_url(body: &Value) -> Result<Value, String> 
   };
   let merged = format!("{}\n{}", stdout, stderr);
   let fallback = state.get("dashboardUrl").and_then(Value::as_str).unwrap_or("");
-  let url = extract_url_from_text(&merged).unwrap_or_else(|| fallback.to_string());
+  let token = state.get("gatewayToken").and_then(Value::as_str).unwrap_or("");
+  let url = normalize_openclaw_dashboard_bootstrap_url(&extract_url_from_text(&merged).unwrap_or_else(|| fallback.to_string()), token);
   Ok(json!({ "ok": !url.is_empty(), "url": url, "stdout": stdout.trim(), "stderr": stderr.trim(), "command": format!("{} dashboard --no-open", bin_path) }))
+}
+
+pub(crate) fn repair_openclaw_dashboard_auth(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let cwd = {
+    let input = object.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
+    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+  };
+  let mut state = load_openclaw_state()?;
+  let binary = state.get("binary").cloned().unwrap_or_else(|| json!({}));
+  if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
+    return Err("OpenClaw 尚未安装".to_string());
+  }
+  let bin_path = binary.get("path").and_then(Value::as_str).unwrap_or("openclaw").to_string();
+  std::env::set_var("PATH", full_path_env());
+  let mut notes: Vec<String> = Vec::new();
+  let mut token_generated = false;
+  let mut restart_required = false;
+
+  let gateway_auth_mode = state.get("gatewayAuthMode").and_then(Value::as_str).unwrap_or("token").to_string();
+  let mut gateway_token = state.get("gatewayToken").and_then(Value::as_str).unwrap_or("").to_string();
+  if gateway_auth_mode == "token" && gateway_token.is_empty() {
+    let doctor = create_command(&bin_path)
+      .args(["doctor", "--generate-gateway-token"])
+      .current_dir(&cwd)
+      .output();
+    if let Ok(out) = doctor {
+      let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+      let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+      notes.push(format!("doctor: {}", format!("{}\n{}", stdout.trim(), stderr.trim()).trim()));
+    }
+    state = load_openclaw_state()?;
+    gateway_token = state.get("gatewayToken").and_then(Value::as_str).unwrap_or("").to_string();
+    if !gateway_token.is_empty() {
+      token_generated = true;
+      restart_required = state.get("gatewayReachable").and_then(Value::as_bool).unwrap_or(false);
+    }
+  }
+
+  let config_get = create_command(&bin_path)
+    .args(["config", "get", "gateway.auth.token"])
+    .current_dir(&cwd)
+    .output();
+  if let Ok(out) = config_get {
+    let merged = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if gateway_token.is_empty() {
+      gateway_token = extract_openclaw_gateway_token(&merged).unwrap_or_default();
+    }
+  }
+
+  if gateway_auth_mode == "token" && gateway_token.is_empty() {
+    return Err("Gateway token 仍未就绪，请检查 `openclaw config get gateway.auth.token` 或 `openclaw doctor --generate-gateway-token` 输出".to_string());
+  }
+
+  if restart_required {
+    let _ = stop_openclaw_gateway();
+    std::thread::sleep(Duration::from_millis(800));
+  }
+
+  let mut launch = Value::Null;
+  state = load_openclaw_state()?;
+  if restart_required || !state.get("gatewayReachable").and_then(Value::as_bool).unwrap_or(false) {
+    launch = launch_openclaw(&json!({ "cwd": cwd.to_string_lossy().to_string() }))?;
+    for _ in 0..20 {
+      std::thread::sleep(Duration::from_millis(1000));
+      state = load_openclaw_state()?;
+      if state.get("gatewayReachable").and_then(Value::as_bool).unwrap_or(false) {
+        break;
+      }
+    }
+  }
+
+  let dashboard = get_openclaw_dashboard_url(&json!({ "cwd": cwd.to_string_lossy().to_string() }))?;
+  let dashboard_url = normalize_openclaw_dashboard_bootstrap_url(
+    dashboard.get("url").and_then(Value::as_str).unwrap_or_else(|| state.get("dashboardUrl").and_then(Value::as_str).unwrap_or("")),
+    &gateway_token,
+  );
+  Ok(json!({
+    "ok": true,
+    "tokenGenerated": token_generated,
+    "restartRequired": restart_required,
+    "gatewayReachable": state.get("gatewayReachable").cloned().unwrap_or(Value::Bool(false)),
+    "gatewayUrl": state.get("gatewayUrl").cloned().unwrap_or(Value::Null),
+    "gatewayToken": if gateway_token.is_empty() { Value::Null } else { json!(gateway_token) },
+    "dashboardUrl": dashboard_url,
+    "launch": launch,
+    "notes": notes,
+  }))
 }
 
 pub(crate) fn save_openclaw_config(body: &Value) -> Result<Value, String> {

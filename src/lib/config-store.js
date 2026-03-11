@@ -2172,6 +2172,74 @@ export async function getOpenClawDashboardUrl({ cwd } = {}) {
   };
 }
 
+export async function repairOpenClawDashboardAuth({ cwd } = {}) {
+  const targetCwd = path.resolve(cwd || process.cwd());
+  let state = await loadOpenClawState();
+  if (!state.binary?.installed) throw new Error('OpenClaw 尚未安装');
+
+  const binaryPath = state.binary.path || 'openclaw';
+  const notes = [];
+  let tokenGenerated = false;
+  let restartRequired = false;
+
+  if (state.gatewayAuthMode === 'token' && !state.gatewayToken) {
+    const doctor = await runCommand(binaryPath, ['doctor', '--generate-gateway-token'], { cwd: targetCwd });
+    notes.push(`doctor: ${(doctor.stderr || doctor.stdout || '').trim() || `exit=${doctor.code}`}`);
+    const afterDoctor = await loadOpenClawState();
+    if (afterDoctor.gatewayToken && afterDoctor.gatewayToken !== state.gatewayToken) {
+      tokenGenerated = true;
+      restartRequired = afterDoctor.gatewayReachable;
+      state = afterDoctor;
+    }
+  }
+
+  const configGet = await runCommand(binaryPath, ['config', 'get', 'gateway.auth.token'], { cwd: targetCwd });
+  const cliToken = extractOpenClawGatewayToken(`${configGet.stdout || ''}\n${configGet.stderr || ''}`);
+  if (!state.gatewayToken && cliToken) {
+    state = {
+      ...state,
+      gatewayToken: cliToken,
+      gatewayTokenReady: true,
+      dashboardUrl: buildOpenClawDashboardUrl({ gatewayUrl: state.gatewayUrl, config: state.config, gatewayToken: cliToken }),
+    };
+  }
+
+  if (state.gatewayAuthMode === 'token' && !state.gatewayToken) {
+    throw new Error('Gateway token 仍未就绪，请检查 `openclaw config get gateway.auth.token` 或 `openclaw doctor --generate-gateway-token` 输出');
+  }
+
+  if (restartRequired) {
+    await stopOpenClaw();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  }
+
+  let launch = null;
+  state = await loadOpenClawState();
+  if (!state.gatewayReachable || restartRequired) {
+    launch = await launchOpenClaw({ cwd: targetCwd });
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      state = await loadOpenClawState();
+      if (state.gatewayReachable) break;
+    }
+  }
+
+  const dashboard = await getOpenClawDashboardUrl({ cwd: targetCwd });
+  const dashboardUrl = normalizeOpenClawDashboardBootstrapUrl(dashboard.url || state.dashboardUrl || state.gatewayUrl, state.gatewayToken);
+
+  return {
+    ok: true,
+    tokenGenerated,
+    restartRequired,
+    gatewayReachable: state.gatewayReachable,
+    gatewayUrl: state.gatewayUrl,
+    gatewayToken: state.gatewayToken,
+    dashboardUrl,
+    launch,
+    notes,
+  };
+}
+
 export async function saveOpenClawConfig({ configJson }) {
   if (!configJson || !configJson.trim()) throw new Error('配置内容不能为空');
   let parsed;
@@ -2505,10 +2573,31 @@ function buildOpenClawDashboardUrl({ gatewayUrl, config, gatewayToken }) {
   if (!base) return '';
   const url = new URL(base);
   url.pathname = normalizeOpenClawControlUiBasePath(config?.gateway?.controlUi?.basePath || '/');
-  if (gatewayToken) url.searchParams.set('token', gatewayToken);
-  return url.toString();
+  return normalizeOpenClawDashboardBootstrapUrl(url.toString(), gatewayToken);
 }
 
 function extractUrlFromText(text) {
   return String(text || '').match(/https?:\/\/\S+/)?.[0]?.replace(/[),.;]+$/, '') || '';
+}
+
+function extractOpenClawGatewayToken(text) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const match = line.match(/(?:^|\b)(oc_[a-z0-9]+)(?:\b|$)/i);
+    if (match) return match[1];
+  }
+  return '';
+}
+
+function normalizeOpenClawDashboardBootstrapUrl(rawUrl, gatewayToken) {
+  const input = String(rawUrl || '').trim();
+  if (!input) return '';
+  const url = new URL(input);
+  if (gatewayToken) {
+    url.searchParams.delete('token');
+    const hashParams = new URLSearchParams(String(url.hash || '').replace(/^#/, ''));
+    hashParams.set('token', gatewayToken);
+    url.hash = hashParams.toString();
+  }
+  return url.toString();
 }
