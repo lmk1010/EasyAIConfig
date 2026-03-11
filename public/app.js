@@ -119,24 +119,30 @@ function renderQuickRailSupportPanel() {
   ].join('');
 }
 
-/** Open OpenClaw dashboard with auth token appended */
-function openOpenClawDashboard(baseUrl) {
-  if (!baseUrl) return;
-  // Try to get the gateway auth token from config or state
-  const token = state.openclawState?.config?.gateway?.auth?.token
-    || state.openclawState?.gatewayToken
-    || '';
-  let url = baseUrl;
-  if (token) {
-    const sep = url.includes('?') ? '&' : '?';
-    url = `${url}${sep}token=${encodeURIComponent(token)}`;
-  }
-  // Use backend API to open in default browser (window.open doesn't work in Tauri)
+function buildOpenClawDashboardFallbackUrl(baseUrl) {
+  const raw = baseUrl || state.openclawState?.dashboardUrl || state.openclawState?.gatewayUrl || '';
+  if (!raw) return '';
+  const url = new URL(raw, window.location.origin);
+  const token = state.openclawState?.config?.gateway?.auth?.token || state.openclawState?.gatewayToken || '';
+  if (token && !url.searchParams.get('token')) url.searchParams.set('token', token);
+  return url.toString();
+}
+
+async function openOpenClawDashboard(baseUrl) {
+  let url = '';
+  try {
+    const json = await api('/api/openclaw/dashboard-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: state.current?.launch?.cwd || '' }),
+    });
+    url = json?.ok ? (json.data?.url || '') : '';
+  } catch { /* ignore */ }
+  url = url || buildOpenClawDashboardFallbackUrl(baseUrl);
+  if (!url) return;
   api('/api/open-url', { method: 'POST', body: JSON.stringify({ url }) }).then(res => {
     if (!res?.ok) window.open(url, '_blank');
-  }).catch(() => {
-    window.open(url, '_blank');
-  });
+  }).catch(() => window.open(url, '_blank'));
 }
 
 /* ── Task Manager ── */
@@ -3200,13 +3206,14 @@ function buildOpenClawConsoleView() {
   const agentInfo = getOpenClawConsoleAgents(config);
   const defaults = agentInfo.defaults || {};
   const gatewayBind = String(config.gateway?.bind || 'local');
-  const gatewayAuth = String(config.gateway?.auth?.mode || 'token');
+  const gatewayAuth = String(data.gatewayAuthMode || config.gateway?.auth?.mode || 'token');
   const issues = [];
 
   if (!data.binary?.installed) issues.push({ tone: 'error', title: 'OpenClaw 未安装', copy: '当前还没检测到 openclaw 命令，先去"工具安装"完成安装。', action: { type: 'goto-page', page: 'tools', label: '去安装' } });
   if (!data.configExists) issues.push({ tone: 'warn', title: 'openclaw.json 尚未生成', copy: '说明还没完成初始化或还没真正保存过配置。', action: { type: 'goto-quick-tool', tool: 'openclaw', label: '去快速配置' } });
   if (data.needsOnboarding) issues.push({ tone: 'warn', title: 'OpenClaw 仍需初始化', copy: '当前还没有生成 `openclaw.json`，先完成首次初始化。', action: { type: 'launch-openclaw', label: '启动并初始化' } });
   if (!data.gatewayReachable) issues.push({ tone: 'warn', title: 'Dashboard 未在线', copy: '当前没探测到本地 Gateway，很多渠道回调和控制面板操作都会失效。', action: { type: 'launch-openclaw', label: '启动 Gateway' } });
+  if (gatewayAuth === 'token' && !data.gatewayTokenReady) issues.push({ tone: 'error', title: 'Gateway 缺少令牌', copy: '当前启用了 token 鉴权，但没有检测到可用 token，Dashboard 会提示 unauthorized / 4008。', action: { type: 'repair-openclaw-dashboard', label: '一键修复并打开' } });
   if (!providers.length) issues.push({ tone: 'error', title: '没有配置模型 Provider', copy: 'OpenClaw 已安装，但 `models.providers` 里还没有可用模型源。', action: { type: 'goto-config-editor-tool', tool: 'openclaw', label: '去配置 Provider' } });
   if (!quick.model) issues.push({ tone: 'error', title: '默认 Agent 模型未设置', copy: '当前没有检测到 `agents.defaults.model.primary`，聊天入口通常无法正常出结果。', action: { type: 'goto-config-editor-tool', tool: 'openclaw', label: '去设置模型' } });
   if (providers.length && !quick.hasApiKey) issues.push({ tone: 'error', title: '默认 Provider 缺少 API Key', copy: `已检测到默认模型 ${quick.model || '-'}，但没有找到它对应的 API Key。`, action: { type: 'goto-quick-tool', tool: 'openclaw', label: '去补 Key' } });
@@ -3215,7 +3222,7 @@ function buildOpenClawConsoleView() {
 
   const summary = [
     renderToolConsoleStat('安装状态', data.binary?.installed ? (data.binary.version || '已安装') : '未安装', data.binary?.path ? `<span class="tool-console-code">${escapeHtml(data.binary.path)}</span>` : '', { icon: 'install' }),
-    renderToolConsoleStat('Dashboard', data.gatewayReachable ? '在线' : '未启动', data.gatewayUrl ? `<span class="tool-console-code">${escapeHtml(data.gatewayUrl)}</span>` : '等待本地 Gateway 启动', { icon: 'dashboard' }),
+    renderToolConsoleStat('Dashboard', data.gatewayReachable ? '在线' : '未启动', (data.dashboardUrl || data.gatewayUrl) ? `<span class="tool-console-code">${escapeHtml(data.dashboardUrl || data.gatewayUrl)}</span>` : '等待本地 Gateway 启动', { icon: 'dashboard' }),
     renderToolConsoleStat('默认 Agent', quick.model || defaults.model?.primary || '未设置', defaults.thinkingDefault ? `thinking=${escapeHtml(defaults.thinkingDefault)}` : '建议先固定默认模型', { icon: 'agent' }),
     renderToolConsoleStat('接入渠道', String(channels.length), channels.length ? channels.map((item) => item.label).slice(0, 3).join(' · ') : '尚未接入任何聊天渠道', { icon: 'channel' }),
   ].join('');
@@ -3241,7 +3248,7 @@ function buildOpenClawConsoleView() {
     : '<div class="tool-console-empty">当前还没有接入聊天渠道。</div>';
 
   const main = [
-    renderToolConsoleCard('运行状态', 'Gateway、配置与认证', `<div class="tool-console-list">${renderToolConsoleRow('配置文件', `<span class="tool-console-code">${escapeHtml(data.configPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('Gateway', data.gatewayReachable ? '在线' : '未就绪')}${renderToolConsoleRow('Bind', gatewayBind)}${renderToolConsoleRow('Auth', gatewayAuth)}${renderToolConsoleRow('Onboarding', data.needsOnboarding ? '待完成' : '已完成')}</div>`, { icon: 'runtime' }),
+    renderToolConsoleCard('运行状态', 'Gateway、配置与认证', `<div class="tool-console-list">${renderToolConsoleRow('配置文件', `<span class="tool-console-code">${escapeHtml(data.configPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('Gateway', data.gatewayReachable ? '在线' : '未就绪')}${renderToolConsoleRow('Bind', gatewayBind)}${renderToolConsoleRow('Auth', gatewayAuth)}${renderToolConsoleRow('Token', data.gatewayTokenReady ? '已就绪' : '缺失')}${renderToolConsoleRow('Dashboard URL', data.dashboardUrl ? `<span class="tool-console-code">${escapeHtml(data.dashboardUrl)}</span>` : '-', { html: Boolean(data.dashboardUrl) })}${renderToolConsoleRow('Onboarding', data.needsOnboarding ? '待完成' : '已完成')}</div>`, { icon: 'runtime' }),
     renderToolConsoleCard('异常检测', '优先指出启动、模型、认证和暴露风险', renderToolConsoleIssueList(issues, 'OpenClaw 侧暂未发现明显阻塞项。'), { icon: 'issues', iconTone: issues.length ? (issues.some(i => i.tone === 'error') ? 'error' : 'warn') : 'ok' }),
   ].join('');
 
@@ -3250,6 +3257,7 @@ function buildOpenClawConsoleView() {
     renderToolConsoleCard('快速操作', '检测、启动、停止', `<div class="tool-console-actions">${[
       { type: 'refresh-console', label: '重新检测', primary: true },
       data.gatewayReachable ? { type: 'open-openclaw-dashboard', label: '打开 Dashboard' } : { type: 'launch-openclaw', label: '启动 OpenClaw' },
+      { type: 'repair-openclaw-dashboard', label: '一键修复并打开' },
       { type: 'stop-openclaw', label: '停止 Gateway' },
       { type: 'goto-config-editor-tool', tool: 'openclaw', label: '打开配置编辑' },
       { type: 'goto-quick-tool', tool: 'openclaw', label: '切到快速配置' },
@@ -3410,6 +3418,29 @@ async function stopOpenClawGateway({ manual = true } = {}) {
   return result;
 }
 
+async function repairOpenClawDashboard() {
+  const data = state.openclawState || await fetchOpenClawStateData();
+  if (!data.binary?.installed) {
+    flash('OpenClaw 尚未安装', 'error');
+    return;
+  }
+  if (!data.configExists || !data.gatewayReachable) {
+    await launchOpenClawOnly();
+    return;
+  }
+  const json = await api('/api/openclaw/dashboard-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cwd: state.current?.launch?.cwd || '' }),
+  });
+  if (!json.ok || !json.data?.url) {
+    throw new Error(json.error || '获取 Dashboard 令牌化链接失败');
+  }
+  await fetchOpenClawStateData();
+  await openOpenClawDashboard(json.data.url);
+  flash('已重新打开带令牌的 Dashboard 链接', 'success');
+}
+
 async function refreshToolConsoleData({ manual = false } = {}) {
   if (state.consoleRefreshing) return;
   state.consoleRefreshing = true;
@@ -3483,6 +3514,12 @@ async function handleToolConsoleAction(button) {
       return;
     }
     openOpenClawDashboard(data.gatewayUrl || `http://127.0.0.1:${data.gatewayPort || 18789}/`);
+    return;
+  }
+
+  if (action === 'repair-openclaw-dashboard') {
+    await repairOpenClawDashboard();
+    renderToolConsole();
     return;
   }
 

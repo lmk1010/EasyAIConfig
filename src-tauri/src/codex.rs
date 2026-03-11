@@ -2046,6 +2046,21 @@ fn check_openclaw_gateway_reachable(gateway_url: &str) -> bool {
     .unwrap_or(false)
 }
 
+fn normalize_openclaw_control_ui_base_path(value: &str) -> String {
+  let trimmed = value.trim();
+  if trimmed.is_empty() || trimmed == "/" {
+    "/".to_string()
+  } else {
+    format!("/{}", trimmed.trim_matches('/'))
+  }
+}
+
+fn extract_url_from_text(text: &str) -> Option<String> {
+  text.split_whitespace()
+    .find(|part| part.starts_with("http://") || part.starts_with("https://"))
+    .map(|part| part.trim_end_matches(|ch: char| [')', ',', '.', ';'].contains(&ch)).to_string())
+}
+
 pub(crate) fn launch_claudecode(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
@@ -2092,10 +2107,13 @@ pub(crate) fn load_openclaw_state() -> Result<Value, String> {
   let gateway_port = if !gateway_port_env.is_empty() { gateway_port_env }
     else if !gateway_port_cfg.is_empty() { gateway_port_cfg }
     else { "18789".to_string() };
+  let gateway_auth_mode = config.pointer("/gateway/auth/mode")
+    .and_then(Value::as_str).unwrap_or("token").to_string();
 
   let gateway_url = format!("http://127.0.0.1:{}/", gateway_port);
   let gateway_reachable = check_openclaw_gateway_reachable(&gateway_url);
   let needs_onboarding = binary.get("installed").and_then(Value::as_bool).unwrap_or(false) && !config_exists;
+  let dashboard_url = build_openclaw_dashboard_url(&gateway_url, &config, &gateway_token);
 
   Ok(json!({
     "toolId": "openclaw",
@@ -2105,9 +2123,12 @@ pub(crate) fn load_openclaw_state() -> Result<Value, String> {
     "config": config,
     "configJson": config_json,
     "binary": binary,
+    "gatewayAuthMode": gateway_auth_mode,
     "gatewayToken": if gateway_token.is_empty() { Value::Null } else { json!(gateway_token) },
+    "gatewayTokenReady": gateway_auth_mode != "token" || !gateway_token.is_empty(),
     "gatewayPort": gateway_port,
     "gatewayUrl": gateway_url,
+    "dashboardUrl": dashboard_url,
     "gatewayReachable": gateway_reachable,
     "needsOnboarding": needs_onboarding,
     "installMethods": if cfg!(target_os = "windows") {
@@ -2116,6 +2137,43 @@ pub(crate) fn load_openclaw_state() -> Result<Value, String> {
       json!(["script", "npm", "source", "docker"])
     },
   }))
+}
+
+fn build_openclaw_dashboard_url(gateway_url: &str, config: &Value, gateway_token: &str) -> String {
+  let base = config.pointer("/gateway/controlUi/basePath").and_then(Value::as_str).unwrap_or("/");
+  let mut url = reqwest::Url::parse(gateway_url).unwrap_or_else(|_| reqwest::Url::parse("http://127.0.0.1:18789/").unwrap());
+  url.set_path(&normalize_openclaw_control_ui_base_path(base));
+  if !gateway_token.trim().is_empty() {
+    url.query_pairs_mut().append_pair("token", gateway_token);
+  }
+  url.to_string()
+}
+
+pub(crate) fn get_openclaw_dashboard_url(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let cwd = {
+    let input = object.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
+    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+  };
+  let state = load_openclaw_state()?;
+  let binary = state.get("binary").cloned().unwrap_or_else(|| json!({}));
+  if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
+    return Err("OpenClaw 尚未安装".to_string());
+  }
+  let bin_path = binary.get("path").and_then(Value::as_str).unwrap_or("openclaw").to_string();
+  std::env::set_var("PATH", full_path_env());
+  let output = create_command(&bin_path)
+    .args(["dashboard", "--no-open"])
+    .current_dir(&cwd)
+    .output();
+  let (stdout, stderr) = match output {
+    Ok(out) => (String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string()),
+    Err(_) => (String::new(), String::new()),
+  };
+  let merged = format!("{}\n{}", stdout, stderr);
+  let fallback = state.get("dashboardUrl").and_then(Value::as_str).unwrap_or("");
+  let url = extract_url_from_text(&merged).unwrap_or_else(|| fallback.to_string());
+  Ok(json!({ "ok": !url.is_empty(), "url": url, "stdout": stdout.trim(), "stderr": stderr.trim(), "command": format!("{} dashboard --no-open", bin_path) }))
 }
 
 pub(crate) fn save_openclaw_config(body: &Value) -> Result<Value, String> {

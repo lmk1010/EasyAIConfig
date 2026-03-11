@@ -2126,6 +2126,9 @@ export async function loadOpenClawState() {
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
   const gatewayReachable = await checkOpenClawGatewayReachable(gatewayUrl);
   const needsOnboarding = binary.installed && !configExists;
+  const gatewayAuthMode = String(config.gateway?.auth?.mode || 'token');
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || config.gateway?.auth?.token || null;
+  const dashboardUrl = buildOpenClawDashboardUrl({ gatewayUrl, config, gatewayToken });
 
   return {
     toolId: 'openclaw',
@@ -2135,12 +2138,37 @@ export async function loadOpenClawState() {
     config,
     configJson: JSON.stringify(config, null, 2),
     binary,
-    gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN || config.gateway?.auth?.token || null,
+    gatewayAuthMode,
+    gatewayToken,
+    gatewayTokenReady: gatewayAuthMode !== 'token' || Boolean(gatewayToken),
     gatewayPort,
     gatewayUrl,
+    dashboardUrl,
     gatewayReachable,
     needsOnboarding,
     installMethods: process.platform === 'win32' ? ['domestic', 'wsl', 'script'] : ['script', 'npm', 'source', 'docker'],
+  };
+}
+
+export async function getOpenClawDashboardUrl({ cwd } = {}) {
+  const state = await loadOpenClawState();
+  if (!state.binary?.installed) throw new Error('OpenClaw 尚未安装');
+  const targetCwd = path.resolve(cwd || process.cwd());
+  const binaryPath = state.binary.path || 'openclaw';
+  const result = spawnSync(binaryPath, ['dashboard', '--no-open'], {
+    cwd: targetCwd,
+    encoding: 'utf8',
+    timeout: 12000,
+    windowsHide: true,
+  });
+  const merged = `${result.stdout || ''}\n${result.stderr || ''}`;
+  const url = extractUrlFromText(merged) || state.dashboardUrl || state.gatewayUrl;
+  return {
+    ok: Boolean(url),
+    url,
+    stdout: String(result.stdout || '').trim(),
+    stderr: String(result.stderr || '').trim(),
+    command: `${binaryPath} dashboard --no-open`,
   };
 }
 
@@ -2464,4 +2492,23 @@ async function ensureOpenClawGatewayDefaults(configPath, config) {
   await ensureDir(path.dirname(configPath));
   await writeText(configPath, JSON.stringify(config, null, 2) + '\n');
   return true;
+}
+
+function normalizeOpenClawControlUiBasePath(value) {
+  const input = String(value || '').trim();
+  if (!input || input === '/') return '/';
+  return `/${input.replace(/^\/+|\/+$/g, '')}`;
+}
+
+function buildOpenClawDashboardUrl({ gatewayUrl, config, gatewayToken }) {
+  const base = String(gatewayUrl || '').trim();
+  if (!base) return '';
+  const url = new URL(base);
+  url.pathname = normalizeOpenClawControlUiBasePath(config?.gateway?.controlUi?.basePath || '/');
+  if (gatewayToken) url.searchParams.set('token', gatewayToken);
+  return url.toString();
+}
+
+function extractUrlFromText(text) {
+  return String(text || '').match(/https?:\/\/\S+/)?.[0]?.replace(/[),.;]+$/, '') || '';
 }

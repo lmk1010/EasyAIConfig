@@ -15,6 +15,7 @@ import {
   installOpenClawRemote,
   cancelOpenClawInstallTask,
   getOpenClawInstallTask,
+  getOpenClawDashboardUrl,
   onboardOpenClaw,
   launchClaudeCode,
   launchCodex,
@@ -355,6 +356,14 @@ export async function startServer() {
   app.post('/api/openclaw/onboard', async (req, res) => {
     try {
       ok(res, { data: await onboardOpenClaw(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/openclaw/dashboard-url', async (req, res) => {
+    try {
+      ok(res, { data: await getOpenClawDashboardUrl(req.body || {}) });
     } catch (error) {
       fail(res, error);
     }

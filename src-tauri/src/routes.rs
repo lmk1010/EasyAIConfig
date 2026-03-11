@@ -4,6 +4,7 @@ use crate::codex::{
   check_setup_environment, codex_npm_action, get_codex_release_info, launch_codex,
   list_tools, load_claudecode_state, save_claudecode_config, save_claudecode_raw_config,
   launch_claudecode, load_openclaw_state, launch_openclaw, save_openclaw_config,
+  get_openclaw_dashboard_url,
   run_openclaw_install_script, start_openclaw_install_task, get_openclaw_install_task,
   cancel_openclaw_install_task,
   install_openclaw_remote,
@@ -51,6 +52,7 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
         .map_err(|e| format!("spawn_blocking error: {}", e))?
     },
     ("/api/openclaw/config-save", "POST") => save_openclaw_config(body),
+    ("/api/openclaw/dashboard-url", "POST") => get_openclaw_dashboard_url(body),
     ("/api/openclaw/install", "POST") => run_openclaw_install_script(body),
     ("/api/openclaw/install/start", "POST") => start_openclaw_install_task(body),
     ("/api/openclaw/install/status", "GET") => get_openclaw_install_task(query),
