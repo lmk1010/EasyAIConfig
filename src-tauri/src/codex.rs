@@ -856,70 +856,54 @@ fn spawn_openclaw_install_task_runner(task_id: String) {
   });
 }
 
-fn parse_mingit_asset_candidates(listing: &str) -> Vec<String> {
-  let mut assets = Vec::new();
-  for token in listing.split(|ch| ch == '"' || ch == '\'' || ch == '<' || ch == '>' || ch == ' ' || ch == '\n' || ch == '\r') {
-    if !token.contains("MinGit-") || !token.ends_with("-64-bit.zip") {
-      continue;
-    }
-    let name = token.rsplit('/').next().unwrap_or(token).trim();
-    if name.starts_with("MinGit-") && name.ends_with("-64-bit.zip") {
-      assets.push(name.to_string());
-    }
-  }
-  assets.sort_by(|left, right| {
-    let lv = left.trim_start_matches("MinGit-").trim_end_matches("-64-bit.zip");
-    let rv = right.trim_start_matches("MinGit-").trim_end_matches("-64-bit.zip");
-    compare_versions(lv, rv).cmp(&Ordering::Equal)
-  });
-  assets.dedup();
-  assets
-}
-
-fn resolve_mingit_download_url(task_id: &str) -> Result<String, String> {
-  let bases = [
-    "https://ipv4.mirrors.cqupt.edu.cn/github-release/git-for-windows/git/LatestRelease/",
-    "https://mirrors.ustc.edu.cn/github-release/git-for-windows/git/LatestRelease/",
-  ];
-
+fn resolve_mingit_download_urls(task_id: &str) -> Result<Vec<String>, String> {
   let client = reqwest::blocking::Client::builder()
     .timeout(Duration::from_secs(20))
+    .user_agent("EasyAIConfig/1.0.8")
     .build()
     .map_err(|error| error.to_string())?;
 
-  for base in bases {
-    push_openclaw_install_log(task_id, "stdout", &format!("正在获取 MinGit 镜像列表：{}", base));
-    let response = match client.get(base).send() {
-      Ok(resp) => resp,
-      Err(error) => {
-        push_openclaw_install_log(task_id, "stderr", &format!("镜像访问失败：{}", error));
-        continue;
-      }
-    };
-    let body = match response.text() {
-      Ok(text) => text,
-      Err(error) => {
-        push_openclaw_install_log(task_id, "stderr", &format!("镜像页面读取失败：{}", error));
-        continue;
-      }
-    };
-    let mut assets = parse_mingit_asset_candidates(&body);
-    assets.sort_by(|left, right| {
-      let lv = left.trim_start_matches("MinGit-").trim_end_matches("-64-bit.zip");
-      let rv = right.trim_start_matches("MinGit-").trim_end_matches("-64-bit.zip");
-      compare_versions(lv, rv).reverse()
-    });
-    if let Some(asset) = assets.into_iter().next() {
-      return Ok(format!("{}{}", base, asset));
-    }
-  }
+  push_openclaw_install_log(task_id, "stdout", "正在获取 Git for Windows 最新发行信息…");
+  let release: Value = client
+    .get("https://api.github.com/repos/git-for-windows/git/releases/latest")
+    .header("Accept", "application/vnd.github+json")
+    .send()
+    .and_then(|response| response.error_for_status())
+    .map_err(|error| format!("Git 最新发行信息获取失败：{}", error))?
+    .json()
+    .map_err(|error| format!("Git 最新发行信息解析失败：{}", error))?;
 
-  Err("未能从国内镜像获取 MinGit 下载地址".to_string())
+  let asset_url = release
+    .get("assets")
+    .and_then(Value::as_array)
+    .and_then(|assets| {
+      assets.iter().find_map(|asset| {
+        let name = asset.get("name").and_then(Value::as_str)?;
+        if !name.starts_with("MinGit-") || !name.ends_with("-64-bit.zip") {
+          return None;
+        }
+        asset.get("browser_download_url").and_then(Value::as_str)
+      })
+    })
+    .ok_or_else(|| "Git 最新发行里未找到可用的 MinGit 64 位压缩包".to_string())?
+    .to_string();
+
+  let asset_name = asset_url.rsplit('/').next().unwrap_or("MinGit.zip");
+  let latest_release_mirrors = [
+    format!("https://gh-proxy.com/{}", asset_url),
+    format!("https://ghproxy.net/{}", asset_url),
+    format!("https://ipv4.mirrors.cqupt.edu.cn/github-release/git-for-windows/git/LatestRelease/{}", asset_name),
+    format!("https://mirrors.ustc.edu.cn/github-release/git-for-windows/git/LatestRelease/{}", asset_name),
+    asset_url,
+  ];
+
+  Ok(latest_release_mirrors.into_iter().collect())
 }
 
 fn download_archive(url: &str, archive_path: &Path) -> Result<(), String> {
   let client = reqwest::blocking::Client::builder()
     .timeout(Duration::from_secs(180))
+    .user_agent("EasyAIConfig/1.0.8")
     .build()
     .map_err(|error| error.to_string())?;
   let mut response = client.get(url).send().map_err(|error| error.to_string())?;
@@ -984,37 +968,51 @@ fn install_mingit_from_mirror(task_id: &str) -> bool {
   }
 
   let archive_path = tools_dir.join("MinGit.zip");
-  let download_url = match resolve_mingit_download_url(task_id) {
-    Ok(url) => url,
+  let download_urls = match resolve_mingit_download_urls(task_id) {
+    Ok(urls) => urls,
     Err(error) => {
       push_openclaw_install_log(task_id, "stderr", &error);
       return false;
     }
   };
 
-  push_openclaw_install_log(task_id, "stdout", &format!("正在下载 MinGit：{}", download_url));
-  if archive_path.exists() {
-    let _ = fs::remove_file(&archive_path);
-  }
-  if let Err(error) = download_archive(&download_url, &archive_path) {
-    push_openclaw_install_log(task_id, "stderr", &format!("MinGit 下载失败：{}", error));
-    return false;
-  }
-  if let Err(error) = extract_zip_archive(&archive_path, &root) {
-    push_openclaw_install_log(task_id, "stderr", &format!("MinGit 解压失败：{}", error));
-    return false;
-  }
-  if !root.join("cmd").join("git.exe").exists() {
-    push_openclaw_install_log(task_id, "stderr", "MinGit 解压完成，但未找到 git.exe");
-    return false;
+  let mut last_error = None;
+  for download_url in download_urls {
+    push_openclaw_install_log(task_id, "stdout", &format!("正在下载 MinGit：{}", download_url));
+    if archive_path.exists() {
+      let _ = fs::remove_file(&archive_path);
+    }
+    match download_archive(&download_url, &archive_path) {
+      Ok(()) => {}
+      Err(error) => {
+        push_openclaw_install_log(task_id, "stderr", &format!("MinGit 下载失败：{}", error));
+        last_error = Some(error);
+        continue;
+      }
+    }
+    if let Err(error) = extract_zip_archive(&archive_path, &root) {
+      push_openclaw_install_log(task_id, "stderr", &format!("MinGit 解压失败：{}", error));
+      last_error = Some(error);
+      continue;
+    }
+    if !root.join("cmd").join("git.exe").exists() {
+      let error = "MinGit 解压完成，但未找到 git.exe".to_string();
+      push_openclaw_install_log(task_id, "stderr", &error);
+      last_error = Some(error);
+      continue;
+    }
+    if command_exists("git").is_some() {
+      push_openclaw_install_log(task_id, "stdout", "✓ 已自动安装 MinGit，将使用应用内置 Git");
+      return true;
+    }
+    let error = "MinGit 已下载，但仍未检测到 git 命令".to_string();
+    push_openclaw_install_log(task_id, "stderr", &error);
+    last_error = Some(error);
   }
 
-  if command_exists("git").is_some() {
-    push_openclaw_install_log(task_id, "stdout", "✓ 已自动安装 MinGit，将使用应用内置 Git");
-    return true;
+  if let Some(error) = last_error {
+    push_openclaw_install_log(task_id, "stderr", &format!("MinGit 所有下载源均失败：{}", error));
   }
-
-  push_openclaw_install_log(task_id, "stderr", "MinGit 已下载，但仍未检测到 git 命令");
   false
 }
 
