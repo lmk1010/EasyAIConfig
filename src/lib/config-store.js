@@ -2594,10 +2594,8 @@ function normalizeOpenClawDashboardBootstrapUrl(rawUrl, gatewayToken) {
   if (!input) return '';
   const url = new URL(input);
   if (gatewayToken) {
-    url.searchParams.delete('token');
-    const hashParams = new URLSearchParams(String(url.hash || '').replace(/^#/, ''));
-    hashParams.set('token', gatewayToken);
-    url.hash = hashParams.toString();
+    url.hash = '';
+    url.searchParams.set('token', gatewayToken);
   }
   return url.toString();
 }

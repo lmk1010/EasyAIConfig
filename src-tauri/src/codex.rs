@@ -2074,9 +2074,9 @@ fn normalize_openclaw_dashboard_bootstrap_url(raw_url: &str, gateway_token: &str
     return String::new();
   }
   let mut url = reqwest::Url::parse(input).unwrap_or_else(|_| reqwest::Url::parse("http://127.0.0.1:18789/").unwrap());
-  url.query_pairs_mut().clear().finish();
+  url.set_fragment(None);
   if !gateway_token.trim().is_empty() {
-    url.set_fragment(Some(&format!("token={}", gateway_token)));
+    url.query_pairs_mut().clear().append_pair("token", gateway_token).finish();
   }
   url.to_string()
 }

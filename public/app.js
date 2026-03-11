@@ -126,24 +126,31 @@ function buildOpenClawDashboardFallbackUrl(baseUrl) {
   const url = new URL(raw, window.location.origin);
   const token = state.openclawState?.config?.gateway?.auth?.token || state.openclawState?.gatewayToken || '';
   if (token) {
-    url.searchParams.delete('token');
-    const hashParams = new URLSearchParams(String(url.hash || '').replace(/^#/, ''));
-    hashParams.set('token', token);
-    url.hash = hashParams.toString();
+    url.hash = '';
+    url.searchParams.set('token', token);
   }
   return url.toString();
 }
 
+function isLikelyOpenClawBootstrapUrl(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || '').trim());
+    return Boolean(url.hash || url.searchParams.get('token') || url.pathname !== '/');
+  } catch {
+    return false;
+  }
+}
+
 async function openOpenClawDashboard(baseUrl) {
-  let url = buildOpenClawDashboardFallbackUrl(baseUrl);
-  if (!baseUrl) {
+  let url = isLikelyOpenClawBootstrapUrl(baseUrl) ? String(baseUrl || '').trim() : '';
+  if (!url) {
     try {
       const json = await api('/api/openclaw/dashboard-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cwd: state.current?.launch?.cwd || '' }),
       });
-      url = (json?.ok ? (json.data?.url || '') : '') || url;
+      url = (json?.ok ? (json.data?.url || '') : '') || buildOpenClawDashboardFallbackUrl(baseUrl);
     } catch { /* ignore */ }
   }
   if (!url) return;
@@ -1474,7 +1481,7 @@ function renderOpenClawInstalledView(container, data) {
   container.querySelector('#openclawDashboardBtn')?.addEventListener('click', async () => {
     try {
       if (data.gatewayReachable) {
-        openOpenClawDashboard(data.gatewayUrl || `http://127.0.0.1:${data.gatewayPort}/`);
+        await repairOpenClawDashboard({ silent: true });
         return;
       }
       await runOpenClawOnboardFlow({ autoOpenDashboard: true });
@@ -2012,7 +2019,7 @@ function bindOnboardModelConfigEvents() {
           if (confirmStatus) confirmStatus.innerHTML = omc.confirmStatus;
           await loadOpenClawQuickState();
           if (state.openClawSetupContext?.autoOpenDashboard && state.openclawState?.gatewayReachable) {
-            openOpenClawDashboard(state.openclawState.gatewayUrl || `http://127.0.0.1:${state.openclawState.gatewayPort}/`);
+            await repairOpenClawDashboard({ silent: true });
           }
         } else {
           throw new Error(json.error || '模型配置保存失败');
@@ -2908,7 +2915,7 @@ document.addEventListener('click', async (e) => {
       flash('Dashboard 还没准备好，请先完成终端向导', 'info');
       return;
     }
-    openOpenClawDashboard(data.gatewayUrl || `http://127.0.0.1:${data.gatewayPort}/`);
+    await repairOpenClawDashboard({ silent: true });
   } catch {
     flash('打开 Dashboard 失败', 'error');
   }
@@ -3427,10 +3434,10 @@ async function stopOpenClawGateway({ manual = true } = {}) {
   return result;
 }
 
-async function repairOpenClawDashboard() {
+async function repairOpenClawDashboard({ silent = false } = {}) {
   const data = state.openclawState || await fetchOpenClawStateData();
   if (!data.binary?.installed) {
-    flash('OpenClaw 尚未安装', 'error');
+    if (!silent) flash('OpenClaw 尚未安装', 'error');
     return;
   }
   const json = await api('/api/openclaw/repair-dashboard-auth', {
@@ -3444,7 +3451,9 @@ async function repairOpenClawDashboard() {
   state.openClawLastRepair = json.data;
   await fetchOpenClawStateData();
   await openOpenClawDashboard(json.data.dashboardUrl);
-  flash(json.data.tokenGenerated ? '已生成新 token 并重新打开 Dashboard' : '已重新打开带令牌的 Dashboard', 'success');
+  if (!silent) {
+    flash(json.data.tokenGenerated ? '已生成新 token 并重新打开 Dashboard' : '已重新打开带令牌的 Dashboard', 'success');
+  }
 }
 
 async function refreshToolConsoleData({ manual = false } = {}) {
@@ -3519,7 +3528,7 @@ async function handleToolConsoleAction(button) {
       flash('Dashboard 还没准备好，请先启动 OpenClaw', 'info');
       return;
     }
-    openOpenClawDashboard(data.gatewayUrl || `http://127.0.0.1:${data.gatewayPort || 18789}/`);
+    await repairOpenClawDashboard({ silent: true });
     return;
   }
 
@@ -7337,7 +7346,7 @@ async function applyConfigEditor() {
       });
       if (launch.ok && launch.data?.gatewayUrl) {
         flash('配置已生效，OpenClaw Gateway 启动中', 'success');
-        openOpenClawDashboard(launch.data.gatewayUrl);
+        await repairOpenClawDashboard({ silent: true });
       } else {
         flash(launch.data?.message || '配置已保存', 'success');
       }
@@ -8472,7 +8481,7 @@ async function launchCodexOnly() {
   if (state.activeTool === 'openclaw') {
     // If already running, just open the dashboard
     if (el('launchBtn')?.classList.contains('running') && state._ocGatewayUrl) {
-      openOpenClawDashboard(state._ocGatewayUrl);
+      await repairOpenClawDashboard({ silent: true });
       flash('OpenClaw Dashboard 已打开', 'success');
       return;
     }
@@ -8706,7 +8715,7 @@ async function launchOpenClawOnly() {
             updateDialog('启动完成', 'OpenClaw 已准备好');
             setUpdateDialogLocked(false);
             patchUpdateDialog({ confirmText: '关闭', confirmDisabled: false });
-            openOpenClawDashboard(refreshed.gatewayUrl || gatewayUrl);
+            await repairOpenClawDashboard({ silent: true });
             flash('OpenClaw Dashboard 已打开', 'success');
             await loadOpenClawQuickState();
             return;
@@ -8749,7 +8758,7 @@ async function launchOpenClawOnly() {
             updateDialog('启动完成', 'OpenClaw 已准备好');
             setUpdateDialogLocked(false);
             patchUpdateDialog({ confirmText: '关闭', confirmDisabled: false });
-            openOpenClawDashboard(refreshed.gatewayUrl || gatewayUrl);
+            await repairOpenClawDashboard({ silent: true });
             flash('OpenClaw Dashboard 已打开', 'success');
             await loadOpenClawQuickState();
             return;
@@ -8790,7 +8799,7 @@ async function launchOpenClawOnly() {
       updateDialog('启动完成', 'Dashboard 已就绪');
       setUpdateDialogLocked(false);
       patchUpdateDialog({ confirmText: '关闭', confirmDisabled: false });
-      openOpenClawDashboard(gatewayUrl);
+      await repairOpenClawDashboard({ silent: true });
       flash('OpenClaw Dashboard 已打开', 'success');
       return;
     }
@@ -8833,7 +8842,7 @@ async function launchOpenClawOnly() {
           updateDialog('启动完成', 'OpenClaw Dashboard 已准备好');
           setUpdateDialogLocked(false);
           patchUpdateDialog({ confirmText: '关闭', confirmDisabled: false });
-          openOpenClawDashboard(refreshed.gatewayUrl || gatewayUrl);
+          await repairOpenClawDashboard({ silent: true });
           flash('OpenClaw Dashboard 已打开', 'success');
           await loadOpenClawQuickState();
           return;
@@ -9749,9 +9758,9 @@ function bindEvents() {
   el('launchBtn').addEventListener('click', launchCodexOnly);
   // OpenClaw dashboard quick button
   if (el('ocOpenDashboardBtn')) {
-    el('ocOpenDashboardBtn').addEventListener('click', () => {
+    el('ocOpenDashboardBtn').addEventListener('click', async () => {
       if (state._ocGatewayUrl) {
-        openOpenClawDashboard(state._ocGatewayUrl);
+        await repairOpenClawDashboard({ silent: true });
         flash('OpenClaw Dashboard 已打开', 'success');
       }
     });
