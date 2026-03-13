@@ -7,3 +7,11 @@ dist/
 # Tauri build artifacts
 src-tauri/target/
 src-tauri/WixTools/
+
+# Local secrets / personal config
+.env
+.env.*
+*.local
+*.secret
+.codex/
+.claude/
