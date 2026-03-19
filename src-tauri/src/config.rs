@@ -119,6 +119,7 @@ pub(crate) fn load_state(query: &Value) -> Result<Value, String> {
     "configExists": !config_content.trim().is_empty(),
     "envExists": !env_content.trim().is_empty(),
     "configToml": config_content,
+    "authJsonRaw": auth_content,
     "config": config,
     "providers": providers,
     "activeProvider": active_provider,
@@ -411,6 +412,20 @@ pub(crate) fn save_raw_config(body: &Value) -> Result<Value, String> {
     write_text(&paths.config_path, &config_toml)?;
   }
 
+  // Also save auth.json if provided
+  let auth_json_raw = get_string(&object, "authJson");
+  let mut auth_changed = false;
+  if !auth_json_raw.trim().is_empty() {
+    // Validate JSON
+    serde_json::from_str::<Value>(&auth_json_raw).map_err(|e| format!("auth.json 解析失败：{e}"))?;
+    let auth_path = codex_home.join("auth.json");
+    let current_auth = read_text(&auth_path)?;
+    if current_auth != auth_json_raw {
+      write_text(&auth_path, &auth_json_raw)?;
+      auth_changed = true;
+    }
+  }
+
   Ok(json!({
     "saved": true,
     "backupPath": backup_path,
@@ -420,7 +435,7 @@ pub(crate) fn save_raw_config(body: &Value) -> Result<Value, String> {
       "configPath": paths.config_path.to_string_lossy().to_string(),
       "envPath": paths.env_path.to_string_lossy().to_string(),
     },
-    "changed": changed,
+    "changed": changed || auth_changed,
   }))
 }
 

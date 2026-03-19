@@ -310,10 +310,31 @@ function _ensureTaskTimer() {
 }
 
 /* ── Theme ── */
+function getAutoTheme() {
+  const hour = new Date().getHours();
+  return (hour >= 6 && hour < 18) ? 'light' : 'dark';
+}
+
+function resolveTheme(preference) {
+  if (preference === 'auto') return getAutoTheme();
+  return preference;
+}
+
 function initTheme() {
-  const saved = localStorage.getItem('easyaiconfig_theme') || 'dark';
-  state.theme = saved;
-  applyTheme(saved);
+  const saved = localStorage.getItem('easyaiconfig_theme') || 'auto';
+  state.themePreference = saved; // 'dark' | 'light' | 'auto'
+  state.theme = resolveTheme(saved);
+  applyTheme(state.theme);
+  // Re-evaluate auto theme every minute
+  setInterval(() => {
+    if (state.themePreference === 'auto') {
+      const next = getAutoTheme();
+      if (next !== state.theme) {
+        state.theme = next;
+        applyTheme(next);
+      }
+    }
+  }, 60000);
 }
 
 function applyTheme(theme) {
@@ -321,12 +342,25 @@ function applyTheme(theme) {
   // Update range slider fills for new theme colors
   document.querySelectorAll('.config-range').forEach(updateRangeFill);
   syncRawCodeEditorTheme();
+  // Update theme toggle button
+  const btn = el('themeToggleBtn');
+  if (btn) {
+    btn.dataset.themePref = state.themePreference;
+    const titles = { dark: '暗黑模式 · 点击切换浅色', light: '浅色模式 · 点击切换自动', auto: '自动模式 · 点击切换暗黑' };
+    btn.title = titles[state.themePreference] || '切换主题';
+  }
 }
 
 function toggleTheme() {
-  state.theme = state.theme === 'dark' ? 'light' : 'dark';
-  localStorage.setItem('easyaiconfig_theme', state.theme);
+  // Cycle: dark → light → auto
+  const order = ['dark', 'light', 'auto'];
+  const idx = order.indexOf(state.themePreference);
+  state.themePreference = order[(idx + 1) % order.length];
+  state.theme = resolveTheme(state.themePreference);
+  localStorage.setItem('easyaiconfig_theme', state.themePreference);
   applyTheme(state.theme);
+  const labels = { dark: '已切换：暗黑模式', light: '已切换：浅色模式', auto: '已切换：自动模式（跟随时间）' };
+  flash(labels[state.themePreference] || '', 'success');
 }
 
 // Apply theme before any rendering to prevent flash
@@ -4991,6 +5025,7 @@ function initRawCodeEditors() {
   }
 
   ensureRawCodeEditor({ editorId: 'cfgRawTomlEditor', textareaId: 'cfgRawTomlTextarea', mode: 'ace/mode/toml' });
+  ensureRawCodeEditor({ editorId: 'cfgRawAuthEditor', textareaId: 'cfgRawAuthTextarea', mode: 'ace/mode/json' });
   ensureRawCodeEditor({ editorId: 'ocCfgRawJsonEditor', textareaId: 'ocCfgRawJsonTextarea', mode: 'ace/mode/json' });
   syncRawCodeEditorTheme();
 }
@@ -6270,14 +6305,12 @@ function setPage(page = 'quick') {
     if (!hasCachedMetrics) state.dashboardLoading = true;
     renderDashboardPage();
     startDashboardAutoRefresh();
-    void loadDashboardSideStates().then(() => {
+    // Fetch side states and Claude data in parallel, then do ONE re-render
+    const sideP = loadDashboardSideStates();
+    const claudeP = state.dashboardTool === 'claudecode' ? ensureClaudeDashboardData() : Promise.resolve();
+    Promise.all([sideP, claudeP]).then(() => {
       if (state.activePage === 'dashboard') renderDashboardPage();
     });
-    if (state.dashboardTool === 'claudecode') {
-      void ensureClaudeDashboardData().then(() => {
-        if (state.activePage === 'dashboard') renderDashboardPage();
-      });
-    }
     void refreshDashboardData({ silent: hasCachedMetrics });
   }
   if (page === 'configEditor') {
@@ -6582,6 +6615,7 @@ function populateConfigEditor() {
   el('cfgInstructionsTextarea').value = configValue('instructions', '');
   el('cfgBaseInstructionsTextarea').value = configValue('base_instructions', '');
   el('cfgRawTomlTextarea').value = state.current?.configToml || '';
+  el('cfgRawAuthTextarea').value = state.current?.authJsonRaw || '{}';
   syncRawConfigHighlight();
   refreshConfigNumberFields();
   syncShortcutActiveState();
@@ -8642,6 +8676,7 @@ async function saveConfigEditor() {
 
 async function saveRawConfigEditor() {
   setBusy('saveRawConfigEditorBtn', true, '保存中...');
+  const authJsonVal = el('cfgRawAuthTextarea')?.value || '';
   const json = await api('/api/config/raw-save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -8650,11 +8685,12 @@ async function saveRawConfigEditor() {
       projectPath: el('projectPathInput').value.trim(),
       codexHome: el('codexHomeInput').value.trim(),
       configToml: el('cfgRawTomlTextarea').value,
+      authJson: authJsonVal.trim() || undefined,
     }),
   });
   setBusy('saveRawConfigEditorBtn', false);
   if (!json.ok) return false;
-  flash('原始 TOML 已保存', 'success');
+  flash('配置已保存', 'success');
   await loadState({ preserveForm: true });
   populateConfigEditor();
   return true;
@@ -10519,6 +10555,8 @@ function openSetupWizard() {
 
 function closeSetupWizard() {
   state.wizardOpen = false;
+  // Remember that user dismissed the wizard — don't auto-open next time
+  localStorage.setItem('easyaiconfig_wizard_dismissed', '1');
   const overlay = el('setupWizard');
   overlay.classList.add('hide');
   overlay.setAttribute('aria-hidden', 'true');
@@ -11648,9 +11686,23 @@ function bindEvents() {
     const tab = e.target.closest('[data-dashboard-tool]');
     if (tab) {
       state.dashboardTool = tab.dataset.dashboardTool || 'codex';
-      renderDashboardPage();
       if (state.dashboardTool === 'claudecode') {
-        await ensureClaudeDashboardData();
+        // If no cached data yet, fetch first to avoid empty flash
+        const hasCachedData = state.claudeCodeState?.usage?.daily?.length > 0;
+        if (!hasCachedData) {
+          renderDashboardPage(); // show loading state
+          await ensureClaudeDashboardData();
+        }
+        renderDashboardPage();
+        // Refresh in background if we used cached data
+        if (hasCachedData) {
+          ensureClaudeDashboardData().then(() => {
+            if (state.activePage === 'dashboard' && state.dashboardTool === 'claudecode') {
+              renderDashboardPage();
+            }
+          });
+        }
+      } else {
         renderDashboardPage();
       }
       return;
@@ -11710,6 +11762,21 @@ function bindEvents() {
     if (!button) return;
     e.preventDefault();
     await handleToolConsoleAction(button);
+  });
+
+  // ── Raw file tab switching (config.toml / auth.json) ──
+  el('cfgRawTabs')?.addEventListener('click', (e) => {
+    const tab = e.target.closest('.cfg-raw-tab');
+    if (!tab) return;
+    const file = tab.dataset.rawFile;
+    const tabs = el('cfgRawTabs');
+    tabs.dataset.active = file; // drives the CSS sliding pill
+    tabs.querySelectorAll('.cfg-raw-tab').forEach(t => t.classList.toggle('active', t === tab));
+    const tomlWrap = el('cfgRawTomlWrap');
+    const authWrap = el('cfgRawAuthWrap');
+    if (tomlWrap) tomlWrap.style.display = file === 'toml' ? '' : 'none';
+    if (authWrap) authWrap.style.display = file === 'auth' ? '' : 'none';
+    refreshRawCodeEditors();
   });
 
   el('configEditorSearchInput')?.addEventListener('input', applyConfigEditorSearch);
@@ -11904,8 +11971,9 @@ loadState({ preserveForm: false }).then(() => {
     // First time opening the app — show welcome chooser
     showWelcome();
   } else {
-    // Returning user — auto-trigger wizard only if setup is needed
-    if (state.current && (!state.current.codexBinary?.installed || !state.current.configExists || !(state.current.providers?.length > 0))) {
+    // Returning user — only auto-trigger wizard if never dismissed before
+    const wizardDismissed = localStorage.getItem('easyaiconfig_wizard_dismissed');
+    if (!wizardDismissed && state.current && (!state.current.codexBinary?.installed || !state.current.configExists || !(state.current.providers?.length > 0))) {
       openSetupWizard();
     }
   }

@@ -8622,6 +8622,74 @@ select:focus {
   gap: 6px;
 }
 
+/* ── Raw file tab switcher — sliding pill ── */
+.cfg-raw-tabs {
+  display: inline-flex;
+  position: relative;
+  background: rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 0;
+}
+.cfg-raw-tabs::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  height: calc(100% - 6px);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.1);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 0;
+  pointer-events: none;
+}
+.cfg-raw-tabs[data-active="auth"]::before {
+  transform: translateX(100%);
+}
+.cfg-raw-tab {
+  position: relative;
+  z-index: 1;
+  padding: 4px 14px;
+  border: none;
+  background: none !important;
+  color: rgba(255,255,255,0.35);
+  font-size: 0.7rem;
+  font-weight: 500;
+  border-radius: 6px;
+  height: auto;
+  cursor: pointer;
+  transition: color 0.2s ease;
+  font-family: inherit;
+  white-space: nowrap;
+  user-select: none;
+}
+.cfg-raw-tab:hover {
+  color: rgba(255,255,255,0.6);
+}
+.cfg-raw-tab.active {
+  color: rgba(255,255,255,0.9);
+}
+
+/* Light theme */
+[data-theme="light"] .cfg-raw-tabs {
+  background: rgba(15,23,42,0.06);
+}
+[data-theme="light"] .cfg-raw-tabs::before {
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08), 0 0 0 1px rgba(15,23,42,0.06);
+}
+[data-theme="light"] .cfg-raw-tab {
+  color: rgba(15,23,42,0.35);
+}
+[data-theme="light"] .cfg-raw-tab:hover {
+  color: rgba(15,23,42,0.6);
+}
+[data-theme="light"] .cfg-raw-tab.active {
+  color: rgba(15,23,42,0.88);
+}
+
 .raw-editor-chip {
   display: inline-flex;
   align-items: center;
@@ -12578,22 +12646,19 @@ button.about-link-card {
 }
 
 /* Dark mode: show sun, hide moon */
-.theme-ico-sun {
-  display: block;
-}
-
-.theme-ico-moon {
+/* Theme icons: show icon based on preference, not current theme */
+.theme-ico-sun,
+.theme-ico-moon,
+.theme-ico-auto {
   display: none;
 }
 
-/* Light mode: show moon, hide sun */
-[data-theme="light"] .theme-ico-sun {
-  display: none;
-}
-
-[data-theme="light"] .theme-ico-moon {
-  display: block;
-}
+/* dark pref → show sun icon (click to go light) */
+[data-theme-pref="dark"] .theme-ico-sun { display: block; }
+/* light pref → show moon icon (click to go auto) */
+[data-theme-pref="light"] .theme-ico-moon { display: block; }
+/* auto pref → show auto icon (click to go dark) */
+[data-theme-pref="auto"] .theme-ico-auto { display: block; }
 
 [data-theme="light"] .topbar-icon-btn {
   background: rgba(0, 0, 0, 0.02);

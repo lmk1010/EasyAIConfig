@@ -103,7 +103,7 @@
             <p id="pageSubtitle">输入 URL 和 API Key，剩下交给 EasyAIConfig。</p>
           </div>
           <div class="workspace-actions" id="defaultActions">
-            <button id="themeToggleBtn" class="topbar-icon-btn" title="切换主题">
+            <button id="themeToggleBtn" class="topbar-icon-btn" title="切换主题" data-theme-pref="auto">
               <svg class="theme-ico-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="5" />
@@ -119,6 +119,11 @@
               <svg class="theme-ico-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+              <svg class="theme-ico-auto" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 3a9 9 0 0 1 0 18" fill="currentColor" opacity="0.4" stroke="none"/>
               </svg>
             </button>
             <button id="openAdvancedBtn" class="secondary subtle-btn">配置编辑</button>
@@ -2099,14 +2104,25 @@
                 <!-- ═══ Right Sidebar ═══ -->
                 <aside class="config-editor-side">
                   <!-- Codex raw TOML -->
+                  <!-- Codex raw editors (TOML + Auth JSON) -->
                   <div class="config-side-section" data-tool-editor-side="codex">
                     <div class="subline">
-                      <span class="eyebrow">当前原始 TOML</span>
+                      <div class="cfg-raw-tabs" id="cfgRawTabs" data-active="toml">
+                        <button type="button" class="cfg-raw-tab active" data-raw-file="toml">config.toml</button>
+                        <button type="button" class="cfg-raw-tab" data-raw-file="auth">auth.json</button>
+                      </div>
                       <div class="raw-config-actions"><span class="raw-editor-chip">Ace Editor</span></div>
                     </div>
-                    <div id="cfgRawTomlEditor" class="raw-code-editor" aria-label="当前原始 TOML 编辑器"></div>
-                    <textarea id="cfgRawTomlTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
-                    <div class="toml-hint">支持 TOML 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存并生效」。</div>
+                    <div id="cfgRawTomlWrap">
+                      <div id="cfgRawTomlEditor" class="raw-code-editor" aria-label="当前原始 TOML 编辑器"></div>
+                      <textarea id="cfgRawTomlTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
+                      <div class="toml-hint">支持 TOML 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存并生效」。</div>
+                    </div>
+                    <div id="cfgRawAuthWrap" style="display:none">
+                      <div id="cfgRawAuthEditor" class="raw-code-editor" aria-label="当前原始 auth.json 编辑器"></div>
+                      <textarea id="cfgRawAuthTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
+                      <div class="toml-hint">编辑 auth.json 中的 API Key 键值对；修改后点击顶部「保存并生效」。</div>
+                    </div>
                   </div>
                   <!-- OpenClaw raw JSON -->
                   <div class="config-side-section hide" data-tool-editor-side="openclaw">
