@@ -138,6 +138,7 @@
               验证
             </button>
             <button id="closeConfigEditorBtn" class="secondary subtle-btn">关闭</button>
+            <button id="resetConfigEditorBtn" class="secondary subtle-btn hide" title="重置当前配置（保留 Provider）">重置配置</button>
             <button id="saveConfigEditorBtn" class="secondary subtle-btn">保存配置</button>
             <button id="applyConfigEditorBtn">保存并生效</button>
           </div>
@@ -250,6 +251,11 @@
                       <input id="baseUrlInput" placeholder="https://your-provider.com/v1" />
                     </label>
 
+                    <label id="claudeProviderKeyField" class="field field-wide hide">
+                      <span>Provider Key</span>
+                      <input id="claudeProviderKeyInput" placeholder="例如 official / work / test" />
+                    </label>
+
                     <label class="field field-wide">
                       <span>API Key</span>
                       <div class="password-field">
@@ -312,6 +318,7 @@
                   <div class="primary-actions">
                     <button id="editConfigQuickBtn" class="secondary">编辑配置</button>
                     <button id="saveBtn" class="secondary">保存配置</button>
+                    <button id="claudeOauthLoginBtn" class="secondary hide">OAuth 登录</button>
                     <button id="launchBtn">启动 Codex</button>
                   </div>
                 </section>
@@ -519,6 +526,14 @@
                       </svg>
                       <span>Codex</span>
                     </button>
+                    <button type="button" class="cfg-editor-tab" data-cfg-tool="claudecode" aria-pressed="false">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="9" opacity="0.5" />
+                        <path d="M8 12h8M12 8v8" />
+                      </svg>
+                      <span>Claude Code</span>
+                    </button>
                     <button type="button" class="cfg-editor-tab" data-cfg-tool="openclaw" aria-pressed="false">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                         stroke-linecap="round" stroke-linejoin="round">
@@ -668,11 +683,11 @@
                         <label class="field field-wide"><span>自动压缩阈值</span>
                           <div class="config-number-control">
                             <div class="config-number-row">
-                              <input id="cfgCompactLimitInput" inputmode="numeric" placeholder="默认 上下文90% ≈ 244800" />
+                              <input id="cfgCompactLimitInput" inputmode="numeric" placeholder="默认 上下文90% ≈ 244800（有效窗口95%≈258400）" />
                               <button id="cfgCompactLimitResetBtn" type="button" class="secondary tiny-btn">默认</button>
                             </div>
                             <input id="cfgCompactLimitRange" class="config-range" type="range" min="16000" max="1048576" step="1000" />
-                            <div id="cfgCompactLimitHint" class="config-field-hint">默认使用上下文大小的 90%。</div>
+                            <div id="cfgCompactLimitHint" class="config-field-hint">默认使用上下文 90%，Codex 有效窗口约为设置值的 95%。</div>
                           </div>
                         </label>
                         <label class="field field-wide"><span>工具输出上限</span>
@@ -777,6 +792,100 @@
                     <div class="cfg-section-body">
                       <label class="field field-wide"><span>系统指令</span><textarea id="cfgInstructionsTextarea" rows="4" placeholder="自定义系统指令 (可选)"></textarea></label>
                       <label class="field field-wide"><span>基础指令</span><textarea id="cfgBaseInstructionsTextarea" rows="4" placeholder="覆盖模型内置基础指令 (不推荐)"></textarea></label>
+                    </div>
+                  </details>
+                </section>
+                <!-- ═══ Claude Code Config Editor ═══ -->
+                <section class="config-editor-main hide" data-tool-editor="claudecode">
+                  <details class="cfg-section" open>
+                    <summary class="cfg-section-header">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 1.5"/></svg>
+                      <span>模型与行为</span>
+                      <svg class="cfg-section-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                    </summary>
+                    <div class="cfg-section-body">
+                      <div class="editor-grid dense-grid">
+                        <label class="field"><span>默认模型（下拉）</span>
+                          <div class="select-wrap"><select id="ccCfgModelSelect">
+                              <option value="">从预置选择（可留空）</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>自定义模型（可选）</span><input id="ccCfgModelCustom" placeholder="填写后优先使用自定义模型名" /></label>
+                        <label class="field"><span>Provider Key</span><input id="ccCfgProviderKeyInput" placeholder="留空自动推断（如 official）" /></label>
+                        <label class="field"><span>登录方式（只读）</span><input id="ccCfgLoginMethod" placeholder="未登录" readonly /></label>
+                        <label class="toggle-item"><input id="ccCfgAlwaysThinkingCheck" type="checkbox" /><span>Always thinking</span></label>
+                        <label class="toggle-item"><input id="ccCfgSkipDangerousPromptCheck" type="checkbox" /><span>跳过危险权限提示</span></label>
+                      </div>
+                    </div>
+                  </details>
+
+                  <details class="cfg-section">
+                    <summary class="cfg-section-header">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 13h12M2 3h5l2 2h5v6H2V3z"/></svg>
+                      <span>认证与环境变量</span>
+                      <svg class="cfg-section-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                    </summary>
+                    <div class="cfg-section-body">
+                      <div class="editor-grid dense-grid">
+                        <label class="field"><span>ANTHROPIC_BASE_URL</span><input id="ccCfgBaseUrlInput" placeholder="留空使用官方" /></label>
+                        <label class="field"><span>ANTHROPIC_API_KEY</span><input id="ccCfgApiKeyInput" type="password" placeholder="留空表示保持当前" /></label>
+                        <label class="field"><span>ANTHROPIC_AUTH_TOKEN</span><input id="ccCfgAuthTokenInput" type="password" placeholder="留空表示保持当前" /></label>
+                        <label class="field"><span>登录账号（只读）</span><input id="ccCfgLoginIdentity" placeholder="-" readonly /></label>
+                      </div>
+                    </div>
+                  </details>
+
+                  <details class="cfg-section">
+                    <summary class="cfg-section-header">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9.5a3.5 3.5 0 0 0 5 0l1-1a3.54 3.54 0 0 0-5-5l-.5.5"/><path d="M9.5 6.5a3.5 3.5 0 0 0-5 0l-1 1a3.54 3.54 0 0 0 5 5l.5-.5"/></svg>
+                      <span>Provider 管理</span>
+                      <svg class="cfg-section-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                    </summary>
+                    <div class="cfg-section-body">
+                      <div class="cc-provider-toolbar">
+                        <div class="inline-meta">已保存 Provider 列表</div>
+                        <button id="ccProviderOpenCreateBtn" type="button" class="secondary tiny-btn">新建 Provider</button>
+                      </div>
+                      <div id="ccCfgProviderList" class="provider-list desktop-provider-list"></div>
+                      <div id="ccProviderDetailPanel" class="cc-provider-detail hide">
+                        <div class="cc-provider-detail-head">
+                          <strong id="ccProviderDetailTitle">Provider 详情</strong>
+                          <button id="ccProviderDetailCloseBtn" type="button" class="secondary tiny-btn">收起</button>
+                        </div>
+                        <div class="editor-grid dense-grid">
+                          <label class="field"><span>Provider Key</span><input id="ccProviderFormKey" placeholder="例如 official / work / test" /></label>
+                          <label class="field"><span>Provider 名称</span><input id="ccProviderFormName" placeholder="例如 Anthropic Official / 公司网关" /></label>
+                          <label class="field"><span>Base URL</span><input id="ccProviderFormBaseUrl" placeholder="留空默认官方 https://api.anthropic.com" /></label>
+                          <label class="field"><span>默认模型（下拉）</span>
+                            <div class="select-wrap"><select id="ccProviderFormModelSelect">
+                                <option value="">从预置选择（可留空）</option>
+                              </select></div>
+                          </label>
+                          <label class="field"><span>自定义模型（可选）</span><input id="ccProviderFormModelCustom" placeholder="填写后优先使用自定义模型名" /></label>
+                          <label class="field"><span>API Key</span><input id="ccProviderFormApiKey" type="password" placeholder="留空表示保持当前" /></label>
+                          <label class="field"><span>Auth Token</span><input id="ccProviderFormAuthToken" type="password" placeholder="留空表示保持当前" /></label>
+                        </div>
+                        <div class="cc-provider-actions">
+                          <button id="ccProviderFormApplyBtn" type="button" class="secondary tiny-btn">载入到主表单</button>
+                          <button id="ccProviderFormSwitchBtn" type="button" class="secondary tiny-btn">切换为当前</button>
+                          <button id="ccProviderFormSaveBtn" type="button" class="secondary tiny-btn">保存并设为当前</button>
+                        </div>
+                      </div>
+                      <div class="inline-meta">默认只展示列表；点击任一行展开详细配置，支持随时切换。</div>
+                    </div>
+                  </details>
+
+                  <details class="cfg-section">
+                    <summary class="cfg-section-header">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
+                      <span>状态信息</span>
+                      <svg class="cfg-section-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                    </summary>
+                    <div class="cfg-section-body">
+                      <div class="editor-grid dense-grid">
+                        <label class="field field-wide"><span>settings.json 路径（只读）</span><input id="ccCfgSettingsPath" placeholder="~/.claude/settings.json" readonly /></label>
+                        <label class="field field-wide"><span>历史模型（只读）</span><textarea id="ccCfgUsedModels" rows="3" placeholder="暂无" readonly></textarea></label>
+                      </div>
                     </div>
                   </details>
                 </section>
@@ -2124,6 +2233,16 @@
                       <div class="toml-hint">编辑 auth.json 中的 API Key 键值对；修改后点击顶部「保存并生效」。</div>
                     </div>
                   </div>
+                  <!-- Claude Code raw JSON -->
+                  <div class="config-side-section hide" data-tool-editor-side="claudecode">
+                    <div class="subline">
+                      <span class="eyebrow">当前原始 JSON — settings.json</span>
+                      <div class="raw-config-actions"><span class="raw-editor-chip">Ace Editor</span></div>
+                    </div>
+                    <div id="ccCfgRawJsonEditor" class="raw-code-editor" aria-label="Claude Code settings.json 编辑器"></div>
+                    <textarea id="ccCfgRawJsonTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
+                    <div class="toml-hint">支持 JSON 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存并生效」。</div>
+                  </div>
                   <!-- OpenClaw raw JSON -->
                   <div class="config-side-section hide" data-tool-editor-side="openclaw">
                     <div class="subline">
@@ -2143,6 +2262,34 @@
       </section>
     </div>
 
+
+    <div id="ccProviderCreateModal" class="oc-recipe-modal hide">
+      <div class="oc-recipe-modal-backdrop"></div>
+      <div class="oc-recipe-modal-panel">
+        <div class="oc-recipe-modal-head">
+          <h3>新建 Provider</h3>
+          <button type="button" id="ccProviderCreateCloseBtn" class="topbar-icon-btn" title="关闭">×</button>
+        </div>
+        <div class="oc-recipe-modal-body">
+          <label class="field"><span>Provider Key</span><input id="ccProviderCreateKey" placeholder="例如 work / official / codexhub" /></label>
+          <label class="field"><span>Provider 名称</span><input id="ccProviderCreateName" placeholder="例如 公司网关" /></label>
+          <label class="field"><span>Base URL</span><input id="ccProviderCreateBaseUrl" placeholder="留空默认官方 https://api.anthropic.com" /></label>
+          <label class="field"><span>默认模型（下拉）</span>
+            <div class="select-wrap"><select id="ccProviderCreateModelSelect">
+                <option value="">从预置选择（可留空）</option>
+              </select></div>
+          </label>
+          <label class="field"><span>自定义模型（可选）</span><input id="ccProviderCreateModelCustom" placeholder="填写后优先使用自定义模型名" /></label>
+          <datalist id="claudeModelPresetList"></datalist>
+          <label class="field"><span>API Key</span><input id="ccProviderCreateApiKey" type="password" placeholder="可选" /></label>
+          <label class="field"><span>Auth Token</span><input id="ccProviderCreateAuthToken" type="password" placeholder="可选" /></label>
+        </div>
+        <div class="oc-recipe-modal-foot">
+          <button type="button" id="ccProviderCreateCancelBtn" class="secondary subtle-btn">取消</button>
+          <button type="button" id="ccProviderCreateSaveBtn">创建并设为当前</button>
+        </div>
+      </div>
+    </div>
 
     <section id="updateDialog" class="update-dialog hide" aria-hidden="true">
       <div class="update-dialog-backdrop" data-close-update-dialog></div>

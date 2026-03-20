@@ -21,6 +21,7 @@ import {
   onboardOpenClaw,
   repairOpenClawDashboardAuth,
   launchClaudeCode,
+  loginClaudeCode,
   launchCodex,
   loginCodex,
   launchOpenClaw,
@@ -284,6 +285,14 @@ export async function startServer() {
   app.post('/api/claudecode/launch', async (req, res) => {
     try {
       ok(res, { data: await launchClaudeCode(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/login', async (req, res) => {
+    try {
+      ok(res, { data: await loginClaudeCode(req.body || {}) });
     } catch (error) {
       fail(res, error);
     }

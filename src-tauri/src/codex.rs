@@ -106,6 +106,45 @@ fn windows_user_npm_prefix() -> Option<PathBuf> {
   std::env::var("APPDATA").ok().map(PathBuf::from).map(|path| path.join("npm"))
 }
 
+fn windows_user_extra_bin_dirs() -> Vec<String> {
+  let mut dirs = Vec::new();
+  if let Ok(pnpm_home) = std::env::var("PNPM_HOME") {
+    let p = PathBuf::from(pnpm_home);
+    if p.is_dir() {
+      dirs.push(p.to_string_lossy().to_string());
+    }
+  }
+  if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+    let local = PathBuf::from(local_app_data);
+    let candidates = [
+      local.join("pnpm"),
+      local.join("Yarn").join("bin"),
+      local.join("Volta").join("bin"),
+    ];
+    for dir in candidates {
+      if dir.is_dir() {
+        dirs.push(dir.to_string_lossy().to_string());
+      }
+    }
+  }
+  if let Ok(user_profile) = std::env::var("USERPROFILE") {
+    let profile = PathBuf::from(user_profile);
+    let candidates = [profile.join(".bun").join("bin"), profile.join(".volta").join("bin")];
+    for dir in candidates {
+      if dir.is_dir() {
+        dirs.push(dir.to_string_lossy().to_string());
+      }
+    }
+  }
+  if let Ok(bun_install) = std::env::var("BUN_INSTALL") {
+    let bun_bin = PathBuf::from(bun_install).join("bin");
+    if bun_bin.is_dir() {
+      dirs.push(bun_bin.to_string_lossy().to_string());
+    }
+  }
+  dirs
+}
+
 fn windows_portable_node_root() -> Option<PathBuf> {
   app_home().ok().map(|path| path.join("tools").join("node"))
 }
@@ -134,6 +173,7 @@ fn build_windows_full_path_env() -> String {
   if let Some(prefix) = windows_user_npm_prefix() {
     parts.push(prefix.to_string_lossy().to_string());
   }
+  parts.extend(windows_user_extra_bin_dirs());
   parts.extend(windows_mingit_cmd_dirs());
   for p in current.split(';') {
     let item = p.trim();
@@ -172,11 +212,27 @@ fn full_path_env() -> String {
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_else(|| "/Users/unknown".to_string());
 
+      let bun_install_bin = std::env::var("BUN_INSTALL")
+        .ok()
+        .map(|path| PathBuf::from(path).join("bin").to_string_lossy().to_string())
+        .unwrap_or_default();
+      let pnpm_home = std::env::var("PNPM_HOME").unwrap_or_default();
+
       let extra_paths = [
         format!("{}/.nvm/versions/node/*/bin", home),
+        format!("{}/.bun/bin", home),
+        format!("{}/Library/pnpm", home),
+        format!("{}/.local/share/pnpm", home),
+        format!("{}/.pnpm", home),
+        format!("{}/.yarn/bin", home),
+        format!("{}/.config/yarn/global/node_modules/.bin", home),
+        format!("{}/.volta/bin", home),
+        format!("{}/.asdf/shims", home),
         format!("{}/.npm-global/bin", home),
         format!("{}/.local/bin", home),
         format!("{}/bin", home),
+        bun_install_bin,
+        pnpm_home,
         "/opt/homebrew/bin".to_string(),
         "/opt/homebrew/sbin".to_string(),
         "/usr/local/bin".to_string(),
@@ -1344,16 +1400,63 @@ fn try_auto_install_git(task_id: &str) -> bool {
 }
 
 fn codex_candidates() -> Vec<String> {
+  std::env::set_var("PATH", full_path_env());
   let mut paths = which::which_all("codex")
     .map(|items| items.map(|item| item.to_string_lossy().to_string()).collect::<Vec<_>>())
     .unwrap_or_default();
 
-  if cfg!(not(target_os = "windows")) {
-    if let Ok(home) = home_dir() {
-      paths.push(home.join(".npm-global/bin/codex").to_string_lossy().to_string());
+  if let Ok(home) = home_dir() {
+    if cfg!(target_os = "windows") {
+      if let Ok(app_data) = std::env::var("APPDATA") {
+        let npm_dir = PathBuf::from(app_data).join("npm");
+        for candidate in [
+          npm_dir.join("codex.cmd"),
+          npm_dir.join("codex.ps1"),
+          npm_dir.join("codex.exe"),
+          npm_dir.join("codex"),
+        ] {
+          paths.push(candidate.to_string_lossy().to_string());
+        }
+      }
+      if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let local = PathBuf::from(local_app_data);
+        for dir in [local.join("pnpm"), local.join("Volta").join("bin")] {
+          for candidate in [
+            dir.join("codex.cmd"),
+            dir.join("codex.ps1"),
+            dir.join("codex.exe"),
+            dir.join("codex"),
+          ] {
+            paths.push(candidate.to_string_lossy().to_string());
+          }
+        }
+      }
+      for dir in [home.join(".bun").join("bin"), home.join(".volta").join("bin")] {
+        for candidate in [
+          dir.join("codex.cmd"),
+          dir.join("codex.ps1"),
+          dir.join("codex.exe"),
+          dir.join("codex"),
+        ] {
+          paths.push(candidate.to_string_lossy().to_string());
+        }
+      }
+    } else {
+      for candidate in [
+        home.join(".npm-global").join("bin").join("codex"),
+        home.join(".bun").join("bin").join("codex"),
+        home.join("Library").join("pnpm").join("codex"),
+        home.join(".local").join("share").join("pnpm").join("codex"),
+        home.join(".pnpm").join("codex"),
+        home.join(".yarn").join("bin").join("codex"),
+        home.join(".volta").join("bin").join("codex"),
+        home.join(".asdf").join("shims").join("codex"),
+      ] {
+        paths.push(candidate.to_string_lossy().to_string());
+      }
+      paths.push("/usr/local/bin/codex".to_string());
+      paths.push("/opt/homebrew/bin/codex".to_string());
     }
-    paths.push("/usr/local/bin/codex".to_string());
-    paths.push("/opt/homebrew/bin/codex".to_string());
   }
 
   paths.sort();
@@ -1362,6 +1465,7 @@ fn codex_candidates() -> Vec<String> {
 }
 
 pub(crate) fn find_codex_binary() -> Value {
+  std::env::set_var("PATH", full_path_env());
   let mut candidates = codex_candidates()
     .into_iter()
     .filter_map(|candidate_path| {
@@ -2709,7 +2813,7 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
     .and_then(Value::as_bool)
     .unwrap_or(false);
 
-  // Login status — comprehensive
+  // Login status — only expose oauth / api_key to UI
   let oauth = claude_json.get("oauthAccount");
   let login_info = if let Some(account) = oauth.and_then(Value::as_object) {
     json!({
@@ -2719,18 +2823,19 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
       "orgName": account.get("orgName").and_then(Value::as_str).unwrap_or(""),
       "plan": account.get("accountPlan").and_then(Value::as_str).unwrap_or(""),
     })
-  } else if has_keychain_auth && has_completed_onboarding {
-    json!({
-      "loggedIn": true,
-      "method": "keychain",
-      "email": "",
-    })
   } else if has_api_key {
     json!({
       "loggedIn": true,
       "method": "api_key",
       "email": "",
-      "apiKeySource": api_key_source,
+      "apiKeySource": effective_key_source,
+    })
+  } else if has_keychain_auth && has_completed_onboarding {
+    json!({
+      "loggedIn": true,
+      "method": "api_key",
+      "email": "",
+      "apiKeySource": "keychain",
     })
   } else {
     json!({
@@ -3062,6 +3167,26 @@ pub(crate) fn launch_claudecode(body: &Value) -> Result<Value, String> {
   }
   let bin_path = binary.get("path").and_then(Value::as_str).unwrap_or("claude");
   let message = launch_terminal_for_tool(&cwd, bin_path, "Claude Code")?;
+  Ok(json!({ "ok": true, "cwd": cwd.to_string_lossy().to_string(), "message": message }))
+}
+
+pub(crate) fn login_claudecode(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let cwd = {
+    let input = get_string(&object, "cwd");
+    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+  };
+  let binary = find_tool_binary("claude");
+  if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
+    return Err("Claude Code 尚未安装，请先点击安装".to_string());
+  }
+  let binary_path = binary
+    .get("path")
+    .and_then(Value::as_str)
+    .filter(|text| !text.trim().is_empty())
+    .unwrap_or("claude");
+  let command = format!("\"{}\" auth login", binary_path.replace('"', "\\\""));
+  let message = launch_terminal_command(&cwd, &command, "Claude Code OAuth 登录")?;
   Ok(json!({ "ok": true, "cwd": cwd.to_string_lossy().to_string(), "message": message }))
 }
 

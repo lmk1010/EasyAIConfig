@@ -4,7 +4,7 @@ use crate::codex::{
   check_setup_environment, codex_npm_action, get_codex_release_info, launch_codex,
   login_codex, get_codex_usage_metrics,
   list_tools, load_claudecode_state, save_claudecode_config, save_claudecode_raw_config,
-  launch_claudecode, load_openclaw_state, launch_openclaw, save_openclaw_config,
+  launch_claudecode, login_claudecode, load_openclaw_state, launch_openclaw, save_openclaw_config,
   get_openclaw_dashboard_url,
   repair_openclaw_dashboard_auth,
   run_openclaw_install_script, start_openclaw_install_task, get_openclaw_install_task,
@@ -48,6 +48,7 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/claudecode/update", "POST") => codex_npm_action(&["install", "-g", &format!("{}@latest", CLAUDE_CODE_PACKAGE)]),
     ("/api/claudecode/uninstall", "POST") => codex_npm_action(&["uninstall", "-g", CLAUDE_CODE_PACKAGE]),
     ("/api/claudecode/launch", "POST") => launch_claudecode(body),
+    ("/api/claudecode/login", "POST") => login_claudecode(body),
     // OpenClaw — wrapped in spawn_blocking because load_openclaw_state uses reqwest::blocking
     // which deadlocks inside Tokio async runtime
     ("/api/openclaw/state", "GET") => {

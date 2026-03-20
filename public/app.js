@@ -17,7 +17,10 @@ const state = {
   metaDirty: false,
   claudeCodeState: null,
   providerHealth: {},
+  claudeProviderHealth: {},
   providerSecrets: {},
+  claudeSelectedProviderKey: '',
+  claudeProviderDetailKey: '',
   apiKeyField: {
     providerKey: '',
     baseUrl: '',
@@ -573,6 +576,7 @@ function _saveCurrentToolForm() {
   if (!toolId) return;
   _toolFormCache[toolId] = {
     baseUrl: el('baseUrlInput')?.value || '',
+    providerKey: el('claudeProviderKeyInput')?.value || '',
     apiKey: el('apiKeyInput')?.value || '',
     protocolValue: el('openClawProtocolSelect')?.value || '',
     modelHtml: el('modelSelect')?.innerHTML || '',
@@ -584,10 +588,12 @@ function _restoreToolForm(toolId) {
   const cache = _toolFormCache[toolId];
   if (!cache) return false;
   const baseUrlInput = el('baseUrlInput');
+  const providerKeyInput = el('claudeProviderKeyInput');
   const apiKeyInput = el('apiKeyInput');
   const protocolSelect = el('openClawProtocolSelect');
   const modelSelect = el('modelSelect');
   if (baseUrlInput) baseUrlInput.value = cache.baseUrl;
+  if (providerKeyInput) providerKeyInput.value = cache.providerKey || '';
   if (apiKeyInput) apiKeyInput.value = cache.apiKey;
   if (protocolSelect && cache.protocolValue) protocolSelect.value = cache.protocolValue;
   if (modelSelect) {
@@ -615,8 +621,11 @@ function setActiveTool(toolId) {
   const toolDisplayName = tool?.name || { codex: 'Codex', claudecode: 'Claude Code', openclaw: 'OpenClaw' }[toolId] || toolId;
   const launchBtn = el('launchBtn');
   if (launchBtn) launchBtn.textContent = `启动 ${toolDisplayName}`;
+  const claudeOauthLoginBtn = el('claudeOauthLoginBtn');
+  if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.add('hide');
 
   const baseUrlInput = el('baseUrlInput');
+  const claudeProviderKeyField = el('claudeProviderKeyField');
   const apiKeyInput = el('apiKeyInput');
   const modelSelect = el('modelSelect');
   const detectBtn = el('detectBtn');
@@ -642,6 +651,7 @@ function setActiveTool(toolId) {
   if (detectLabel) detectLabel.textContent = '连接检测';
   if (modelLabel) modelLabel.textContent = '可用模型';
   if (protocolField) protocolField.classList.add('hide');
+  if (claudeProviderKeyField) claudeProviderKeyField.classList.add('hide');
   if (modelChips) modelChips.classList.add('hide');
   if (codexAuthBlock) codexAuthBlock.style.display = 'none';
 
@@ -658,7 +668,9 @@ function setActiveTool(toolId) {
   if (syncActions) syncActions.style.display = 'none';
 
   if (toolId === 'claudecode') {
+    if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.remove('hide');
     if (baseUrlField) baseUrlField.style.display = '';
+    if (claudeProviderKeyField) claudeProviderKeyField.classList.remove('hide');
     if (modelField) modelField.style.display = '';
     if (baseUrlInput) {
       baseUrlInput.value = '';
@@ -673,10 +685,10 @@ function setActiveTool(toolId) {
     if (detectField) detectField.style.display = 'none';
     if (protocolField) protocolField.classList.add('hide');
     if (heroTitle) heroTitle.textContent = 'Claude Code 配置';
-    if (heroSubtitle) heroSubtitle.textContent = '配置模型与认证方式，支持 claude login 和 API Key。';
+    if (heroSubtitle) heroSubtitle.textContent = '配置模型与认证方式，支持 OAuth 授权和 API Key。';
     if (sectionTitle) sectionTitle.textContent = 'Claude Code 设置';
     if (modelLabel) modelLabel.textContent = '默认模型';
-    if (detectionMeta) detectionMeta.textContent = '如果已经执行过 claude login，API Key 可以留空。';
+    if (detectionMeta) detectionMeta.textContent = '如果已经完成 OAuth 授权，API Key 可以留空。';
 
     if (modelSelect) {
       modelSelect.innerHTML = '<option value="">加载中...</option>';
@@ -693,10 +705,12 @@ function setActiveTool(toolId) {
   }
 
   if (toolId !== 'openclaw') {
+    if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.add('hide');
     if (state.current?.login?.loggedIn && state.codexAuthView !== 'api_key') {
       state.codexAuthView = 'official';
     }
     if (baseUrlField) baseUrlField.style.display = '';
+    if (claudeProviderKeyField) claudeProviderKeyField.classList.add('hide');
     if (detectField) detectField.style.display = '';
     if (modelField) modelField.style.display = '';
     if (heroTitle) heroTitle.textContent = '最快路径';
@@ -728,6 +742,8 @@ function setActiveTool(toolId) {
   }
 
   if (baseUrlField) baseUrlField.style.display = '';
+  if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.add('hide');
+  if (claudeProviderKeyField) claudeProviderKeyField.classList.add('hide');
   if (detectField) detectField.style.display = 'none';
   if (protocolField) protocolField.classList.remove('hide');
   if (modelField) modelField.style.display = '';
@@ -777,8 +793,117 @@ const CLAUDE_MODEL_ALIASES = [
   { value: 'haiku', label: 'Haiku (快速轻量)', group: '别名' },
 ];
 
+// Claude model IDs (official docs + common gateway-compatible aliases)
+const CLAUDE_MODEL_PRESETS = [
+  // Latest family (official overview page)
+  'claude-opus-4-6',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5',
+  'claude-haiku-4-5-20251001',
+  // 4.5 compatibility (legacy/rollout variants seen in docs by locale)
+  'claude-opus-4-5',
+  'claude-opus-4-5-20251101',
+  'claude-sonnet-4-5',
+  'claude-sonnet-4-5-20250929',
+  // Official aliases and snapshots
+  'claude-opus-4-1',
+  'claude-opus-4-1-20250805',
+  'claude-opus-4-0',
+  'claude-opus-4-20250514',
+  'claude-sonnet-4-0',
+  'claude-sonnet-4-20250514',
+  'claude-3-7-sonnet',
+  'claude-3-7-sonnet-latest',
+  'claude-3-7-sonnet-20250219',
+  'claude-3-5-sonnet-latest',
+  'claude-3-5-sonnet-20241022',
+  'claude-3-5-haiku-latest',
+  'claude-3-5-haiku-20241022',
+  'claude-3-haiku-20240307',
+];
+
+function normalizeClaudeModelKey(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function dedupeClaudeModels(models = []) {
+  const seen = new Set();
+  const output = [];
+  for (const raw of models) {
+    const value = String(raw || '').trim();
+    const key = normalizeClaudeModelKey(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(value);
+  }
+  return output;
+}
+
+function isClaudePresetModel(model = '') {
+  const key = normalizeClaudeModelKey(model);
+  if (!key) return false;
+  return dedupeClaudeModels(CLAUDE_MODEL_PRESETS).some((item) => normalizeClaudeModelKey(item) === key);
+}
+
+function renderClaudeModelSelect(selectId, {
+  usedModels = [],
+  currentModel = '',
+  emptyLabel = '从预置选择（可留空）',
+} = {}) {
+  const select = el(selectId);
+  if (!select) return;
+  const presets = dedupeClaudeModels(CLAUDE_MODEL_PRESETS);
+  const history = dedupeClaudeModels(usedModels);
+  const merged = dedupeClaudeModels([...presets, ...history]);
+  let html = `<option value="">${escapeHtml(emptyLabel)}</option>`;
+  html += merged.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('');
+  const normalizedCurrent = normalizeClaudeModelKey(currentModel);
+  if (normalizedCurrent && !merged.some((item) => normalizeClaudeModelKey(item) === normalizedCurrent)) {
+    html += `<option value="${escapeHtml(currentModel)}">${escapeHtml(currentModel)} (当前自定义)</option>`;
+  }
+  select.innerHTML = html;
+}
+
+function setClaudeModelControl(selectId, customId, modelValue = '', usedModels = []) {
+  const model = String(modelValue || '').trim();
+  renderClaudeModelSelect(selectId, { usedModels, currentModel: model });
+  const select = el(selectId);
+  const custom = el(customId);
+  const inSelect = model && [...(select?.options || [])].some((option) => normalizeClaudeModelKey(option.value) === normalizeClaudeModelKey(model));
+  if (select) select.value = inSelect ? model : '';
+  if (custom) custom.value = model && !inSelect ? model : '';
+}
+
+function readClaudeModelControl(selectId, customId) {
+  const custom = el(customId)?.value?.trim() || '';
+  const selected = el(selectId)?.value?.trim() || '';
+  return custom || selected;
+}
+
+function renderClaudeModelPresetList() {
+  const datalist = el('claudeModelPresetList');
+  const uniqueModels = dedupeClaudeModels(CLAUDE_MODEL_PRESETS);
+  if (datalist) {
+    datalist.innerHTML = uniqueModels
+      .map((model) => `<option value="${escapeHtml(model)}"></option>`)
+      .join('');
+  }
+  const createSelect = el('ccProviderCreateModelSelect');
+  if (createSelect) {
+    const previous = createSelect.value || '';
+    let html = '<option value="">从预置选择（可留空）</option>';
+    html += uniqueModels.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('');
+    if (previous && !uniqueModels.includes(previous)) {
+      html += `<option value="${escapeHtml(previous)}">${escapeHtml(previous)} (当前自定义)</option>`;
+    }
+    createSelect.innerHTML = html;
+    if (previous) createSelect.value = previous;
+  }
+}
+
 async function loadClaudeCodeQuickState({ force = false, cacheOnly = false } = {}) {
   try {
+    renderClaudeModelPresetList();
     const params = new URLSearchParams();
     if (force) params.set('forceUsageRefresh', '1');
     if (cacheOnly) params.set('cacheOnly', '1');
@@ -790,6 +915,9 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false } = {
       return { ok: false, invalidUsage: true };
     }
     state.claudeCodeState = data;
+    const claudeProviders = getClaudeProviderProfiles(data);
+    const activeClaudeProvider = claudeProviders.find((provider) => provider.isActive) || claudeProviders[0] || null;
+    state.claudeSelectedProviderKey = activeClaudeProvider?.key || '';
 
     // Only update quick-page UI if Claude Code is the active tool
     if (state.activeTool !== 'claudecode') {
@@ -800,22 +928,39 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false } = {
 
     const modelSelect = el('modelSelect');
     if (modelSelect) {
-      // Build model options: aliases + used models from history
+      // Build model options: aliases + preset model IDs + used models from history
       let html = '<option value="">默认 (由 Claude Code 决定)</option>';
+      const usedKeys = new Set();
+      const markUsed = (value = '') => {
+        const key = normalizeClaudeModelKey(value);
+        if (!key || usedKeys.has(key)) return false;
+        usedKeys.add(key);
+        return true;
+      };
 
       // Alias group
       html += '<optgroup label="模型别名 (推荐)">';
       for (const m of CLAUDE_MODEL_ALIASES) {
+        if (!markUsed(m.value)) continue;
         const selected = data.model === m.value ? ' selected' : '';
         html += `<option value="${m.value}"${selected}>${m.label}</option>`;
       }
       html += '</optgroup>';
 
+      html += '<optgroup label="Claude 预置模型 ID">';
+      for (const modelId of dedupeClaudeModels(CLAUDE_MODEL_PRESETS)) {
+        if (!markUsed(modelId)) continue;
+        const selected = data.model === modelId ? ' selected' : '';
+        html += `<option value="${escapeHtml(modelId)}"${selected}>${escapeHtml(modelId)}</option>`;
+      }
+      html += '</optgroup>';
+
       // Full model names from usage history
-      const usedModels = data.usedModels || [];
-      if (usedModels.length) {
+      const historyModels = dedupeClaudeModels(data.usedModels || []);
+      if (historyModels.length) {
         html += '<optgroup label="历史使用模型">';
-        for (const modelName of usedModels) {
+        for (const modelName of historyModels) {
+          if (!markUsed(modelName)) continue;
           const selected = data.model === modelName ? ' selected' : '';
           html += `<option value="${escapeHtml(modelName)}"${selected}>${escapeHtml(modelName)}</option>`;
         }
@@ -823,25 +968,46 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false } = {
       }
 
       modelSelect.innerHTML = html;
+      if (data.model && ![...modelSelect.options].some((option) => normalizeClaudeModelKey(option.value) === normalizeClaudeModelKey(data.model))) {
+        const customOption = document.createElement('option');
+        customOption.value = data.model;
+        customOption.textContent = `${data.model} (自定义)`;
+        modelSelect.appendChild(customOption);
+      }
       if (data.model) modelSelect.value = data.model;
     }
 
     // ── Show Base URL ──
     const ev = data.envVars || {};
     const baseUrlInput = el('baseUrlInput');
-    if (baseUrlInput && ev.ANTHROPIC_BASE_URL?.set) {
-      baseUrlInput.value = ev.ANTHROPIC_BASE_URL.value;
+    if (baseUrlInput) {
+      if (activeClaudeProvider) {
+        baseUrlInput.value = activeClaudeProvider.baseUrl || '';
+      } else if (ev.ANTHROPIC_BASE_URL?.set) {
+        baseUrlInput.value = ev.ANTHROPIC_BASE_URL.value;
+      }
+    }
+    const providerKeyInput = el('claudeProviderKeyInput');
+    if (providerKeyInput) {
+      providerKeyInput.value = activeClaudeProvider?.key
+        || normalizeProviderKey(state.claudeSelectedProviderKey || inferClaudeProviderKey(baseUrlInput?.value || ''));
     }
 
     // ── Show API Key status ──
     const apiKeyInput = el('apiKeyInput');
     if (apiKeyInput) {
-      if (data.maskedApiKey) {
+      if (activeClaudeProvider?.maskedAuthToken) {
+        apiKeyInput.placeholder = `${activeClaudeProvider.maskedAuthToken} (Auth Token)`;
+        apiKeyInput.value = '';
+      } else if (activeClaudeProvider?.maskedApiKey) {
+        apiKeyInput.placeholder = `${activeClaudeProvider.maskedApiKey} (API Key)`;
+        apiKeyInput.value = '';
+      } else if (data.maskedApiKey) {
         const srcLabel = { shell: 'Shell 环境变量', 'settings.json': 'settings.json', env: '进程环境变量' }[data.apiKeySource] || '';
         apiKeyInput.placeholder = `${data.maskedApiKey}${srcLabel ? ` (来自 ${srcLabel})` : ''}`;
         apiKeyInput.value = '';
       } else if (data.hasKeychainAuth) {
-        apiKeyInput.placeholder = '已通过 claude login 认证 (Keychain)';
+        apiKeyInput.placeholder = '已在 Keychain 检测到 API Key 凭据';
         apiKeyInput.value = '';
       } else {
         apiKeyInput.placeholder = 'ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN';
@@ -854,13 +1020,18 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false } = {
       const loginInfo = data.login || {};
       const ev = data.envVars || {};
       const parts = [];
+      if (activeClaudeProvider) {
+        const oauthReady = isClaudeOfficialProvider(activeClaudeProvider) && isClaudeOauthLoggedIn(data) && !activeClaudeProvider.hasApiKey;
+        if (oauthReady) parts.push('当前 Provider：OAuth');
+        else if (activeClaudeProvider.hasApiKey) parts.push('当前 Provider：API Key');
+      }
 
       // Auth method
       if (loginInfo.loggedIn) {
         if (loginInfo.method === 'oauth') {
           parts.push(`\u2713 OAuth：${loginInfo.email || ''}${loginInfo.orgName ? ` (${loginInfo.orgName})` : ''}`);
         } else if (loginInfo.method === 'keychain') {
-          parts.push('\u2713 Keychain 认证');
+          parts.push('\u2713 API Key（Keychain）');
         } else if (loginInfo.method === 'api_key') {
           parts.push('\u2713 Token 认证');
         }
@@ -4828,10 +4999,13 @@ async function handleToolConsoleAction(button) {
     if (targetTool === 'openclaw' && !state.openclawState) {
       await loadOpenClawQuickState();
     }
+    if (targetTool === 'claudecode' && !state.claudeCodeState) {
+      await loadClaudeCodeQuickState();
+    }
     if (targetTool !== 'openclaw' && !state.current) {
       await loadState({ preserveForm: true });
     }
-    state.configEditorTool = targetTool === 'openclaw' ? 'openclaw' : 'codex';
+    state.configEditorTool = normalizeConfigEditorTool(targetTool);
     syncConfigEditorForTool();
     populateConfigEditor();
     if (window.refreshCustomSelects) window.refreshCustomSelects();
@@ -5026,6 +5200,7 @@ function initRawCodeEditors() {
 
   ensureRawCodeEditor({ editorId: 'cfgRawTomlEditor', textareaId: 'cfgRawTomlTextarea', mode: 'ace/mode/toml' });
   ensureRawCodeEditor({ editorId: 'cfgRawAuthEditor', textareaId: 'cfgRawAuthTextarea', mode: 'ace/mode/json' });
+  ensureRawCodeEditor({ editorId: 'ccCfgRawJsonEditor', textareaId: 'ccCfgRawJsonTextarea', mode: 'ace/mode/json' });
   ensureRawCodeEditor({ editorId: 'ocCfgRawJsonEditor', textareaId: 'ocCfgRawJsonTextarea', mode: 'ace/mode/json' });
   syncRawCodeEditorTheme();
 }
@@ -6394,15 +6569,27 @@ function setAdvancedOpen(open) {
   state.advancedTimer = setTimeout(() => panel.classList.add('hide'), 180);
 }
 
+function normalizeConfigEditorTool(toolId = '') {
+  if (toolId === 'openclaw' || toolId === 'claudecode' || toolId === 'codex') return toolId;
+  return 'codex';
+}
+
 function getConfigEditorTool() {
-  return state.configEditorTool === 'openclaw' ? 'openclaw' : 'codex';
+  return normalizeConfigEditorTool(state.configEditorTool);
 }
 
 async function setConfigEditorOpen(open) {
   state.configEditorOpen = open;
   if (open) {
+    state.configEditorTool = normalizeConfigEditorTool(state.activeTool || state.configEditorTool);
     if (getConfigEditorTool() === 'openclaw' && !state.openclawState) {
       await loadOpenClawQuickState();
+    }
+    if (getConfigEditorTool() === 'claudecode' && !state.claudeCodeState) {
+      await loadClaudeCodeQuickState();
+    }
+    if (getConfigEditorTool() === 'claudecode') {
+      state.claudeProviderDetailKey = '';
     }
     populateConfigEditor();
     setPage('configEditor');
@@ -6434,6 +6621,21 @@ function buildCompactPromptSetting() {
   return null;
 }
 
+const CODEX_CONTEXT_EFFECTIVE_RATIO = 0.95;
+const CODEX_AUTO_COMPACT_LIMIT_RATIO = 0.9;
+
+function getCodexContextWindowForUi() {
+  return getConfigNumberValue('cfgContextWindowInput') || 272000;
+}
+
+function calcCodexEffectiveContextWindow(contextWindow) {
+  return Math.round(Number(contextWindow || 0) * CODEX_CONTEXT_EFFECTIVE_RATIO);
+}
+
+function calcCodexAutoCompactCap(contextWindow) {
+  return Math.round(Number(contextWindow || 0) * CODEX_AUTO_COMPACT_LIMIT_RATIO);
+}
+
 const CONFIG_NUMBER_FIELDS = {
   cfgContextWindowInput: {
     rangeId: 'cfgContextWindowRange',
@@ -6444,7 +6646,12 @@ const CONFIG_NUMBER_FIELDS = {
     step: 1000,
     defaultValue: () => 272000,
     defaultPlaceholder: () => '默认 272000',
-    hint: (value, empty) => empty ? '拖动滑杆快速调整，也可直接输入数字。' : `当前设置 ${value}`,
+    hint: (value, empty) => {
+      const effective = calcCodexEffectiveContextWindow(value);
+      return empty
+        ? `拖动滑杆快速调整，也可直接输入数字。Codex 实际可用约为设置值的 95%（≈ ${effective}）。`
+        : `当前设置 ${value}；Codex 实际可用约 ${effective} (95%)`;
+    },
   },
   cfgCompactLimitInput: {
     rangeId: 'cfgCompactLimitRange',
@@ -6453,9 +6660,21 @@ const CONFIG_NUMBER_FIELDS = {
     min: 16000,
     max: 512000,
     step: 1000,
-    defaultValue: () => Math.round((getConfigNumberValue('cfgContextWindowInput') || 272000) * 0.9),
-    defaultPlaceholder: () => `默认 上下文90% ≈ ${Math.round((getConfigNumberValue('cfgContextWindowInput') || 272000) * 0.9)}`,
-    hint: (value, empty) => empty ? '默认使用上下文大小的 90%。' : `当前设置 ${value}`,
+    defaultValue: () => calcCodexAutoCompactCap(getCodexContextWindowForUi()),
+    defaultPlaceholder: () => {
+      const contextWindow = getCodexContextWindowForUi();
+      const compactCap = calcCodexAutoCompactCap(contextWindow);
+      const effective = calcCodexEffectiveContextWindow(contextWindow);
+      return `默认 上下文90% ≈ ${compactCap}（有效窗口95%≈${effective}）`;
+    },
+    hint: (value, empty) => {
+      const contextWindow = getCodexContextWindowForUi();
+      const compactCap = calcCodexAutoCompactCap(contextWindow);
+      const effective = calcCodexEffectiveContextWindow(contextWindow);
+      return empty
+        ? `默认使用上下文 90%（上限≈ ${compactCap}），有效窗口约 ${effective} (95%)。`
+        : `当前设置 ${value}；建议不高于 ${compactCap}（上下文90%）`;
+    },
   },
   cfgToolLimitInput: {
     rangeId: 'cfgToolLimitRange',
@@ -6495,8 +6714,9 @@ function syncConfigNumberField(inputId, source = 'init') {
   const range = el(spec.rangeId);
   const hint = el(spec.hintId);
   if (inputId === 'cfgCompactLimitInput') {
-    const contextLimit = getConfigNumberValue('cfgContextWindowInput') || 272000;
-    range.max = String(Math.max(spec.min, contextLimit));
+    const contextLimit = getCodexContextWindowForUi();
+    const compactCap = calcCodexAutoCompactCap(contextLimit);
+    range.max = String(Math.max(spec.min, compactCap));
   }
   const runtimeSpec = {
     ...spec,
@@ -6585,8 +6805,16 @@ async function pickDirectoryPath(targetInputId, { title = '选择目录' } = {})
 function populateConfigEditor() {
   syncConfigEditorForTool();
 
-  if (getConfigEditorTool() === 'openclaw') {
+  const tool = getConfigEditorTool();
+
+  if (tool === 'openclaw') {
     populateOpenClawConfigEditor();
+    applyConfigEditorSearch();
+    return;
+  }
+
+  if (tool === 'claudecode') {
+    populateClaudeCodeConfigEditor();
     applyConfigEditorSearch();
     return;
   }
@@ -6620,6 +6848,208 @@ function populateConfigEditor() {
   refreshConfigNumberFields();
   syncShortcutActiveState();
   applyConfigEditorSearch();
+}
+
+function claudeEnvSourceLabel(source = '') {
+  const table = {
+    shell: 'Shell',
+    'settings.json': 'settings.json',
+    env: '进程环境变量',
+  };
+  return table[source] || source || '';
+}
+
+function claudeLoginMethodLabel(login = {}) {
+  if (!login?.loggedIn) return '未登录';
+  const method = String(login.method || '').toLowerCase();
+  if (method === 'oauth') return '官方登录 (OAuth)';
+  if (method === 'keychain') return 'API Key (Keychain)';
+  if (method === 'api_key') return 'API Key';
+  return '已登录';
+}
+
+function claudeProviderAuthBadge(provider, data = {}) {
+  const login = data.login || {};
+  const method = String(login.method || '').toLowerCase();
+  const envVars = data.envVars || {};
+  const isOfficial = provider.key === 'official' || /api\.anthropic\.com/i.test(provider.baseUrl || '');
+  if (isOfficial && login.loggedIn && method === 'oauth') {
+    return { tone: 'ok', text: '官方登录 / OAuth' };
+  }
+  if (provider.maskedAuthToken) return { tone: 'ok', text: `${provider.maskedAuthToken} (Auth Token)` };
+  if (provider.maskedApiKey) return { tone: 'ok', text: `${provider.maskedApiKey} (API Key)` };
+  if (isOfficial && login.loggedIn && (method === 'api_key' || method === 'keychain')) {
+    const masked = envVars.ANTHROPIC_AUTH_TOKEN?.set
+      ? envVars.ANTHROPIC_AUTH_TOKEN.masked
+      : envVars.ANTHROPIC_API_KEY?.set
+      ? envVars.ANTHROPIC_API_KEY.masked
+      : '';
+    if (masked) return { tone: 'ok', text: `${masked} (API Key)` };
+    return { tone: 'ok', text: 'API Key 已配置' };
+  }
+  return { tone: 'warn', text: '缺少 Key' };
+}
+
+function populateClaudeProviderEditorForm(provider, usedModels = []) {
+  const target = provider || null;
+  const keyInput = el('ccProviderFormKey');
+  const nameInput = el('ccProviderFormName');
+  const baseUrlInput = el('ccProviderFormBaseUrl');
+  const apiKeyInput = el('ccProviderFormApiKey');
+  const authTokenInput = el('ccProviderFormAuthToken');
+  if (keyInput) keyInput.value = target?.key || '';
+  if (nameInput) nameInput.value = target?.name || '';
+  if (baseUrlInput) baseUrlInput.value = target?.baseUrl || '';
+  setClaudeModelControl(
+    'ccProviderFormModelSelect',
+    'ccProviderFormModelCustom',
+    target?.model || readClaudeModelControl('ccCfgModelSelect', 'ccCfgModelCustom') || '',
+    usedModels,
+  );
+  if (apiKeyInput) {
+    apiKeyInput.value = '';
+    apiKeyInput.placeholder = target?.maskedApiKey ? `${target.maskedApiKey} (留空保持当前)` : '留空表示保持当前';
+  }
+  if (authTokenInput) {
+    authTokenInput.value = '';
+    authTokenInput.placeholder = target?.maskedAuthToken ? `${target.maskedAuthToken} (留空保持当前)` : '留空表示保持当前';
+  }
+}
+
+function applyClaudeProviderFormToConfigEditor({ includeSecrets = true } = {}) {
+  const providerKeyRaw = el('ccProviderFormKey')?.value?.trim() || '';
+  const providerName = el('ccProviderFormName')?.value?.trim() || '';
+  const baseUrl = el('ccProviderFormBaseUrl')?.value?.trim() || '';
+  const model = readClaudeModelControl('ccProviderFormModelSelect', 'ccProviderFormModelCustom');
+  const apiKey = el('ccProviderFormApiKey')?.value?.trim() || '';
+  const authToken = el('ccProviderFormAuthToken')?.value?.trim() || '';
+  const normalizedProviderKey = normalizeProviderKey(providerKeyRaw || inferClaudeProviderKey(baseUrl || ''));
+
+  if (el('ccCfgProviderKeyInput')) el('ccCfgProviderKeyInput').value = normalizedProviderKey;
+  if (el('ccCfgBaseUrlInput')) el('ccCfgBaseUrlInput').value = baseUrl;
+  if (model) {
+    setClaudeModelControl('ccCfgModelSelect', 'ccCfgModelCustom', model, state.claudeCodeState?.usedModels || []);
+  }
+  if (includeSecrets) {
+    if (el('ccCfgApiKeyInput')) el('ccCfgApiKeyInput').value = apiKey;
+    if (el('ccCfgAuthTokenInput')) el('ccCfgAuthTokenInput').value = authToken;
+  }
+  state.claudeSelectedProviderKey = normalizedProviderKey;
+  return { providerKey: normalizedProviderKey, providerName };
+}
+
+function populateClaudeCodeConfigEditor() {
+  renderClaudeModelPresetList();
+  const data = state.claudeCodeState || {};
+  const settings = data.settings || {};
+  const settingsEnv = settings.env && typeof settings.env === 'object' ? settings.env : {};
+  const envVars = data.envVars || {};
+  const login = data.login || {};
+  const providers = getClaudeProviderProfiles(data);
+  const activeProvider = providers.find((provider) => provider.key === state.claudeSelectedProviderKey)
+    || providers.find((provider) => provider.isActive)
+    || providers[0]
+    || null;
+  if (activeProvider?.key) state.claudeSelectedProviderKey = activeProvider.key;
+
+  const usedModels = Array.isArray(data.usedModels) ? data.usedModels : [];
+  setClaudeModelControl('ccCfgModelSelect', 'ccCfgModelCustom', data.model || settings.model || '', usedModels);
+  el('ccCfgAlwaysThinkingCheck').checked = Boolean(
+    settings.alwaysThinkingEnabled !== undefined ? settings.alwaysThinkingEnabled : data.alwaysThinkingEnabled,
+  );
+  el('ccCfgSkipDangerousPromptCheck').checked = Boolean(
+    settings.skipDangerousModePermissionPrompt !== undefined
+      ? settings.skipDangerousModePermissionPrompt
+      : data.skipDangerousModePermissionPrompt,
+  );
+
+  const baseUrlFromSettings = typeof settingsEnv.ANTHROPIC_BASE_URL === 'string' ? settingsEnv.ANTHROPIC_BASE_URL.trim() : '';
+  const baseUrlFromEnv = envVars.ANTHROPIC_BASE_URL?.set ? (envVars.ANTHROPIC_BASE_URL.value || '') : '';
+  const providerKeyInput = el('ccCfgProviderKeyInput');
+  if (providerKeyInput) {
+    providerKeyInput.value = activeProvider?.key
+      || normalizeProviderKey(state.claudeSelectedProviderKey || inferClaudeProviderKey(baseUrlFromSettings || baseUrlFromEnv || ''));
+  }
+  el('ccCfgBaseUrlInput').value = activeProvider?.baseUrl || baseUrlFromSettings || baseUrlFromEnv;
+
+  const apiKeyInput = el('ccCfgApiKeyInput');
+  if (apiKeyInput) {
+    apiKeyInput.value = '';
+    const source = claudeEnvSourceLabel(envVars.ANTHROPIC_API_KEY?.source || data.apiKeySource);
+    apiKeyInput.placeholder = activeProvider?.maskedApiKey
+      ? `${activeProvider.maskedApiKey} (Provider)`
+      : envVars.ANTHROPIC_API_KEY?.set
+      ? `${envVars.ANTHROPIC_API_KEY.masked}${source ? ` (${source})` : ''}`
+      : '留空表示保持当前';
+  }
+
+  const authTokenInput = el('ccCfgAuthTokenInput');
+  if (authTokenInput) {
+    authTokenInput.value = '';
+    const source = claudeEnvSourceLabel(envVars.ANTHROPIC_AUTH_TOKEN?.source);
+    authTokenInput.placeholder = activeProvider?.maskedAuthToken
+      ? `${activeProvider.maskedAuthToken} (Provider)`
+      : envVars.ANTHROPIC_AUTH_TOKEN?.set
+      ? `${envVars.ANTHROPIC_AUTH_TOKEN.masked}${source ? ` (${source})` : ''}`
+      : '留空表示保持当前';
+  }
+
+  const loginMethod = claudeLoginMethodLabel(login);
+  const loginSource = login.loggedIn && String(login.method || '').toLowerCase() === 'api_key'
+    ? claudeEnvSourceLabel(
+      envVars.ANTHROPIC_AUTH_TOKEN?.set
+        ? envVars.ANTHROPIC_AUTH_TOKEN.source
+        : envVars.ANTHROPIC_API_KEY?.source || data.apiKeySource,
+    )
+    : '';
+  const loginIdentity = login.email || login.orgName || login.plan || '-';
+  el('ccCfgLoginMethod').value = activeProvider?.key
+    ? `${loginMethod}${loginSource ? ` · ${loginSource}` : ''} · provider:${activeProvider.key}`
+    : `${loginMethod}${loginSource ? ` · ${loginSource}` : ''}`;
+  el('ccCfgLoginIdentity').value = loginIdentity;
+  el('ccCfgSettingsPath').value = data.settingsPath || '~/.claude/settings.json';
+  el('ccCfgUsedModels').value = (data.usedModels || []).join(', ');
+  el('ccCfgRawJsonTextarea').value = data.settingsJson || '{}';
+
+  const providerList = el('ccCfgProviderList');
+  if (state.claudeProviderDetailKey && !providers.some((provider) => provider.key === state.claudeProviderDetailKey)) {
+    state.claudeProviderDetailKey = '';
+  }
+  if (providerList) {
+    providerList.innerHTML = providers.length ? providers.map((provider) => {
+      const isActive = provider.key === state.claudeSelectedProviderKey;
+      const isOpen = provider.key === state.claudeProviderDetailKey;
+      const isOfficial = provider.key === 'official' || /api\.anthropic\.com/i.test(provider.baseUrl || '');
+      const kind = isOfficial ? '官方' : '自定义';
+      const authBadge = claudeProviderAuthBadge(provider, data);
+      const netBadge = claudeProviderConnectivityLabel(provider, data);
+      return `
+        <div class="provider-card cc-provider-row ${isActive ? 'active' : ''}" data-cc-open-provider="${escapeHtml(provider.key)}">
+          <div class="provider-main">
+            <strong>${escapeHtml(provider.name || provider.key)}</strong>
+            <div class="provider-meta">${escapeHtml(kind)} · ${escapeHtml(provider.key)} · ${escapeHtml(provider.baseUrl || 'https://api.anthropic.com')}</div>
+          </div>
+          <div class="cc-provider-inline-actions">
+            <span class="provider-pill ${authBadge.tone}">${escapeHtml(authBadge.text)}</span>
+            <span class="provider-pill ${netBadge.tone}">${escapeHtml(netBadge.text)}</span>
+            <button type="button" class="secondary tiny-btn" data-cc-provider-action="switch" data-cc-provider-key="${escapeHtml(provider.key)}">切换</button>
+            <button type="button" class="secondary tiny-btn" data-cc-provider-action="check" data-cc-provider-key="${escapeHtml(provider.key)}">检测</button>
+            <span class="provider-option-model">${escapeHtml(isOpen ? '已展开' : (isActive ? '当前' : '详情'))}</span>
+          </div>
+        </div>
+      `;
+    }).join('') : '<div class="provider-meta">暂无 Provider</div>';
+  }
+  const detailProvider = providers.find((provider) => provider.key === state.claudeProviderDetailKey) || null;
+  const detailPanel = el('ccProviderDetailPanel');
+  const detailTitle = el('ccProviderDetailTitle');
+  if (detailPanel) detailPanel.classList.toggle('hide', !detailProvider);
+  if (detailTitle) detailTitle.textContent = detailProvider
+    ? `Provider 详情 · ${detailProvider.name || detailProvider.key}`
+    : 'Provider 详情';
+  if (detailProvider) populateClaudeProviderEditorForm(detailProvider, usedModels);
+
+  syncRawConfigHighlight();
 }
 
 function getConfigEditorFieldSearchText(node) {
@@ -6761,6 +7191,8 @@ function syncConfigEditorForTool() {
   if (searchInput) {
     searchInput.placeholder = tool === 'openclaw'
       ? '搜索配置方案…如 Telegram、安全、代理'
+      : tool === 'claudecode'
+        ? 'Claude Code 配置商店即将支持'
       : '搜索配置方案…如 模型、推理、沙箱、上下文';
     searchInput.value = '';
   }
@@ -6771,13 +7203,25 @@ function syncConfigEditorForTool() {
   if (fieldSearchInput) {
     fieldSearchInput.placeholder = tool === 'openclaw'
       ? '搜索配置项…如 Telegram、网关、日志、Agent'
+      : tool === 'claudecode'
+        ? '搜索配置项…如 模型、认证、Base URL、Token'
       : '搜索配置项…如 沙箱、审批、推理、SQLite';
+  }
+  const storeBtn = el('openConfigStoreBtn');
+  if (storeBtn) storeBtn.classList.toggle('hide', tool === 'claudecode');
+  const resetBtn = el('resetConfigEditorBtn');
+  if (resetBtn) {
+    const resetSupported = tool === 'codex' || tool === 'claudecode';
+    resetBtn.classList.toggle('hide', !resetSupported);
+    resetBtn.title = tool === 'claudecode'
+      ? '重置 Claude Code 非 Provider 配置（保留 Provider）'
+      : '重置 Codex 配置（保留 Provider）';
   }
   // Show/hide OpenClaw header config switch
   const ocSwitch = el('ocHeaderConfigSwitch');
   if (ocSwitch) ocSwitch.classList.toggle('hide', tool !== 'openclaw');
-  if (tool === 'codex') {
-    const sections = [...document.querySelectorAll('[data-tool-editor="codex"] details.cfg-section')];
+  if (tool !== 'openclaw') {
+    const sections = [...document.querySelectorAll(`[data-tool-editor="${tool}"] details.cfg-section`)];
     sections.forEach((section, index) => {
       section.open = index === 0;
     });
@@ -7247,7 +7691,9 @@ function updateOcPanelBadges(cfg) {
   _b('ocBadgeExtensions', extCustom ? '已配置' : '未配置', Boolean(extCustom));
 }
 function getActiveRecipesRaw() {
-  return getConfigStoreRecipesByTool(getConfigEditorTool());
+  const tool = getConfigEditorTool();
+  if (tool === 'claudecode') return [];
+  return getConfigStoreRecipesByTool(tool);
 }
 
 /**
@@ -7432,6 +7878,10 @@ function openConfigStore() {
   if (!modal) return;
 
   const tool = getConfigEditorTool();
+  if (tool === 'claudecode') {
+    flash('Claude Code 配置商店即将支持，先用上方表单或右侧 settings.json 编辑。', 'info');
+    return;
+  }
   const toolNames = { codex: 'Codex', claudecode: 'Claude Code', openclaw: 'OpenClaw' };
   const badge = el('configStoreToolBadge');
   if (badge) badge.textContent = toolNames[tool] || tool;
@@ -7677,6 +8127,8 @@ function validateCurrentConfig() {
   const tool = getConfigEditorTool();
   if (tool === 'openclaw') {
     validateOpenClawConfig();
+  } else if (tool === 'claudecode') {
+    validateClaudeCodeConfig();
   } else {
     validateCodexConfig();
   }
@@ -7738,13 +8190,16 @@ function validateCodexConfig() {
       }
     }
 
-    // Check compact limit vs context window
+    // Check compact limit vs Codex auto-compact bound (context * 90%)
     const compactLimit = el('cfgCompactLimitInput')?.value?.trim();
     if (compactLimit && ctxWindow) {
       const compactNum = Number(compactLimit);
       const ctxNum = Number(ctxWindow);
-      if (compactNum > ctxNum) {
-        errors.push(`自动压缩阈值 (${compactNum}) 大于上下文窗口 (${ctxNum})`);
+      const compactCap = calcCodexAutoCompactCap(ctxNum);
+      if (compactNum > compactCap) {
+        errors.push(`自动压缩阈值 (${compactNum}) 超过 Codex 上限 (${compactCap} = 上下文90%)`);
+      } else if (compactNum >= Math.round(compactCap * 0.95)) {
+        warnings.push(`自动压缩阈值 (${compactNum}) 已非常接近上限 (${compactCap})，建议再留余量`);
       }
     }
 
@@ -7839,6 +8294,65 @@ function validateOpenClawConfig() {
   } else {
     btn.classList.add('ok');
     flash('✅ OpenClaw 配置验证通过', 'success');
+  }
+  setTimeout(() => btn.classList.remove('ok', 'err'), 3000);
+}
+
+/** Validate the current Claude Code configuration. */
+function validateClaudeCodeConfig() {
+  const btn = el('validateConfigBtn');
+  if (!btn) return;
+  btn.classList.remove('ok', 'err');
+  const errors = [];
+  const warnings = [];
+
+  try {
+    const model = readClaudeModelControl('ccCfgModelSelect', 'ccCfgModelCustom');
+    if (model && !/^[a-zA-Z0-9._/\-]+$/.test(model)) {
+      warnings.push('模型名称包含非常规字符，建议仅使用字母、数字、-、_、/、.');
+    }
+    const providerKeyRaw = el('ccCfgProviderKeyInput')?.value?.trim() || '';
+    if (providerKeyRaw) {
+      const normalizedKey = normalizeProviderKey(providerKeyRaw);
+      if (!normalizedKey) {
+        errors.push('Provider Key 无效，请使用字母、数字、- 或 _');
+      } else if (normalizedKey !== providerKeyRaw) {
+        warnings.push(`Provider Key 将规范化为 ${normalizedKey}`);
+      }
+    }
+    const baseUrl = el('ccCfgBaseUrlInput')?.value?.trim() || '';
+    if (baseUrl) {
+      try {
+        const parsed = new URL(baseUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          errors.push('Base URL 仅支持 http/https');
+        }
+      } catch {
+        errors.push('Base URL 格式无效');
+      }
+    }
+
+    const rawText = el('ccCfgRawJsonTextarea')?.value?.trim() || '';
+    if (rawText) {
+      try {
+        JSON.parse(rawText);
+      } catch {
+        errors.push('settings.json 存在 JSON 语法错误');
+      }
+    }
+  } catch (e) {
+    errors.push(`配置校验出错: ${e.message}`);
+  }
+
+  if (errors.length) {
+    btn.classList.add('err');
+    flash(`❌ 配置有 ${errors.length} 个错误: ${errors[0]}`, 'error');
+  } else if (warnings.length) {
+    btn.classList.add('ok');
+    flash(`⚠️ 配置基本正确，${warnings.length} 个建议: ${warnings[0]}`, 'warning');
+  } else {
+    btn.classList.add('ok');
+    flash('✅ Claude Code 配置验证通过', 'success');
   }
   setTimeout(() => btn.classList.remove('ok', 'err'), 3000);
 }
@@ -8613,6 +9127,295 @@ function buildSettingsPatch() {
   };
 }
 
+function normalizeProviderKey(value = '') {
+  const key = String(value || '').trim().toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!key) return '';
+  if (/^\d/.test(key)) return `provider-${key}`;
+  return key;
+}
+
+function isClaudeOauthLoggedIn(data = state.claudeCodeState) {
+  const login = data?.login || {};
+  return Boolean(login.loggedIn && String(login.method || '').toLowerCase() === 'oauth');
+}
+
+function isClaudeOfficialProvider(provider = {}) {
+  const key = String(provider?.key || '').trim().toLowerCase();
+  const baseUrl = normalizeClaudeBaseUrl(provider?.baseUrl || '');
+  return key === 'official' || !baseUrl || /api\.anthropic\.com/i.test(baseUrl);
+}
+
+function ensurePlainObject(value, fallback = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
+  return value;
+}
+
+function buildClaudeCodeSettingsFromFields({
+  fromConfigEditor = false,
+  preserveSecretWhenEmpty = true,
+  providerNameOverride = '',
+  useGlobalEnvFallback = true,
+  preferOauthForOfficial = false,
+} = {}) {
+  const currentSettings = cloneJson(state.claudeCodeState?.settings || {});
+  const settings = ensurePlainObject(currentSettings, {});
+  settings.env = ensurePlainObject(settings.env, {});
+  settings.easyaiconfig = ensurePlainObject(settings.easyaiconfig, {});
+  settings.easyaiconfig.providers = ensurePlainObject(settings.easyaiconfig.providers, {});
+
+  const modelValue = fromConfigEditor
+    ? readClaudeModelControl('ccCfgModelSelect', 'ccCfgModelCustom')
+    : (el('modelSelect')?.value?.trim() || '');
+  if (modelValue) settings.model = modelValue;
+  else delete settings.model;
+
+  if (fromConfigEditor) {
+    settings.alwaysThinkingEnabled = Boolean(el('ccCfgAlwaysThinkingCheck')?.checked);
+    settings.skipDangerousModePermissionPrompt = Boolean(el('ccCfgSkipDangerousPromptCheck')?.checked);
+  } else {
+    settings.alwaysThinkingEnabled = Boolean(settings.alwaysThinkingEnabled);
+    settings.skipDangerousModePermissionPrompt = Boolean(settings.skipDangerousModePermissionPrompt);
+  }
+
+  const baseUrlText = fromConfigEditor
+    ? (el('ccCfgBaseUrlInput')?.value?.trim() || '')
+    : (el('baseUrlInput')?.value?.trim() || '');
+  const apiKeyText = fromConfigEditor
+    ? (el('ccCfgApiKeyInput')?.value?.trim() || '')
+    : (el('apiKeyInput')?.value?.trim() || '');
+  const authTokenText = fromConfigEditor
+    ? (el('ccCfgAuthTokenInput')?.value?.trim() || '')
+    : '';
+  const normalizedBaseUrl = normalizeClaudeBaseUrl(baseUrlText);
+
+  const manualProviderKey = normalizeProviderKey(fromConfigEditor
+    ? (el('ccCfgProviderKeyInput')?.value?.trim() || '')
+    : (el('claudeProviderKeyInput')?.value?.trim() || ''));
+  const selectedKey = normalizeProviderKey(manualProviderKey || state.claudeSelectedProviderKey || '');
+  const inferredKey = normalizeProviderKey(inferClaudeProviderKey(normalizedBaseUrl || ''));
+  const selectedProvider = selectedKey ? ensurePlainObject(settings.easyaiconfig.providers[selectedKey], {}) : {};
+  const selectedBaseUrl = normalizeClaudeBaseUrl(selectedProvider.baseUrl || '');
+  const keepSelectedKey = Boolean(selectedKey) && (!normalizedBaseUrl || selectedBaseUrl === normalizedBaseUrl);
+  const providerKey = manualProviderKey || (keepSelectedKey ? selectedKey : (inferredKey || selectedKey || 'official'));
+  const providers = settings.easyaiconfig.providers;
+  const existingProvider = ensurePlainObject(providers[providerKey], {});
+
+  const forceOauth = preferOauthForOfficial
+    && !authTokenText
+    && !apiKeyText
+    && isClaudeOauthLoggedIn()
+    && (providerKey === 'official' || !normalizedBaseUrl || /api\.anthropic\.com/i.test(normalizedBaseUrl));
+
+  let finalAuthToken = authTokenText;
+  let finalApiKey = '';
+  if (forceOauth) {
+    finalAuthToken = '';
+    finalApiKey = '';
+  } else if (finalAuthToken) {
+    finalApiKey = '';
+  } else if (apiKeyText) {
+    finalApiKey = apiKeyText;
+  } else if (preserveSecretWhenEmpty) {
+    const fallbackAuth = String(existingProvider.authToken || (useGlobalEnvFallback ? settings.env.ANTHROPIC_AUTH_TOKEN : '') || '').trim();
+    const fallbackApi = String(existingProvider.apiKey || (useGlobalEnvFallback ? settings.env.ANTHROPIC_API_KEY : '') || '').trim();
+    finalAuthToken = fallbackAuth;
+    finalApiKey = finalAuthToken ? '' : fallbackApi;
+  }
+
+  if (normalizedBaseUrl) settings.env.ANTHROPIC_BASE_URL = normalizedBaseUrl;
+  else delete settings.env.ANTHROPIC_BASE_URL;
+
+  if (forceOauth) {
+    delete settings.env.ANTHROPIC_AUTH_TOKEN;
+    delete settings.env.ANTHROPIC_API_KEY;
+  } else if (finalAuthToken) {
+    settings.env.ANTHROPIC_AUTH_TOKEN = finalAuthToken;
+    delete settings.env.ANTHROPIC_API_KEY;
+  } else if (finalApiKey) {
+    settings.env.ANTHROPIC_API_KEY = finalApiKey;
+    delete settings.env.ANTHROPIC_AUTH_TOKEN;
+  } else if (!preserveSecretWhenEmpty) {
+    delete settings.env.ANTHROPIC_API_KEY;
+    delete settings.env.ANTHROPIC_AUTH_TOKEN;
+  }
+
+  const providerNameRaw = String(providerNameOverride || existingProvider.name || '').trim();
+  const providerName = String(providerNameRaw || inferClaudeProviderLabel(normalizedBaseUrl || '') || providerKey).trim();
+  providers[providerKey] = {
+    ...existingProvider,
+    name: providerName,
+    baseUrl: normalizedBaseUrl,
+    apiKey: finalApiKey || '',
+    authToken: finalAuthToken || '',
+    model: modelValue || '',
+    updatedAt: new Date().toISOString(),
+  };
+
+  settings.easyaiconfig.activeProvider = providerKey;
+  state.claudeSelectedProviderKey = providerKey;
+  return settings;
+}
+
+async function saveClaudeCodeSettingsJson(settings) {
+  const json = await api('/api/claudecode/raw-save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      settingsJson: JSON.stringify(settings || {}, null, 2),
+    }),
+  });
+  return json;
+}
+
+function buildClaudeCodeResetSettingsPreservingProviders() {
+  const currentSettings = ensurePlainObject(cloneJson(state.claudeCodeState?.settings || {}), {});
+  const currentEnv = ensurePlainObject(currentSettings.env, {});
+  const easy = ensurePlainObject(currentSettings.easyaiconfig, {});
+  const providers = ensurePlainObject(cloneJson(easy.providers || {}), {});
+  const providerKeys = Object.keys(providers);
+  let activeProviderKey = normalizeProviderKey(easy.activeProvider || state.claudeSelectedProviderKey || '');
+  if (!activeProviderKey || !providers[activeProviderKey]) {
+    activeProviderKey = normalizeProviderKey(providerKeys[0] || inferClaudeProviderKey(currentEnv.ANTHROPIC_BASE_URL || '') || 'official');
+  }
+  const activeProvider = ensurePlainObject(providers[activeProviderKey], {});
+
+  const baseUrl = normalizeClaudeBaseUrl(activeProvider.baseUrl || currentEnv.ANTHROPIC_BASE_URL || '');
+  const authToken = String(activeProvider.authToken || currentEnv.ANTHROPIC_AUTH_TOKEN || '').trim();
+  const apiKey = authToken ? '' : String(activeProvider.apiKey || currentEnv.ANTHROPIC_API_KEY || '').trim();
+  const model = String(activeProvider.model || currentSettings.model || '').trim();
+  const nextEasy = ensurePlainObject(cloneJson(easy), {});
+  nextEasy.providers = providers;
+  if (activeProviderKey) nextEasy.activeProvider = activeProviderKey;
+
+  const nextSettings = {
+    env: {},
+    model: model || undefined,
+    alwaysThinkingEnabled: false,
+    skipDangerousModePermissionPrompt: false,
+    easyaiconfig: nextEasy,
+  };
+  if (baseUrl) nextSettings.env.ANTHROPIC_BASE_URL = baseUrl;
+  if (authToken) nextSettings.env.ANTHROPIC_AUTH_TOKEN = authToken;
+  else if (apiKey) nextSettings.env.ANTHROPIC_API_KEY = apiKey;
+  return nextSettings;
+}
+
+async function resetConfigEditorPreservingProviders() {
+  const tool = getConfigEditorTool();
+  if (tool !== 'codex' && tool !== 'claudecode') return flash('当前工具暂不支持重置', 'warning');
+  const confirmed = window.confirm(tool === 'claudecode'
+    ? '将重置 Claude Code 的非 Provider 配置，并保留 Provider 列表与当前 Provider。\n\n是否继续？'
+    : '将重置 Codex 配置，并保留 Provider / auth.json。\n\n是否继续？');
+  if (!confirmed) return;
+
+  setBusy('resetConfigEditorBtn', true, '重置中...');
+  try {
+    if (tool === 'claudecode') {
+      const saved = await saveClaudeCodeSettingsJson(buildClaudeCodeResetSettingsPreservingProviders());
+      if (!saved.ok) return flash(saved.error || 'Claude Code 配置重置失败', 'error');
+      await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+      populateConfigEditor();
+      flash('Claude Code 配置已重置（Provider 保留）', 'success');
+      return;
+    }
+
+    const json = await api('/api/config/raw-save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: el('scopeSelect').value,
+        projectPath: el('projectPathInput').value.trim(),
+        codexHome: el('codexHomeInput').value.trim(),
+        configToml: '',
+      }),
+    });
+    if (!json.ok) return flash(json.error || 'Codex 配置重置失败', 'error');
+    await loadState({ preserveForm: false });
+    populateConfigEditor();
+    flash('Codex 配置已重置（Provider 保留）', 'success');
+  } catch (error) {
+    flash(`配置重置失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+  } finally {
+    setBusy('resetConfigEditorBtn', false);
+  }
+}
+
+function seedClaudeProviderCreateModal() {
+  renderClaudeModelPresetList();
+  const currentBaseUrl = normalizeClaudeBaseUrl(el('ccCfgBaseUrlInput')?.value?.trim() || '');
+  const currentModel = readClaudeModelControl('ccCfgModelSelect', 'ccCfgModelCustom');
+  const inferredKey = normalizeProviderKey(inferClaudeProviderKey(currentBaseUrl || '')) || 'official';
+  if (el('ccProviderCreateKey')) el('ccProviderCreateKey').value = inferredKey;
+  if (el('ccProviderCreateName')) el('ccProviderCreateName').value = inferClaudeProviderLabel(currentBaseUrl || '') || inferredKey;
+  if (el('ccProviderCreateBaseUrl')) el('ccProviderCreateBaseUrl').value = currentBaseUrl;
+  if (el('ccProviderCreateModelSelect')) {
+    renderClaudeModelSelect('ccProviderCreateModelSelect', {
+      usedModels: state.claudeCodeState?.usedModels || [],
+      currentModel,
+    });
+    el('ccProviderCreateModelSelect').value = isClaudePresetModel(currentModel) ? currentModel : '';
+  }
+  if (el('ccProviderCreateModelCustom')) {
+    el('ccProviderCreateModelCustom').value = currentModel && !isClaudePresetModel(currentModel) ? currentModel : '';
+  }
+  if (el('ccProviderCreateApiKey')) el('ccProviderCreateApiKey').value = '';
+  if (el('ccProviderCreateAuthToken')) el('ccProviderCreateAuthToken').value = '';
+}
+
+function openClaudeProviderCreateModal() {
+  seedClaudeProviderCreateModal();
+  el('ccProviderCreateModal')?.classList.remove('hide');
+}
+
+function closeClaudeProviderCreateModal() {
+  el('ccProviderCreateModal')?.classList.add('hide');
+}
+
+async function createClaudeProviderFromModal() {
+  const baseUrl = normalizeClaudeBaseUrl(el('ccProviderCreateBaseUrl')?.value?.trim() || '');
+  const providerKey = normalizeProviderKey(el('ccProviderCreateKey')?.value?.trim() || inferClaudeProviderKey(baseUrl || ''));
+  const providerName = (el('ccProviderCreateName')?.value?.trim() || inferClaudeProviderLabel(baseUrl || '') || providerKey).trim();
+  const modelPreset = el('ccProviderCreateModelSelect')?.value?.trim() || '';
+  const modelCustom = el('ccProviderCreateModelCustom')?.value?.trim() || '';
+  const model = modelCustom || modelPreset;
+  const apiKey = el('ccProviderCreateApiKey')?.value?.trim() || '';
+  const authToken = el('ccProviderCreateAuthToken')?.value?.trim() || '';
+  if (!providerKey) return { ok: false, error: 'Provider Key 无效' };
+
+  if (el('ccProviderFormKey')) el('ccProviderFormKey').value = providerKey;
+  if (el('ccProviderFormName')) el('ccProviderFormName').value = providerName;
+  if (el('ccProviderFormBaseUrl')) el('ccProviderFormBaseUrl').value = baseUrl;
+  setClaudeModelControl('ccProviderFormModelSelect', 'ccProviderFormModelCustom', model, state.claudeCodeState?.usedModels || []);
+  if (el('ccProviderFormApiKey')) el('ccProviderFormApiKey').value = apiKey;
+  if (el('ccProviderFormAuthToken')) el('ccProviderFormAuthToken').value = authToken;
+  state.claudeProviderDetailKey = providerKey;
+
+  const saved = await saveClaudeProviderFormInConfigEditor({ switchOnly: false });
+  if (!saved.ok) return saved;
+  return { ok: true, providerKey };
+}
+
+async function saveClaudeProviderFormInConfigEditor({ switchOnly = false, provider } = {}) {
+  if (provider) populateClaudeProviderEditorForm(provider);
+  if (switchOnly) {
+    if (el('ccCfgApiKeyInput')) el('ccCfgApiKeyInput').value = '';
+    if (el('ccCfgAuthTokenInput')) el('ccCfgAuthTokenInput').value = '';
+  }
+  const { providerKey, providerName } = applyClaudeProviderFormToConfigEditor({ includeSecrets: !switchOnly });
+  if (!providerKey) return { ok: false, error: 'Provider Key 不能为空' };
+  const nextSettings = buildClaudeCodeSettingsFromFields({
+    fromConfigEditor: true,
+    providerNameOverride: providerName || provider?.name || '',
+    useGlobalEnvFallback: false,
+    preferOauthForOfficial: switchOnly,
+  });
+  const saved = await saveClaudeCodeSettingsJson(nextSettings);
+  if (!saved.ok) return saved;
+  await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+  populateClaudeCodeConfigEditor();
+  return { ok: true, providerKey };
+}
+
 async function saveConfigEditor() {
   setBusy('saveConfigEditorBtn', true, '保存中...');
 
@@ -8639,6 +9442,28 @@ async function saveConfigEditor() {
     flash('OpenClaw 配置已保存', 'success');
     // Refresh state
     await loadOpenClawQuickState();
+    populateConfigEditor();
+    return;
+  }
+
+  // ── Claude Code save ──
+  if (getConfigEditorTool() === 'claudecode') {
+    const rawEl = el('ccCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawEl && rawEl.value.trim() && rawEl.value !== (state.claudeCodeState?.settingsJson || ''));
+    const json = rawEdited
+      ? await api('/api/claudecode/raw-save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settingsJson: rawEl?.value || '{}' }),
+      })
+      : await saveClaudeCodeSettingsJson(buildClaudeCodeSettingsFromFields({
+        fromConfigEditor: true,
+        preferOauthForOfficial: true,
+      }));
+    setBusy('saveConfigEditorBtn', false);
+    if (!json.ok) return flash(json.error || 'Claude Code 配置保存失败', 'error');
+    flash('Claude Code 配置已保存', 'success');
+    await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
     populateConfigEditor();
     return;
   }
@@ -8740,6 +9565,25 @@ async function applyConfigEditor() {
     return;
   }
 
+  // ── Claude Code apply ──
+  if (getConfigEditorTool() === 'claudecode') {
+    const rawEl = el('ccCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawEl && rawEl.value.trim() && rawEl.value !== (state.claudeCodeState?.settingsJson || ''));
+    const json = rawEdited
+      ? await api('/api/claudecode/raw-save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settingsJson: rawEl?.value || '{}' }),
+      })
+      : await saveClaudeCodeSettingsJson(buildClaudeCodeSettingsFromFields({ fromConfigEditor: true }));
+    setBusy('applyConfigEditorBtn', false);
+    if (!json.ok) return flash(json.error || 'Claude Code 配置保存失败', 'error');
+    await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+    populateConfigEditor();
+    await launchClaudeCodeOnly();
+    return;
+  }
+
   // ── Codex apply (default) ──
   const tomlEl = el('cfgRawTomlTextarea');
   const rawEdited = Boolean(tomlEl && tomlEl.value.trim() && tomlEl.value !== (state.current?.configToml || ''));
@@ -8824,6 +9668,443 @@ function inferEnvKey(providerKey) {
   return providerKey.replace(/-/g, '_').toUpperCase() + '_API_KEY';
 }
 
+const CODEX_PROVIDER_HISTORY_STORAGE_KEY = 'easyaiconfig_codex_provider_history_v1';
+const CODEX_PROVIDER_HISTORY_MAX = 80;
+
+function codexProviderHistoryId(provider = {}) {
+  const key = String(provider?.key || '').trim().toLowerCase();
+  return key || '';
+}
+
+function normalizeCodexProviderHistoryItem(item = {}) {
+  const key = String(item.key || '').trim();
+  if (!key) return null;
+  const lastSeenAt = Number(item.lastSeenAt) || Date.now();
+  const firstSeenAt = Number(item.firstSeenAt) || lastSeenAt;
+  return {
+    key,
+    name: String(item.name || key).trim() || key,
+    baseUrl: normalizeBaseUrl(String(item.baseUrl || '').trim()),
+    envKey: String(item.envKey || '').trim(),
+    wireApi: String(item.wireApi || 'responses').trim() || 'responses',
+    firstSeenAt,
+    lastSeenAt,
+  };
+}
+
+function readCodexProviderHistory() {
+  try {
+    const raw = localStorage.getItem(CODEX_PROVIDER_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.items) ? parsed.items : []);
+    return list
+      .map((item) => normalizeCodexProviderHistoryItem(item))
+      .filter(Boolean)
+      .sort((left, right) => (right.lastSeenAt || 0) - (left.lastSeenAt || 0));
+  } catch {
+    return [];
+  }
+}
+
+function writeCodexProviderHistory(items = []) {
+  try {
+    const normalized = items
+      .map((item) => normalizeCodexProviderHistoryItem(item))
+      .filter(Boolean)
+      .sort((left, right) => (right.lastSeenAt || 0) - (left.lastSeenAt || 0))
+      .slice(0, CODEX_PROVIDER_HISTORY_MAX);
+    localStorage.setItem(CODEX_PROVIDER_HISTORY_STORAGE_KEY, JSON.stringify({ items: normalized }));
+  } catch {
+    // Ignore storage errors (private mode / quota / disabled storage).
+  }
+}
+
+function persistCodexProviderHistory(currentProviders = []) {
+  const historyMap = new Map();
+  readCodexProviderHistory().forEach((item) => {
+    const id = codexProviderHistoryId(item);
+    if (id) historyMap.set(id, item);
+  });
+  const now = Date.now();
+  currentProviders.forEach((provider) => {
+    const id = codexProviderHistoryId(provider);
+    if (!id) return;
+    const previous = historyMap.get(id) || null;
+    historyMap.set(id, normalizeCodexProviderHistoryItem({
+      key: provider.key,
+      name: provider.name || previous?.name || provider.key,
+      baseUrl: provider.baseUrl || previous?.baseUrl || '',
+      envKey: provider.envKey || previous?.envKey || '',
+      wireApi: provider.wireApi || previous?.wireApi || 'responses',
+      firstSeenAt: previous?.firstSeenAt || now,
+      lastSeenAt: now,
+    }));
+  });
+  writeCodexProviderHistory([...historyMap.values()]);
+}
+
+function mergeCodexProvidersWithHistory(currentProviders = []) {
+  const merged = currentProviders.map((provider) => ({ ...provider, historyOnly: false }));
+  const existing = new Set(merged.map((provider) => codexProviderHistoryId(provider)).filter(Boolean));
+  readCodexProviderHistory().forEach((item) => {
+    const id = codexProviderHistoryId(item);
+    if (!id || existing.has(id)) return;
+    merged.push({
+      key: item.key,
+      name: item.name || item.key,
+      baseUrl: item.baseUrl || '',
+      envKey: item.envKey || '',
+      wireApi: item.wireApi || 'responses',
+      hasInlineBearerToken: false,
+      isActive: false,
+      hasApiKey: false,
+      maskedApiKey: '',
+      keySource: 'history',
+      resolvedKeyName: item.envKey || '',
+      inferred: false,
+      historyOnly: true,
+    });
+  });
+  return merged;
+}
+
+function normalizeClaudeBaseUrl(baseUrl = '') {
+  const raw = String(baseUrl || '').trim();
+  if (!raw) return '';
+  try {
+    const withScheme = /^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const url = new URL(withScheme);
+    url.pathname = url.pathname.replace(/\/+$/, '');
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return raw;
+  }
+}
+
+function inferClaudeProviderKey(baseUrl = '') {
+  const normalized = normalizeClaudeBaseUrl(baseUrl);
+  if (!normalized || /api\.anthropic\.com/i.test(normalized)) return 'official';
+  try {
+    const host = new URL(normalized).hostname.toLowerCase().replace(/^www\./, '');
+    const parts = host.split('.');
+    const ignored = new Set(['api', 'anthropic', 'claude', 'gateway', 'chat', 'www']);
+    const seed = parts.find((part) => !ignored.has(part) && /[a-z]/.test(part)) || host;
+    const slug = seed.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!slug) return 'custom';
+    return /^\d/.test(slug) ? `provider-${slug}` : slug;
+  } catch {
+    return 'custom';
+  }
+}
+
+function inferClaudeProviderLabel(baseUrl = '') {
+  const normalized = normalizeClaudeBaseUrl(baseUrl);
+  if (!normalized || /api\.anthropic\.com/i.test(normalized)) return 'Anthropic Official';
+  const seed = inferClaudeProviderKey(normalized);
+  return seed
+    .replace(/^provider-/, '')
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'Custom Provider';
+}
+
+function getClaudeProviderProfiles(data = state.claudeCodeState) {
+  const settings = data?.settings && typeof data.settings === 'object' ? data.settings : {};
+  const settingsEnv = settings.env && typeof settings.env === 'object' ? settings.env : {};
+  const runtimeEnv = data?.envVars && typeof data.envVars === 'object' ? data.envVars : {};
+  const easy = settings.easyaiconfig && typeof settings.easyaiconfig === 'object' ? settings.easyaiconfig : {};
+  const rawProviders = easy.providers && typeof easy.providers === 'object' ? easy.providers : {};
+  const activeProviderKey = String(easy.activeProvider || '').trim();
+  const oauthLoggedIn = isClaudeOauthLoggedIn(data);
+
+  const providers = Object.entries(rawProviders).map(([key, raw]) => {
+    const item = raw && typeof raw === 'object' ? raw : {};
+    const baseUrl = normalizeClaudeBaseUrl(item.baseUrl || '');
+    const apiKey = String(item.apiKey || '').trim();
+    const authToken = String(item.authToken || '').trim();
+    const model = String(item.model || '').trim();
+    return {
+      key,
+      name: String(item.name || inferClaudeProviderLabel(baseUrl || '')),
+      baseUrl,
+      apiKey,
+      authToken,
+      model,
+      maskedApiKey: maskSecret(apiKey),
+      maskedAuthToken: maskSecret(authToken),
+      hasApiKey: Boolean(apiKey || authToken),
+      isActive: activeProviderKey && activeProviderKey === key,
+      source: 'settings.easyaiconfig.providers',
+    };
+  });
+
+  const envBaseUrl = normalizeClaudeBaseUrl(
+    settingsEnv.ANTHROPIC_BASE_URL
+      || (runtimeEnv.ANTHROPIC_BASE_URL?.set ? (runtimeEnv.ANTHROPIC_BASE_URL.value || '') : ''),
+  );
+  const envApiKey = String(settingsEnv.ANTHROPIC_API_KEY || '').trim();
+  const envAuthToken = String(settingsEnv.ANTHROPIC_AUTH_TOKEN || '').trim();
+  const runtimeMaskedApiKey = runtimeEnv.ANTHROPIC_API_KEY?.set ? String(runtimeEnv.ANTHROPIC_API_KEY.masked || '').trim() : '';
+  const runtimeMaskedAuthToken = runtimeEnv.ANTHROPIC_AUTH_TOKEN?.set ? String(runtimeEnv.ANTHROPIC_AUTH_TOKEN.masked || '').trim() : '';
+  const hasRuntimeSecret = Boolean(runtimeMaskedApiKey || runtimeMaskedAuthToken);
+  const runtimeProviderKey = activeProviderKey || inferClaudeProviderKey(envBaseUrl);
+  if (hasRuntimeSecret) {
+    const runtimeProvider = providers.find((provider) => provider.key === runtimeProviderKey);
+    if (runtimeProvider) {
+      if (!runtimeProvider.maskedApiKey) runtimeProvider.maskedApiKey = runtimeMaskedApiKey;
+      if (!runtimeProvider.maskedAuthToken) runtimeProvider.maskedAuthToken = runtimeMaskedAuthToken;
+      runtimeProvider.hasApiKey = true;
+    }
+  }
+  const syntheticKey = activeProviderKey || inferClaudeProviderKey(envBaseUrl);
+  const shouldAddSynthetic = !providers.length || Boolean(activeProviderKey || envBaseUrl || envApiKey || envAuthToken || hasRuntimeSecret);
+  if (shouldAddSynthetic && !providers.some((provider) => provider.key === syntheticKey)) {
+    providers.push({
+      key: syntheticKey || 'official',
+      name: inferClaudeProviderLabel(envBaseUrl || ''),
+      baseUrl: envBaseUrl,
+      apiKey: envApiKey,
+      authToken: envAuthToken,
+      model: String(settings.model || '').trim(),
+      maskedApiKey: maskSecret(envApiKey) || runtimeMaskedApiKey,
+      maskedAuthToken: maskSecret(envAuthToken) || runtimeMaskedAuthToken,
+      hasApiKey: Boolean(envApiKey || envAuthToken || hasRuntimeSecret),
+      isActive: true,
+      source: envApiKey || envAuthToken ? 'settings.env' : hasRuntimeSecret ? 'runtime.env' : 'settings.env',
+    });
+  }
+
+  if (oauthLoggedIn && !providers.some((provider) => provider.key === 'official')) {
+    providers.push({
+      key: 'official',
+      name: 'Anthropic Official',
+      baseUrl: '',
+      apiKey: '',
+      authToken: '',
+      model: String(settings.model || '').trim(),
+      maskedApiKey: '',
+      maskedAuthToken: '',
+      hasApiKey: false,
+      isActive: activeProviderKey === 'official' || !activeProviderKey,
+      source: 'oauth',
+    });
+  }
+
+  if (!providers.some((provider) => provider.isActive) && providers.length) {
+    providers[0].isActive = true;
+  }
+
+  providers.sort((left, right) => {
+    if (left.isActive !== right.isActive) return left.isActive ? -1 : 1;
+    return String(left.name || left.key).localeCompare(String(right.name || right.key), 'zh-CN');
+  });
+
+  return providers;
+}
+
+function getClaudeProviderByKey(providerKey = '') {
+  const key = String(providerKey || '').trim();
+  if (!key) return null;
+  return getClaudeProviderProfiles().find((provider) => provider.key === key) || null;
+}
+
+function fillFromClaudeProvider(provider) {
+  if (!provider) return;
+  state.claudeSelectedProviderKey = provider.key || '';
+  const providerKeyInput = el('claudeProviderKeyInput');
+  if (providerKeyInput) providerKeyInput.value = provider.key || '';
+  const modelSelect = el('modelSelect');
+  if (modelSelect && provider.model) {
+    let found = false;
+    for (const option of modelSelect.options) {
+      if (option.value === provider.model) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      const option = document.createElement('option');
+      option.value = provider.model;
+      option.textContent = provider.model;
+      modelSelect.appendChild(option);
+    }
+    modelSelect.value = provider.model;
+  }
+  const baseUrlInput = el('baseUrlInput');
+  if (baseUrlInput) baseUrlInput.value = provider.baseUrl || '';
+  const apiKeyInput = el('apiKeyInput');
+  if (apiKeyInput) {
+    apiKeyInput.value = '';
+    apiKeyInput.type = 'password';
+    if (provider.maskedAuthToken) {
+      apiKeyInput.placeholder = `${provider.maskedAuthToken} (Auth Token)`;
+    } else if (provider.maskedApiKey) {
+      apiKeyInput.placeholder = `${provider.maskedApiKey} (API Key)`;
+    } else {
+      apiKeyInput.placeholder = 'ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN';
+    }
+  }
+  syncApiKeyToggle();
+  const detectionMeta = el('detectionMeta');
+  if (detectionMeta) {
+    detectionMeta.textContent = `已载入 ${provider.name || provider.key}`;
+  }
+}
+
+async function quickSwitchClaudeProvider(provider) {
+  if (!provider?.key) return { ok: false, error: 'Provider 无效' };
+  fillFromClaudeProvider(provider);
+  setBusy('saveBtn', true, '切换中...');
+  const nextSettings = buildClaudeCodeSettingsFromFields({
+    fromConfigEditor: false,
+    useGlobalEnvFallback: false,
+    preferOauthForOfficial: true,
+  });
+  const saved = await saveClaudeCodeSettingsJson(nextSettings);
+  setBusy('saveBtn', false);
+  if (!saved.ok) return saved;
+  await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+  renderCurrentConfig();
+  return { ok: true };
+}
+
+function getCodexSwitchModelValue() {
+  const inConfigEditor = state.activePage === 'configEditor' && getConfigEditorTool() === 'codex';
+  if (inConfigEditor) {
+    return el('cfgModelInput')?.value?.trim() || state.current?.summary?.model || '';
+  }
+  return el('modelSelect')?.value?.trim() || state.current?.summary?.model || '';
+}
+
+async function quickSwitchCodexProvider(provider) {
+  if (!provider?.key) return { ok: false, error: 'Provider 无效' };
+  const baseUrl = normalizeBaseUrl(provider.baseUrl || '');
+  if (!baseUrl) return { ok: false, error: `Provider「${provider.name || provider.key}」缺少 Base URL` };
+
+  const payload = {
+    scope: el('scopeSelect')?.value || 'global',
+    projectPath: el('projectPathInput')?.value?.trim() || '',
+    codexHome: el('codexHomeInput')?.value?.trim() || '',
+    providerKey: provider.key,
+    providerLabel: String(provider.name || provider.key || '').trim(),
+    envKey: String(provider.envKey || inferEnvKey(provider.key)).trim(),
+    baseUrl,
+    apiKey: '',
+    model: getCodexSwitchModelValue(),
+  };
+
+  const saved = await api('/api/config/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!saved.ok) return saved;
+
+  await loadState({ preserveForm: false });
+  if (state.activePage === 'configEditor' && getConfigEditorTool() === 'codex') {
+    populateConfigEditor();
+  }
+  renderCurrentConfig();
+  return { ok: true, providerKey: provider.key };
+}
+
+async function testCodexProviderConnectivity(provider, { delayMs = 420 } = {}) {
+  if (!provider?.key) return { ok: false, error: 'Provider 无效' };
+  if (provider.historyOnly) {
+    return { ok: false, error: '历史 Provider 需先切换并保存到当前配置后再检测' };
+  }
+  if (!provider.hasApiKey) {
+    return { ok: false, error: `Provider「${provider.name || provider.key}」缺少已保存的 Key` };
+  }
+  if (!provider.baseUrl) {
+    return { ok: false, error: `Provider「${provider.name || provider.key}」缺少 Base URL` };
+  }
+
+  state.providerHealth[provider.key] = { loading: true, checked: false, startedAt: Date.now() };
+  renderCurrentConfig();
+  renderProviders();
+
+  if (delayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  const json = await api('/api/provider/test-saved', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: el('scopeSelect')?.value || 'global',
+      projectPath: el('projectPathInput')?.value?.trim() || '',
+      codexHome: el('codexHomeInput')?.value?.trim() || '',
+      providerKey: provider.key,
+      timeoutMs: 8000,
+    }),
+    timeoutMs: 10000,
+  });
+
+  state.providerHealth[provider.key] = { loading: false, checked: true, ok: Boolean(json?.ok) };
+  renderCurrentConfig();
+  renderProviders();
+
+  if (!json?.ok) return { ok: false, error: json?.error || '连通性检测失败' };
+  return { ok: true };
+}
+
+function claudeProviderConnectivityLabel(provider, data = state.claudeCodeState) {
+  const health = state.claudeProviderHealth[provider.key];
+  if (health?.loading) return { tone: 'muted', text: '检测中' };
+  if (health?.checked) return health.ok ? { tone: 'ok', text: '已通' } : { tone: 'bad', text: '失败' };
+
+  const login = data?.login || {};
+  const method = String(login.method || '').toLowerCase();
+  const isOfficial = provider.key === 'official' || /api\.anthropic\.com/i.test(provider.baseUrl || '');
+  if (isOfficial && login.loggedIn && method === 'oauth') {
+    return { tone: 'ok', text: '官方登录' };
+  }
+  if (!(provider.authToken || provider.apiKey)) return { tone: 'warn', text: '缺少 Key' };
+  return { tone: 'muted', text: '待检测' };
+}
+
+async function testClaudeProviderConnectivity(provider, { delayMs = 420 } = {}) {
+  if (!provider?.key) return { ok: false, error: 'Provider 无效' };
+  const baseUrl = normalizeClaudeBaseUrl(provider.baseUrl || '') || 'https://api.anthropic.com';
+  const secret = String(provider.authToken || provider.apiKey || '').trim();
+  const login = state.claudeCodeState?.login || {};
+  const loginMethod = String(login.method || '').toLowerCase();
+  const isOfficial = provider.key === 'official' || /api\.anthropic\.com/i.test(provider.baseUrl || '');
+  if (!secret && isOfficial && login.loggedIn && loginMethod === 'oauth') {
+    state.claudeProviderHealth[provider.key] = { loading: false, checked: true, ok: true };
+    if (getConfigEditorTool() === 'claudecode') populateClaudeCodeConfigEditor();
+    return { ok: true };
+  }
+  if (!secret) return { ok: false, error: `Provider「${provider.name || provider.key}」缺少可用 Key` };
+
+  state.claudeProviderHealth[provider.key] = { loading: true, checked: false, startedAt: Date.now() };
+  if (getConfigEditorTool() === 'claudecode') populateClaudeCodeConfigEditor();
+
+  if (delayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  const json = await api('/api/provider/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      baseUrl,
+      apiKey: secret,
+      timeoutMs: 10000,
+    }),
+    timeoutMs: 12000,
+  });
+
+  state.claudeProviderHealth[provider.key] = { loading: false, checked: true, ok: Boolean(json?.ok) };
+  if (getConfigEditorTool() === 'claudecode') populateClaudeCodeConfigEditor();
+
+  if (!json?.ok) return { ok: false, error: json?.error || '连通性检测失败' };
+  return { ok: true };
+}
+
 function modelScore(model) {
   const text = String(model || '').toLowerCase();
   if (!text) return -Infinity;
@@ -8860,7 +10141,7 @@ function resolveCodexProviderForSave(baseUrl) {
       providerKey: cachedProvider.key,
       providerLabel: String(cachedProvider.name || ''),
       envKey: String(cachedProvider.envKey || ''),
-      reuseExisting: !cachedProvider.inferred,
+      reuseExisting: !cachedProvider.inferred && !cachedProvider.historyOnly,
     };
   }
 
@@ -8870,7 +10151,7 @@ function resolveCodexProviderForSave(baseUrl) {
       providerKey: matchedByBaseUrl.key,
       providerLabel: String(matchedByBaseUrl.name || ''),
       envKey: String(matchedByBaseUrl.envKey || ''),
-      reuseExisting: !matchedByBaseUrl.inferred,
+      reuseExisting: !matchedByBaseUrl.inferred && !matchedByBaseUrl.historyOnly,
     };
   }
 
@@ -9001,6 +10282,7 @@ function renderQuickSummary() {
 
 function providerHealthLabel(provider) {
   const item = state.providerHealth[provider.key];
+  if (provider.historyOnly) return { text: '历史', tone: 'muted' };
   if (!provider.hasApiKey) return { text: '缺少 Key', tone: 'warn' };
   if (!item) return { text: '待检测', tone: 'muted' };
   if (item.loading) return { text: '检测中', tone: 'muted' };
@@ -9014,29 +10296,61 @@ function renderCurrentConfig() {
     const cc = state.claudeCodeState;
     const model = cc?.model || el('modelSelect')?.value || '未选择模型';
     const login = cc?.login || {};
-    let providerName = 'Claude Code';
-    if (login.orgName) providerName = login.orgName;
-    else if (login.email) providerName = login.email;
+    const providers = getClaudeProviderProfiles(cc);
+    const activeProvider = providers.find((provider) => provider.key === state.claudeSelectedProviderKey)
+      || providers.find((provider) => provider.isActive)
+      || providers[0]
+      || null;
+    state.claudeSelectedProviderKey = activeProvider?.key || '';
+
+    let providerName = activeProvider?.name || 'Claude Code';
+    if (!activeProvider && login.orgName) providerName = login.orgName;
+    else if (!activeProvider && login.email) providerName = login.email;
 
     let statusText, statusTone;
-    if (login.loggedIn) { statusText = '已通'; statusTone = 'ok'; }
+    const loginMethod = String(login.method || '').toLowerCase();
+    const activeOfficial = isClaudeOfficialProvider(activeProvider || {});
+    const activeHasKey = Boolean(activeProvider?.hasApiKey);
+    const activeOauthReady = activeOfficial && isClaudeOauthLoggedIn(cc);
+    if (activeHasKey) { statusText = 'API Key'; statusTone = 'ok'; }
+    else if (activeOauthReady) { statusText = 'OAuth'; statusTone = 'ok'; }
+    else if (login.loggedIn && (loginMethod === 'api_key' || loginMethod === 'keychain')) { statusText = 'API Key'; statusTone = 'ok'; }
+    else if (login.loggedIn && loginMethod === 'oauth') { statusText = 'OAuth'; statusTone = 'ok'; }
     else if (cc?.maskedApiKey) { statusText = '已配置 Key'; statusTone = 'ok'; }
     else { statusText = '未认证'; statusTone = 'warn'; }
 
     const ev = cc?.envVars || {};
-    const baseUrl = ev.ANTHROPIC_BASE_URL?.set ? ev.ANTHROPIC_BASE_URL.value : 'https://api.anthropic.com';
+    const baseUrl = activeProvider?.baseUrl || (ev.ANTHROPIC_BASE_URL?.set ? ev.ANTHROPIC_BASE_URL.value : 'https://api.anthropic.com');
 
     el('currentConfigMain').innerHTML = `<span class="current-provider">${escapeHtml(providerName)}</span><span class="current-model">${escapeHtml(model || '-')}</span>`;
-    el('currentConfigMeta').innerHTML = `状态 <span class="provider-pill ${statusTone}">${escapeHtml(statusText)}</span><span class="meta-sep">·</span><span class="current-url">${escapeHtml(baseUrl)}</span>`;
+    const providerKeyLabel = activeProvider?.key ? activeProvider.key : 'active';
+    el('currentConfigMeta').innerHTML = `状态 <span class="provider-pill ${statusTone}">${escapeHtml(statusText)}</span><span class="meta-sep">·</span><span class="provider-pill ok">${escapeHtml(providerKeyLabel)}</span><span class="meta-sep">·</span><span class="current-url">${escapeHtml(baseUrl)}</span>`;
 
-    el('providerDropdown').innerHTML = '<div class="provider-empty">Claude Code 不使用 Provider 切换</div>';
+    el('providerDropdown').innerHTML = providers.length ? providers.map((provider) => {
+      const oauthReady = isClaudeOfficialProvider(provider) && isClaudeOauthLoggedIn(cc);
+      const hasCredential = provider.hasApiKey || oauthReady;
+      const keyMask = provider.maskedAuthToken || provider.maskedApiKey || (oauthReady ? 'OAuth 已登录' : '未保存 Key');
+      return `
+        <button class="provider-option ${provider.key === state.claudeSelectedProviderKey ? 'active' : ''}" data-load-claude-provider="${escapeHtml(provider.key)}">
+          <span class="provider-option-main">
+            <strong>${escapeHtml(provider.name || provider.key)}</strong>
+            <span>${escapeHtml(provider.baseUrl || 'https://api.anthropic.com')}</span>
+          </span>
+          <span class="provider-option-side">
+            <span class="provider-pill ${hasCredential ? 'ok' : 'warn'}">${escapeHtml(hasCredential ? keyMask : '缺少 Key')}</span>
+            <span class="provider-option-model">${escapeHtml(provider.key === state.claudeSelectedProviderKey ? '当前' : '切换')}</span>
+          </span>
+        </button>
+      `;
+    }).join('') : '<div class="provider-empty">暂无 Provider 配置</div>';
     el('providerDropdown').classList.toggle('hide', !state.providerDropdownOpen);
     el('providerSwitchBtn').setAttribute('aria-expanded', String(state.providerDropdownOpen));
 
     state.quickTips = [
-      '支持 claude login 和 API Key 两种认证方式',
+      '支持多 Provider：右上角下拉点击即切换 URL 与 Key',
+      '支持 OAuth 授权和 API Key 两种认证方式',
       '模型别名（sonnet / opus / haiku）可直接使用',
-      '可通过 Base URL 配置代理或第三方 API',
+      '保存后会把当前 URL / Key 写入 Provider，并设为当前激活',
     ];
     renderQuickRailSupportPanel();
     return;
@@ -9087,16 +10401,20 @@ function renderCurrentConfig() {
   const providers = state.current?.providers || [];
   el('providerDropdown').innerHTML = providers.length ? providers.map((provider) => {
     const badge = providerHealthLabel(provider);
+    const modelLabel = provider.isActive
+      ? (state.current?.summary?.model || '-')
+      : (provider.historyOnly ? '历史条目' : '切换');
     return `
       <button class="provider-option ${provider.isActive ? 'active' : ''}" data-load-provider="${escapeHtml(provider.key)}">
         <span class="provider-option-main">
           <strong>${escapeHtml(provider.name || provider.key)}</strong>
-          ${provider.inferred ? '<span class="provider-pill ok">自动识别</span>' : ''}
+          ${provider.historyOnly ? '<span class="provider-pill muted">历史</span>' : ''}
+          ${provider.inferred && !provider.historyOnly ? '<span class="provider-pill ok">自动识别</span>' : ''}
           <span>${escapeHtml(provider.baseUrl || '-')}</span>
         </span>
         <span class="provider-option-side">
           <span class="provider-pill ${badge.tone}">${escapeHtml(badge.text)}</span>
-          <span class="provider-option-model">${escapeHtml(provider.isActive ? (state.current?.summary?.model || '-') : '切换')}</span>
+          <span class="provider-option-model">${escapeHtml(modelLabel)}</span>
         </span>
       </button>
     `;
@@ -9160,7 +10478,9 @@ function toggleProviderDropdown(force) {
   state.providerDropdownOpen = typeof force === 'boolean' ? force : !state.providerDropdownOpen;
   renderCurrentConfig();
   if (state.providerDropdownOpen) {
-    refreshProviderHealth();
+    if (state.activeTool === 'codex') {
+      refreshProviderHealth();
+    }
     positionProviderDropdown();
   }
 }
@@ -9228,9 +10548,14 @@ function renderProviders() {
     <div class="provider-card ${provider.isActive ? 'active' : ''}">
       <div class="provider-main">
         <strong>${escapeHtml(provider.name || provider.key)}</strong>
+        ${provider.historyOnly ? '<span class="provider-pill muted">历史</span>' : ''}
+        ${provider.inferred && !provider.historyOnly ? '<span class="provider-pill ok">自动识别</span>' : ''}
         <div class="provider-meta">${escapeHtml(provider.baseUrl || '-')}</div>
       </div>
-      <button class="secondary tiny-btn" data-load-provider="${escapeHtml(provider.key)}">载入</button>
+      <div class="provider-actions-row">
+        <button class="secondary tiny-btn" data-load-provider="${escapeHtml(provider.key)}">切换</button>
+        <button class="secondary tiny-btn" data-check-provider="${escapeHtml(provider.key)}">检测</button>
+      </div>
     </div>
   `).join('') : '<div class="provider-meta">暂无 Provider</div>';
 }
@@ -9261,9 +10586,13 @@ function fillFromProvider(provider) {
   const model = provider.isActive ? (state.current?.summary?.model || '') : '';
   renderModelOptions([], model);
   renderCurrentConfig();
-  el('detectionMeta').textContent = provider.hasApiKey
-    ? `已载入 ${provider.name || provider.key}${provider.inferred ? '（来自 OpenAI 认证自动识别）' : ''}，Key 已保存，可点击右侧眼睛查看`
-    : `已载入 ${provider.name || provider.key}，但未发现 Key`;
+  if (provider.historyOnly) {
+    el('detectionMeta').textContent = `已载入历史 Provider「${provider.name || provider.key}」，请补充 Key 后保存以恢复到当前配置`;
+  } else {
+    el('detectionMeta').textContent = provider.hasApiKey
+      ? `已载入 ${provider.name || provider.key}${provider.inferred ? '（来自 OpenAI 认证自动识别）' : ''}，Key 已保存，可点击右侧眼睛查看`
+      : `已载入 ${provider.name || provider.key}，但未发现 Key`;
+  }
 }
 
 /* ── Sync from Codex environment → OpenClaw quick-setup form ── */
@@ -9459,6 +10788,18 @@ async function loadState({ preserveForm = true } = {}) {
   const json = await api(`/api/state?${params.toString()}`);
   if (!json.ok) return flash(json.error || '读取状态失败', 'error');
   state.current = json.data;
+  if (state.current && Array.isArray(state.current.providers)) {
+    persistCodexProviderHistory(state.current.providers);
+    state.current.providers = mergeCodexProvidersWithHistory(state.current.providers);
+    const activeKey = String(state.current?.activeProvider?.key || state.current?.summary?.modelProvider || '').trim();
+    if (activeKey) {
+      state.current.providers.forEach((provider) => {
+        provider.isActive = provider.key === activeKey;
+      });
+      const activeFromMerged = state.current.providers.find((provider) => provider.key === activeKey);
+      if (activeFromMerged) state.current.activeProvider = activeFromMerged;
+    }
+  }
   state.providerHealth = {};
   fillAdvancedFromState();
   renderStatus();
@@ -9834,27 +11175,32 @@ async function saveOpenClawConfigOnly() {
 async function saveClaudeCodeConfigOnly() {
   const model = el('modelSelect')?.value || '';
   const apiKey = el('apiKeyInput')?.value?.trim() || '';
+  const baseUrl = el('baseUrlInput')?.value?.trim() || '';
 
   // Safety: don't save OpenAI keys into Claude Code config
-  if (apiKey && apiKey.startsWith('sk-') && apiKey.length > 30) {
+  if (apiKey && /^sk-(?!ant)/i.test(apiKey) && apiKey.length > 30) {
     flash('检测到 OpenAI Key，请勿填入 Claude Code 配置', 'error');
     return;
   }
 
-  setBusy('saveBtn', true, '保存中...');
-  const payload = { model };
-  if (apiKey) {
-    payload.env = { ANTHROPIC_API_KEY: apiKey };
+  // If user manually changed URL and no provider is selected, infer one for this save.
+  if (!state.claudeSelectedProviderKey && (baseUrl || model || apiKey)) {
+    state.claudeSelectedProviderKey = inferClaudeProviderKey(baseUrl || '');
   }
 
-  const saved = await api('/api/claudecode/config-save', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+  setBusy('saveBtn', true, '保存中...');
+  const nextSettings = buildClaudeCodeSettingsFromFields({
+    fromConfigEditor: false,
+    preferOauthForOfficial: true,
   });
+  const saved = await saveClaudeCodeSettingsJson(nextSettings);
   setBusy('saveBtn', false);
   if (!saved.ok) return flash(saved.error || '保存失败', 'error');
-  flash('Claude Code 配置已保存', 'success');
+  await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+  renderCurrentConfig();
+  const activeProvider = getClaudeProviderByKey(state.claudeSelectedProviderKey);
+  const providerLabel = activeProvider?.name || state.claudeSelectedProviderKey || '当前';
+  flash(`Claude Code 配置已保存，当前 Provider：${providerLabel}`, 'success');
 }
 
 async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已启动') {
@@ -10358,6 +11704,35 @@ async function launchClaudeCodeOnly() {
     flash(e.message || '启动失败', 'error');
   } finally {
     if (launchBtn) launchBtn.textContent = orig;
+  }
+}
+
+async function launchClaudeCodeOAuthLogin(buttonId = 'claudeOauthLoginBtn') {
+  const button = el(buttonId);
+  const originalText = button?.textContent || 'OAuth 登录';
+  if (button) {
+    button.disabled = true;
+    button.textContent = '启动中...';
+  }
+  try {
+    const json = await api('/api/claudecode/login', {
+      method: 'POST',
+      body: { cwd: state.current?.launch?.cwd || '' },
+    });
+    if (!json.ok) {
+      flash(json.error || '启动 OAuth 登录失败', 'error');
+      return false;
+    }
+    flash('已在终端中打开 Claude Code OAuth 登录，请完成浏览器授权后点击刷新状态', 'success');
+    return true;
+  } catch (error) {
+    flash(error instanceof Error ? error.message : '启动 OAuth 登录失败', 'error');
+    return false;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
   }
 }
 
@@ -11165,6 +12540,20 @@ function bindEvents() {
       tryAutoFetchModels();
     }
   });
+  el('claudeProviderKeyInput')?.addEventListener('input', (event) => {
+    if (state.activeTool !== 'claudecode') return;
+    const normalized = normalizeProviderKey(event.target.value || '');
+    state.claudeSelectedProviderKey = normalized || state.claudeSelectedProviderKey || '';
+    renderCurrentConfig();
+  });
+  el('claudeProviderKeyInput')?.addEventListener('blur', (event) => {
+    const normalized = normalizeProviderKey(event.target.value || '');
+    event.target.value = normalized;
+    if (state.activeTool === 'claudecode' && normalized) {
+      state.claudeSelectedProviderKey = normalized;
+      renderCurrentConfig();
+    }
+  });
   el('apiKeyInput').addEventListener('input', () => {
     const raw = el('apiKeyInput').value.trim();
     const currentActual = state.apiKeyField.actualValue.trim();
@@ -11245,6 +12634,7 @@ function bindEvents() {
     renderTasksPage();
   });
   el('saveBtn').addEventListener('click', saveConfigOnly);
+  el('claudeOauthLoginBtn')?.addEventListener('click', () => launchClaudeCodeOAuthLogin('claudeOauthLoginBtn'));
   el('launchBtn').addEventListener('click', launchCodexOnly);
   // OpenClaw dashboard quick button
   if (el('ocOpenDashboardBtn')) {
@@ -11451,15 +12841,121 @@ function bindEvents() {
     if (!button) return;
     renderModelOptions(state.detected?.models || [], button.dataset.model);
   });
-  el('savedProviders').addEventListener('click', (event) => {
+  el('savedProviders').addEventListener('click', async (event) => {
+    const checkBtn = event.target.closest('[data-check-provider]');
+    if (checkBtn) {
+      const providerKey = checkBtn.dataset.checkProvider;
+      const provider = (state.current?.providers || []).find((item) => item.key === providerKey);
+      if (!provider) return;
+      const result = await testCodexProviderConnectivity(provider, { delayMs: 420 });
+      if (!result.ok) flash(result.error || '检测失败', 'error');
+      else flash(`Provider「${provider.name || provider.key}」已连通`, 'success');
+      return;
+    }
     const button = event.target.closest('[data-load-provider]');
     if (!button) return;
     const providerKey = button.dataset.loadProvider;
-    fillFromProvider((state.current?.providers || []).find((item) => item.key === providerKey));
-    // Update visual active state on provider cards
-    el('savedProviders').querySelectorAll('.provider-card').forEach(card => card.classList.remove('active'));
-    const card = button.closest('.provider-card');
-    if (card) card.classList.add('active');
+    const provider = (state.current?.providers || []).find((item) => item.key === providerKey);
+    if (!provider) return;
+    const switched = await quickSwitchCodexProvider(provider);
+    if (!switched.ok) return flash(switched.error || '切换失败', 'error');
+    flash(`已切换到 Provider「${provider.name || provider.key}」`, 'success');
+  });
+  el('ccCfgProviderList')?.addEventListener('click', async (event) => {
+    const actionBtn = event.target.closest('[data-cc-provider-action]');
+    if (actionBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      const providerKey = actionBtn.dataset.ccProviderKey || '';
+      const provider = getClaudeProviderByKey(providerKey);
+      if (!provider) return;
+
+      if (actionBtn.dataset.ccProviderAction === 'switch') {
+        const switched = await saveClaudeProviderFormInConfigEditor({ switchOnly: true, provider });
+        if (!switched.ok) return flash(switched.error || '切换失败', 'error');
+        flash(`已切换到 Provider「${switched.providerKey}」`, 'success');
+        return;
+      }
+
+      if (actionBtn.dataset.ccProviderAction === 'check') {
+        const checked = await testClaudeProviderConnectivity(provider, { delayMs: 420 });
+        if (!checked.ok) return flash(checked.error || '检测失败', 'error');
+        flash(`Provider「${provider.name || provider.key}」已连通`, 'success');
+        return;
+      }
+    }
+
+    const row = event.target.closest('[data-cc-open-provider]');
+    if (!row) return;
+    const provider = getClaudeProviderByKey(row.dataset.ccOpenProvider || '');
+    if (!provider) return;
+    state.claudeProviderDetailKey = state.claudeProviderDetailKey === provider.key ? '' : (provider.key || '');
+    populateClaudeCodeConfigEditor();
+  });
+  el('ccProviderDetailCloseBtn')?.addEventListener('click', () => {
+    state.claudeProviderDetailKey = '';
+    populateClaudeCodeConfigEditor();
+  });
+  el('ccProviderOpenCreateBtn')?.addEventListener('click', openClaudeProviderCreateModal);
+  el('ccProviderCreateCloseBtn')?.addEventListener('click', closeClaudeProviderCreateModal);
+  el('ccProviderCreateCancelBtn')?.addEventListener('click', closeClaudeProviderCreateModal);
+  el('ccProviderCreateModal')?.querySelector('.oc-recipe-modal-backdrop')?.addEventListener('click', closeClaudeProviderCreateModal);
+  el('ccProviderCreateSaveBtn')?.addEventListener('click', async () => {
+    setBusy('ccProviderCreateSaveBtn', true, '创建中...');
+    const created = await createClaudeProviderFromModal();
+    setBusy('ccProviderCreateSaveBtn', false);
+    if (!created.ok) return flash(created.error || '创建失败', 'error');
+    closeClaudeProviderCreateModal();
+    flash(`Provider「${created.providerKey}」已创建并设为当前`, 'success');
+  });
+  el('ccProviderFormApplyBtn')?.addEventListener('click', () => {
+    const result = applyClaudeProviderFormToConfigEditor({ includeSecrets: true });
+    if (!result.providerKey) return flash('Provider Key 无效', 'error');
+    flash('已载入到主表单，点击“保存配置”后生效', 'success');
+  });
+  el('ccProviderFormSwitchBtn')?.addEventListener('click', async () => {
+    setBusy('ccProviderFormSwitchBtn', true, '切换中...');
+    const switched = await saveClaudeProviderFormInConfigEditor({ switchOnly: true });
+    setBusy('ccProviderFormSwitchBtn', false);
+    if (!switched.ok) return flash(switched.error || '切换失败', 'error');
+    flash(`已切换到 Provider「${switched.providerKey}」`, 'success');
+  });
+  el('ccProviderFormSaveBtn')?.addEventListener('click', async () => {
+    setBusy('ccProviderFormSaveBtn', true, '保存中...');
+    const saved = await saveClaudeProviderFormInConfigEditor({ switchOnly: false });
+    setBusy('ccProviderFormSaveBtn', false);
+    if (!saved.ok) return flash(saved.error || '保存失败', 'error');
+    flash(`Provider「${saved.providerKey}」已保存并设为当前`, 'success');
+  });
+  el('ccProviderFormKey')?.addEventListener('blur', (event) => {
+    event.target.value = normalizeProviderKey(event.target.value || '');
+  });
+  el('ccProviderFormBaseUrl')?.addEventListener('blur', (event) => {
+    const normalized = normalizeClaudeBaseUrl(event.target.value || '');
+    event.target.value = normalized;
+    const keyInput = el('ccProviderFormKey');
+    if (keyInput && !keyInput.value.trim()) {
+      keyInput.value = normalizeProviderKey(inferClaudeProviderKey(normalized || ''));
+    }
+    const nameInput = el('ccProviderFormName');
+    if (nameInput && !nameInput.value.trim()) {
+      nameInput.value = inferClaudeProviderLabel(normalized || '');
+    }
+  });
+  el('ccProviderCreateKey')?.addEventListener('blur', (event) => {
+    event.target.value = normalizeProviderKey(event.target.value || '');
+  });
+  el('ccProviderCreateBaseUrl')?.addEventListener('blur', (event) => {
+    const normalized = normalizeClaudeBaseUrl(event.target.value || '');
+    event.target.value = normalized;
+    const keyInput = el('ccProviderCreateKey');
+    if (keyInput && !keyInput.value.trim()) {
+      keyInput.value = normalizeProviderKey(inferClaudeProviderKey(normalized || ''));
+    }
+    const nameInput = el('ccProviderCreateName');
+    if (nameInput && !nameInput.value.trim()) {
+      nameInput.value = inferClaudeProviderLabel(normalized || '');
+    }
   });
   document.querySelectorAll('[data-page-target]').forEach((node) => {
     if (node.dataset.pageTarget === '__wizard__') return; // handled separately
@@ -11480,6 +12976,7 @@ function bindEvents() {
   el('themeToggleBtn').addEventListener('click', toggleTheme);
   el('configEditorBtn').addEventListener('click', () => setConfigEditorOpen(true));
   el('closeConfigEditorBtn').addEventListener('click', () => setConfigEditorOpen(false));
+  el('resetConfigEditorBtn')?.addEventListener('click', resetConfigEditorPreservingProviders);
   el('saveConfigEditorBtn').addEventListener('click', saveConfigEditor);
   el('applyConfigEditorBtn').addEventListener('click', applyConfigEditor);
 
@@ -11652,7 +13149,7 @@ function bindEvents() {
       const tab = e.target.closest('[data-cfg-tool]');
       if (!tab) return;
       e.preventDefault();
-      const tool = tab.dataset.cfgTool === 'openclaw' ? 'openclaw' : 'codex';
+      const tool = normalizeConfigEditorTool(tab.dataset.cfgTool || 'codex');
       if (tool === getConfigEditorTool()) return;
 
       state.configEditorTool = tool;
@@ -11660,6 +13157,9 @@ function bindEvents() {
 
       if (tool === 'openclaw' && !state.openclawState) {
         await loadOpenClawQuickState();
+      }
+      if (tool === 'claudecode' && !state.claudeCodeState) {
+        await loadClaudeCodeQuickState();
       }
 
       populateConfigEditor();
@@ -11817,11 +13317,33 @@ function bindEvents() {
   if (ocModelNameCombobox) initModelCombobox(ocModelNameCombobox, OPENCLAW_MODEL_NAME_PRESETS);
 
   el('providerSwitchBtn').addEventListener('click', () => toggleProviderDropdown());
-  el('providerRefreshBtn').addEventListener('click', () => refreshProviderHealth(true));
-  el('providerDropdown').addEventListener('click', (event) => {
+  el('providerRefreshBtn').addEventListener('click', () => {
+    if (state.activeTool === 'claudecode') {
+      loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+      return;
+    }
+    refreshProviderHealth(true);
+  });
+  el('providerDropdown').addEventListener('click', async (event) => {
+    const claudeButton = event.target.closest('[data-load-claude-provider]');
+    if (claudeButton) {
+      const provider = getClaudeProviderByKey(claudeButton.dataset.loadClaudeProvider || '');
+      if (provider) {
+        const switched = await quickSwitchClaudeProvider(provider);
+        if (!switched.ok) flash(switched.error || '切换失败', 'error');
+        else flash(`已切换到 Provider「${provider.name || provider.key}」`, 'success');
+      }
+      toggleProviderDropdown(false);
+      return;
+    }
     const button = event.target.closest('[data-load-provider]');
     if (!button) return;
-    fillFromProvider((state.current?.providers || []).find((item) => item.key === button.dataset.loadProvider));
+    const provider = (state.current?.providers || []).find((item) => item.key === button.dataset.loadProvider);
+    if (provider) {
+      const switched = await quickSwitchCodexProvider(provider);
+      if (!switched.ok) flash(switched.error || '切换失败', 'error');
+      else flash(`已切换到 Provider「${provider.name || provider.key}」`, 'success');
+    }
     toggleProviderDropdown(false);
   });
   document.addEventListener('click', (event) => {
@@ -12011,6 +13533,7 @@ loadTools();
       }
       if (node.getAttribute('role') === 'button') return true;
       if (node.hasAttribute('data-load-provider')) return true;
+      if (node.hasAttribute('data-load-claude-provider')) return true;
       node = node.parentElement;
     }
     return false;

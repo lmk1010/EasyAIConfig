@@ -89,6 +89,100 @@ function runSpawnSync(command, args, options = {}) {
   return spawnSync(command, args, withWindowsHide(options));
 }
 
+function safeResolveDir(dirPath) {
+  if (!dirPath) return '';
+  try {
+    return path.resolve(String(dirPath).trim());
+  } catch {
+    return '';
+  }
+}
+
+function managerGlobalBinDirs() {
+  const home = os.homedir();
+  const dirs = new Set();
+  const add = (dirPath) => {
+    const resolved = safeResolveDir(dirPath);
+    if (resolved) dirs.add(resolved);
+  };
+
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA?.trim();
+    const localAppData = process.env.LOCALAPPDATA?.trim();
+    add(windowsUserNpmPrefix());
+    add(appData ? path.join(appData, 'npm') : '');
+    add(process.env.BUN_INSTALL?.trim() ? path.join(process.env.BUN_INSTALL.trim(), 'bin') : path.join(home, '.bun', 'bin'));
+    add(process.env.PNPM_HOME?.trim() || (localAppData ? path.join(localAppData, 'pnpm') : ''));
+    add(localAppData ? path.join(localAppData, 'Yarn', 'bin') : '');
+    add(localAppData ? path.join(localAppData, 'Volta', 'bin') : '');
+    add(path.join(home, '.volta', 'bin'));
+  } else {
+    add(process.env.BUN_INSTALL?.trim() ? path.join(process.env.BUN_INSTALL.trim(), 'bin') : path.join(home, '.bun', 'bin'));
+    add(process.env.PNPM_HOME?.trim());
+    add(path.join(home, 'Library', 'pnpm')); // macOS
+    add(path.join(home, '.local', 'share', 'pnpm')); // Linux
+    add(path.join(home, '.pnpm'));
+    add(path.join(home, '.yarn', 'bin'));
+    add(path.join(home, '.config', 'yarn', 'global', 'node_modules', '.bin'));
+    add(path.join(home, '.volta', 'bin'));
+    add(path.join(home, '.asdf', 'shims'));
+    add(path.join(home, '.npm-global', 'bin'));
+    add(path.join(home, '.local', 'bin'));
+  }
+
+  return [...dirs];
+}
+
+function binaryCandidatesFromDir(binaryName, dirPath) {
+  if (!dirPath) return [];
+  if (process.platform === 'win32') {
+    return [
+      path.join(dirPath, `${binaryName}.cmd`),
+      path.join(dirPath, `${binaryName}.ps1`),
+      path.join(dirPath, `${binaryName}.exe`),
+      path.join(dirPath, binaryName),
+    ];
+  }
+  return [path.join(dirPath, binaryName)];
+}
+
+function readManagerBinDir(command, args = []) {
+  const result = runSpawnSync(command, args, { encoding: 'utf8', timeout: 1500 });
+  if (result.status !== 0) return '';
+  const text = String(result.stdout || '').split(/\r?\n/).find((line) => line.trim()) || '';
+  return safeResolveDir(text);
+}
+
+function managerReportedBinDirs() {
+  const dirs = new Set();
+  const add = (value) => {
+    const resolved = safeResolveDir(value);
+    if (resolved) dirs.add(resolved);
+  };
+
+  if (commandExists(process.platform === 'win32' ? 'bun.exe' : 'bun')) {
+    add(readManagerBinDir(process.platform === 'win32' ? 'bun.exe' : 'bun', ['pm', 'bin', '-g']));
+  }
+  if (commandExists(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')) {
+    add(readManagerBinDir(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['bin', '-g']));
+  }
+  if (commandExists(process.platform === 'win32' ? 'yarn.cmd' : 'yarn')) {
+    add(readManagerBinDir(process.platform === 'win32' ? 'yarn.cmd' : 'yarn', ['global', 'bin']));
+  }
+
+  return [...dirs];
+}
+
+function voltaWhichBinary(binaryName) {
+  const voltaCmd = process.platform === 'win32' ? 'volta.exe' : 'volta';
+  if (!commandExists(voltaCmd)) return '';
+  const result = runSpawnSync(voltaCmd, ['which', binaryName], { encoding: 'utf8', timeout: 1500 });
+  if (result.status !== 0) return '';
+  const line = String(result.stdout || '').split(/\r?\n/).find((item) => item.trim()) || '';
+  const resolved = safeResolveDir(line);
+  return resolved && existsSync(resolved) ? resolved : '';
+}
+
 function toolBinaryCandidates(toolId) {
   const tool = getToolDef(toolId);
   const binaryName = tool.binaryName;
@@ -101,24 +195,28 @@ function toolBinaryCandidates(toolId) {
     const preferredPrefix = toolId === 'openclaw' ? openClawNpmPrefix() : npmGlobalPrefix();
     const appData = process.env.APPDATA?.trim();
     const winCandidates = [
-      preferredPrefix ? path.join(preferredPrefix, `${binaryName}.cmd`) : '',
-      preferredPrefix ? path.join(preferredPrefix, `${binaryName}.ps1`) : '',
-      preferredPrefix ? path.join(preferredPrefix, `${binaryName}.exe`) : '',
-      preferredPrefix ? path.join(preferredPrefix, binaryName) : '',
-      appData ? path.join(appData, 'npm', `${binaryName}.cmd`) : '',
-      appData ? path.join(appData, 'npm', `${binaryName}.ps1`) : '',
-      appData ? path.join(appData, 'npm', `${binaryName}.exe`) : '',
-      appData ? path.join(appData, 'npm', binaryName) : '',
-      toolId === 'openclaw' ? path.join(os.homedir(), '.local', 'bin', `${binaryName}.cmd`) : '',
+      ...binaryCandidatesFromDir(binaryName, preferredPrefix),
+      ...binaryCandidatesFromDir(binaryName, appData ? path.join(appData, 'npm') : ''),
+      ...(toolId === 'openclaw' ? binaryCandidatesFromDir(binaryName, path.join(os.homedir(), '.local', 'bin')) : []),
     ];
     winCandidates.filter(Boolean).forEach((candidate) => {
       if (existsSync(candidate)) addCandidate(candidate);
     });
   } else {
     const npmPrefix = npmGlobalPrefix();
-    const unixCandidate = npmPrefix ? path.join(npmPrefix, 'bin', binaryName) : '';
-    if (unixCandidate && existsSync(unixCandidate)) addCandidate(unixCandidate);
+    for (const unixCandidate of binaryCandidatesFromDir(binaryName, npmPrefix ? path.join(npmPrefix, 'bin') : '')) {
+      if (unixCandidate && existsSync(unixCandidate)) addCandidate(unixCandidate);
+    }
   }
+
+  for (const dirPath of [...managerGlobalBinDirs(), ...managerReportedBinDirs()]) {
+    for (const candidate of binaryCandidatesFromDir(binaryName, dirPath)) {
+      if (candidate && existsSync(candidate)) addCandidate(candidate);
+    }
+  }
+
+  const voltaCandidate = voltaWhichBinary(binaryName);
+  if (voltaCandidate) addCandidate(voltaCandidate);
 
   const lookupResult = runSpawnSync(
     process.platform === 'win32' ? 'where' : 'which',
@@ -2799,6 +2897,19 @@ export async function launchClaudeCode({ cwd } = {}) {
     binaryPath: binary.path,
     binaryName: 'claude',
     toolLabel: 'Claude Code',
+  });
+  return { ok: true, cwd: targetCwd, message };
+}
+
+export async function loginClaudeCode({ cwd } = {}) {
+  const targetCwd = path.resolve(cwd || process.cwd());
+  const binary = findToolBinary('claudecode');
+  if (!binary.installed) {
+    throw new Error('Claude Code 尚未安装，请先点击安装');
+  }
+  const message = launchTerminalCommand(targetCwd, {
+    commandText: `"${String(binary.path || 'claude').replace(/"/g, '\\"')}" auth login`,
+    toolLabel: 'Claude Code OAuth 登录',
   });
   return { ok: true, cwd: targetCwd, message };
 }
