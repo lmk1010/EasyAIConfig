@@ -5414,6 +5414,37 @@ const CODEX_MODEL_PRESETS = [
   },
 ];
 
+// Codex model context-window caps from the built-in model catalog (v0.116.0).
+const CODEX_MODEL_CONTEXT_WINDOWS = {
+  'gpt-5.4': 272000,
+  'gpt-5.3-codex': 272000,
+  'gpt-5.2': 272000,
+  'gpt-5.1-codex': 272000,
+  'gpt-5.1': 272000,
+};
+
+function normalizeCodexModelSlug(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function resolveCodexModelContextWindowCap(modelValue = '') {
+  const normalized = normalizeCodexModelSlug(modelValue);
+  if (!normalized) return null;
+  if (CODEX_MODEL_CONTEXT_WINDOWS[normalized]) return CODEX_MODEL_CONTEXT_WINDOWS[normalized];
+  const parts = normalized.split('/');
+  const tail = parts[parts.length - 1] || '';
+  if (tail && CODEX_MODEL_CONTEXT_WINDOWS[tail]) return CODEX_MODEL_CONTEXT_WINDOWS[tail];
+  return null;
+}
+
+function getCodexSelectedModelValue() {
+  return String(el('cfgModelInput')?.value || configValue('model', '') || '').trim();
+}
+
+function getCodexSelectedModelContextCap() {
+  return resolveCodexModelContextWindowCap(getCodexSelectedModelValue());
+}
+
 const OPENCLAW_MODEL_NAME_PRESETS = [
   {
     label: 'OpenAI',
@@ -6830,7 +6861,7 @@ const CODEX_CONTEXT_EFFECTIVE_RATIO = 0.95;
 const CODEX_AUTO_COMPACT_LIMIT_RATIO = 0.9;
 
 function getCodexContextWindowForUi() {
-  return getConfigNumberValue('cfgContextWindowInput') || 272000;
+  return getConfigNumberValue('cfgContextWindowInput') || getCodexSelectedModelContextCap() || 272000;
 }
 
 function calcCodexEffectiveContextWindow(contextWindow) {
@@ -6849,13 +6880,28 @@ const CONFIG_NUMBER_FIELDS = {
     min: 32000,
     max: 512000,
     step: 1000,
-    defaultValue: () => 272000,
-    defaultPlaceholder: () => '默认 272000',
+    defaultValue: () => getCodexSelectedModelContextCap() || 272000,
+    defaultPlaceholder: () => {
+      const modelCap = getCodexSelectedModelContextCap();
+      const model = getCodexSelectedModelValue();
+      if (modelCap) return `默认 ${modelCap.toLocaleString('en-US')}（${model || '当前模型'} 上限）`;
+      return '默认 272000';
+    },
     hint: (value, empty) => {
+      const modelCap = getCodexSelectedModelContextCap();
+      const model = getCodexSelectedModelValue();
       const effective = calcCodexEffectiveContextWindow(value);
+      const valueText = Number(value || 0).toLocaleString('en-US');
+      const effectiveText = Number(effective || 0).toLocaleString('en-US');
+      if (modelCap) {
+        const capText = Number(modelCap).toLocaleString('en-US');
+        return empty
+          ? `${model || '当前模型'} 最大上下文 ${capText}；Codex 实际可用约 95%（≈ ${effectiveText}）。`
+          : `当前设置 ${valueText}；模型上限 ${capText}，Codex 实际可用约 ${effectiveText} (95%)`;
+      }
       return empty
-        ? `拖动滑杆快速调整，也可直接输入数字。Codex 实际可用约为设置值的 95%（≈ ${effective}）。`
-        : `当前设置 ${value}；Codex 实际可用约 ${effective} (95%)`;
+        ? `拖动滑杆快速调整，也可直接输入数字。Codex 实际可用约为设置值的 95%（≈ ${effectiveText}）。`
+        : `当前设置 ${valueText}；Codex 实际可用约 ${effectiveText} (95%)`;
     },
   },
   cfgCompactLimitInput: {
@@ -6918,6 +6964,14 @@ function syncConfigNumberField(inputId, source = 'init') {
   const input = el(inputId);
   const range = el(spec.rangeId);
   const hint = el(spec.hintId);
+  if (range && !range.dataset.baseMax) {
+    range.dataset.baseMax = String(range.max || spec.max);
+  }
+  if (inputId === 'cfgContextWindowInput') {
+    const modelCap = getCodexSelectedModelContextCap();
+    const baseMax = Number(range.dataset.baseMax || spec.max);
+    range.max = String(Math.max(spec.min, modelCap || baseMax));
+  }
   if (inputId === 'cfgCompactLimitInput') {
     const contextLimit = getCodexContextWindowForUi();
     const compactCap = calcCodexAutoCompactCap(contextLimit);
@@ -8390,16 +8444,22 @@ function validateCodexConfig() {
       const ctxNum = Number(ctxWindow);
       if (isNaN(ctxNum) || ctxNum < 1000) {
         errors.push(`上下文窗口值 "${ctxWindow}" 无效 (最小 1000)`);
-      } else if (ctxNum > 2097152) {
-        warnings.push(`上下文窗口 ${ctxNum} 非常大，可能超出模型支持范围`);
+      } else {
+        const modelCap = getCodexSelectedModelContextCap();
+        if (modelCap && ctxNum > modelCap) {
+          errors.push(`上下文窗口 ${ctxNum} 超过所选模型上限 ${modelCap}`);
+        } else if (!modelCap && ctxNum > 2097152) {
+          warnings.push(`上下文窗口 ${ctxNum} 非常大，可能超出模型支持范围`);
+        }
       }
     }
 
     // Check compact limit vs Codex auto-compact bound (context * 90%)
     const compactLimit = el('cfgCompactLimitInput')?.value?.trim();
-    if (compactLimit && ctxWindow) {
+    if (compactLimit) {
       const compactNum = Number(compactLimit);
-      const ctxNum = Number(ctxWindow);
+      const fallbackContext = getCodexContextWindowForUi();
+      const ctxNum = Number(ctxWindow || fallbackContext);
       const compactCap = calcCodexAutoCompactCap(ctxNum);
       if (compactNum > compactCap) {
         errors.push(`自动压缩阈值 (${compactNum}) 超过 Codex 上限 (${compactCap} = 上下文90%)`);
@@ -13508,6 +13568,12 @@ function bindEvents() {
       if (inputId === 'cfgContextWindowInput') syncConfigNumberField('cfgCompactLimitInput', 'refresh');
     });
   });
+  const syncCodexContextLimitsFromModel = () => {
+    syncConfigNumberField('cfgContextWindowInput', 'refresh');
+    syncConfigNumberField('cfgCompactLimitInput', 'refresh');
+  };
+  el('cfgModelInput')?.addEventListener('input', syncCodexContextLimitsFromModel);
+  el('cfgModelInput')?.addEventListener('change', syncCodexContextLimitsFromModel);
   el('cfgSqliteHomeBrowseBtn').addEventListener('click', () => pickDirectoryPath('cfgSqliteHomeInput', { title: '选择 SQLite 目录' }));
   el('cfgSqliteHomeUseCodexHomeBtn').addEventListener('click', () => applySqliteHomePreset('codex-home'));
   el('cfgSqliteHomeResetBtn').addEventListener('click', () => applySqliteHomePreset('default'));
