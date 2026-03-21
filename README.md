@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo-minimal.svg" width="84" height="84" alt="EasyAIConfig" />
+  <img src="assets/logo.png" width="96" height="96" alt="EasyAIConfig" />
 </p>
 
 <h1 align="center">EasyAIConfig</h1>
@@ -16,7 +16,7 @@
 
 ---
 
-## 已支持功能（当前版本）
+## [Core] 已支持功能（当前版本）
 
 ### 核心能力
 
@@ -39,7 +39,7 @@
 | **Claude Code** | 已支持 | 已支持 | 已支持 (OAuth 登录) | 已支持 (`~/.claude/settings.json`) | 已支持 |
 | **OpenClaw** | 已支持（一键 / WSL / 脚本） | 已支持（Gateway 启动） | 已支持 (`onboard`) | 已支持 (`~/.openclaw/openclaw.json`) | 已支持 |
 
-## 未来功能待办（Roadmap）
+## [Todo] 未来功能待办（Roadmap）
 
 > 以下为计划项，按优先级逐步推进。
 
@@ -52,7 +52,7 @@
 | P2 | 多语言界面（中文 / English） | 规划中 |
 | P3 | 配方（Recipes）模板扩展与社区分享 | 规划中 |
 
-## 截图预览
+## [UI] 截图预览
 
 <p align="center">
   <img src="assets/dashboard-codex.png" width="100%" alt="Codex Dashboard — Token 用量趋势、费用估算、模型分布" />
@@ -64,9 +64,9 @@
 </p>
 <p align="center"><em>Claude Code 数据看板 — 多模型统计、Token 分布与消耗分析</em></p>
 
-## 安装
+## [Install] 安装
 
-### 桌面版（推荐）
+### [Desktop] 桌面版（推荐）
 
 最新版本下载统一在 Releases：
 [https://github.com/lmk1010/EasyAIConfig/releases/latest](https://github.com/lmk1010/EasyAIConfig/releases/latest)
@@ -82,7 +82,7 @@
 - `aarch64` / `arm64`：Apple Silicon
 - `x64` / `x86_64`：Intel / AMD 64 位
 
-### Web 模式
+### [Web] Web 模式
 
 ```bash
 npm install -g easyaiconfig
@@ -91,7 +91,7 @@ easyaiconfig
 
 启动本地服务后自动打开浏览器。
 
-## 快速开始
+## [QuickStart] 快速开始
 
 1. **输入 Base URL** — 支持 OpenAI / 第三方 OpenAI 兼容 API
 2. **填写 API Key** — 自动识别 Provider 并生成环境变量名
@@ -99,35 +99,35 @@ easyaiconfig
 4. **保存配置** — 写入 `~/.codex/config.toml` + `.env`
 5. **启动 Codex** — 在终端中运行配置好的 Codex
 
-## 开发
+## [Dev] 开发
 
-### 前置要求
+### [Prerequisites] 前置要求
 
 - **Node.js** ≥ 18
 - **Rust** ≥ 1.77（桌面开发）
 - **npm** ≥ 8
 
-### Web 开发模式
+### [Web Dev] Web 开发模式
 
 ```bash
 npm install
 npm start
 ```
 
-### 桌面开发模式
+### [Desktop Dev] 桌面开发模式
 
 ```bash
 npm install
 npm run desktop:dev
 ```
 
-### 桌面打包
+### [Build] 桌面打包
 
 ```bash
 npm run desktop:build
 ```
 
-## 项目结构
+## [Tree] 项目结构
 
 ```
 ├── public/            # 前端静态文件（HTML / CSS / JS）
@@ -149,15 +149,15 @@ npm run desktop:build
 └── .github/workflows/ # CI/CD
 ```
 
-## 发布配置
+## [Release] 发布配置
 
-### 生成签名密钥
+### [Signing] 生成签名密钥
 
 ```bash
 npx tauri signer generate -w ~/.tauri/easyaiconfig.key
 ```
 
-### GitHub Secrets
+### [Secrets] GitHub Secrets
 
 在仓库 Settings → Secrets 中配置：
 
@@ -172,7 +172,7 @@ npx tauri signer generate -w ~/.tauri/easyaiconfig.key
 > gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 > ```
 
-### 发布新版本
+### [Tag] 发布新版本
 
 推送 tag 即可触发自动构建与发布：
 
