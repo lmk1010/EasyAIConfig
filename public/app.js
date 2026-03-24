@@ -16,6 +16,13 @@ const state = {
   detected: null,
   metaDirty: false,
   claudeCodeState: null,
+  opencodeState: null,
+  openCodeDesktopState: null,
+  openCodeEcosystemState: null,
+  toolsCatalogQuery: '',
+  toolsCatalogTag: 'all',
+  toolsCatalogPage: 1,
+  toolsCatalogPageSize: 9,
   providerHealth: {},
   claudeProviderHealth: {},
   providerSecrets: {},
@@ -78,6 +85,19 @@ const state = {
     pendingTask: null,
     activeTaskId: '',
     cancelBusy: false,
+  },
+  openCodeInstallView: {
+    lastRenderKey: '',
+    lastLogsText: '',
+    pauseUntil: 0,
+    pendingTask: null,
+    timerId: 0,
+    activeTaskId: '',
+    cancelBusy: false,
+  },
+  toolRuntimeSync: {
+    running: null,
+    lastAt: 0,
   },
   openClawSetupFlowId: 0,
   openClawSetupContext: null,
@@ -373,33 +393,238 @@ function toggleTheme() {
 initTheme();
 
 /* ── Multi-tool Support ── */
-async function loadTools() {
+function ensureKnownTools(tools = []) {
+  const known = [
+    { id: 'codex', name: 'Codex CLI', description: 'OpenAI 官方 AI 编程助手' },
+    { id: 'claudecode', name: 'Claude Code', description: 'Anthropic 终端原生 AI 编程助手' },
+    { id: 'opencode', name: 'OpenCode', description: '开放式 AI 编程助手 CLI' },
+    { id: 'openclaw', name: 'OpenClaw', description: '开源多渠道 AI 助手平台' },
+  ];
+  const map = new Map((tools || []).map((tool) => [tool.id, tool]));
+  return known.map((tool) => map.get(tool.id) || {
+    ...tool,
+    supported: true,
+    configFormat: 'json',
+    installMethod: tool.id === 'opencode' ? 'auto' : 'npm',
+    npmPackage: tool.id === 'codex' ? '@openai/codex' : tool.id === 'claudecode' ? '@anthropic-ai/claude-code' : tool.id === 'opencode' ? 'opencode-ai' : 'openclaw',
+    binary: { installed: false, version: null, path: null },
+  });
+}
+
+async function loadOpenCodeDesktopState({ render = true } = {}) {
   try {
-    const json = await api('/api/tools');
+    const json = await api('/api/opencode/desktop/state');
     if (json.ok && json.data) {
-      state.tools = json.data;
-      renderToolsPage();
-      updateToolSelector();
+      state.openCodeDesktopState = json.data;
+      if (render && state.activePage === 'tools') renderToolsPage();
     }
   } catch { /* silent */ }
 }
 
-function renderToolsPage() {
-  const grid = document.querySelector('.tools-page .tools-grid');
-  if (!grid || !state.tools.length) return;
+async function loadOpenCodeEcosystemState({ render = true } = {}) {
+  try {
+    const cwd = el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '';
+    const params = new URLSearchParams();
+    if (cwd) params.set('cwd', cwd);
+    const json = await api(`/api/opencode/ecosystem/state${params.toString() ? `?${params.toString()}` : ''}`);
+    if (json.ok && json.data) {
+      state.openCodeEcosystemState = json.data;
+      if (render && state.activePage === 'tools') renderToolsPage();
+    }
+  } catch { /* silent */ }
+}
 
-  const actionSvgs = {
-    update: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3" /></svg>',
-    reinstall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6" /><path d="M2.5 8A10 10 0 1 1 4.34 16" /></svg>',
-    uninstall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>',
+async function loadTools() {
+  try {
+    const json = await api('/api/tools');
+    if (json.ok && json.data) {
+      state.tools = ensureKnownTools(json.data);
+      renderToolsPage();
+      updateToolSelector();
+      await loadOpenCodeDesktopState({ render: false }).catch(() => {});
+      await loadOpenCodeEcosystemState({ render: false }).catch(() => {});
+      if (state.activePage === 'tools') renderToolsPage();
+    }
+  } catch { /* silent */ }
+}
+
+function shouldResyncToolRuntimeState() {
+  return state.activePage === 'quick'
+    || state.activePage === 'configEditor'
+    || state.activePage === 'console'
+    || state.activePage === 'tools';
+}
+
+async function refreshToolRuntimeAfterMutation(toolId = '') {
+  await loadTools().catch(() => {});
+  if (!toolId || toolId === 'codex') {
+    await loadState({ preserveForm: true }).catch(() => {});
+  }
+  if (!toolId || toolId === 'claudecode') {
+    await loadClaudeCodeQuickState({ force: false, cacheOnly: false }).catch(() => {});
+  }
+  if (!toolId || toolId === 'opencode') {
+    await loadOpenCodeQuickState().catch(() => {});
+  }
+  if (!toolId || toolId === 'openclaw') {
+    await loadOpenClawQuickState().catch(() => {});
+  }
+  renderCurrentConfig();
+  renderToolConsole();
+}
+
+async function resyncToolRuntimeState({ force = false } = {}) {
+  if (!force && !shouldResyncToolRuntimeState()) return;
+  const now = Date.now();
+  if (!force && state.toolRuntimeSync.running) return state.toolRuntimeSync.running;
+  if (!force && now - (state.toolRuntimeSync.lastAt || 0) < 1200) return;
+
+  const job = refreshToolRuntimeAfterMutation(state.activeTool || '').catch(() => {});
+
+  state.toolRuntimeSync.running = job;
+  try {
+    await job;
+    state.toolRuntimeSync.lastAt = Date.now();
+  } finally {
+    state.toolRuntimeSync.running = null;
+  }
+}
+
+const OPENCODE_DESKTOP_DOWNLOAD_URL = 'https://opencode.ai/download';
+const OPENCODE_DESKTOP_HOME_URL = 'https://opencode.ai/';
+const OPENCODE_IDE_DOCS_URL = 'https://opencode.ai/docs/ide';
+const OPENCODE_GITHUB_DOCS_URL = 'https://opencode.ai/docs/github';
+const OPENCODE_GITLAB_DOCS_URL = 'https://opencode.ai/docs/gitlab';
+
+function getOpenCodeDesktopPlatformLabel(platform = '') {
+  const text = String(platform || navigator.platform || '').toLowerCase();
+  if (text.includes('darwin') || text.includes('mac')) return 'macOS';
+  if (text.includes('win')) return 'Windows';
+  if (text.includes('linux')) return 'Linux';
+  return '桌面端';
+}
+
+function getToolsCatalogQuery() {
+  return normalizeStoreText(state.toolsCatalogQuery || '');
+}
+
+function getToolsCatalogTag() {
+  return String(state.toolsCatalogTag || 'all');
+}
+
+function getOpenCodeDesktopCatalogItem() {
+  const data = state.openCodeDesktopState || {};
+  const platformLabel = getOpenCodeDesktopPlatformLabel(data.platform);
+  const supported = data.supported !== false && ['macOS', 'Windows'].includes(platformLabel);
+  const installed = Boolean(data.installed);
+  return {
+    id: 'opencode-desktop',
+    kind: 'desktop',
+    iconId: 'opencode-desktop',
+    typeLabel: '桌面版',
+    name: 'OpenCode Desktop',
+    description: '内置下载器自动拉取官方桌面版，安装过程尽量全自动。',
+    supported,
+    installed,
+    version: installed ? (data.installPath || `${platformLabel} 已安装`) : supported ? `${platformLabel} 一键安装` : `${platformLabel} 暂未接入自动安装`,
+    badge: installed ? '已安装' : supported ? '可自动安装' : '官方入口',
+    tags: ['desktop', 'automation'].concat(installed ? ['installed'] : []),
+    chips: [platformLabel, installed ? '已安装' : '桌面端', supported ? '自动下载' : '需手动处理'],
+    primaryAction: { toolId: 'opencode-desktop', action: installed ? 'open' : 'install', label: installed ? '打开桌面版' : '一键安装', disabled: !supported },
+    secondaryAction: installed
+      ? { toolId: 'opencode-desktop', action: 'reinstall', label: '重新安装' }
+      : { externalUrl: OPENCODE_DESKTOP_HOME_URL, label: '官网' },
   };
+}
 
-  grid.innerHTML = state.tools.map(tool => {
+function getOpenCodeEcosystemCatalogItems() {
+  const ecosystem = state.openCodeEcosystemState || {};
+  const targets = ecosystem.targets || {};
+  const specs = [
+    { key: 'vscode', id: 'opencode-vscode', name: 'OpenCode · VS Code', typeLabel: '扩展', desc: '调用 `code` 一键安装官方扩展。', docsUrl: OPENCODE_IDE_DOCS_URL, unavailable: '未检测到 `code` 命令' },
+    { key: 'cursor', id: 'opencode-cursor', name: 'OpenCode · Cursor', typeLabel: '扩展', desc: '调用 `cursor` 一键安装官方扩展。', docsUrl: OPENCODE_IDE_DOCS_URL, unavailable: '未检测到 `cursor` 命令' },
+    { key: 'windsurf', id: 'opencode-windsurf', name: 'OpenCode · Windsurf', typeLabel: '扩展', desc: '调用 `windsurf` 一键安装官方扩展。', docsUrl: OPENCODE_IDE_DOCS_URL, unavailable: '未检测到 `windsurf` 命令' },
+    { key: 'vscodium', id: 'opencode-vscodium', name: 'OpenCode · VSCodium', typeLabel: '扩展', desc: '调用 `codium` 一键安装官方扩展。', docsUrl: OPENCODE_IDE_DOCS_URL, unavailable: '未检测到 `codium` 命令' },
+    { key: 'zed', id: 'opencode-zed', name: 'OpenCode · Zed', typeLabel: '扩展', desc: '自动写入 Zed 配置，打开 Zed 后自动装扩展。', docsUrl: OPENCODE_IDE_DOCS_URL, unavailable: '未检测到 Zed 环境' },
+    { key: 'github', id: 'opencode-github', name: 'OpenCode · GitHub', typeLabel: '集成', desc: '一键生成 GitHub Actions 工作流。', docsUrl: OPENCODE_GITHUB_DOCS_URL, unavailable: '请先打开一个 Git 仓库' },
+    { key: 'gitlab', id: 'opencode-gitlab', name: 'OpenCode · GitLab', typeLabel: '集成', desc: '一键生成 GitLab CI 模板文件。', docsUrl: OPENCODE_GITLAB_DOCS_URL, unavailable: '请先打开一个 Git 仓库' },
+  ];
+  return specs.map((spec) => {
+    const target = targets[spec.key] || {};
+    const available = target.available !== false;
+    const installed = Boolean(target.installed);
+    const statusValue = installed
+      ? (target.commandPath || target.workflowPath || target.settingsPath || target.repoRoot || '已配置')
+      : available
+        ? (target.commandPath || target.repoRoot || '可一键处理')
+        : spec.unavailable;
+    return {
+      id: spec.id,
+      kind: 'ecosystem',
+      target: spec.key,
+      iconId: spec.id,
+      typeLabel: spec.typeLabel,
+      name: spec.name,
+      description: spec.desc,
+      supported: available,
+      installed,
+      version: statusValue,
+      badge: installed ? '已就绪' : available ? '可自动化' : '待检测',
+      tags: [spec.typeLabel === '扩展' ? 'extension' : 'integration', 'automation'].concat(installed ? ['installed'] : []),
+      chips: [spec.typeLabel, installed ? '已配置' : '未配置', available ? '一键处理' : '待环境就绪'],
+      primaryAction: { toolId: spec.id, action: 'ecosystem-install', label: target.actionLabel || (installed ? '重新处理' : '立即安装'), disabled: !available, ecosystemTarget: spec.key },
+      secondaryAction: { externalUrl: spec.docsUrl, label: '官方文档' },
+    };
+  });
+}
+
+function getToolCatalogItems() {
+  const baseItems = (state.tools || []).map((tool) => {
     const isSoon = !tool.supported;
-    const isInstalled = tool.binary?.installed;
-    const version = tool.binary?.version || '';
+    const installed = Boolean(tool.binary?.installed);
+    return {
+      id: tool.id,
+      kind: 'tool',
+      iconId: tool.id,
+      typeLabel: 'CLI',
+      name: tool.name,
+      description: tool.description,
+      supported: !isSoon,
+      installed,
+      version: installed ? (tool.binary?.version || tool.binary?.path || '已安装') : (isSoon ? '暂未支持' : '未安装'),
+      badge: installed ? '已安装' : isSoon ? '即将支持' : 'CLI',
+      tags: ['cli'].concat(installed ? ['installed'] : []),
+      chips: ['CLI', installed ? '已安装' : '未安装'],
+      tool,
+    };
+  });
+  return [...baseItems, getOpenCodeDesktopCatalogItem(), ...getOpenCodeEcosystemCatalogItems()];
+}
 
-    const actionButtons = tool.supported ? `
+function filterToolCatalogItems(items = []) {
+  const query = getToolsCatalogQuery();
+  const tag = getToolsCatalogTag();
+  return items.filter((item) => {
+    if (tag !== 'all' && !(item.tags || []).includes(tag)) return false;
+    if (!query) return true;
+    const haystack = normalizeStoreText([
+      item.name,
+      item.description,
+      item.typeLabel,
+      item.version,
+      ...(item.tags || []),
+      ...(item.chips || []),
+    ].join(' '));
+    return haystack.includes(query);
+  });
+}
+
+function renderToolCardActions(item, actionSvgs) {
+  if (item.kind === 'tool') {
+    const tool = item.tool;
+    const isInstalled = item.installed;
+    if (!item.supported) return '<button class="secondary tool-action-btn" disabled>安装</button>';
+    return `
       <button class="secondary tool-action-btn" data-tool-action="update" data-tool-id="${tool.id}">
         ${actionSvgs.update}
         <span>${isInstalled ? '更新' : '安装'}</span>
@@ -414,58 +639,212 @@ function renderToolsPage() {
           <span>卸载</span>
         </button>
       ` : ''}
-    ` : '<button class="secondary tool-action-btn" disabled>安装</button>';
-
-    return `
-      <div class="tool-card ${isSoon ? 'tool-card-soon' : ''}" data-tool-id="${tool.id}">
-        <div class="tool-card-head">
-          <div class="tool-icon tool-icon-${tool.id}">
-            ${toolIconSvg(tool.id)}
-          </div>
-          <div class="tool-info">
-            <div class="tool-name">${escapeHtml(tool.name)}${isSoon ? ' <span class="tool-soon-tag">即将支持</span>' : ''}</div>
-            <div class="tool-desc">${escapeHtml(tool.description)}</div>
-          </div>
-        </div>
-        <div class="tool-status">
-          <span class="tool-version ${!isInstalled ? 'tool-version-muted' : ''}">${isInstalled ? escapeHtml(version) : (isSoon ? '暂未支持' : '未安装')}</span>
-          ${isInstalled ? '<span class="tool-badge tool-badge-ok">已安装</span>' : ''}
-        </div>
-        <div class="tool-actions">${actionButtons}</div>
-      </div>
     `;
-  }).join('');
+  }
+  const buttons = [item.primaryAction, item.secondaryAction, item.tertiaryAction].filter(Boolean).map((action) => {
+    if (action.externalUrl) {
+      return `
+        <button class="secondary tool-action-btn" data-external-url="${escapeHtml(action.externalUrl)}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+          <span>${escapeHtml(action.label)}</span>
+        </button>
+      `;
+    }
+    return `
+      <button class="secondary tool-action-btn" data-tool-id="${escapeHtml(action.toolId)}" data-tool-action="${escapeHtml(action.action)}" ${action.ecosystemTarget ? `data-ecosystem-target="${escapeHtml(action.ecosystemTarget)}"` : ''} ${action.disabled ? 'disabled' : ''}>
+        ${action.action === 'reinstall' ? actionSvgs.reinstall : action.action === 'open' ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>' : actionSvgs.update}
+        <span>${escapeHtml(action.label)}</span>
+      </button>
+    `;
+  });
+  return buttons.join('');
+}
 
-  // Event delegation - only bind once
+function renderToolCatalogCard(item, actionSvgs) {
+  return `
+    <div class="tool-card ${!item.supported ? 'tool-card-soon' : ''}" data-tool-id="${item.id}">
+      <div class="tool-card-head">
+        <div class="tool-icon tool-icon-${item.iconId}">
+          ${toolIconSvg(item.iconId)}
+        </div>
+        <div class="tool-info">
+          <div class="tool-name-row">
+            <div class="tool-name">${escapeHtml(item.name)}</div>
+            <span class="tool-type-tag">${escapeHtml(item.typeLabel)}</span>
+          </div>
+          <div class="tool-desc">${escapeHtml(item.description)}</div>
+        </div>
+      </div>
+      <div class="tool-chip-row">
+        ${(item.chips || []).map((chip, index) => `<span class="tool-chip ${index === 1 && item.installed ? 'tool-chip-active' : ''}">${escapeHtml(chip)}</span>`).join('')}
+      </div>
+      <div class="tool-status">
+        <span class="tool-version ${!item.installed ? 'tool-version-muted' : ''}">${escapeHtml(item.version)}</span>
+        <span class="tool-badge ${item.installed ? 'tool-badge-ok' : ''}">${escapeHtml(item.badge)}</span>
+      </div>
+      <div class="tool-actions">${renderToolCardActions(item, actionSvgs)}</div>
+    </div>
+  `;
+}
+
+function bindToolsCatalogControls() {
+  const searchInput = el('toolsCatalogSearchInput');
+  if (searchInput && !searchInput._bound) {
+    searchInput._bound = true;
+    searchInput.addEventListener('input', () => {
+      state.toolsCatalogQuery = searchInput.value || '';
+      state.toolsCatalogPage = 1;
+      renderToolsPage();
+    });
+  }
+  const tagWrap = el('toolsCatalogTags');
+  if (tagWrap && !tagWrap._bound) {
+    tagWrap._bound = true;
+    tagWrap.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-tools-tag]');
+      if (!button) return;
+      state.toolsCatalogTag = button.dataset.toolsTag || 'all';
+      state.toolsCatalogPage = 1;
+      renderToolsPage();
+    });
+  }
+}
+
+function renderToolsPage() {
+  const grid = document.querySelector('.tools-page .tools-grid');
+  if (!grid || !state.tools.length) return;
+  bindToolsCatalogControls();
+
+  const actionSvgs = {
+    update: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3" /></svg>',
+    reinstall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6" /><path d="M2.5 8A10 10 0 1 1 4.34 16" /></svg>',
+    uninstall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>',
+  };
+
+  const items = filterToolCatalogItems(getToolCatalogItems());
+  const searchInput = el('toolsCatalogSearchInput');
+  if (searchInput && searchInput.value !== state.toolsCatalogQuery) searchInput.value = state.toolsCatalogQuery;
+  document.querySelectorAll('[data-tools-tag]').forEach((node) => {
+    node.classList.toggle('active', node.dataset.toolsTag === getToolsCatalogTag());
+  });
+
+  const pageSize = Math.max(1, Number(state.toolsCatalogPageSize || 9));
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  state.toolsCatalogPage = Math.min(Math.max(1, Number(state.toolsCatalogPage || 1)), totalPages);
+  const start = (state.toolsCatalogPage - 1) * pageSize;
+  const pageItems = items.slice(start, start + pageSize);
+
+  grid.innerHTML = pageItems.map((item) => renderToolCatalogCard(item, actionSvgs)).join('');
+  el('toolsCatalogEmpty')?.classList.toggle('hide', items.length > 0);
+  const pagination = el('toolsCatalogPagination');
+  const prevBtn = el('toolsCatalogPrevBtn');
+  const nextBtn = el('toolsCatalogNextBtn');
+  const pageMeta = el('toolsCatalogPageMeta');
+  if (pagination) pagination.classList.toggle('hide', items.length <= pageSize);
+  if (prevBtn) prevBtn.disabled = state.toolsCatalogPage <= 1;
+  if (nextBtn) nextBtn.disabled = state.toolsCatalogPage >= totalPages;
+  if (pageMeta) pageMeta.textContent = `第 ${state.toolsCatalogPage} / ${totalPages} 页 · 共 ${items.length} 项`;
+
+  if (pagination && !pagination._bound) {
+    pagination._bound = true;
+    prevBtn?.addEventListener('click', () => {
+      if (state.toolsCatalogPage <= 1) return;
+      state.toolsCatalogPage -= 1;
+      renderToolsPage();
+    });
+    nextBtn?.addEventListener('click', () => {
+      state.toolsCatalogPage += 1;
+      renderToolsPage();
+    });
+  }
+
   if (!grid._toolsBound) {
     grid._toolsBound = true;
     grid.addEventListener('click', (e) => {
+      const linkBtn = e.target.closest('[data-external-url]');
+      if (linkBtn) {
+        void openExternalUrl(linkBtn.dataset.externalUrl || '');
+        return;
+      }
       const btn = e.target.closest('[data-tool-action]');
       if (!btn) return;
-      const toolId = btn.dataset.toolId;
-      const action = btn.dataset.toolAction;
-      handleToolAction(toolId, action, btn);
+      handleToolAction(btn.dataset.toolId, btn.dataset.toolAction, btn);
     });
   }
 }
 
 // Generic tool action handler
 async function handleToolAction(toolId, action, btn) {
-  const toolNames = { codex: 'Codex', claudecode: 'Claude Code', openclaw: 'OpenClaw' };
+  const toolNames = { codex: 'Codex', claudecode: 'Claude Code', opencode: 'OpenCode', 'opencode-desktop': 'OpenCode Desktop', openclaw: 'OpenClaw' };
   const toolName = toolNames[toolId] || toolId;
 
-  // Map tool ID to API prefix
-  const apiPrefix = toolId === 'codex' ? 'codex' : toolId === 'claudecode' ? 'claudecode' : 'openclaw';
+  const apiPrefixMap = { codex: 'codex', claudecode: 'claudecode', opencode: 'opencode', openclaw: 'openclaw' };
+  const apiPrefix = apiPrefixMap[toolId] || toolId;
 
-  // OpenClaw install has a special handler
   if (toolId === 'openclaw' && action === 'update') {
     await openClawInstallMethodDialog(btn);
     return;
   }
 
-  // OpenClaw uninstall has a special handler with purge choice + progress
   if (toolId === 'openclaw' && action === 'uninstall') {
     await openClawUninstallDialog(btn);
+    return;
+  }
+
+  if (action === 'ecosystem-install') {
+    const target = btn?.dataset?.ecosystemTarget || toolId.replace('opencode-', '');
+    setToolBtnBusy(btn, true, '处理中…');
+    try {
+      const cwd = el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '';
+      const json = await api('/api/opencode/ecosystem/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, cwd }),
+      });
+      if (!json.ok) {
+        flash(json.error || 'OpenCode 生态项处理失败', 'error');
+        return;
+      }
+      flash(json.data?.message || 'OpenCode 生态项已处理', 'success');
+      await loadOpenCodeEcosystemState({ render: state.activePage === 'tools' });
+    } catch (error) {
+      flash(error?.message || 'OpenCode 生态项处理失败', 'error');
+    } finally {
+      setToolBtnBusy(btn, false);
+    }
+    return;
+  }
+
+  if (toolId === 'opencode-desktop') {
+    if (action === 'install') {
+      await runOpenCodeDesktopInstallAction(btn, { reinstall: false });
+      return;
+    }
+    if (action === 'reinstall') {
+      await runOpenCodeDesktopInstallAction(btn, { reinstall: true });
+      return;
+    }
+    if (action === 'open') {
+      setToolBtnBusy(btn, true, '打开中…');
+      try {
+        const json = await api('/api/opencode/desktop/open', { method: 'POST' });
+        if (!json.ok) {
+          flash(json.error || '打开 OpenCode Desktop 失败', 'error');
+          return;
+        }
+        flash('OpenCode Desktop 已打开', 'success');
+        await loadOpenCodeDesktopState({ render: state.activePage === 'tools' });
+      } catch (error) {
+        flash(error?.message || '打开 OpenCode Desktop 失败', 'error');
+      } finally {
+        setToolBtnBusy(btn, false);
+      }
+      return;
+    }
+  }
+
+  if (toolId === 'opencode' && ['update', 'reinstall', 'uninstall'].includes(action)) {
+    await runOpenCodeToolAction(action, btn);
     return;
   }
 
@@ -506,7 +885,6 @@ async function handleToolAction(toolId, action, btn) {
   const config = actionConfig[action];
   if (!config) return;
 
-  // Confirm dialog if needed
   if (config.confirm) {
     const confirmed = await openUpdateDialog(config.confirm);
     if (!confirmed) {
@@ -515,7 +893,6 @@ async function handleToolAction(toolId, action, btn) {
     }
   }
 
-  // Set button busy state with spinner
   setToolBtnBusy(btn, true, config.busyText);
 
   try {
@@ -525,14 +902,13 @@ async function handleToolAction(toolId, action, btn) {
       return;
     }
     flash(config.successText, 'success');
-    loadTools(); // Refresh tool cards
+    await refreshToolRuntimeAfterMutation(toolId);
   } catch (e) {
     flash(e.message || `${toolName} 操作失败`, 'error');
   } finally {
     setToolBtnBusy(btn, false);
   }
 }
-
 const SPINNER_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.22-8.56" /></svg>';
 
 function setToolBtnBusy(btn, busy, text) {
@@ -549,11 +925,980 @@ function setToolBtnBusy(btn, busy, text) {
   }
 }
 
+function getOpenCodeActionCopy(action, installedBefore = false) {
+  if (action === 'desktop-install') {
+    return installedBefore
+      ? { busy: '重装中…', title: '正在重装 OpenCode Desktop', done: 'OpenCode Desktop 已重装完成' }
+      : { busy: '安装中…', title: '正在安装 OpenCode Desktop', done: 'OpenCode Desktop 安装完成' };
+  }
+  if (action === 'install') {
+    return { busy: '安装中…', title: '正在安装 OpenCode', done: 'OpenCode 安装完成' };
+  }
+  if (action === 'update') {
+    return installedBefore
+      ? { busy: '更新中…', title: '正在更新 OpenCode', done: 'OpenCode 已更新到最新版' }
+      : { busy: '安装中…', title: '正在安装 OpenCode', done: 'OpenCode 安装完成' };
+  }
+  if (action === 'reinstall') {
+    return { busy: '重装中…', title: '正在重装 OpenCode', done: 'OpenCode 重装完成' };
+  }
+  return { busy: '卸载中…', title: '正在卸载 OpenCode', done: 'OpenCode 已卸载' };
+}
+
+function getOpenCodeMethodLabel(method = '') {
+  return ({
+    auto: '自动检测',
+    domestic: '国内 npm 镜像',
+    script: '官方安装脚本',
+    npm: 'npm 官方源',
+    brew: 'Homebrew',
+    scoop: 'Scoop',
+    choco: 'Chocolatey',
+  }[method] || method || '自动检测');
+}
+
+function getOpenCodeRequestedMethodLabel(method = '') {
+  return method ? getOpenCodeMethodLabel(method) : '自动检测';
+}
+
+function getOpenCodeCommandPreview(action, requestedMethod = '') {
+  if (action === 'desktop-install') {
+    const isWin = navigator.platform?.startsWith('Win');
+    return isWin
+      ? ['内置下载器 → 官方 Windows 安装包', '下载完成后自动拉起安装器，尽量直接完成安装']
+      : ['内置下载器 → 官方 macOS DMG', '下载完成后自动挂载并安装到 Applications'];
+  }
+  const isWin = navigator.platform?.startsWith('Win');
+  const requested = requestedMethod || 'auto';
+  const installMap = isWin
+    ? {
+      auto: ['Google 可达 → npm i -g opencode-ai@latest', 'Google 不可达 → npm i -g opencode-ai@latest --registry=https://registry.npmmirror.com'],
+      domestic: ['npm i -g opencode-ai@latest --registry=https://registry.npmmirror.com'],
+      npm: ['npm i -g opencode-ai@latest'],
+      scoop: ['scoop install opencode'],
+      choco: ['choco install opencode -y'],
+    }
+    : {
+      auto: ['Google 可达 → curl -fsSL https://opencode.ai/install | bash', 'Google 不可达 → npm i -g opencode-ai@latest --registry=https://registry.npmmirror.com'],
+      domestic: ['npm i -g opencode-ai@latest --registry=https://registry.npmmirror.com'],
+      script: ['curl -fsSL https://opencode.ai/install | bash'],
+      brew: ['brew install anomalyco/tap/opencode'],
+      npm: ['npm i -g opencode-ai@latest'],
+    };
+  const uninstallMap = isWin
+    ? {
+      domestic: ['npm uninstall -g opencode-ai'],
+      npm: ['npm uninstall -g opencode-ai'],
+      scoop: ['scoop uninstall opencode'],
+      choco: ['choco uninstall opencode -y'],
+      auto: ['根据当前安装方式自动选择卸载命令'],
+    }
+    : {
+      domestic: ['npm uninstall -g opencode-ai'],
+      npm: ['npm uninstall -g opencode-ai'],
+      script: ['rm -f <opencode-binary>'],
+      brew: ['brew uninstall anomalyco/tap/opencode'],
+      auto: ['根据当前安装方式自动选择卸载命令'],
+    };
+  const baseMap = action === 'uninstall' ? uninstallMap : installMap;
+  return baseMap[requested] || baseMap.auto || [];
+}
+
+function createOpenCodeTracker(action, { installedBefore = false, requestedMethod = '' } = {}) {
+  const copy = getOpenCodeActionCopy(action, installedBefore);
+  const startedAt = new Date().toISOString();
+  const uninstall = action === 'uninstall';
+  const desktopInstall = action === 'desktop-install';
+  const steps = desktopInstall
+    ? [
+      { key: 'inspect', title: '检查系统环境', description: '识别系统、架构与桌面版状态', status: 'running' },
+      { key: 'download', title: '下载桌面安装器', description: '通过内置下载器拉取官方桌面版安装包', status: 'pending' },
+      { key: 'install', title: '自动安装并启动', description: '自动安装 OpenCode Desktop 并尝试直接打开', status: 'pending' },
+    ]
+    : uninstall
+      ? [
+        { key: 'inspect', title: '检查当前安装', description: '确认当前 OpenCode 安装状态', status: 'running' },
+        { key: 'remove', title: '执行卸载命令', description: '移除全局 OpenCode 命令与包', status: 'pending' },
+        { key: 'verify', title: '验证卸载结果', description: '刷新工具状态并确认结果', status: 'pending' },
+      ]
+      : [
+        { key: 'network', title: '检测网络环境', description: '检测 Google 可达性与当前网络情况', status: 'running' },
+        { key: 'method', title: '确定安装方式', description: '根据网络和你的选择确认最终安装方案', status: 'pending' },
+        { key: 'execute', title: '执行安装命令', description: '运行安装命令并等待依赖安装完成', status: 'pending' },
+        { key: 'verify', title: '验证安装结果', description: '确认 opencode 命令已经可用', status: 'pending' },
+      ];
+  return {
+    toolId: desktopInstall ? 'opencode-desktop' : 'opencode',
+    action,
+    installedBefore,
+    requestedMethod,
+    method: '',
+    command: '',
+    commandPreview: getOpenCodeCommandPreview(action, requestedMethod),
+    googleReachable: null,
+    usedDomesticMirror: null,
+    status: 'running',
+    progress: desktopInstall ? 10 : uninstall ? 10 : 8,
+    stepIndex: 0,
+    summary: desktopInstall ? copy.title : uninstall ? '正在检查当前 OpenCode 安装状态…' : '正在检测网络并准备安装 OpenCode…',
+    hint: desktopInstall ? '会自动下载官方桌面版，不需要你自己找安装包。' : uninstall ? '先别关闭窗口，卸载完成后会自动刷新。' : '安装过程会自动继续，你现在不需要操作。',
+    detail: desktopInstall ? '正在检查桌面版系统环境…' : uninstall ? '正在确认当前安装路径…' : '正在准备安装器…',
+    steps,
+    logs: [{ source: 'stdout', text: `${copy.title} 已开始`, at: startedAt }],
+    startedAt,
+    startedAtTs: Date.now(),
+    completedAt: null,
+    stdout: '',
+    stderr: '',
+    error: null,
+    version: '',
+    _markers: {},
+  };
+}
+
+function stripAnsiControlText(text) {
+  return String(text || '')
+    .replace(/[\x1B\x9B][[\]()#;?]*(?:(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-ntqry=><~]|(?:].*?(?:\x07|\x1B\\)))/g, '')
+    .replace(/\r/g, '')
+    .trim();
+}
+
+function pushOpenCodeTrackerLog(task, source, text) {
+  const cleaned = stripAnsiControlText(text);
+  if (!cleaned) return;
+  task.logs.push({ source, text: cleaned, at: new Date().toISOString() });
+  if (task.logs.length > 120) task.logs.shift();
+  task.detail = cleaned;
+}
+
+function setOpenCodeTrackerStep(task, stepIndex, overrides = {}) {
+  const safeIndex = Math.max(0, Math.min(stepIndex, (task.steps || []).length - 1));
+  if (safeIndex < task.stepIndex && task.status === 'running') return;
+  task.stepIndex = safeIndex;
+  task.progress = Math.max(task.progress || 0, overrides.progress || [18, 36, 82, 96][safeIndex] || task.progress || 0);
+  if (overrides.summary) task.summary = overrides.summary;
+  if (overrides.hint) task.hint = overrides.hint;
+  if (overrides.detail) task.detail = overrides.detail;
+  task.steps = task.steps.map((step, index) => ({
+    ...step,
+    status: index < safeIndex ? 'done' : index === safeIndex ? (overrides.status || 'running') : 'pending',
+  }));
+}
+
+function updateOpenCodeTrackerHeartbeat(task) {
+  if (!task || task.status !== 'running') return;
+  const elapsed = Date.now() - Number(task.startedAtTs || Date.now());
+  if (task.action === 'uninstall') {
+    if (!task._markers.inspectLog && elapsed > 280) {
+      task._markers.inspectLog = true;
+      pushOpenCodeTrackerLog(task, 'stdout', '正在读取当前 OpenCode 安装状态…');
+    }
+    if (!task._markers.removeStep && elapsed > 900) {
+      task._markers.removeStep = true;
+      setOpenCodeTrackerStep(task, 1, {
+        progress: 34,
+        summary: '正在执行卸载命令…',
+        hint: '卸载完成后会自动刷新工具状态。',
+        detail: '正在移除 OpenCode 安装文件…',
+      });
+      pushOpenCodeTrackerLog(task, 'stdout', '开始执行卸载命令…');
+    }
+    if (task.stepIndex === 1) {
+      task.progress = Math.max(task.progress, Math.min(88, 34 + Math.floor(Math.max(0, elapsed - 900) / 450) * 4));
+    }
+    return;
+  }
+
+  if (!task._markers.networkLog && elapsed > 300) {
+    task._markers.networkLog = true;
+    pushOpenCodeTrackerLog(task, 'stdout', '正在检测当前网络连通性…');
+  }
+  if (!task._markers.awaitInstallerResultLog && elapsed > 620) {
+    task._markers.awaitInstallerResultLog = true;
+    pushOpenCodeTrackerLog(task, 'stdout', task.commandPreview?.length
+      ? 'Google 可达性与实际执行命令会在安装器返回后确认，当前先展示候选命令。'
+      : 'Google 可达性与实际执行命令会在安装器返回后确认。');
+  }
+  if (!task._markers.methodStep && elapsed > 900) {
+    task._markers.methodStep = true;
+    setOpenCodeTrackerStep(task, 1, {
+      progress: 26,
+      summary: '正在确定 OpenCode 安装方式…',
+      hint: '会优先选择最快、最稳定的安装方式。',
+      detail: task.requestedMethod ? `已收到安装方式：${getOpenCodeRequestedMethodLabel(task.requestedMethod)}` : '正在根据网络自动选择安装方式…',
+    });
+    pushOpenCodeTrackerLog(task, 'stdout', task.requestedMethod
+      ? `用户选择安装方式：${getOpenCodeRequestedMethodLabel(task.requestedMethod)}`
+      : '未指定安装方式，将自动选择最合适的安装方案。');
+  }
+  if (!task._markers.executeStep && elapsed > 1700) {
+    task._markers.executeStep = true;
+    setOpenCodeTrackerStep(task, 2, {
+      progress: 42,
+      summary: '正在执行 OpenCode 安装命令…',
+      hint: '这里通常耗时最长，期间没有新日志也正常。',
+      detail: task.commandPreview?.length ? '正在安装依赖并写入全局命令…候选命令见下方日志。' : '正在安装依赖并写入全局命令…',
+    });
+    pushOpenCodeTrackerLog(task, 'stdout', task.command
+      ? `安装命令已启动：${task.command}`
+      : task.commandPreview?.length
+        ? '安装命令已启动，实际执行命令等待安装器返回；候选命令见上。'
+        : '安装命令已启动，正在等待依赖安装完成…');
+  }
+  if (task.stepIndex === 2) {
+    task.progress = Math.max(task.progress, Math.min(90, 42 + Math.floor(Math.max(0, elapsed - 1700) / 550) * 4));
+  }
+}
+
+function getOpenCodeTrackerLogsText(task) {
+  return (task.logs || []).map((item) => {
+    const time = item.at ? new Date(item.at).toLocaleTimeString() : '--:--:--';
+    return `[${time}] ${item.source === 'stderr' ? 'ERR' : 'LOG'} ${item.text}`;
+  }).join('\n') || '安装日志会显示在这里。';
+}
+
+function buildOpenCodeTrackerRenderKey(task) {
+  return JSON.stringify({
+    status: task.status,
+    progress: task.progress,
+    stepIndex: task.stepIndex,
+    summary: task.summary,
+    hint: task.hint,
+    detail: task.detail,
+    error: task.error,
+    version: task.version,
+    method: task.method,
+    command: task.command,
+    googleReachable: task.googleReachable,
+    usedDomesticMirror: task.usedDomesticMirror,
+    steps: (task.steps || []).map((step) => `${step.key}:${step.status}`).join('|'),
+    logs: (task.logs || []).map((item) => `${item.source}:${item.text}`).join('\n'),
+  });
+}
+
+function shouldPauseOpenCodeInstallRender() {
+  if (Date.now() < (state.openCodeInstallView.pauseUntil || 0)) return true;
+  const selection = window.getSelection?.();
+  const node = selection?.anchorNode?.parentElement || selection?.anchorNode;
+  return Boolean(selection?.toString()?.trim() && node?.closest?.('.install-tracker-log'));
+}
+
+function renderOpenCodeTrackerDialog(task) {
+  const copy = getOpenCodeActionCopy(task.action, task.installedBefore);
+  const desktopInstall = task.action === 'desktop-install';
+  const platformLabel = getOpenCodeDesktopPlatformLabel(state.openCodeDesktopState?.platform || navigator.platform || '');
+  const logs = getOpenCodeTrackerLogsText(task);
+  const statusLabel = task.status === 'success'
+    ? copy.done
+    : task.status === 'cancelled'
+      ? `${copy.title.replace('正在', '').trim()} 已中断`
+      : task.status === 'cancelling'
+        ? `${copy.title.replace('正在', '').trim()} 中断中`
+        : task.status === 'error'
+          ? `${copy.title.replace('正在', '').trim()} 失败`
+          : copy.title;
+  const detailText = task.detail || (task.status === 'running' || task.status === 'cancelling'
+    ? (desktopInstall ? '正在等待新的下载 / 安装输出…' : '正在等待新的安装输出…')
+    : '');
+  const todoItems = desktopInstall
+    ? (task.status === 'success'
+      ? ['桌面版已经安装完成。', '现在可以直接点“打开桌面版”。', '如果你也要用 CLI，可继续安装 OpenCode 命令行版。']
+      : task.status === 'cancelling'
+        ? ['正在停止本次下载任务。', '正在等待后端清理临时状态。', '请先不要关闭窗口，完成后会自动提示。']
+        : task.status === 'cancelled'
+          ? ['本次桌面版安装已经停止。', '如果要继续，重新点击“一键安装”即可。', '下载阶段的残留文件会自动处理。']
+          : task.status === 'error'
+            ? ['先看下面“最后日志”的最后几行。', '如果是权限问题，允许系统安装后再试一次。', '如果是网络问题，稍后重试即可。']
+            : ['你不需要手动找安装包。', '下载完成后会自动继续安装。', platformLabel === 'Windows' ? 'Windows 会自动拉起安装器。' : 'mac 会自动安装到 Applications。'])
+    : (task.status === 'success'
+      ? ['已完成安装流程。', '如果你是首次使用，下一步建议去快速配置 Provider 和默认模型。', '也可以直接从工具页启动 OpenCode。']
+      : task.status === 'cancelling'
+        ? ['正在停止安装进程。', '正在等待后端清理本次任务。', '请先不要关闭窗口，清理完成后会自动提示。']
+        : task.status === 'cancelled'
+          ? ['本次安装已经停止。', '如需继续，重新点击安装即可。', '如果有残留，下次安装或卸载会继续自动处理。']
+          : task.status === 'error'
+            ? ['先看下面“最后日志”里的最后几行。', '如果是网络问题，可改用国内优化方式。', '如果是环境问题，先确认 Node.js / npm / Homebrew 可用。']
+            : ['先别关闭窗口，也别重复点击安装。', '如果 30–90 秒没有新日志，通常只是网络下载中。', '安装完成后，这里会自动给出结果。']);
+  const infoItems = desktopInstall
+    ? [
+      `平台：${platformLabel}`,
+      '来源：OpenCode 官方稳定版安装包',
+      `方式：${platformLabel === 'Windows' ? '内置下载器 + 自动拉起安装器' : '内置下载器 + 自动安装到 Applications'}`,
+      `耗时：${formatRelativeDuration(task.startedAt, task.completedAt)}`,
+      task.command ? `执行：${task.command}` : task.commandPreview?.length ? `流程：${task.commandPreview.join('；')}` : '流程：等待开始',
+    ].filter(Boolean)
+    : [
+      `请求方式：${getOpenCodeRequestedMethodLabel(task.requestedMethod)}`,
+      task.method ? `实际方式：${getOpenCodeMethodLabel(task.method)}` : (task.stepIndex >= 1 ? '实际方式：等待安装器确认（候选命令已显示）' : '实际方式：等待检测'),
+      typeof task.googleReachable === 'boolean' ? `Google 可达：${task.googleReachable ? '是' : '否'}` : (task.stepIndex >= 1 ? 'Google 可达：等待安装器返回结果（未最终确认）' : 'Google 可达：检测中'),
+      typeof task.usedDomesticMirror === 'boolean' ? `国内镜像：${task.usedDomesticMirror ? '已使用' : '未使用'}` : '',
+      `耗时：${formatRelativeDuration(task.startedAt, task.completedAt)}`,
+      task.command ? `命令：${task.command}` : task.commandPreview?.length ? `命令预览：${task.commandPreview.join('；')}` : '命令：等待生成',
+    ].filter(Boolean);
+  return `
+    <div class="install-tracker">
+      <div class="install-tracker-top">
+        <div>
+          <div class="install-tracker-status">${escapeHtml(statusLabel)}</div>
+          <div class="install-tracker-summary">${escapeHtml(task.summary || '')}</div>
+        </div>
+        <div class="install-tracker-percent">${Math.max(0, Math.min(100, Number(task.progress || 0)))}%</div>
+      </div>
+      <div class="sti-progress install-tracker-bar"><div class="sti-progress-fill ${task.status === 'running' ? 'indeterminate' : ''}" style="width:${Math.max(6, task.progress || 0)}%"></div></div>
+      <div class="install-tracker-hint">${escapeHtml(task.hint || '你现在不需要操作，等它自己完成即可。')}</div>
+      <div class="install-tracker-detail">${escapeHtml(detailText)}</div>
+      <div class="install-tracker-grid">
+        <div class="install-tracker-col">${(task.steps || []).map((step, index) => renderOpenClawInstallStep(step, index, task.status)).join('')}</div>
+        <div class="install-tracker-col">
+          <div class="install-tracker-note-card">
+            <div class="install-tracker-note-title">当前状态</div>
+            <ul class="install-tracker-list">${infoItems.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+          </div>
+          <div class="install-tracker-note-card">
+            <div class="install-tracker-note-title">你现在该做什么</div>
+            <ul class="install-tracker-list">${todoItems.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
+          </div>
+        </div>
+      </div>
+      <div class="install-tracker-log-head">
+        <div class="install-tracker-log-title">最后日志</div>
+        <button type="button" class="secondary install-tracker-copy-btn" data-copy-opencode-log>复制日志</button>
+      </div>
+      <pre class="install-tracker-log">${escapeHtml(logs)}</pre>
+    </div>
+  `;
+}
+
+function renderTrackedOpenCodeDialog(task, { force = false } = {}) {
+  const renderKey = buildOpenCodeTrackerRenderKey(task);
+  state.openCodeInstallView.lastLogsText = getOpenCodeTrackerLogsText(task);
+  if (!force && shouldPauseOpenCodeInstallRender()) {
+    state.openCodeInstallView.pendingTask = task;
+    return;
+  }
+  if (!force && renderKey === state.openCodeInstallView.lastRenderKey) return;
+
+  const body = el('updateDialogBody');
+  const oldLog = body?.querySelector('.install-tracker-log');
+  const oldBodyScrollTop = body?.scrollTop || 0;
+  const oldLogScrollTop = oldLog?.scrollTop || 0;
+  const oldLogScrollHeight = oldLog?.scrollHeight || 0;
+  const wasNearBottom = !oldLog || (oldLog.scrollTop + oldLog.clientHeight >= oldLog.scrollHeight - 28);
+
+  const copy = getOpenCodeActionCopy(task.action, task.installedBefore);
+  const eyebrow = task.action === 'desktop-install' ? 'OpenCode Desktop' : 'OpenCode';
+  patchUpdateDialog({
+    eyebrow,
+    title: task.status === 'success'
+      ? copy.done
+      : task.status === 'cancelled'
+        ? `${copy.title.replace('正在', '').trim()} 已中断`
+        : task.status === 'cancelling'
+          ? `${copy.title.replace('正在', '').trim()} 中断中`
+          : task.status === 'error'
+            ? `${copy.title.replace('正在', '').trim()} 失败`
+            : copy.title,
+    body: renderOpenCodeTrackerDialog(task),
+    confirmText: task.status === 'running' ? '处理中…' : task.status === 'cancelling' ? '中断中…' : '知道了',
+    confirmDisabled: task.status === 'running' || task.status === 'cancelling',
+    cancelText: task.status === 'running' ? '中断安装' : task.status === 'cancelling' ? '中断中…' : '取消',
+    cancelDisabled: task.status === 'cancelling',
+    cancelHidden: !(task.status === 'running' || task.status === 'cancelling'),
+    trackerMode: true,
+  });
+
+  if (task.status !== 'running' && task.status !== 'cancelling') {
+    state.updateDialogCancelHandler = null;
+  }
+
+  const syncScroll = () => {
+    const newBody = el('updateDialogBody');
+    const newLog = newBody?.querySelector('.install-tracker-log');
+    if (newBody) newBody.scrollTop = oldBodyScrollTop;
+    if (newLog) {
+      if (wasNearBottom) {
+        newLog.scrollTop = newLog.scrollHeight;
+      } else {
+        newLog.scrollTop = Math.max(0, oldLogScrollTop + (newLog.scrollHeight - oldLogScrollHeight));
+      }
+    }
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncScroll);
+  else syncScroll();
+  state.openCodeInstallView.lastRenderKey = renderKey;
+  state.openCodeInstallView.pendingTask = null;
+}
+
+async function finishOpenCodeTracker(task, result, errorMessage = '') {
+  if (result?.requestedMethod) task.requestedMethod = result.requestedMethod;
+  if (result?.method) task.method = result.method;
+  if (typeof result?.googleReachable === 'boolean') task.googleReachable = result.googleReachable;
+  if (typeof result?.usedDomesticMirror === 'boolean') task.usedDomesticMirror = result.usedDomesticMirror;
+  if (result?.command) task.command = result.command;
+  if (result?.stdout) task.stdout = String(result.stdout || '');
+  if (result?.stderr) task.stderr = String(result.stderr || '');
+
+  if (result?.googleReachable !== undefined) {
+    pushOpenCodeTrackerLog(task, 'stdout', `Google 可达性检测结果：${result.googleReachable ? '可访问' : '不可访问'}`);
+  }
+  if (result?.method) {
+    pushOpenCodeTrackerLog(task, 'stdout', `最终安装方式：${getOpenCodeMethodLabel(result.method)}`);
+  }
+  if (result?.command) {
+    pushOpenCodeTrackerLog(task, 'stdout', `执行命令：${result.command}`);
+  }
+  const outputText = String(result?.stdout || result?.stderr || '').trim();
+  if (outputText) {
+    outputText.split(/\r?\n/).filter(Boolean).slice(-12).forEach((line) => pushOpenCodeTrackerLog(task, result?.stderr ? 'stderr' : 'stdout', line));
+  }
+
+  if (errorMessage) {
+    task.status = 'error';
+    task.error = errorMessage;
+    task.completedAt = new Date().toISOString();
+    if (task.action === 'uninstall') {
+      setOpenCodeTrackerStep(task, Math.max(1, task.stepIndex), { status: 'error', detail: errorMessage, summary: 'OpenCode 卸载失败', hint: '先看最后日志，一般会直接指出失败原因。' });
+    } else {
+      setOpenCodeTrackerStep(task, Math.max(2, task.stepIndex), { status: 'error', detail: errorMessage, summary: 'OpenCode 安装失败', hint: '先看最后日志，通常会告诉你是网络、权限还是依赖问题。' });
+    }
+    renderTrackedOpenCodeDialog(task, { force: true });
+    return;
+  }
+
+  if (task.action === 'uninstall') {
+    setOpenCodeTrackerStep(task, 2, {
+      progress: 94,
+      summary: '正在验证 OpenCode 卸载结果…',
+      hint: '马上就完成了。',
+      detail: '正在刷新工具状态并确认卸载结果…',
+    });
+    renderTrackedOpenCodeDialog(task, { force: true });
+    await sleep(260);
+    task.steps = task.steps.map((step) => ({ ...step, status: 'done' }));
+    task.progress = 100;
+    task.status = 'success';
+    task.summary = 'OpenCode 已卸载完成';
+    task.hint = '如需恢复，重新点击安装即可。';
+    task.detail = '工具状态已经刷新完成。';
+    task.completedAt = new Date().toISOString();
+    renderTrackedOpenCodeDialog(task, { force: true });
+    return;
+  }
+
+  setOpenCodeTrackerStep(task, 3, {
+    progress: 94,
+    summary: '正在验证 OpenCode 安装结果…',
+    hint: '马上就完成了，正在确认命令可用。',
+    detail: result?.command ? `安装命令已完成，正在验证：${result.command}` : '安装命令已完成，正在验证 opencode 命令…',
+  });
+  renderTrackedOpenCodeDialog(task, { force: true });
+  await sleep(320);
+  task.steps = task.steps.map((step) => ({ ...step, status: 'done' }));
+  task.progress = 100;
+  task.status = 'success';
+  task.summary = task.action === 'update' && task.installedBefore ? 'OpenCode 已更新到最新版' : task.action === 'reinstall' ? 'OpenCode 重装完成' : 'OpenCode 安装完成';
+  task.hint = '下一步可以直接启动 OpenCode，或先去配置 Provider / 模型。';
+  task.detail = result?.stdout ? String(result.stdout).trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] || '已完成安装验证。' : '已完成安装验证。';
+  task.version = state.tools.find((tool) => tool.id === 'opencode')?.binary?.version || '';
+  task.completedAt = new Date().toISOString();
+  renderTrackedOpenCodeDialog(task, { force: true });
+}
+
+
+async function fetchOpenCodeInstallTask(taskId) {
+  const json = await api(`/api/opencode/install/status?taskId=${encodeURIComponent(taskId)}`, { timeoutMs: 12000 });
+  if (!json.ok) throw new Error(json.error || '获取 OpenCode 安装进度失败');
+  return json.data;
+}
+
+async function cancelOpenCodeInstallTask(taskId) {
+  const json = await api('/api/opencode/install/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId }),
+    timeoutMs: 120000,
+  });
+  if (!json.ok) throw new Error(json.error || '中断 OpenCode 安装失败');
+  return json.data;
+}
+
+async function fetchOpenCodeDesktopInstallTask(taskId) {
+  const json = await api(`/api/opencode/desktop/install/status?taskId=${encodeURIComponent(taskId)}`, { timeoutMs: 12000 });
+  if (!json.ok) throw new Error(json.error || '获取 OpenCode Desktop 安装进度失败');
+  return json.data;
+}
+
+async function cancelOpenCodeDesktopInstallTask(taskId) {
+  const json = await api('/api/opencode/desktop/install/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId }),
+    timeoutMs: 120000,
+  });
+  if (!json.ok) throw new Error(json.error || '中断 OpenCode Desktop 安装失败');
+  return json.data;
+}
+
+function syncOpenCodeTrackerWithTask(tracker, task) {
+  if (!tracker || !task) return tracker;
+  tracker.taskId = task.taskId || tracker.taskId || '';
+  tracker.action = task.action || tracker.action;
+  tracker.requestedMethod = task.requestedMethod || tracker.requestedMethod;
+  tracker.method = task.method || '';
+  tracker.command = task.command || '';
+  tracker.googleReachable = typeof task.googleReachable === 'boolean' ? task.googleReachable : null;
+  tracker.usedDomesticMirror = typeof task.usedDomesticMirror === 'boolean' ? task.usedDomesticMirror : null;
+  tracker.status = task.status || tracker.status;
+  tracker.progress = Number(task.progress || 0) || tracker.progress || 0;
+  tracker.stepIndex = Number(task.stepIndex || 0) || 0;
+  tracker.summary = task.summary || tracker.summary;
+  tracker.hint = task.hint || tracker.hint;
+  tracker.detail = task.detail || tracker.detail;
+  tracker.steps = Array.isArray(task.steps) && task.steps.length ? task.steps : tracker.steps;
+  tracker.logs = Array.isArray(task.logs) ? task.logs : tracker.logs;
+  tracker.startedAt = task.startedAt || tracker.startedAt;
+  tracker.completedAt = task.completedAt || null;
+  tracker.version = task.version || '';
+  tracker.error = task.error || null;
+  return tracker;
+}
+
+function isUnsupportedOpenCodeTaskApi(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('Unsupported request: POST /api/opencode/install/start')
+    || message.includes('Unsupported request: GET /api/opencode/install/status')
+    || message.includes('Unsupported request: POST /api/opencode/install/cancel');
+}
+
+async function runLegacyOpenCodeRequest(action, requestedMethod) {
+  const apiMap = {
+    install: '/api/opencode/install',
+    update: '/api/opencode/update',
+    reinstall: '/api/opencode/reinstall',
+    uninstall: '/api/opencode/uninstall',
+  };
+  const json = await api(apiMap[action], {
+    method: 'POST',
+    headers: requestedMethod ? { 'Content-Type': 'application/json' } : undefined,
+    body: requestedMethod ? JSON.stringify({ method: requestedMethod }) : undefined,
+    timeoutMs: 180000,
+  });
+  if (!json.ok) throw new Error(json.error || 'OpenCode 操作失败');
+  return json.data;
+}
+
+async function runTrackedOpenCodeTask(action, method, onUpdate) {
+  const startJson = await api('/api/opencode/install/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, method }),
+    timeoutMs: 12000,
+  });
+  if (!startJson.ok || !startJson.data?.taskId) {
+    throw new Error(startJson.error || '启动 OpenCode 任务失败');
+  }
+
+  let task = startJson.data;
+  if (typeof onUpdate === 'function') onUpdate(task);
+
+  let refreshFailures = 0;
+  while (task.status === 'running' || task.status === 'cancelling') {
+    await sleep(900);
+    try {
+      task = await fetchOpenCodeInstallTask(task.taskId);
+      refreshFailures = 0;
+      if (typeof onUpdate === 'function') onUpdate(task);
+    } catch (error) {
+      refreshFailures += 1;
+      if (refreshFailures >= 3) throw error;
+    }
+  }
+
+  return task;
+}
+
+async function runTrackedOpenCodeDesktopTask(onUpdate, { reinstall = false } = {}) {
+  const startJson = await api('/api/opencode/desktop/install/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reinstall: Boolean(reinstall) }),
+    timeoutMs: 12000,
+  });
+  if (!startJson.ok || !startJson.data?.taskId) {
+    throw new Error(startJson.error || '启动 OpenCode Desktop 安装任务失败');
+  }
+
+  let task = startJson.data;
+  if (typeof onUpdate === 'function') onUpdate(task);
+
+  let refreshFailures = 0;
+  while (task.status === 'running' || task.status === 'cancelling') {
+    await sleep(900);
+    try {
+      task = await fetchOpenCodeDesktopInstallTask(task.taskId);
+      refreshFailures = 0;
+      if (typeof onUpdate === 'function') onUpdate(task);
+    } catch (error) {
+      refreshFailures += 1;
+      if (refreshFailures >= 3) throw error;
+    }
+  }
+
+  return task;
+}
+
+async function runOpenCodeToolAction(action, btn, options = {}) {
+  const installedBefore = action === 'install'
+    ? false
+    : Boolean(state.tools.find((tool) => tool.id === 'opencode')?.binary?.installed);
+  const requestedMethod = String(options.method || '').trim();
+  const suppressFlash = Boolean(options.suppressFlash);
+  const copy = getOpenCodeActionCopy(action, installedBefore);
+  const confirmMap = {
+    reinstall: {
+      eyebrow: 'OpenCode',
+      title: '重装 OpenCode',
+      body: '<p>这会重新全局安装当前版本 OpenCode。</p>',
+      confirmText: '确认重装',
+      cancelText: '取消',
+    },
+    uninstall: {
+      eyebrow: 'OpenCode',
+      title: '卸载 OpenCode',
+      body: '<p>卸载后将无法直接从工具页启动 OpenCode。</p>',
+      confirmText: '确认卸载',
+      cancelText: '取消',
+      tone: 'danger',
+    },
+  };
+
+  if (confirmMap[action]) {
+    const confirmed = await openUpdateDialog(confirmMap[action]);
+    if (!confirmed) {
+      flash('操作已取消', 'info');
+      return { ok: false, cancelled: true };
+    }
+  }
+
+  const tracker = createOpenCodeTracker(action, { installedBefore, requestedMethod });
+  if (requestedMethod) {
+    pushOpenCodeTrackerLog(tracker, 'stdout', `安装方式请求：${getOpenCodeRequestedMethodLabel(requestedMethod)}`);
+  }
+  (tracker.commandPreview || []).forEach((line, index) => {
+    pushOpenCodeTrackerLog(tracker, 'stdout', `${tracker.commandPreview.length > 1 ? `候选命令 ${index + 1}` : '预计命令'}：${line}`);
+  });
+  if (tracker.commandPreview?.length) {
+    pushOpenCodeTrackerLog(tracker, 'stdout', '说明：实际 Google 检测结果、最终方式、真实执行命令，将由后端安装器实时回传。');
+  }
+
+  setToolBtnBusy(btn, true, copy.busy);
+  clearInterval(state.openCodeInstallView.timerId || 0);
+  state.openCodeInstallView.timerId = 0;
+  state.openCodeInstallView.activeTaskId = '';
+  state.openCodeInstallView.cancelBusy = false;
+  void openUpdateDialog({
+    eyebrow: 'OpenCode',
+    title: copy.title,
+    body: renderOpenCodeTrackerDialog(tracker),
+    confirmText: '处理中…',
+    confirmDisabled: true,
+    cancelText: '中断安装',
+    cancelHidden: false,
+    trackerMode: true,
+  });
+  setUpdateDialogLocked(true, copy.title);
+  renderTrackedOpenCodeDialog(tracker, { force: true });
+  state.updateDialogCancelHandler = async () => {
+    const activeTaskId = state.openCodeInstallView.activeTaskId;
+    if (!activeTaskId || state.openCodeInstallView.cancelBusy) return;
+    state.openCodeInstallView.cancelBusy = true;
+    patchUpdateDialog({
+      cancelText: '中断中…',
+      cancelDisabled: true,
+      confirmText: '清理中…',
+      confirmDisabled: true,
+      trackerMode: true,
+    });
+    try {
+      await cancelOpenCodeInstallTask(activeTaskId);
+      flash('已发送 OpenCode 中断请求', 'info');
+    } catch (error) {
+      state.openCodeInstallView.cancelBusy = false;
+      patchUpdateDialog({
+        cancelText: '重试中断',
+        cancelDisabled: false,
+        confirmText: '处理中…',
+        confirmDisabled: true,
+        trackerMode: true,
+      });
+      flash(error.message || '中断 OpenCode 安装失败', 'error');
+    }
+  };
+
+  try {
+    const finalTask = await runTrackedOpenCodeTask(action, requestedMethod, (task) => {
+      state.openCodeInstallView.activeTaskId = task.taskId || state.openCodeInstallView.activeTaskId;
+      state.openCodeInstallView.cancelBusy = task.status === 'cancelling';
+      syncOpenCodeTrackerWithTask(tracker, task);
+      renderTrackedOpenCodeDialog(tracker);
+    });
+
+    state.updateDialogCancelHandler = null;
+    state.openCodeInstallView.cancelBusy = false;
+    syncOpenCodeTrackerWithTask(tracker, finalTask);
+    renderTrackedOpenCodeDialog(tracker, { force: true });
+    setUpdateDialogLocked(false);
+    patchUpdateDialog({
+      eyebrow: 'OpenCode',
+      title: tracker.status === 'success' ? copy.done : tracker.status === 'cancelled' ? 'OpenCode 安装已中断' : tracker.status === 'error' ? `${copy.title.replace('正在', '').trim()} 失败` : copy.title,
+      body: renderOpenCodeTrackerDialog(tracker),
+      confirmText: '知道了',
+      confirmDisabled: false,
+      cancelHidden: true,
+      cancelDisabled: false,
+      trackerMode: true,
+    });
+
+    await refreshToolRuntimeAfterMutation('opencode');
+
+    if (finalTask.status === 'success') {
+      if (!suppressFlash) flash(copy.done, 'success');
+      return { ok: true, data: finalTask };
+    }
+    if (finalTask.status === 'cancelled') {
+      if (!suppressFlash) flash('OpenCode 安装已中断', 'info');
+      return { ok: false, cancelled: true, data: finalTask };
+    }
+
+    const errMsg = finalTask.error || 'OpenCode 操作失败';
+    if (!suppressFlash) flash(errMsg, 'error');
+    return { ok: false, error: errMsg, data: finalTask };
+  } catch (error) {
+    if (isUnsupportedOpenCodeTaskApi(error)) {
+      pushOpenCodeTrackerLog(tracker, 'stderr', '当前桌面后端还未升级到实时任务接口，已自动切换为兼容模式继续安装。');
+      tracker.summary = '正在切换兼容模式继续执行…';
+      tracker.hint = '不需要你手动执行命令；本次自动兼容，但暂时不支持实时中断。';
+      tracker.detail = '正在调用旧版后端接口完成安装…';
+      renderTrackedOpenCodeDialog(tracker, { force: true });
+      patchUpdateDialog({
+        cancelHidden: true,
+        cancelDisabled: true,
+        confirmText: '处理中…',
+        confirmDisabled: true,
+        trackerMode: true,
+      });
+      state.updateDialogCancelHandler = null;
+      try {
+        const legacyResult = await runLegacyOpenCodeRequest(action, requestedMethod);
+        await refreshToolRuntimeAfterMutation('opencode');
+        setUpdateDialogLocked(false);
+        await finishOpenCodeTracker(tracker, legacyResult, legacyResult?.ok === false ? (legacyResult?.stderr || 'OpenCode 操作失败') : '');
+        patchUpdateDialog({ confirmText: '知道了', confirmDisabled: false, cancelHidden: true, trackerMode: true });
+        if (legacyResult?.ok === false) {
+          const errMsg = legacyResult?.stderr || 'OpenCode 操作失败';
+          if (!suppressFlash) flash(errMsg, 'error');
+          return { ok: false, error: errMsg, data: legacyResult };
+        }
+        if (!suppressFlash) flash(copy.done, 'success');
+        return { ok: true, data: legacyResult, compatibilityMode: true };
+      } catch (legacyError) {
+        const errMsg = legacyError?.message || 'OpenCode 操作失败';
+        state.updateDialogCancelHandler = null;
+        state.openCodeInstallView.cancelBusy = false;
+        tracker.status = 'error';
+        tracker.error = errMsg;
+        tracker.completedAt = new Date().toISOString();
+        tracker.summary = action === 'uninstall' ? 'OpenCode 卸载失败' : 'OpenCode 安装失败';
+        tracker.hint = '兼容模式也执行失败了，请看最后日志。';
+        tracker.detail = errMsg;
+        renderTrackedOpenCodeDialog(tracker, { force: true });
+        setUpdateDialogLocked(false);
+        patchUpdateDialog({ confirmText: '知道了', confirmDisabled: false, cancelHidden: true, trackerMode: true });
+        if (!suppressFlash) flash(errMsg, 'error');
+        return { ok: false, error: errMsg };
+      }
+    }
+
+    const errMsg = error?.message || 'OpenCode 操作失败';
+    state.updateDialogCancelHandler = null;
+    state.openCodeInstallView.cancelBusy = false;
+    tracker.status = 'error';
+    tracker.error = errMsg;
+    tracker.completedAt = new Date().toISOString();
+    tracker.summary = action === 'uninstall' ? 'OpenCode 卸载失败' : 'OpenCode 安装失败';
+    tracker.hint = '无法继续获取实时安装状态，请重试。';
+    tracker.detail = errMsg;
+    renderTrackedOpenCodeDialog(tracker, { force: true });
+    setUpdateDialogLocked(false);
+    patchUpdateDialog({ confirmText: '知道了', confirmDisabled: false, cancelHidden: true, trackerMode: true });
+    if (!suppressFlash) flash(errMsg, 'error');
+    return { ok: false, error: errMsg };
+  } finally {
+    setToolBtnBusy(btn, false);
+  }
+}
+
+async function runOpenCodeDesktopInstallAction(btn, { reinstall = false } = {}) {
+  if (reinstall) {
+    const confirmed = await openUpdateDialog({
+      eyebrow: 'OpenCode Desktop',
+      title: '重新安装 OpenCode Desktop',
+      body: '<p>这会重新下载安装官方桌面版，并自动继续安装。</p>',
+      confirmText: '确认重装',
+      cancelText: '取消',
+    });
+    if (!confirmed) {
+      flash('操作已取消', 'info');
+      return { ok: false, cancelled: true };
+    }
+  }
+
+  const installedBefore = Boolean(state.openCodeDesktopState?.installed);
+  const copy = getOpenCodeActionCopy('desktop-install', reinstall || installedBefore);
+  const tracker = createOpenCodeTracker('desktop-install', { installedBefore: reinstall || installedBefore });
+  tracker.toolId = 'opencode-desktop';
+  pushOpenCodeTrackerLog(tracker, 'stdout', '安装源：OpenCode 官方桌面版稳定渠道');
+  (tracker.commandPreview || []).forEach((line, index) => {
+    pushOpenCodeTrackerLog(tracker, 'stdout', `${tracker.commandPreview.length > 1 ? `预计步骤 ${index + 1}` : '预计步骤'}：${line}`);
+  });
+
+  const taskCardId = addTask(reinstall ? '重装 OpenCode Desktop' : '安装 OpenCode Desktop', {
+    progress: Math.max(4, tracker.progress || 4),
+    message: tracker.summary || copy.title,
+  });
+
+  setToolBtnBusy(btn, true, copy.busy);
+  clearInterval(state.openCodeInstallView.timerId || 0);
+  state.openCodeInstallView.timerId = 0;
+  state.openCodeInstallView.activeTaskId = '';
+  state.openCodeInstallView.cancelBusy = false;
+  void openUpdateDialog({
+    eyebrow: 'OpenCode Desktop',
+    title: copy.title,
+    body: renderOpenCodeTrackerDialog(tracker),
+    confirmText: '处理中…',
+    confirmDisabled: true,
+    cancelText: '中断安装',
+    cancelHidden: false,
+    trackerMode: true,
+  });
+  setUpdateDialogLocked(true, copy.title);
+  renderTrackedOpenCodeDialog(tracker, { force: true });
+  state.updateDialogCancelHandler = async () => {
+    const activeTaskId = state.openCodeInstallView.activeTaskId;
+    if (!activeTaskId || state.openCodeInstallView.cancelBusy) return;
+    state.openCodeInstallView.cancelBusy = true;
+    patchUpdateDialog({
+      cancelText: '中断中…',
+      cancelDisabled: true,
+      confirmText: '清理中…',
+      confirmDisabled: true,
+      trackerMode: true,
+    });
+    try {
+      await cancelOpenCodeDesktopInstallTask(activeTaskId);
+      flash('已发送 OpenCode Desktop 中断请求', 'info');
+    } catch (error) {
+      state.openCodeInstallView.cancelBusy = false;
+      patchUpdateDialog({
+        cancelText: '重试中断',
+        cancelDisabled: false,
+        confirmText: '处理中…',
+        confirmDisabled: true,
+        trackerMode: true,
+      });
+      flash(error.message || '中断 OpenCode Desktop 安装失败', 'error');
+    }
+  };
+
+  try {
+    const finalTask = await runTrackedOpenCodeDesktopTask((task) => {
+      state.openCodeInstallView.activeTaskId = task.taskId || state.openCodeInstallView.activeTaskId;
+      state.openCodeInstallView.cancelBusy = task.status === 'cancelling';
+      syncOpenCodeTrackerWithTask(tracker, task);
+      renderTrackedOpenCodeDialog(tracker);
+      updateTask(taskCardId, {
+        name: reinstall ? '重装 OpenCode Desktop' : '安装 OpenCode Desktop',
+        status: task.status === 'running' || task.status === 'cancelling'
+          ? 'running'
+          : task.status === 'success'
+            ? 'done'
+            : task.status === 'cancelled'
+              ? 'cancelled'
+              : 'error',
+        progress: Math.max(4, task.progress || 0),
+        message: task.summary || '',
+      });
+    }, { reinstall });
+
+    state.updateDialogCancelHandler = null;
+    state.openCodeInstallView.cancelBusy = false;
+    syncOpenCodeTrackerWithTask(tracker, finalTask);
+    renderTrackedOpenCodeDialog(tracker, { force: true });
+    setUpdateDialogLocked(false);
+    patchUpdateDialog({
+      eyebrow: 'OpenCode Desktop',
+      title: tracker.status === 'success' ? copy.done : tracker.status === 'cancelled' ? 'OpenCode Desktop 安装已中断' : tracker.status === 'error' ? `${copy.title.replace('正在', '').trim()} 失败` : copy.title,
+      body: renderOpenCodeTrackerDialog(tracker),
+      confirmText: '知道了',
+      confirmDisabled: false,
+      cancelHidden: true,
+      cancelDisabled: false,
+      trackerMode: true,
+    });
+
+    await refreshToolRuntimeAfterMutation('opencode');
+
+    if (finalTask.status === 'success') {
+      flash(copy.done, 'success');
+      updateTask(taskCardId, { status: 'done', progress: 100, message: '桌面版已安装完成' });
+      return { ok: true, data: finalTask };
+    }
+    if (finalTask.status === 'cancelled') {
+      flash('OpenCode Desktop 安装已中断', 'info');
+      updateTask(taskCardId, { status: 'cancelled', progress: 100, message: finalTask.summary || '安装已中断' });
+      return { ok: false, cancelled: true, data: finalTask };
+    }
+
+    const errMsg = finalTask.error || 'OpenCode Desktop 安装失败';
+    flash(errMsg, 'error');
+    updateTask(taskCardId, { status: 'error', message: errMsg });
+    return { ok: false, error: errMsg, data: finalTask };
+  } catch (error) {
+    const errMsg = error?.message || 'OpenCode Desktop 安装失败';
+    state.updateDialogCancelHandler = null;
+    state.openCodeInstallView.cancelBusy = false;
+    tracker.status = 'error';
+    tracker.error = errMsg;
+    tracker.completedAt = new Date().toISOString();
+    tracker.summary = 'OpenCode Desktop 安装失败';
+    tracker.hint = '无法继续获取实时安装状态，请重试。';
+    tracker.detail = errMsg;
+    renderTrackedOpenCodeDialog(tracker, { force: true });
+    setUpdateDialogLocked(false);
+    patchUpdateDialog({ eyebrow: 'OpenCode Desktop', confirmText: '知道了', confirmDisabled: false, cancelHidden: true, trackerMode: true });
+    flash(errMsg, 'error');
+    updateTask(taskCardId, { status: 'error', message: errMsg });
+    return { ok: false, error: errMsg };
+  } finally {
+    setToolBtnBusy(btn, false);
+  }
+}
+
 function toolIconSvg(toolId) {
   const icons = {
     codex: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" opacity="0.4" /><path d="M12 12l9-5M12 12v10M12 12L3 7" /></svg>',
     claudecode: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity="0.4" /><path d="M8 12h8M12 8v8" /></svg>',
     openclaw: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" opacity="0.4" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" /></svg>',
+    opencode: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5" opacity="0.4" /><path d="M9 8l-3 4 3 4" /><path d="M15 8l3 4-3 4" /><path d="M13 6l-2 12" /></svg>',
+    'opencode-desktop': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5" opacity="0.4" /><path d="M9 8l-3 4 3 4" /><path d="M15 8l3 4-3 4" /><path d="M13 6l-2 12" /></svg>',
+    'opencode-vscode': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3 6 8v8l9 5 6-3V6l-6-3Z" opacity="0.35" /><path d="m6 8 4 4-4 4" /><path d="m10 6 4 2v8l-4 2" /></svg>',
+    'opencode-cursor': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v14H5z" opacity="0.35" /><path d="m8 8 4 4-4 4" /><path d="M13 8h3" /><path d="M13 16h3" /></svg>',
+    'opencode-windsurf': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15c2.5-5 5.5-7.5 9-7.5 3 0 5.3 1.4 7 4.5" opacity="0.4" /><path d="M4 12c2.5 5 5.5 7.5 9 7.5 3 0 5.3-1.4 7-4.5" /><path d="M8 12h8" /></svg>',
+    'opencode-vscodium': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3 6 8v8l9 5 6-3V6l-6-3Z" opacity="0.35" /><path d="m6 8 4 4-4 4" /><path d="m15-10-5 6 5 6" opacity="0.85" /></svg>',
+    'opencode-zed': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h14v14H5z" opacity="0.35" /><path d="M8 8h8l-8 8h8" /></svg>',
+    'opencode-github': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-4.5 1.5-5-2-7-2" /><path d="M15 22v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 19 4.77 5.07 5.07 0 0 0 18.91 1S17.73.65 15 2.48a13.38 13.38 0 0 0-6 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77 5.44 5.44 0 0 0 3.5 8.5c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" /></svg>',
+    'opencode-gitlab': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 21 4.2-12.8H7.8L12 21Z" /><path d="M4.8 8.2 12 21l-7-5.2.8-7.6Z" opacity="0.45" /><path d="M19.2 8.2 12 21l7-5.2-.8-7.6Z" opacity="0.45" /></svg>',
   };
   return icons[toolId] || icons.codex;
 }
@@ -697,12 +2042,47 @@ function setActiveTool(toolId) {
       modelSelect.innerHTML = '<option value="">加载中...</option>';
     }
 
+    applyClaudeCodeQuickInstallState(state.claudeCodeState || {});
     if (!_restoreToolForm('claudecode')) {
       loadClaudeCodeQuickState();
     } else {
       loadClaudeCodeQuickState();
     }
     // Show placeholder right-panel while async load runs
+    renderCurrentConfig();
+    return;
+  }
+
+  if (toolId === 'opencode') {
+    if (baseUrlField) baseUrlField.style.display = '';
+    if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.add('hide');
+    if (claudeProviderKeyField) claudeProviderKeyField.classList.add('hide');
+    if (detectField) detectField.style.display = '';
+    if (protocolField) protocolField.classList.add('hide');
+    if (modelField) modelField.style.display = '';
+    if (heroTitle) heroTitle.textContent = 'OpenCode';
+    if (heroSubtitle) heroSubtitle.textContent = '按源码约定写入 `opencode.json`，模型格式使用 provider/model。';
+    if (sectionTitle) sectionTitle.textContent = 'OpenCode 快速配置';
+    if (baseUrlLabel) baseUrlLabel.textContent = 'Provider Base URL';
+    if (apiKeyLabel) apiKeyLabel.textContent = 'Provider API Key';
+    if (modelLabel) modelLabel.textContent = '默认模型';
+    if (detectionMeta) detectionMeta.textContent = '建议先填 OpenAI 兼容 URL / Key，再检测模型列表。';
+    if (baseUrlInput) {
+      baseUrlInput.value = '';
+      baseUrlInput.placeholder = 'https://your-provider.com/v1';
+    }
+    if (apiKeyInput) {
+      apiKeyInput.type = 'password';
+      apiKeyInput.value = '';
+      apiKeyInput.placeholder = 'sk-...';
+    }
+    syncApiKeyToggle();
+    applyOpenCodeQuickInstallState(state.opencodeState || {});
+    if (!_restoreToolForm('opencode')) {
+      loadOpenCodeQuickState();
+    } else {
+      loadOpenCodeQuickState();
+    }
     renderCurrentConfig();
     return;
   }
@@ -727,6 +2107,7 @@ function setActiveTool(toolId) {
       apiKeyInput.placeholder = 'sk-...';
     }
     syncApiKeyToggle();
+    applyCodexQuickInstallState();
 
     if (!_restoreToolForm('codex')) {
       if (baseUrlInput && state.current?.config?.base_url) {
@@ -774,6 +2155,7 @@ function setActiveTool(toolId) {
     apiKeyInput.value = '';
   }
   syncApiKeyToggle();
+  applyOpenClawQuickInstallState(state.openclawState || {});
   if (modelSelect) {
     const synced = syncOpenClawQuickProtocol(protocolSelect?.value || 'openai-completions');
     modelSelect.value = synced.model;
@@ -918,6 +2300,7 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false } = {
       return { ok: false, invalidUsage: true };
     }
     state.claudeCodeState = data;
+    applyClaudeCodeQuickInstallState(data);
     const claudeProviders = getClaudeProviderProfiles(data);
     const activeClaudeProvider = claudeProviders.find((provider) => provider.isActive) || claudeProviders[0] || null;
     state.claudeSelectedProviderKey = activeClaudeProvider?.key || '';
@@ -1081,12 +2464,432 @@ async function ensureClaudeDashboardData({ force = false } = {}) {
   return result;
 }
 
+function normalizeOpenCodeProviderKey(value = '') {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized || 'custom';
+}
+
+function openCodeProviderKeyFromModel(model = '') {
+  const text = String(model || '').trim();
+  return text.includes('/') ? text.split('/')[0] : '';
+}
+
+function getOpenCodeConfiguredModels(data = {}) {
+  const models = new Set();
+  if (data.model) models.add(data.model);
+  if (data.smallModel) models.add(data.smallModel);
+  (data.providers || []).forEach((provider) => {
+    (provider.modelIds || []).forEach((modelId) => models.add(`${provider.key}/${modelId}`));
+  });
+  return [...models].filter(Boolean).sort();
+}
+
+function renderOpenCodeModelOptions(selectId, { data = {}, currentModel = '' } = {}) {
+  const select = el(selectId);
+  if (!select) return;
+  const models = getOpenCodeConfiguredModels(data);
+  let html = '<option value="">选择默认模型</option>';
+  html += models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('');
+  if (currentModel && !models.includes(currentModel)) {
+    html += `<option value="${escapeHtml(currentModel)}">${escapeHtml(currentModel)} (当前自定义)</option>`;
+  }
+  select.innerHTML = html;
+  if (currentModel) select.value = currentModel;
+}
+
+function formatOpenCodeAuthExpiry(value = '') {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function getOpenCodeProviderByKey(key = '') {
+  return (state.opencodeState?.providers || []).find((item) => item.key === key) || null;
+}
+
+function getOpenCodeSwitchModelValue(provider = {}) {
+  const currentModel = String(el('modelSelect')?.value || state.opencodeState?.model || '').trim();
+  const currentModelId = currentModel.includes('/') ? currentModel.split('/').slice(1).join('/') : currentModel;
+  if (currentModelId && (provider.modelIds || []).includes(currentModelId)) return `${provider.key}/${currentModelId}`;
+  if ((provider.modelIds || []).length) return `${provider.key}/${provider.modelIds[0]}`;
+  return currentModelId ? `${provider.key}/${currentModelId}` : '';
+}
+
+function fillFromOpenCodeProvider(provider) {
+  if (!provider?.key) return;
+  const baseUrlInput = el('baseUrlInput');
+  const apiKeyInput = el('apiKeyInput');
+  const nextModel = getOpenCodeSwitchModelValue(provider);
+  if (baseUrlInput) baseUrlInput.value = provider.baseUrl || '';
+  if (apiKeyInput) {
+    apiKeyInput.type = 'password';
+    apiKeyInput.value = '';
+    apiKeyInput.placeholder = provider.maskedApiKey || (provider.hasAuth ? `${provider.authType || 'Auth'} 已登录` : 'API Key（留空表示保持当前）');
+  }
+  renderOpenCodeModelOptions('modelSelect', { data: state.opencodeState || {}, currentModel: nextModel || state.opencodeState?.model || '' });
+  if (nextModel && el('modelSelect')) el('modelSelect').value = nextModel;
+  const detectionMeta = el('detectionMeta');
+  if (detectionMeta) detectionMeta.textContent = `已载入 ${provider.name || provider.key}`;
+}
+
+async function quickSwitchOpenCodeProvider(provider) {
+  if (!provider?.key) return { ok: false, error: 'Provider 无效' };
+  fillFromOpenCodeProvider(provider);
+  let config;
+  try {
+    config = buildOpenCodeConfigFromFields();
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  setBusy('saveBtn', true, '切换中...');
+  const json = await api('/api/opencode/config-save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: el('scopeSelect')?.value || 'global',
+      projectPath: el('projectPathInput')?.value?.trim() || '',
+      configJson: JSON.stringify(config, null, 2),
+    }),
+  });
+  setBusy('saveBtn', false);
+  if (!json.ok) return json;
+  await loadOpenCodeQuickState();
+  renderCurrentConfig();
+  return { ok: true, providerKey: provider.key };
+}
+
+function populateOpenCodeConfigEditor() {
+  const data = state.opencodeState || {};
+  const active = data.activeProvider || {};
+  const apiInput = el('opCfgApiKeyInput');
+  el('opCfgModelInput').value = data.model || '';
+  el('opCfgSmallModelInput').value = data.smallModel || '';
+  el('opCfgProviderKeyInput').value = data.activeProviderKey || '';
+  el('opCfgProviderNameInput').value = active.name || '';
+  el('opCfgBaseUrlInput').value = active.baseUrl || '';
+  if (apiInput) {
+    apiInput.value = '';
+    apiInput.placeholder = active.maskedApiKey || '留空表示保持当前';
+  }
+  el('opCfgProviderPackageInput').value = active.npm || '@ai-sdk/openai-compatible';
+  el('opCfgConfigPath').value = data.configPath || '~/.config/opencode/opencode.json';
+  el('opCfgAuthPath').value = data.authPath || '~/.local/share/opencode/auth.json';
+  el('opCfgProvidersSummary').value = (data.providers || []).map((provider) => `${provider.key} · ${provider.baseUrl || '默认'} · ${(provider.modelIds || []).length} models`).join('\n') || '暂无';
+  el('opCfgRawJsonTextarea').value = data.configJson || JSON.stringify(data.config || {}, null, 2);
+  syncRawConfigHighlight();
+}
+
+function isCodexInstalled() {
+  return Boolean(state.current?.codexBinary?.installed || state.tools.find((tool) => tool.id === 'codex')?.binary?.installed);
+}
+
+function isClaudeCodeInstalled(data = state.claudeCodeState || {}) {
+  return Boolean(data.binary?.installed || state.tools.find((tool) => tool.id === 'claudecode')?.binary?.installed);
+}
+
+function isOpenCodeInstalled(data = state.opencodeState || {}) {
+  return Boolean(data.binary?.installed || state.tools.find((tool) => tool.id === 'opencode')?.binary?.installed);
+}
+
+function isOpenClawInstalled(data = state.openclawState || {}) {
+  return Boolean(data.binary?.installed || state.tools.find((tool) => tool.id === 'openclaw')?.binary?.installed);
+}
+
+function applyQuickInstallState({
+  toolId,
+  installed,
+  installLabel,
+  sectionTitleText,
+  heroSubtitleText,
+  detectionMetaText,
+  showBaseUrl = true,
+  showApiKey = true,
+  showDetect = true,
+  showModel = true,
+  showProtocol = false,
+  showSyncActions = false,
+  showOauthBtn = false,
+  showProviderKey = false,
+  showSaveBtn = true,
+  showEditBtn = true,
+  showProviderSwitch = true,
+  showConfigEditorBtn = true,
+  showModelRefreshBtn = false,
+  showCodexAuthBlock = false,
+} = {}) {
+  if (state.activeTool !== toolId) return;
+  const baseUrlField = el('baseUrlInput')?.closest('.field');
+  const apiKeyField = el('apiKeyInput')?.closest('.field');
+  const detectField = el('detectBtn')?.closest('.field');
+  const modelField = el('modelSelect')?.closest('.field');
+  const protocolField = el('openClawProtocolField');
+  const saveBtn = el('saveBtn');
+  const editBtn = el('editConfigQuickBtn');
+  const launchBtn = el('launchBtn');
+  const detectionMeta = el('detectionMeta');
+  const sectionTitle = document.querySelector('.flow-section .section-title');
+  const heroSubtitle = document.querySelector('.hero-subtitle');
+  const providerSwitchBtn = el('providerSwitchBtn');
+  const configEditorBtn = el('configEditorBtn');
+  const modelRefreshBtn = el('modelRefreshBtn');
+  const modelChips = el('modelChips');
+  const syncActions = el('sectionSyncActions');
+  const claudeOauthLoginBtn = el('claudeOauthLoginBtn');
+  const claudeProviderKeyField = el('claudeProviderKeyField');
+  const codexAuthBlock = el('codexAuthBlock');
+
+  if (!installed) {
+    if (baseUrlField) baseUrlField.style.display = 'none';
+    if (apiKeyField) apiKeyField.style.display = 'none';
+    if (detectField) detectField.style.display = 'none';
+    if (modelField) modelField.style.display = 'none';
+    if (protocolField) protocolField.classList.add('hide');
+    if (saveBtn) saveBtn.style.display = 'none';
+    if (editBtn) editBtn.style.display = 'none';
+    if (launchBtn) launchBtn.textContent = installLabel;
+    if (detectionMeta) detectionMeta.textContent = detectionMetaText;
+    if (sectionTitle) sectionTitle.textContent = sectionTitleText;
+    if (heroSubtitle) heroSubtitle.textContent = heroSubtitleText;
+    if (providerSwitchBtn) providerSwitchBtn.style.display = 'none';
+    if (configEditorBtn) configEditorBtn.style.display = 'none';
+    if (modelRefreshBtn) modelRefreshBtn.classList.remove('visible');
+    if (modelChips) modelChips.classList.add('hide');
+    if (syncActions) syncActions.style.display = 'none';
+    if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.add('hide');
+    if (claudeProviderKeyField) claudeProviderKeyField.classList.add('hide');
+    if (codexAuthBlock) codexAuthBlock.style.display = 'none';
+    return;
+  }
+
+  if (baseUrlField) baseUrlField.style.display = showBaseUrl ? '' : 'none';
+  if (apiKeyField) apiKeyField.style.display = showApiKey ? '' : 'none';
+  if (detectField) detectField.style.display = showDetect ? '' : 'none';
+  if (modelField) modelField.style.display = showModel ? '' : 'none';
+  if (protocolField) protocolField.classList.toggle('hide', !showProtocol);
+  if (saveBtn) saveBtn.style.display = showSaveBtn ? '' : 'none';
+  if (editBtn) editBtn.style.display = showEditBtn ? '' : 'none';
+  if (launchBtn) launchBtn.textContent = `启动 ${toolId === 'claudecode' ? 'Claude Code' : toolId === 'openclaw' ? 'OpenClaw' : toolId === 'opencode' ? 'OpenCode' : 'Codex'}`;
+  if (detectionMeta) detectionMeta.textContent = detectionMetaText;
+  if (sectionTitle) sectionTitle.textContent = sectionTitleText;
+  if (heroSubtitle) heroSubtitle.textContent = heroSubtitleText;
+  if (providerSwitchBtn) providerSwitchBtn.style.display = showProviderSwitch ? '' : 'none';
+  if (configEditorBtn) configEditorBtn.style.display = showConfigEditorBtn ? '' : 'none';
+  if (modelRefreshBtn) modelRefreshBtn.classList.toggle('visible', showModelRefreshBtn);
+  if (syncActions) syncActions.style.display = showSyncActions ? '' : 'none';
+  if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.toggle('hide', !showOauthBtn);
+  if (claudeProviderKeyField) claudeProviderKeyField.classList.toggle('hide', !showProviderKey);
+  if (codexAuthBlock) codexAuthBlock.style.display = showCodexAuthBlock ? 'grid' : 'none';
+}
+
+function applyCodexQuickInstallState() {
+  applyQuickInstallState({
+    toolId: 'codex',
+    installed: isCodexInstalled(),
+    installLabel: '安装 Codex',
+    sectionTitleText: isCodexInstalled() ? '连接配置' : 'Codex 未安装',
+    heroSubtitleText: isCodexInstalled() ? '用户通常只需要 `URL` 和 `API Key`，这里一步完成。' : '当前设备还没有安装 Codex，先一键安装，安装完成后再配置登录和 Provider。',
+    detectionMetaText: isCodexInstalled() ? '默认只需要 URL 和 API Key；缺少 http/https 会自动补全。' : '当前未检测到 codex，请先安装；安装完成后这里才会显示登录和配置项。',
+    showBaseUrl: true,
+    showApiKey: true,
+    showDetect: true,
+    showModel: true,
+    showCodexAuthBlock: true,
+  });
+}
+
+function applyClaudeCodeQuickInstallState(data = state.claudeCodeState || {}) {
+  applyQuickInstallState({
+    toolId: 'claudecode',
+    installed: isClaudeCodeInstalled(data),
+    installLabel: '安装 Claude Code',
+    sectionTitleText: isClaudeCodeInstalled(data) ? 'Claude Code 设置' : 'Claude Code 未安装',
+    heroSubtitleText: isClaudeCodeInstalled(data) ? '配置模型与认证方式，支持 OAuth 授权和 API Key。' : '当前设备还没有安装 Claude Code，先一键安装，安装完成后再配置 OAuth 或 API Key。',
+    detectionMetaText: isClaudeCodeInstalled(data) ? '如果已经完成 OAuth 授权，API Key 可以留空。' : '当前未检测到 claude，请先安装；安装完成后这里才会显示认证和模型配置。',
+    showBaseUrl: true,
+    showApiKey: true,
+    showDetect: false,
+    showModel: true,
+    showOauthBtn: true,
+    showProviderKey: true,
+  });
+}
+
+function applyOpenCodeQuickInstallState(data = state.opencodeState || {}) {
+  applyQuickInstallState({
+    toolId: 'opencode',
+    installed: isOpenCodeInstalled(data),
+    installLabel: '安装 OpenCode',
+    sectionTitleText: isOpenCodeInstalled(data) ? 'OpenCode 快速配置' : 'OpenCode 未安装',
+    heroSubtitleText: isOpenCodeInstalled(data) ? '按源码约定写入 `opencode.json`，模型格式使用 provider/model。' : '当前设备还没有安装 OpenCode，先一键安装，再填写 URL、Key 和模型。',
+    detectionMetaText: isOpenCodeInstalled(data) ? '建议先填 OpenAI 兼容 URL / Key，再检测模型列表。' : '当前未检测到 opencode，请先安装；安装完成后这里才会显示配置项。',
+    showBaseUrl: true,
+    showApiKey: true,
+    showDetect: true,
+    showModel: true,
+    showModelRefreshBtn: true,
+  });
+}
+
+function applyOpenClawQuickInstallState(data = state.openclawState || {}) {
+  applyQuickInstallState({
+    toolId: 'openclaw',
+    installed: isOpenClawInstalled(data),
+    installLabel: '安装 OpenClaw',
+    sectionTitleText: isOpenClawInstalled(data) ? 'OpenClaw 模型配置' : 'OpenClaw 未安装',
+    heroSubtitleText: isOpenClawInstalled(data) ? '支持 Claude / OpenAI / OpenAI Responses 三种常用协议，先填 URL 和 Token 就能跑。' : '当前设备还没有安装 OpenClaw，先一键安装，安装完成后再配置协议、模型和 Token。',
+    detectionMetaText: isOpenClawInstalled(data) ? '选择协议后会自动适配默认 URL、环境变量名和推荐模型。' : '当前未检测到 openclaw，请先安装；安装完成后这里才会显示协议和模型配置。',
+    showBaseUrl: true,
+    showApiKey: true,
+    showDetect: false,
+    showModel: true,
+    showProtocol: true,
+    showSyncActions: true,
+    showModelRefreshBtn: true,
+  });
+}
+
+async function loadOpenCodeQuickState() {
+  try {
+    const params = new URLSearchParams({
+      scope: el('scopeSelect')?.value || 'global',
+      projectPath: el('projectPathInput')?.value?.trim() || '',
+    });
+    const json = await api(`/api/opencode/state?${params.toString()}`);
+    if (!json.ok || !json.data) return { ok: false, error: json.error || '读取失败' };
+    const data = json.data;
+    state.opencodeState = data;
+    if (state.activeTool !== 'opencode') {
+      renderToolConsole();
+      return { ok: true, data };
+    }
+    const heroTitle = document.querySelector('.hero-title');
+    const heroSubtitle = document.querySelector('.hero-subtitle');
+    const baseUrlInput = el('baseUrlInput');
+    const apiKeyInput = el('apiKeyInput');
+    if (heroTitle) heroTitle.textContent = data.binary?.version ? `OpenCode · ${data.binary.version}` : 'OpenCode';
+    if (heroSubtitle) heroSubtitle.textContent = '填写 OpenAI 兼容 Provider、API Key 与默认模型，保存后写入 opencode.json。';
+    if (baseUrlInput) baseUrlInput.value = data.activeProvider?.baseUrl || '';
+    if (apiKeyInput) {
+      apiKeyInput.type = 'password';
+      apiKeyInput.value = '';
+      apiKeyInput.placeholder = data.activeProvider?.maskedApiKey || 'API Key（留空表示保持当前）';
+    }
+    renderOpenCodeModelOptions('modelSelect', { data, currentModel: data.model || '' });
+    applyOpenCodeQuickInstallState(data);
+    renderCurrentConfig();
+    renderToolConsole();
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: error?.message || '读取失败' };
+  }
+}
+
+function mergeModelsIntoOpenCodeDropdown(fetchedModels = []) {
+  const modelSelect = el('modelSelect');
+  if (!modelSelect) return;
+  const data = state.opencodeState || {};
+  const currentValue = modelSelect.value || data.model || '';
+  const providerKey = data.activeProviderKey || normalizeOpenCodeProviderKey(inferProviderKey(el('baseUrlInput')?.value || ''));
+  const models = [...new Set((fetchedModels || []).map((item) => `${providerKey}/${item}`))];
+  let html = '<option value="">选择默认模型</option>';
+  html += models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('');
+  if (currentValue && !models.includes(currentValue)) {
+    html += `<option value="${escapeHtml(currentValue)}">${escapeHtml(currentValue)} (当前)</option>`;
+  }
+  modelSelect.innerHTML = html;
+  if (currentValue) modelSelect.value = currentValue;
+}
+
+function buildOpenCodeConfigFromFields() {
+  const current = state.opencodeState || {};
+  const existing = cloneJson(current.config || {});
+  const inConfigEditor = state.activePage === 'configEditor' && getConfigEditorTool() === 'opencode';
+  const editorModel = el('opCfgModelInput')?.value || '';
+  const quickModel = el('modelSelect')?.value || '';
+  const model = (inConfigEditor ? (editorModel || quickModel || current.model || '') : (quickModel || editorModel || current.model || '')).trim();
+  if (!model) throw new Error('请先填写默认模型');
+  const smallModel = (el('opCfgSmallModelInput')?.value || current.smallModel || '').trim();
+  const editorBaseUrl = el('opCfgBaseUrlInput')?.value || '';
+  const quickBaseUrl = el('baseUrlInput')?.value || '';
+  const baseUrl = normalizeBaseUrl(inConfigEditor ? (editorBaseUrl || quickBaseUrl || current.activeProvider?.baseUrl || '') : (quickBaseUrl || editorBaseUrl || current.activeProvider?.baseUrl || ''));
+  const providerPackage = (el('opCfgProviderPackageInput')?.value || current.activeProvider?.npm || '@ai-sdk/openai-compatible').trim() || '@ai-sdk/openai-compatible';
+  const desiredProviderKey = (el('opCfgProviderKeyInput')?.value || openCodeProviderKeyFromModel(model) || current.activeProviderKey || inferProviderKey(baseUrl)).trim();
+  const providerKey = normalizeOpenCodeProviderKey(desiredProviderKey || 'custom');
+  const providerName = (el('opCfgProviderNameInput')?.value || current.activeProvider?.name || inferProviderLabel(baseUrl) || providerKey).trim() || providerKey;
+  const editorApiKey = el('opCfgApiKeyInput')?.value || '';
+  const quickApiKey = el('apiKeyInput')?.value || '';
+  const apiKey = (inConfigEditor ? (editorApiKey || quickApiKey || '') : (quickApiKey || editorApiKey || '')).trim();
+  const modelParts = model.includes('/') ? model.split('/') : [providerKey, model];
+  const finalProviderKey = normalizeOpenCodeProviderKey(modelParts[0] || providerKey);
+  const modelId = (modelParts.slice(1).join('/') || model).trim();
+
+  existing.$schema = existing.$schema || 'https://opencode.ai/config.json';
+  existing.model = `${finalProviderKey}/${modelId}`;
+  if (smallModel) existing.small_model = smallModel; else delete existing.small_model;
+  existing.provider = existing.provider || {};
+  const provider = cloneJson(existing.provider[finalProviderKey] || {});
+  provider.name = providerName;
+  provider.npm = providerPackage;
+  provider.options = { ...(provider.options || {}) };
+  if (baseUrl) provider.options.baseURL = baseUrl; else delete provider.options.baseURL;
+  if (apiKey) provider.options.apiKey = apiKey;
+  provider.models = { ...(provider.models || {}) };
+  provider.models[modelId] = provider.models[modelId] || {};
+  existing.provider[finalProviderKey] = provider;
+  return existing;
+}
+
+async function saveOpenCodeConfigOnly() {
+  let config;
+  try {
+    config = buildOpenCodeConfigFromFields();
+  } catch (error) {
+    return flash(error instanceof Error ? error.message : String(error), 'error');
+  }
+  setBusy('saveBtn', true, '保存中...');
+  const json = await api('/api/opencode/config-save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: el('scopeSelect')?.value || 'global',
+      projectPath: el('projectPathInput')?.value?.trim() || '',
+      configJson: JSON.stringify(config, null, 2),
+    }),
+  });
+  setBusy('saveBtn', false);
+  if (!json.ok) return flash(json.error || '保存失败', 'error');
+  await loadOpenCodeQuickState();
+  renderCurrentConfig();
+  flash('OpenCode 配置已保存', 'success');
+}
+
+async function launchOpenCodeOnly() {
+  if (!isOpenCodeInstalled(state.opencodeState || {})) {
+    const result = await runOpenCodeToolAction('install', el('launchBtn'));
+    await loadTools();
+    await loadOpenCodeQuickState().catch(() => {});
+    applyOpenCodeQuickInstallState(state.opencodeState || {});
+    return Boolean(result?.ok);
+  }
+  setBusy('launchBtn', true, '启动中...');
+  const launched = await api('/api/opencode/launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cwd: el('launchCwdInput')?.value?.trim() || '' }),
+  });
+  setBusy('launchBtn', false);
+  if (!launched.ok) return flash(launched.error || '启动失败', 'error');
+  flash('OpenCode 已启动', 'success');
+  return true;
+}
+
 /* ── OpenClaw Quick State ── */
 async function loadOpenClawQuickState() {
   try {
     const data = await fetchOpenClawStateData();
     const quick = deriveOpenClawQuickConfig(data);
     state.openClawQuickConfig = quick;
+    applyOpenClawQuickInstallState(data);
 
     // Only update quick-page UI if OpenClaw is the active tool
     if (state.activeTool !== 'openclaw') {
@@ -1125,30 +2928,40 @@ async function loadOpenClawQuickState() {
     rows.push(iPlug + '<span>Token：' + escapeHtml(quick.envKey || getOpenClawDefaultEnvKey(quick.api || 'openai-completions')) + '</span>');
     rows.push((quick.hasApiKey ? iKey : iNo) + '<span>' + (quick.hasApiKey ? ('Key：' + escapeHtml(quick.maskedApiKey)) : '未保存 API Key') + '</span>');
     rows.push((data.gatewayToken ? iOk : iNo) + '<span>' + (data.gatewayToken ? 'Gateway Token 就绪' : 'Token 待生成') + '</span>');
+    rows.push((data.daemonRunning ? iOk : iNo) + '<span>常驻服务：' + escapeHtml(getOpenClawDaemonStatusLabel(data)) + '</span>');
 
     // Update launch button + dashboard quick row
     var _lb = el('launchBtn');
     var _dqr = el('ocDashboardQuickRow');
     state._ocGatewayUrl = data.gatewayUrl || '';
     const gatewayStatus = getOpenClawGatewayStatus(data);
+    const _ocStatus = document.querySelector('#ocDashboardQuickRow .oc-dashboard-status');
+    const _ocDaemonBtn = el('ocDaemonBtn');
     if (gatewayStatus === 'online') {
       if (_lb) {
         _lb.innerHTML = '<span class="running-dot"></span>打开 Dashboard';
         _lb.classList.add('running');
       }
       if (_dqr) _dqr.classList.remove('hide');
+      if (_ocStatus) _ocStatus.innerHTML = '<span class="running-dot"></span>OpenClaw 正在运行';
     } else if (gatewayStatus === 'warming') {
       if (_lb) {
         _lb.textContent = 'Gateway 启动中…';
         _lb.classList.remove('running');
       }
       if (_dqr) _dqr.classList.remove('hide');
+      if (_ocStatus) _ocStatus.innerHTML = '<span class="running-dot"></span>OpenClaw 启动中';
     } else {
       if (_lb) {
         _lb.textContent = '启动 OpenClaw';
         _lb.classList.remove('running');
       }
-      if (_dqr) _dqr.classList.add('hide');
+      if (_dqr) _dqr.classList.toggle('hide', !data.binary?.installed);
+      if (_ocStatus) _ocStatus.innerHTML = `<span class="running-dot" style="opacity:${data.daemonRunning ? '1' : '.35'}"></span>常驻服务：${escapeHtml(getOpenClawDaemonStatusLabel(data))}`;
+    }
+    if (_ocDaemonBtn) {
+      _ocDaemonBtn.textContent = data.daemonInstalled ? '关闭常驻' : '开启常驻';
+      _ocDaemonBtn.style.color = data.daemonInstalled ? '#fbbf24' : '';
     }
 
     if (heroSubtitle) {
@@ -1213,13 +3026,17 @@ function getOpenClawGatewayStatusLabel(data = {}) {
   return ({ online: '在线', warming: '启动中', offline: '未启动' })[getOpenClawGatewayStatus(data)] || '未启动';
 }
 
+function getOpenClawDaemonStatusLabel(data = {}) {
+  return data.daemon?.label || (data.daemonRunning ? '运行中' : data.daemonInstalled ? '已关闭' : '未启用');
+}
+
 function syncCodexAuthView() {
   const block = el('codexAuthBlock');
   const panel = el('codexOfficialAuthPanel');
   const baseUrlField = el('baseUrlInput')?.closest('.field');
   const apiKeyField = el('apiKeyInput')?.closest('.field');
   const detectField = el('detectBtn')?.closest('.field');
-  if (!block || !panel || state.activeTool !== 'codex') {
+  if (!block || !panel || state.activeTool !== 'codex' || !isCodexInstalled()) {
     if (block) block.style.display = 'none';
     return;
   }
@@ -2690,8 +4507,7 @@ async function executeOpenClawInstall(method, card) {
 
     if (finalTask.status === 'success') {
       flash(finalTask.version ? `OpenClaw 安装完成（${finalTask.version}）` : 'OpenClaw 安装完成', 'success');
-      loadTools();
-      await loadOpenClawQuickState();
+      await refreshToolRuntimeAfterMutation('openclaw');
       updateTask(taskId, { status: 'done', progress: 100, message: finalTask.version ? `已安装 ${finalTask.version}` : '安装完成' });
       // Fire-and-forget — onboard flow runs in its own dialog
       runOpenClawOnboardFlow({ autoOpenDashboard: true }).catch(error => {
@@ -3158,7 +4974,7 @@ document.addEventListener('click', async (e) => {
       });
       el('updateDialogConfirmBtn').disabled = false;
       flash(purge ? 'OpenClaw 已完整卸载，数据已清除' : 'OpenClaw 已卸载，数据已保留', 'success');
-      loadTools();
+      await refreshToolRuntimeAfterMutation('openclaw');
     }
   } catch (err) {
     clearInterval(progressTimer);
@@ -3213,9 +5029,10 @@ document.addEventListener('click', async (e) => {
 });
 
 document.addEventListener('click', async (e) => {
-  const copyBtn = e.target.closest('[data-copy-openclaw-log]');
-  if (!copyBtn) return;
-  const text = state.openClawInstallView.lastLogsText || '';
+  const openClawCopyBtn = e.target.closest('[data-copy-openclaw-log]');
+  const openCodeCopyBtn = e.target.closest('[data-copy-opencode-log]');
+  if (!openClawCopyBtn && !openCodeCopyBtn) return;
+  const text = openClawCopyBtn ? (state.openClawInstallView.lastLogsText || '') : (state.openCodeInstallView.lastLogsText || '');
   if (!text.trim()) {
     flash('当前还没有可复制的日志', 'info');
     return;
@@ -3231,16 +5048,33 @@ document.addEventListener('click', async (e) => {
 document.addEventListener('pointerdown', (e) => {
   if (!e.target.closest('.install-tracker-log')) return;
   state.openClawInstallView.pauseUntil = Date.now() + 15000;
+  state.openCodeInstallView.pauseUntil = Date.now() + 15000;
 });
 
 document.addEventListener('pointerup', () => {
-  if (!state.openClawInstallView.pendingTask) return;
   setTimeout(() => {
-    if (shouldPauseOpenClawInstallRender()) return;
-    if (!state.openClawInstallView.pendingTask) return;
-    renderTrackedOpenClawDialog(state.openClawInstallView.pendingTask, { force: true });
+    if (state.openClawInstallView.pendingTask && !shouldPauseOpenClawInstallRender()) {
+      renderTrackedOpenClawDialog(state.openClawInstallView.pendingTask, { force: true });
+    }
+    if (state.openCodeInstallView.pendingTask && !shouldPauseOpenCodeInstallRender()) {
+      renderTrackedOpenCodeDialog(state.openCodeInstallView.pendingTask, { force: true });
+    }
   }, 120);
 });
+
+document.addEventListener('wheel', (e) => {
+  const logEl = e.target.closest?.('.install-tracker-log');
+  if (!logEl) return;
+  state.openClawInstallView.pauseUntil = Date.now() + 15000;
+  state.openCodeInstallView.pauseUntil = Date.now() + 15000;
+  if (logEl.scrollHeight <= logEl.clientHeight) return;
+  const maxScrollTop = Math.max(0, logEl.scrollHeight - logEl.clientHeight);
+  const nextScrollTop = Math.max(0, Math.min(maxScrollTop, logEl.scrollTop + e.deltaY));
+  if (nextScrollTop === logEl.scrollTop) return;
+  logEl.scrollTop = nextScrollTop;
+  e.preventDefault();
+  e.stopPropagation();
+}, { passive: false });
 
 document.addEventListener('click', async (e) => {
   const refreshBtn = e.target.closest('[data-openclaw-refresh-state]');
@@ -3301,6 +5135,7 @@ const PAGE_META = {
 const TOOL_CONSOLE_META = {
   codex: { label: 'Codex', actionLabel: 'Codex CLI' },
   claudecode: { label: 'Claude Code', actionLabel: 'Claude Code' },
+  opencode: { label: 'OpenCode', actionLabel: 'OpenCode' },
   openclaw: { label: 'OpenClaw', actionLabel: 'OpenClaw' },
 };
 
@@ -4396,6 +6231,9 @@ function renderToolConsoleAction(action = {}) {
     `data-console-action="${escapeHtml(action.type || '')}"`,
     action.page ? `data-console-page="${escapeHtml(action.page)}"` : '',
     action.tool ? `data-console-tool-target="${escapeHtml(action.tool)}"` : '',
+    action.provider ? `data-console-provider="${escapeHtml(action.provider)}"` : '',
+    action.method ? `data-console-method="${escapeHtml(action.method)}"` : '',
+    action.authKey ? `data-console-auth-key="${escapeHtml(action.authKey)}"` : '',
   ].filter(Boolean).join(' ');
   const klass = action.primary ? 'tiny-btn' : 'secondary tiny-btn';
   return `<button type="button" class="${klass}" ${attrs}>${escapeHtml(action.label || '操作')}</button>`;
@@ -4674,6 +6512,69 @@ function buildClaudeConsoleView() {
   return { summary, main, side, activity: '' };
 }
 
+function buildOpenCodeConsoleView() {
+  const data = state.opencodeState || {};
+  const active = data.activeProvider || null;
+  const providers = data.providers || [];
+  const authEntries = data.authEntries || [];
+  const activeAuth = data.activeAuth || null;
+  const issues = [];
+
+  if (!data.binary?.installed) issues.push({ tone: 'error', title: 'OpenCode 未安装', copy: '当前还没检测到 opencode 命令，先去“工具安装”完成安装。', action: { type: 'goto-page', page: 'tools', label: '去安装' } });
+  if (!data.configExists) issues.push({ tone: 'warn', title: '还没有 OpenCode 配置', copy: '当前作用域还没有写入 `opencode.json` / `opencode.jsonc`。', action: { type: 'goto-quick-tool', tool: 'opencode', label: '去快速配置' } });
+  if (!data.model) issues.push({ tone: 'warn', title: '默认模型未设置', copy: 'OpenCode 模型格式通常是 `provider/model`，建议先固定默认模型。', action: { type: 'goto-quick-tool', tool: 'opencode', label: '去设置模型' } });
+  if (!providers.length) issues.push({ tone: 'warn', title: '未配置 Provider', copy: '当前配置中还没有可用的 provider 节点。', action: { type: 'goto-config-editor-tool', tool: 'opencode', label: '去配置' } });
+  if (active && !active.hasCredential) issues.push({ tone: 'warn', title: '当前 Provider 缺少凭证', copy: `活动 Provider "${active.name || active.key}" 还没有保存 API Key，也没有 auth 登录。`, action: { type: 'goto-quick-tool', tool: 'opencode', label: '去补凭证' } });
+  if (!authEntries.length && !providers.some((provider) => provider.hasApiKey)) issues.push({ tone: 'warn', title: '尚未登录 OpenCode Provider', copy: '当前没发现 auth.json 凭证，也没发现已保存 API Key。', action: { type: 'opencode-auth-login', provider: active?.key || '', label: '启动 auth login' } });
+
+  const summary = [
+    renderToolConsoleStat('安装状态', data.binary?.installed ? (data.binary.version || '已安装') : '未安装', data.binary?.path ? `<span class="tool-console-code">${escapeHtml(data.binary.path)}</span>` : '', { icon: 'install' }),
+    renderToolConsoleStat('作用域', data.scope === 'project' ? '项目级' : '全局', data.rootPath ? `<span class="tool-console-code">${escapeHtml(data.rootPath)}</span>` : '', { icon: 'scope' }),
+    renderToolConsoleStat('默认模型', data.model || '未设置', data.smallModel || '未设置 small_model', { icon: 'model' }),
+    renderToolConsoleStat('认证状态', activeAuth ? `${activeAuth.type || 'auth'} 已登录` : (active?.hasApiKey ? 'API Key 已保存' : '未认证'), activeAuth?.key || active?.baseUrl || '等待配置', { icon: 'auth' }),
+  ].join('');
+
+  const providerBody = providers.length
+    ? `<div class="tool-console-item-list">${providers.map((provider) => renderToolConsoleItem({
+        title: provider.name || provider.key,
+        meta: provider.key,
+        chips: [provider.hasCredential ? '凭证就绪' : '缺少凭证', provider.hasAuth ? `${provider.authType || 'auth'} 登录` : '未登录', `${(provider.modelIds || []).length} models`],
+        body: `<div class="tool-console-list compact">${renderToolConsoleRow('Base URL', provider.baseUrl ? `<span class="tool-console-code">${escapeHtml(provider.baseUrl)}</span>` : '-', { html: Boolean(provider.baseUrl) })}${renderToolConsoleRow('npm', provider.npm || '@ai-sdk/openai-compatible')}${renderToolConsoleRow('模型', (provider.modelIds || []).join(', ') || '未显式声明')}</div>`,
+      })).join('')}</div>`
+    : '<div class="tool-console-empty">当前还没有配置任何 OpenCode Provider。</div>';
+
+  const authBody = authEntries.length
+    ? `<div class="tool-console-item-list">${authEntries.map((entry) => renderToolConsoleItem({
+        title: entry.key,
+        meta: entry.type || 'unknown',
+        chips: [entry.hasCredential ? '已就绪' : '缺失', entry.expiresAt ? `到期 ${formatOpenCodeAuthExpiry(entry.expiresAt)}` : '长期有效'],
+        body: `<div class="tool-console-list compact">${renderToolConsoleRow('凭证', entry.maskedSecret || '-')}${renderToolConsoleRow('到期', entry.expiresAt ? formatOpenCodeAuthExpiry(entry.expiresAt) : '-')}</div>`,
+      })).join('')}</div>`
+    : '<div class="tool-console-empty">当前还没有检测到 OpenCode auth.json 凭证。</div>';
+
+  const actions = [
+    { type: 'refresh-console', label: '重新检测', primary: true },
+    { type: 'goto-quick-tool', tool: 'opencode', label: '切到快速配置' },
+    { type: 'goto-config-editor-tool', tool: 'opencode', label: '打开配置编辑' },
+    { type: 'goto-page', page: 'tools', label: '查看安装状态' },
+  ];
+  if (data.binary?.installed) actions.splice(1, 0, { type: 'opencode-auth-login', provider: active?.key || '', label: '启动 auth login' });
+  if (activeAuth?.key) actions.splice(2, 0, { type: 'opencode-auth-remove', authKey: activeAuth.key, label: '移除当前凭证' });
+
+  const main = [
+    renderToolConsoleCard('状态总览', '安装、配置和当前模型', `<div class="tool-console-list">${renderToolConsoleRow('配置文件', `<span class="tool-console-code">${escapeHtml(data.configPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('鉴权文件', `<span class="tool-console-code">${escapeHtml(data.authPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('默认模型', data.model || '-')}${renderToolConsoleRow('Small model', data.smallModel || '-')}${renderToolConsoleRow('当前 Provider', active?.key || '-')}${renderToolConsoleRow('当前 auth', activeAuth?.key || '-')}</div>`, { icon: 'status' }),
+    renderToolConsoleCard('Provider 列表', '按源码字段展示 provider / options / models', providerBody, { icon: 'providers' }),
+    renderToolConsoleCard('认证状态', '来自 auth.json 的 Provider 登录凭证', authBody, { icon: 'actions' }),
+    renderToolConsoleCard('异常检测', '优先提示安装、模型和凭证问题', renderToolConsoleIssueList(issues, 'OpenCode 侧暂未发现明显阻塞项。'), { icon: 'issues', iconTone: issues.length ? (issues.some(i => i.tone === 'error') ? 'error' : 'warn') : 'ok' }),
+  ].join('');
+
+  const side = [
+    renderToolConsoleCard('推荐操作', '常用入口', `<div class="tool-console-actions">${actions.map(renderToolConsoleAction).join('')}</div>`, { icon: 'actions' }),
+  ].join('');
+
+  return { summary, main, side, activity: '' };
+}
+
 function buildOpenClawConsoleView() {
   const data = state.openclawState || {};
   const lastRepair = state.openClawLastRepair || null;
@@ -4704,7 +6605,7 @@ function buildOpenClawConsoleView() {
   const summary = [
     renderToolConsoleStat('安装状态', data.binary?.installed ? (data.binary.version || '已安装') : '未安装', data.binary?.path ? `<span class="tool-console-code">${escapeHtml(data.binary.path)}</span>` : '', { icon: 'install' }),
     renderToolConsoleStat('Dashboard', getOpenClawGatewayStatusLabel(data), (data.dashboardUrl || data.gatewayUrl) ? `<span class="tool-console-code">${escapeHtml(data.dashboardUrl || data.gatewayUrl)}</span>` : '等待本地 Gateway 启动', { icon: 'dashboard' }),
-    renderToolConsoleStat('认证状态', dashboardAuth.summary, dashboardAuth.detail, { icon: 'runtime' }),
+    renderToolConsoleStat('常驻服务', getOpenClawDaemonStatusLabel(data), data.daemon?.detail || '当前未启用常驻服务', { icon: 'runtime' }),
     renderToolConsoleStat('默认 Agent', quick.model || defaults.model?.primary || '未设置', defaults.thinkingDefault ? `thinking=${escapeHtml(defaults.thinkingDefault)}` : '建议先固定默认模型', { icon: 'agent' }),
   ].join('');
 
@@ -4729,7 +6630,7 @@ function buildOpenClawConsoleView() {
     : '<div class="tool-console-empty">当前还没有接入聊天渠道。</div>';
 
   const main = [
-    renderToolConsoleCard('Gateway 状态', '进程、认证与 Dashboard 引导链接', `<div class="tool-console-list">${renderToolConsoleRow('配置文件', `<span class="tool-console-code">${escapeHtml(data.configPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('Gateway 状态', getOpenClawGatewayStatusLabel(data))}${renderToolConsoleRow('Gateway HTTP', data.gatewayReachable ? '在线' : data.gatewayPortListening ? '等待面板就绪' : '未就绪')}${renderToolConsoleRow('端口占用', renderOpenClawPortOccupants(data), { html: true })}${renderToolConsoleRow('Bind', gatewayBind)}${renderToolConsoleRow('Auth', gatewayAuth)}${renderToolConsoleRow('Token', data.gatewayTokenReady ? '已就绪' : '缺失')}${renderToolConsoleRow('Dashboard URL', data.dashboardUrl ? `<span class="tool-console-code">${escapeHtml(data.dashboardUrl)}</span>` : '-', { html: Boolean(data.dashboardUrl) })}${renderToolConsoleRow('Onboarding', data.needsOnboarding ? '待完成' : '已完成')}</div>`, { icon: 'runtime' }),
+    renderToolConsoleCard('Gateway 状态', '进程、认证与 Dashboard 引导链接', `<div class="tool-console-list">${renderToolConsoleRow('配置文件', `<span class="tool-console-code">${escapeHtml(data.configPath || '-')}</span>`, { html: true })}${renderToolConsoleRow('Gateway 状态', getOpenClawGatewayStatusLabel(data))}${renderToolConsoleRow('常驻服务', getOpenClawDaemonStatusLabel(data))}${renderToolConsoleRow('Gateway HTTP', data.gatewayReachable ? '在线' : data.gatewayPortListening ? '等待面板就绪' : '未就绪')}${renderToolConsoleRow('端口占用', renderOpenClawPortOccupants(data), { html: true })}${renderToolConsoleRow('Bind', gatewayBind)}${renderToolConsoleRow('Auth', gatewayAuth)}${renderToolConsoleRow('Token', data.gatewayTokenReady ? '已就绪' : '缺失')}${renderToolConsoleRow('Dashboard URL', data.dashboardUrl ? `<span class="tool-console-code">${escapeHtml(data.dashboardUrl)}</span>` : '-', { html: Boolean(data.dashboardUrl) })}${renderToolConsoleRow('Onboarding', data.needsOnboarding ? '待完成' : '已完成')}</div>`, { icon: 'runtime' }),
     renderToolConsoleCard('Dashboard 认证状态', 'Control UI 认证、令牌化链接与浏览器会话', `<div class="tool-console-list">${renderToolConsoleRow('状态', dashboardAuth.summary)}${renderToolConsoleRow('认证模式', gatewayAuth)}${renderToolConsoleRow('令牌化 URL', /[?&]token=/.test(String(data.dashboardUrl || '')) ? '已就绪' : '缺失')}${renderToolConsoleRow('浏览器会话', dashboardAuth.session)}${renderToolConsoleRow('诊断', dashboardAuth.detail)}${renderToolConsoleRow('修复备注', (dashboardAuth.notes || []).length ? (dashboardAuth.notes || []).join(' | ') : '无')}</div>`, { icon: 'issues', iconTone: dashboardAuth.tone === 'error' ? 'error' : dashboardAuth.tone === 'ok' ? 'ok' : 'warn' }),
     renderToolConsoleCard('修复结果', '最近一次一键修复的执行结果', lastRepair ? `<div class="tool-console-list">${renderToolConsoleRow('Token 生成', lastRepair.tokenGenerated ? '是' : '否')}${renderToolConsoleRow('要求重启', lastRepair.restartRequired ? '是' : '否')}${renderToolConsoleRow('修复后 Gateway', getOpenClawGatewayStatusLabel(lastRepair))}${renderToolConsoleRow('修复后 URL', lastRepair.dashboardUrl ? `<span class="tool-console-code">${escapeHtml(lastRepair.dashboardUrl)}</span>` : '-', { html: Boolean(lastRepair.dashboardUrl) })}${renderToolConsoleRow('备注', (lastRepair.notes || []).length ? escapeHtml(lastRepair.notes.join(' | ')) : '无')}</div>` : '<div class="tool-console-empty">还没有执行过“一键修复并打开”。</div>', { icon: 'actions' }),
   ].join('');
@@ -4741,6 +6642,7 @@ function buildOpenClawConsoleView() {
       data.gatewayReachable ? { type: 'open-openclaw-dashboard', label: '打开 Dashboard' } : data.gatewayPortListening ? { type: 'refresh-console', label: '查看启动状态' } : { type: 'launch-openclaw', label: '启动 OpenClaw' },
       { type: 'repair-openclaw-dashboard', label: '一键修复并打开' },
       data.gatewayPortOccupants?.length ? { type: 'kill-openclaw-port', label: '结束端口占用' } : null,
+      { type: 'toggle-openclaw-daemon', label: data.daemonInstalled ? '关闭常驻服务' : '开启常驻服务' },
       { type: 'stop-openclaw', label: '停止 Gateway' },
       { type: 'goto-config-editor-tool', tool: 'openclaw', label: '打开配置编辑' },
       { type: 'goto-quick-tool', tool: 'openclaw', label: '切到快速配置' },
@@ -4838,6 +6740,13 @@ function getToolStatusDot(tool) {
     if (login.loggedIn || data.hasApiKey) return 'online';
     return 'warning';
   }
+  if (tool === 'opencode') {
+    const data = state.opencodeState || {};
+    if (!data.binary?.installed) return 'error';
+    if (data.activeProvider?.hasApiKey && data.model) return 'online';
+    if (data.configExists) return 'warning';
+    return 'offline';
+  }
   if (tool === 'openclaw') {
     const data = state.openclawState || {};
     if (!data.binary?.installed) return 'error';
@@ -4863,16 +6772,20 @@ function renderToolConsole() {
   // Update status dots
   const dotCodex = el('tcDotCodex');
   const dotClaude = el('tcDotClaude');
+  const dotOpenCode = el('tcDotOpenCode');
   const dotOpenClaw = el('tcDotOpenClaw');
   if (dotCodex) dotCodex.className = `tc-tab-dot ${getToolStatusDot('codex')}`;
   if (dotClaude) dotClaude.className = `tc-tab-dot ${getToolStatusDot('claudecode')}`;
+  if (dotOpenCode) dotOpenCode.className = `tc-tab-dot ${getToolStatusDot('opencode')}`;
   if (dotOpenClaw) dotOpenClaw.className = `tc-tab-dot ${getToolStatusDot('openclaw')}`;
 
   const view = tool === 'openclaw'
     ? buildOpenClawConsoleView()
-    : tool === 'claudecode'
-      ? buildClaudeConsoleView()
-      : buildCodexConsoleView();
+    : tool === 'opencode'
+      ? buildOpenCodeConsoleView()
+      : tool === 'claudecode'
+        ? buildClaudeConsoleView()
+        : buildCodexConsoleView();
 
   summary.innerHTML = view.summary;
   main.innerHTML = view.main;
@@ -4898,9 +6811,25 @@ async function stopOpenClawGateway({ manual = true } = {}) {
     if (manual) flash(result.error || '停止 Gateway 失败', 'error');
     return result;
   }
-  await sleep(700);
-  await loadOpenClawQuickState();
-  if (manual) flash('OpenClaw Gateway 已停止', 'success');
+  await sleep(400);
+  await refreshToolRuntimeAfterMutation('openclaw');
+  if (manual) flash(result.data?.message || 'OpenClaw 已停止', 'success');
+  return result;
+}
+
+async function setOpenClawDaemonEnabled(enabled, { manual = true } = {}) {
+  const result = await api('/api/openclaw/daemon', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: Boolean(enabled) }),
+  });
+  if (!result.ok) {
+    if (manual) flash(result.error || (enabled ? '开启常驻服务失败' : '关闭常驻服务失败'), 'error');
+    return result;
+  }
+  await sleep(400);
+  await refreshToolRuntimeAfterMutation('openclaw');
+  if (manual) flash(result.data?.message || (enabled ? 'OpenClaw 常驻服务已开启' : 'OpenClaw 常驻服务已关闭'), 'success');
   return result;
 }
 
@@ -4970,6 +6899,7 @@ async function refreshToolConsoleData({ manual = false } = {}) {
   try {
     await loadState({ preserveForm: true });
     await loadClaudeCodeQuickState();
+    await loadOpenCodeQuickState();
     await loadOpenClawQuickState();
     renderToolConsole();
     if (manual) flash(`${getToolConsoleLabel(state.consoleTool)} 控制台已刷新`, 'success');
@@ -5021,6 +6951,72 @@ async function handleToolConsoleAction(button) {
     return;
   }
 
+  if (action === 'opencode-auth-login') {
+    const provider = button.dataset.consoleProvider || state.opencodeState?.activeProviderKey || '';
+    const method = button.dataset.consoleMethod || '';
+    const original = button.textContent || '启动 auth login';
+    button.disabled = true;
+    button.textContent = '启动中...';
+    try {
+      const json = await api('/api/opencode/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd: el('launchCwdInput')?.value?.trim() || el('projectPathInput')?.value?.trim() || '',
+          provider,
+          method,
+        }),
+      });
+      if (!json.ok) {
+        flash(json.error || '启动 OpenCode 登录失败', 'error');
+        return;
+      }
+      flash('已在终端打开 OpenCode auth login，请完成登录后点击刷新状态', 'success');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+    return;
+  }
+
+  if (action === 'opencode-auth-remove') {
+    const provider = button.dataset.consoleAuthKey || button.dataset.consoleProvider || state.opencodeState?.activeAuth?.key || '';
+    if (!provider) {
+      flash('未找到可移除的 OpenCode 凭证', 'error');
+      return;
+    }
+    if (!window.confirm(`确认移除 OpenCode 凭证「${provider}」吗？`)) return;
+    const original = button.textContent || '移除当前凭证';
+    button.disabled = true;
+    button.textContent = '移除中...';
+    try {
+      const json = await api('/api/opencode/auth-remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: el('scopeSelect')?.value || 'global',
+          projectPath: el('projectPathInput')?.value?.trim() || '',
+          provider,
+        }),
+      });
+      if (!json.ok) {
+        flash(json.error || '移除 OpenCode 凭证失败', 'error');
+        return;
+      }
+      await loadOpenCodeQuickState();
+      if (state.activePage === 'configEditor' && getConfigEditorTool() === 'opencode') {
+        populateConfigEditor();
+      }
+      renderToolConsole();
+      renderCurrentConfig();
+      flash('OpenCode 凭证已移除', 'success');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+    return;
+  }
+
   if (action === 'launch-openclaw') {
     await launchOpenClawOnly();
     renderToolConsole();
@@ -5052,6 +7048,14 @@ async function handleToolConsoleAction(button) {
   if (action === 'stop-openclaw') {
     await stopOpenClawGateway({ manual: true });
     renderToolConsole();
+    return;
+  }
+
+  if (action === 'toggle-openclaw-daemon') {
+    const data = state.openclawState || await fetchOpenClawStateData();
+    await setOpenClawDaemonEnabled(!data.daemonInstalled, { manual: true });
+    renderToolConsole();
+    return;
   }
 }
 
@@ -5209,6 +7213,7 @@ function initRawCodeEditors() {
   ensureRawCodeEditor({ editorId: 'cfgRawTomlEditor', textareaId: 'cfgRawTomlTextarea', mode: 'ace/mode/toml' });
   ensureRawCodeEditor({ editorId: 'cfgRawAuthEditor', textareaId: 'cfgRawAuthTextarea', mode: 'ace/mode/json' });
   ensureRawCodeEditor({ editorId: 'ccCfgRawJsonEditor', textareaId: 'ccCfgRawJsonTextarea', mode: 'ace/mode/json' });
+  ensureRawCodeEditor({ editorId: 'opCfgRawJsonEditor', textareaId: 'opCfgRawJsonTextarea', mode: 'ace/mode/json' });
   ensureRawCodeEditor({ editorId: 'ocCfgRawJsonEditor', textareaId: 'ocCfgRawJsonTextarea', mode: 'ace/mode/json' });
   syncRawCodeEditorTheme();
 }
@@ -6392,6 +8397,7 @@ function closeUpdateDialog(result = false) {
   const panel = el('updateDialog');
   if (!panel) return;
   if (state.updateDialogLocked) return;
+  const shouldResyncTools = Boolean(state.openCodeInstallView.activeTaskId || state.openClawInstallView.activeTaskId);
   clearTimeout(state.updateDialogTimer);
   state.updateDialogOpen = false;
   state.updateDialogLocked = false;
@@ -6402,6 +8408,14 @@ function closeUpdateDialog(result = false) {
   state.openClawInstallView.pendingTask = null;
   state.openClawInstallView.activeTaskId = '';
   state.openClawInstallView.cancelBusy = false;
+  state.openCodeInstallView.lastRenderKey = '';
+  state.openCodeInstallView.lastLogsText = '';
+  state.openCodeInstallView.pauseUntil = 0;
+  state.openCodeInstallView.pendingTask = null;
+  state.openCodeInstallView.activeTaskId = '';
+  state.openCodeInstallView.cancelBusy = false;
+  clearInterval(state.openCodeInstallView.timerId || 0);
+  state.openCodeInstallView.timerId = 0;
   state.openClawSetupContext = null;
   panel.classList.remove('dialog-locked', 'install-tracker-mode');
   // Clean up install dialog wide class and restore actions bar
@@ -6418,6 +8432,7 @@ function closeUpdateDialog(result = false) {
     state.updateDialogResolver = null;
     resolver(result);
   }
+  if (shouldResyncTools) void resyncToolRuntimeState({ force: true });
 }
 
 function openUpdateDialog({ eyebrow = 'Update', title, body = '', meta = '', confirmText = '继续', cancelText = '取消', tone = 'default', confirmOnly = false, trackerMode = false, hideActions = false }) {
@@ -6535,6 +8550,11 @@ function setPage(page = 'quick') {
     if (!state.systemStorageLoading) {
       void loadSystemStorageState({ silent: true });
     }
+  }
+  if (page === 'tools') {
+    renderToolsPage();
+    void loadOpenCodeDesktopState({ render: true });
+    void loadOpenCodeEcosystemState({ render: true });
   }
 }
 
@@ -6726,11 +8746,13 @@ async function uninstallToolForSystemSettings(toolId) {
   const endpointMap = {
     codex: '/api/codex/uninstall',
     claudecode: '/api/claudecode/uninstall',
+    opencode: '/api/opencode/uninstall',
     openclaw: '/api/openclaw/uninstall',
   };
   const labelMap = {
     codex: 'Codex',
     claudecode: 'Claude Code',
+    opencode: 'OpenCode',
     openclaw: 'OpenClaw',
   };
   const endpoint = endpointMap[toolId];
@@ -6810,7 +8832,7 @@ function setAdvancedOpen(open) {
 }
 
 function normalizeConfigEditorTool(toolId = '') {
-  if (toolId === 'openclaw' || toolId === 'claudecode' || toolId === 'codex') return toolId;
+  if (toolId === 'openclaw' || toolId === 'opencode' || toolId === 'claudecode' || toolId === 'codex') return toolId;
   return 'codex';
 }
 
@@ -6827,6 +8849,9 @@ async function setConfigEditorOpen(open) {
     }
     if (getConfigEditorTool() === 'claudecode' && !state.claudeCodeState) {
       await loadClaudeCodeQuickState();
+    }
+    if (getConfigEditorTool() === 'opencode' && !state.opencodeState) {
+      await loadOpenCodeQuickState();
     }
     if (getConfigEditorTool() === 'claudecode') {
       state.claudeProviderDetailKey = '';
@@ -7078,6 +9103,12 @@ function populateConfigEditor() {
 
   if (tool === 'claudecode') {
     populateClaudeCodeConfigEditor();
+    applyConfigEditorSearch();
+    return;
+  }
+
+  if (tool === 'opencode') {
+    populateOpenCodeConfigEditor();
     applyConfigEditorSearch();
     return;
   }
@@ -8145,7 +10176,7 @@ function openConfigStore() {
     flash('Claude Code 配置商店即将支持，先用上方表单或右侧 settings.json 编辑。', 'info');
     return;
   }
-  const toolNames = { codex: 'Codex', claudecode: 'Claude Code', openclaw: 'OpenClaw' };
+  const toolNames = { codex: 'Codex', claudecode: 'Claude Code', opencode: 'OpenCode', openclaw: 'OpenClaw' };
   const badge = el('configStoreToolBadge');
   if (badge) badge.textContent = toolNames[tool] || tool;
 
@@ -9688,6 +11719,45 @@ async function saveClaudeProviderFormInConfigEditor({ switchOnly = false, provid
 async function saveConfigEditor() {
   setBusy('saveConfigEditorBtn', true, '保存中...');
 
+  // ── OpenCode save ──
+  if (getConfigEditorTool() === 'opencode') {
+    const rawEl = el('opCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawEl && rawEl.value.trim() && rawEl.value !== (state.opencodeState?.configJson || ''));
+    let json;
+    if (rawEdited) {
+      json = await api('/api/opencode/raw-save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: el('scopeSelect')?.value || 'global',
+          projectPath: el('projectPathInput')?.value?.trim() || '',
+          configJson: rawEl?.value || '{}',
+        }),
+      });
+    } else {
+      try {
+        json = await api('/api/opencode/config-save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scope: el('scopeSelect')?.value || 'global',
+            projectPath: el('projectPathInput')?.value?.trim() || '',
+            configJson: JSON.stringify(buildOpenCodeConfigFromFields(), null, 2),
+          }),
+        });
+      } catch (error) {
+        setBusy('saveConfigEditorBtn', false);
+        return flash(error instanceof Error ? error.message : String(error), 'error');
+      }
+    }
+    setBusy('saveConfigEditorBtn', false);
+    if (!json.ok) return flash(json.error || 'OpenCode 配置保存失败', 'error');
+    flash('OpenCode 配置已保存', 'success');
+    await loadOpenCodeQuickState();
+    populateConfigEditor();
+    return;
+  }
+
   // ── OpenClaw save ──
   if (getConfigEditorTool() === 'openclaw') {
     const rawEl = el('ocCfgRawJsonTextarea');
@@ -9792,6 +11862,45 @@ async function saveRawConfigEditor() {
 
 async function applyConfigEditor() {
   setBusy('applyConfigEditorBtn', true, '生效中...');
+
+  // ── OpenCode apply ──
+  if (getConfigEditorTool() === 'opencode') {
+    const rawEl = el('opCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawEl && rawEl.value.trim() && rawEl.value !== (state.opencodeState?.configJson || ''));
+    let json;
+    if (rawEdited) {
+      json = await api('/api/opencode/raw-save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: el('scopeSelect')?.value || 'global',
+          projectPath: el('projectPathInput')?.value?.trim() || '',
+          configJson: rawEl?.value || '{}',
+        }),
+      });
+    } else {
+      try {
+        json = await api('/api/opencode/config-save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scope: el('scopeSelect')?.value || 'global',
+            projectPath: el('projectPathInput')?.value?.trim() || '',
+            configJson: JSON.stringify(buildOpenCodeConfigFromFields(), null, 2),
+          }),
+        });
+      } catch (error) {
+        setBusy('applyConfigEditorBtn', false);
+        return flash(error instanceof Error ? error.message : String(error), 'error');
+      }
+    }
+    setBusy('applyConfigEditorBtn', false);
+    if (!json.ok) return flash(json.error || 'OpenCode 配置保存失败', 'error');
+    await loadOpenCodeQuickState();
+    populateConfigEditor();
+    await launchOpenCodeOnly();
+    return;
+  }
 
   // ── OpenClaw apply ──
   if (getConfigEditorTool() === 'openclaw') {
@@ -10563,6 +12672,21 @@ function renderCurrentConfig() {
   // ── Claude Code tab ──
   if (state.activeTool === 'claudecode') {
     const cc = state.claudeCodeState;
+    if (!isClaudeCodeInstalled(cc)) {
+      el('currentConfigMain').innerHTML = '<span class="current-provider">Claude Code</span><span class="current-model">未安装</span>';
+      el('currentConfigMeta').innerHTML = '<span class="provider-pill warn">未安装</span><span class="meta-sep">·</span><span class="current-url">请先安装 Claude Code</span>';
+      el('providerDropdown').innerHTML = '<div class="provider-empty">当前还没安装 Claude Code，请先安装后再配置。</div>';
+      el('providerDropdown').classList.add('hide');
+      el('providerSwitchBtn').setAttribute('aria-expanded', 'false');
+      state.quickTips = [
+        '当前未检测到 claude 命令',
+        '先点下方“安装 Claude Code”自动安装',
+        '安装成功后再显示 OAuth、API Key、模型等配置项',
+      ];
+      applyClaudeCodeQuickInstallState(cc || {});
+      renderQuickRailSupportPanel();
+      return;
+    }
     const model = cc?.model || el('modelSelect')?.value || '未选择模型';
     const login = cc?.login || {};
     const providers = getClaudeProviderProfiles(cc);
@@ -10625,10 +12749,81 @@ function renderCurrentConfig() {
     return;
   }
 
+  // ── OpenCode tab ──
+  if (state.activeTool === 'opencode') {
+    const data = state.opencodeState || {};
+    const active = data.activeProvider || null;
+    const installed = isOpenCodeInstalled(data);
+    if (!installed) {
+      el('currentConfigMain').innerHTML = '<span class="current-provider">OpenCode</span><span class="current-model">未安装</span>';
+      el('currentConfigMeta').innerHTML = '<span class="provider-pill warn">未安装</span><span class="meta-sep">·</span><span class="current-url">请先安装 OpenCode</span>';
+      el('providerDropdown').innerHTML = '<div class="provider-empty">当前还没安装 OpenCode，请先安装后再配置。</div>';
+      el('providerDropdown').classList.add('hide');
+      el('providerSwitchBtn').setAttribute('aria-expanded', 'false');
+      state.quickTips = [
+        '当前未检测到 opencode 命令',
+        '先点下方“安装 OpenCode”自动安装',
+        '安装成功后再显示 URL、Key、模型等配置项',
+      ];
+      applyOpenCodeQuickInstallState(data);
+      renderQuickRailSupportPanel();
+      return;
+    }
+    const model = data.model || el('modelSelect')?.value || '未选择模型';
+    const providerName = active?.name || active?.key || 'OpenCode';
+    el('currentConfigMain').innerHTML = `<span class="current-provider">${escapeHtml(providerName)}</span><span class="current-model">${escapeHtml(model)}</span>`;
+    el('currentConfigMeta').innerHTML = [
+      `<span class="provider-pill ${active?.hasCredential ? 'ok' : 'warn'}">${active?.hasCredential ? '凭证已就绪' : '缺少凭证'}</span>`,
+      `<span class="provider-pill ok">${escapeHtml(data.scope === 'project' ? '项目级' : '全局')}</span>`,
+      active?.baseUrl ? `<span class="current-url">${escapeHtml(active.baseUrl)}</span>` : '未填写 Base URL',
+    ].join('<span class="meta-sep">·</span>');
+
+    el('providerDropdown').innerHTML = (data.providers || []).length
+      ? (data.providers || []).map((provider) => `
+        <button class="provider-option ${provider.key === data.activeProviderKey ? 'active' : ''}" data-load-opencode-provider="${escapeHtml(provider.key)}">
+          <span class="provider-option-main">
+            <strong>${escapeHtml(provider.name || provider.key)}</strong>
+            <span>${escapeHtml(provider.baseUrl || '默认')}</span>
+          </span>
+          <span class="provider-option-side">
+            <span class="provider-pill ${provider.hasCredential ? 'ok' : 'warn'}">${provider.hasCredential ? (provider.hasAuth ? `${provider.authType || 'Auth'} 已登录` : 'Key 已就绪') : '缺少凭证'}</span>
+            <span class="provider-option-model">${escapeHtml(provider.key === data.activeProviderKey ? '当前' : ((provider.modelIds || []).length ? `${provider.modelIds.length} models` : '切换'))}</span>
+          </span>
+        </button>
+      `).join('')
+      : '<div class="provider-empty">暂无 Provider 配置</div>';
+    el('providerDropdown').classList.toggle('hide', !state.providerDropdownOpen);
+    el('providerSwitchBtn').setAttribute('aria-expanded', String(state.providerDropdownOpen));
+
+    state.quickTips = [
+      '模型格式使用 provider/model，例如 openai/gpt-5',
+      '支持全局 `~/.config/opencode/opencode.json` 和项目级 `opencode.json` / `.opencode/opencode.json`',
+      '鉴权文件位于 `~/.local/share/opencode/auth.json`，当前快速配置先写 provider.options.apiKey',
+    ];
+    applyOpenCodeQuickInstallState(data);
+    renderQuickRailSupportPanel();
+    return;
+  }
+
   // ── OpenClaw tab ──
   if (state.activeTool === 'openclaw') {
     const quick = state.openClawQuickConfig;
     const ocState = state.openclawState;
+    if (!isOpenClawInstalled(ocState || {})) {
+      el('currentConfigMain').innerHTML = '<span class="current-provider">OpenClaw</span><span class="current-model">未安装</span>';
+      el('currentConfigMeta').innerHTML = '<span class="provider-pill warn">未安装</span><span class="meta-sep">·</span><span class="current-url">请先安装 OpenClaw</span>';
+      el('providerDropdown').innerHTML = '<div class="provider-empty">当前还没安装 OpenClaw，请先安装后再配置。</div>';
+      el('providerDropdown').classList.add('hide');
+      el('providerSwitchBtn').setAttribute('aria-expanded', 'false');
+      state.quickTips = [
+        '当前未检测到 openclaw 命令',
+        '先点下方“安装 OpenClaw”自动安装',
+        '安装成功后再显示协议、模型、Token 等配置项',
+      ];
+      applyOpenClawQuickInstallState(ocState || {});
+      renderQuickRailSupportPanel();
+      return;
+    }
     const model = quick?.model || el('modelSelect')?.value || '未选择默认模型';
 
     el('currentConfigMain').innerHTML = `<span class="current-provider">OpenClaw</span><span class="current-model">${escapeHtml(model)}</span>`;
@@ -10638,6 +12833,7 @@ function renderCurrentConfig() {
       quick?.baseUrl ? `<span class="current-url">${escapeHtml(quick.baseUrl)}</span>` : '官方默认端点',
       `<span class="provider-pill ${quick?.hasApiKey ? 'ok' : 'warn'}">${quick?.hasApiKey ? '已保存 Key' : '缺少 Key'}</span>`,
       `<span class="provider-pill ${ocState?.gatewayReachable ? 'ok' : ocState?.gatewayPortListening ? 'warn' : 'muted'}">${ocState?.gatewayReachable ? 'Dashboard 在线' : ocState?.gatewayPortListening ? 'Gateway 启动中' : 'Dashboard 未启动'}</span>`,
+      `<span class="provider-pill ${ocState?.daemonRunning ? 'ok' : ocState?.daemonInstalled ? 'muted' : 'warn'}">常驻：${escapeHtml(getOpenClawDaemonStatusLabel(ocState || {}))}</span>`,
     ];
     el('currentConfigMeta').innerHTML = meta.join('<span class="meta-sep">·</span>');
 
@@ -10655,6 +12851,21 @@ function renderCurrentConfig() {
   }
 
   // ── Codex tab (default) ──
+  if (!isCodexInstalled()) {
+    el('currentConfigMain').innerHTML = '<span class="current-provider">Codex</span><span class="current-model">未安装</span>';
+    el('currentConfigMeta').innerHTML = '<span class="provider-pill warn">未安装</span><span class="meta-sep">·</span><span class="current-url">请先安装 Codex</span>';
+    el('providerDropdown').innerHTML = '<div class="provider-empty">当前还没安装 Codex，请先安装后再配置。</div>';
+    el('providerDropdown').classList.add('hide');
+    el('providerSwitchBtn').setAttribute('aria-expanded', 'false');
+    state.quickTips = [
+      '当前未检测到 codex 命令',
+      '先点下方“安装 Codex”自动安装',
+      '安装成功后再显示官方登录、API Key、模型等配置项',
+    ];
+    applyCodexQuickInstallState();
+    renderQuickRailSupportPanel();
+    return;
+  }
   const active = state.current?.activeProvider || null;
   const login = state.current?.login || {};
   const model = state.current?.summary?.model || el('modelSelect').value || '未选择模型';
@@ -10795,8 +13006,8 @@ function renderDefaultCodexModels(selectEl, currentModel) {
 }
 
 function renderModelOptions(models = state.detected?.models || [], preferred = '') {
-  // Skip when Claude Code is active — its model list is managed separately
-  if (state.activeTool === 'claudecode') return;
+  // Skip when Claude Code / OpenCode are active — they manage model lists separately
+  if (state.activeTool === 'claudecode' || state.activeTool === 'opencode') return;
 
   const selected = preferred || el('modelSelect').value || state.current?.summary?.model || '';
   const unique = [...new Set([selected, state.detected?.recommendedModel, ...models].filter(Boolean))];
@@ -11077,7 +13288,7 @@ async function loadState({ preserveForm = true } = {}) {
   renderCurrentConfig();
 
   // Skip Codex form restoration when non-Codex tool is active
-  if (state.activeTool === 'claudecode' || state.activeTool === 'openclaw') {
+  if (state.activeTool === 'claudecode' || state.activeTool === 'opencode' || state.activeTool === 'openclaw') {
     refreshProviderHealth();
     renderToolConsole();
     return;
@@ -11179,7 +13390,7 @@ async function runCodexAction(buttonId, endpoint, busyText, successText) {
     return false;
   }
   if (successText) flash(successText, 'success');
-  await loadState({ preserveForm: true });
+  await refreshToolRuntimeAfterMutation('codex');
   return true;
 }
 
@@ -11187,13 +13398,20 @@ async function runCodexAction(buttonId, endpoint, busyText, successText) {
 function _getDetectParams() {
   const baseUrl = normalizeBaseUrl(el('baseUrlInput')?.value?.trim() || '');
   const apiKey = el('apiKeyInput')?.value?.trim() || '';
-  // For Codex: also check stored key
   if (state.activeTool === 'codex') {
     const payload = currentPayload();
     const useStored = canUseStoredApiKey({ baseUrl: payload.baseUrl, providerKey: payload.providerKey }) && !payload.apiKey;
     return { baseUrl: payload.baseUrl || baseUrl, apiKey: payload.apiKey || apiKey, useStored, payload };
   }
-  // For OpenClaw: check if key was stored in openclawState
+  if (state.activeTool === 'opencode') {
+    const active = state.opencodeState?.activeProvider || {};
+    return {
+      baseUrl: baseUrl || normalizeBaseUrl(active.baseUrl || ''),
+      apiKey,
+      useStored: false,
+      payload: null,
+    };
+  }
   const storedKey = state.openClawQuickConfig?.apiKey || '';
   return { baseUrl, apiKey: apiKey || storedKey, useStored: false, payload: null };
 }
@@ -11224,6 +13442,8 @@ async function detectModels() {
     state.detected = null;
     if (state.activeTool === 'openclaw') {
       // Keep OpenClaw preset list
+    } else if (state.activeTool === 'opencode') {
+      renderOpenCodeModelOptions('modelSelect', { data: state.opencodeState || {}, currentModel: state.opencodeState?.model || '' });
     } else {
       renderModelOptions();
     }
@@ -11235,6 +13455,8 @@ async function detectModels() {
   const models = json.data.models || [];
   if (state.activeTool === 'openclaw') {
     _mergeModelsIntoOpenClawDropdown(models);
+  } else if (state.activeTool === 'opencode') {
+    mergeModelsIntoOpenCodeDropdown(models);
   } else {
     state.detected.recommendedModel = pickRecommendedModel(models, json.data.recommendedModel);
     renderModelOptions(models, state.detected.recommendedModel);
@@ -11249,7 +13471,7 @@ async function detectModels() {
  */
 let _autoFetchAbort = null;
 async function tryAutoFetchModels() {
-  if (state.activeTool !== 'codex' && state.activeTool !== 'openclaw') return;
+  if (state.activeTool !== 'codex' && state.activeTool !== 'opencode' && state.activeTool !== 'openclaw') return;
   const params = _getDetectParams();
   if (!params.baseUrl || (!params.apiKey && !params.useStored)) return;
 
@@ -11345,6 +13567,9 @@ function inferOpenClawProviderFromModel(modelId) {
 async function saveConfigOnly() {
   if (state.activeTool === 'claudecode') {
     return saveClaudeCodeConfigOnly();
+  }
+  if (state.activeTool === 'opencode') {
+    return saveOpenCodeConfigOnly();
   }
   if (state.activeTool === 'openclaw') {
     return saveOpenClawConfigOnly();
@@ -11475,14 +13700,6 @@ async function saveClaudeCodeConfigOnly() {
 async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已启动') {
   const codexInstalled = state.current?.codexBinary?.installed;
   if (!codexInstalled) {
-    const shouldInstall = await openUpdateDialog({
-      eyebrow: 'Codex',
-      title: '未检测到 Codex',
-      body: '<p>当前设备还没有安装 Codex，可以立即自动安装后再启动。</p>',
-      confirmText: '立即安装',
-      cancelText: '取消',
-    });
-    if (!shouldInstall) return false;
     const installed = await installCodex({ silent: true });
     if (!installed) return false;
   }
@@ -11528,6 +13745,9 @@ async function launchCodexOnly() {
   if (state.activeTool === 'claudecode') {
     return launchClaudeCodeOnly();
   }
+  if (state.activeTool === 'opencode') {
+    return launchOpenCodeOnly();
+  }
   if (state.activeTool === 'openclaw') {
     // If already running, just open the dashboard
     if (el('launchBtn')?.classList.contains('running') && state._ocGatewayUrl) {
@@ -11543,6 +13763,12 @@ async function launchCodexOnly() {
 async function launchOpenClawOnly() {
   const launchBtn = el('launchBtn');
   const orig = launchBtn?.textContent || '启动 OpenClaw';
+  if (!isOpenClawInstalled(state.openclawState || {})) {
+    await openClawInstallMethodDialog(launchBtn);
+    await loadTools();
+    await loadOpenClawQuickState().catch(() => {});
+    return false;
+  }
   if (launchBtn) launchBtn.textContent = '启动中...';
 
   // --- build launch tracker state ---
@@ -11958,6 +14184,19 @@ async function launchOpenClawOnly() {
 async function launchClaudeCodeOnly() {
   const launchBtn = el('launchBtn');
   const orig = launchBtn?.textContent || '启动 Claude Code';
+  if (!isClaudeCodeInstalled(state.claudeCodeState || {})) {
+    setBusy('launchBtn', true, '安装中...');
+    const json = await api('/api/claudecode/install', { method: 'POST', timeoutMs: 180000 });
+    setBusy('launchBtn', false);
+    if (!json.ok || json.data?.ok === false) {
+      flash(json.error || json.data?.stderr || 'Claude Code 安装失败', 'error');
+      return false;
+    }
+    await loadTools();
+    await loadClaudeCodeQuickState({ force: false, cacheOnly: false }).catch(() => {});
+    flash('Claude Code 安装完成', 'success');
+    return true;
+  }
   if (launchBtn) launchBtn.textContent = '启动中...';
   try {
     const json = await api('/api/claudecode/launch', {
@@ -12320,6 +14559,7 @@ async function runWizardEnvCheck() {
     const toolsInstalled = [];
     if (env.codex?.installed) toolsInstalled.push('Codex');
     if (state.tools.find(t => t.id === 'claudecode')?.binary?.installed) toolsInstalled.push('Claude Code');
+    if (state.tools.find(t => t.id === 'opencode')?.binary?.installed) toolsInstalled.push('OpenCode');
     if (state.tools.find(t => t.id === 'openclaw')?.binary?.installed) toolsInstalled.push('OpenClaw');
     if (toolsInstalled.length > 0) {
       lines.push(`${_tools} 已安装：${toolsInstalled.join('、')}`);
@@ -12363,6 +14603,28 @@ const WIZARD_TOOL_META = {
     methods: [{ id: 'npm', label: 'npm', cmd: 'npm install -g @anthropic-ai/claude-code' }],
     binaryKey: 'claudecode',
     configLabel: '~/.claude/settings.json',
+  },
+  opencode: {
+    name: 'OpenCode',
+    package: 'opencode / opencode-ai',
+    installApi: '/api/opencode/install',
+    methods: navigator.platform?.startsWith('Win')
+      ? [
+        { id: 'auto', label: '自动检测', cmd: '自动检测 Google 可达性：可访问走官方，不可访问走国内 npm 镜像', tag: '默认推荐' },
+        { id: 'domestic', label: '国内优化', cmd: 'npm i -g opencode-ai@latest --registry=https://registry.npmmirror.com', tag: '国内' },
+        { id: 'npm', label: 'npm', cmd: 'npm i -g opencode-ai@latest', tag: '官方' },
+        { id: 'scoop', label: 'Scoop', cmd: 'scoop install opencode', tag: '官方' },
+        { id: 'choco', label: 'Chocolatey', cmd: 'choco install opencode', tag: '官方' },
+      ]
+      : [
+        { id: 'auto', label: '自动检测', cmd: '自动检测 Google 可达性：可访问走官方脚本，不可访问走国内 npm 镜像', tag: '默认推荐' },
+        { id: 'domestic', label: '国内优化', cmd: 'npm i -g opencode-ai@latest --registry=https://registry.npmmirror.com', tag: '国内' },
+        { id: 'script', label: '官方脚本', cmd: 'curl -fsSL https://opencode.ai/install | bash', tag: '官方推荐' },
+        { id: 'brew', label: 'Homebrew', cmd: 'brew install anomalyco/tap/opencode', tag: '官方' },
+        { id: 'npm', label: 'npm', cmd: 'npm i -g opencode-ai@latest' },
+      ],
+    binaryKey: 'opencode',
+    configLabel: '~/.config/opencode/opencode.json',
   },
   openclaw: {
     name: 'OpenClaw',
@@ -12498,16 +14760,20 @@ async function wizardRunInstall() {
   const taskId = addTask(`安装 ${meta.name} (${method})`);
   el('wizardInstallBtn').disabled = true;
   const progressEl = el('wizardInstallProgress');
-  progressEl.classList.remove('hide');
-  // Show which command is running
   const cmdText = selectedMethod?.cmd || '';
-  progressEl.innerHTML = `
-    <div class="wib-spinner"></div>
-    <div class="wib-progress-info">
-      <div style="font-size:0.82rem;font-weight:600;">正在安装 ${escapeHtml(meta.name)}…</div>
-      <code style="font-size:0.72rem;opacity:0.6;margin-top:4px;display:block;word-break:break-all;">${escapeHtml(cmdText)}</code>
-    </div>
-  `;
+  if (tool === 'opencode') {
+    progressEl.classList.add('hide');
+    progressEl.innerHTML = '<div class="wib-spinner"></div>';
+  } else {
+    progressEl.classList.remove('hide');
+    progressEl.innerHTML = `
+      <div class="wib-spinner"></div>
+      <div class="wib-progress-info">
+        <div style="font-size:0.82rem;font-weight:600;">正在安装 ${escapeHtml(meta.name)}…</div>
+        <code style="font-size:0.72rem;opacity:0.6;margin-top:4px;display:block;word-break:break-all;">${escapeHtml(cmdText)}</code>
+      </div>
+    `;
+  }
   el('wizardInstallResult').classList.add('hide');
 
   try {
@@ -12557,7 +14823,38 @@ async function wizardRunInstall() {
       return;
     }
 
-    const bodyPayload = (tool === 'openclaw') ? { method } : undefined;
+    if (tool === 'opencode') {
+      const result = await runOpenCodeToolAction('install', null, { method, suppressFlash: true });
+      progressEl.classList.add('hide');
+      progressEl.innerHTML = '<div class="wib-spinner"></div>';
+
+      if (result?.ok) {
+        const version = state.tools.find(t => t.id === 'opencode')?.binary?.version || result.data?.stdout?.match(/[\d]+\.[\d]+\.[\d]+/)?.[0] || '';
+        const methodText = result.data?.method ? `方式：${getOpenCodeMethodLabel(result.data.method)}` : '';
+        el('wizardInstallResult').classList.remove('hide');
+        el('wizardInstallResult').className = 'wib-result success';
+        el('wizardInstallResult').innerHTML = `
+          <div>✓ ${escapeHtml(meta.name)} 安装成功！</div>
+          ${version ? `<div style="font-size:0.76rem;opacity:0.6;margin-top:2px;">版本：${escapeHtml(version)}</div>` : ''}
+          ${methodText ? `<div style="font-size:0.76rem;opacity:0.6;margin-top:2px;">${escapeHtml(methodText)}</div>` : ''}
+        `;
+        el('wizardInstallBtn').style.display = 'none';
+        el('wizardInstallNextBtn').style.display = '';
+        updateTask(taskId, { status: 'done', progress: 100, message: version ? `已安装 ${version}` : '安装完成' });
+      } else {
+        el('wizardInstallResult').classList.remove('hide');
+        el('wizardInstallResult').className = 'wib-result error';
+        el('wizardInstallResult').innerHTML = `
+          <div>安装失败</div>
+          <pre style="font-size:0.72rem;opacity:0.7;margin-top:6px;max-height:120px;overflow:auto;white-space:pre-wrap;word-break:break-all;">${escapeHtml(result?.error || '未知错误')}</pre>
+        `;
+        el('wizardInstallBtn').disabled = false;
+        updateTask(taskId, { status: 'error', message: result?.error || '安装失败' });
+      }
+      return;
+    }
+
+    const bodyPayload = (tool === 'openclaw' || tool === 'opencode') ? { method } : undefined;
     const json = await api(meta.installApi, {
       method: 'POST',
       headers: bodyPayload ? { 'Content-Type': 'application/json' } : undefined,
@@ -12804,8 +15101,8 @@ function bindEvents() {
       : normalizeBaseUrl(rawValue);
     if (value) el('baseUrlInput').value = value;
     applyDerivedMeta(false);
-    // Auto-fetch models from URL for Codex and OpenClaw
-    if ((state.activeTool === 'codex' || state.activeTool === 'openclaw') && value) {
+    // Auto-fetch models from URL for Codex / OpenCode / OpenClaw
+    if ((state.activeTool === 'codex' || state.activeTool === 'opencode' || state.activeTool === 'openclaw') && value) {
       tryAutoFetchModels();
     }
   });
@@ -12871,10 +15168,10 @@ function bindEvents() {
     });
   });
 
-  // Auto-fetch models when model select is opened (for OpenClaw)
+  // Auto-fetch models when model select is opened (for OpenClaw / OpenCode)
   let _lastModelFetch = 0;
   el('modelSelect')?.addEventListener('mousedown', () => {
-    if (state.activeTool !== 'openclaw') return;
+    if (state.activeTool !== 'openclaw' && state.activeTool !== 'opencode') return;
     const now = Date.now();
     if (now - _lastModelFetch < 5000) return; // Debounce: skip if fetched < 5s ago
     _lastModelFetch = now;
@@ -12922,13 +15219,33 @@ function bindEvents() {
       btn.textContent = '停止中...';
       btn.disabled = true;
       try {
-        await api('/api/openclaw/stop', { method: 'POST' });
-        flash('OpenClaw Gateway 已停止', 'success');
-        // Wait a moment then refresh state
-        await new Promise(r => setTimeout(r, 1000));
-        await loadOpenClawQuickState();
+        const result = await stopOpenClawGateway({ manual: false });
+        if (!result?.ok) throw new Error(result?.error || '停止失败');
+        await refreshToolRuntimeAfterMutation('openclaw');
+        flash(result.data?.message || 'OpenClaw 已停止', 'success');
       } catch (e) {
         flash('停止失败：' + (e.message || e), 'error');
+      } finally {
+        btn.textContent = orig;
+        btn.disabled = false;
+      }
+    });
+  }
+
+  if (el('ocDaemonBtn')) {
+    el('ocDaemonBtn').addEventListener('click', async () => {
+      const btn = el('ocDaemonBtn');
+      const data = state.openclawState || await fetchOpenClawStateData();
+      const enable = !data.daemonInstalled;
+      const orig = btn.textContent;
+      btn.textContent = enable ? '开启中...' : '关闭中...';
+      btn.disabled = true;
+      try {
+        const result = await setOpenClawDaemonEnabled(enable, { manual: false });
+        if (!result?.ok) throw new Error(result?.error || (enable ? '开启失败' : '关闭失败'));
+        flash(result.data?.message || (enable ? 'OpenClaw 常驻服务已开启' : 'OpenClaw 常驻服务已关闭'), 'success');
+      } catch (e) {
+        flash((enable ? '开启常驻失败：' : '关闭常驻失败：') + (e.message || e), 'error');
       } finally {
         btn.textContent = orig;
         btn.disabled = false;
@@ -13099,7 +15416,7 @@ function bindEvents() {
     renderCurrentConfig();
   });
   el('modelSelect').addEventListener('change', (event) => {
-    if (state.activeTool === 'openclaw') {
+    if (state.activeTool === 'openclaw' || state.activeTool === 'opencode') {
       renderCurrentConfig();
       return;
     }
@@ -13612,6 +15929,17 @@ function bindEvents() {
       toggleProviderDropdown(false);
       return;
     }
+    const openCodeButton = event.target.closest('[data-load-opencode-provider]');
+    if (openCodeButton) {
+      const provider = getOpenCodeProviderByKey(openCodeButton.dataset.loadOpencodeProvider || '');
+      if (provider) {
+        const switched = await quickSwitchOpenCodeProvider(provider);
+        if (!switched.ok) flash(switched.error || '切换失败', 'error');
+        else flash(`已切换到 Provider「${provider.name || provider.key}」`, 'success');
+      }
+      toggleProviderDropdown(false);
+      return;
+    }
     const button = event.target.closest('[data-load-provider]');
     if (!button) return;
     const provider = (state.current?.providers || []).find((item) => item.key === button.dataset.loadProvider);
@@ -13731,8 +16059,7 @@ function bindEvents() {
       return false;
     }
     flash(`${label} 已卸载`, 'success');
-    await loadTools();
-    await loadState({ preserveForm: true });
+    await refreshToolRuntimeAfterMutation(toolId);
     await loadSystemStorageState({ silent: true });
     return true;
   }
@@ -13747,15 +16074,15 @@ function bindEvents() {
     void runSystemToolUninstall('sysUninstallOpenClawBtn', 'openclaw');
   });
   el('sysUninstallAllToolsBtn')?.addEventListener('click', async () => {
-    const confirmed = window.confirm('确认卸载全部工具（Codex / Claude Code / OpenClaw）吗？');
+    const confirmed = window.confirm('确认卸载全部工具（Codex / Claude Code / OpenCode / OpenClaw）吗？');
     if (!confirmed) return;
     setBusy('sysUninstallAllToolsBtn', true, '卸载中...');
     await uninstallToolForSystemSettings('codex');
     await uninstallToolForSystemSettings('claudecode');
+    await uninstallToolForSystemSettings('opencode');
     await uninstallToolForSystemSettings('openclaw');
     setBusy('sysUninstallAllToolsBtn', false);
-    await loadTools();
-    await loadState({ preserveForm: true });
+    await refreshToolRuntimeAfterMutation();
     await loadSystemStorageState({ silent: true });
     flash('全部卸载流程已完成，请检查工具状态', 'success');
   });
@@ -13852,7 +16179,14 @@ window.addEventListener('resize', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
-  if (state.activePage === 'dashboard') void refreshDashboardData({ silent: true });
+  if (state.activePage === 'dashboard') {
+    void refreshDashboardData({ silent: true });
+    return;
+  }
+  void resyncToolRuntimeState();
+});
+window.addEventListener('focus', () => {
+  void resyncToolRuntimeState();
 });
 setPage('quick');
 applyDerivedMeta(true);

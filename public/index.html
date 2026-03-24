@@ -19,7 +19,7 @@
         <div class="sidebar-drag-region" data-tauri-drag-region></div>
         <div class="sidebar-head">
           <div class="brand-row">
-            <img class="brand-logo" src="icon.png" width="36" height="36" alt="logo" style="border-radius:8px">
+            <img class="brand-logo" src="icon.png" width="52" height="52" alt="logo" style="border-radius:12px">
             <span class="brand-name">EasyAIConfig</span>
           </div>
         </div>
@@ -176,6 +176,16 @@
                     </svg>
                     <span>Claude Code</span>
                   </button>
+                  <button class="tool-tab" data-tool="opencode">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                      stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="5" opacity="0.5" />
+                      <path d="M9 8l-3 4 3 4" />
+                      <path d="M15 8l3 4-3 4" />
+                      <path d="M13 6l-2 12" />
+                    </svg>
+                    <span>OpenCode</span>
+                  </button>
                   <button class="tool-tab" data-tool="openclaw">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                       stroke-linecap="round" stroke-linejoin="round">
@@ -220,6 +230,16 @@
                           <rect x="6" y="6" width="12" height="12" rx="2" />
                         </svg>
                         停止
+                      </button>
+                      <button id="ocDaemonBtn" class="secondary"
+                        style="font-size:0.76rem;padding:0 10px;height:26px">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px">
+                          <path d="M12 2v6" />
+                          <path d="M8 4h8" />
+                          <path d="M6.2 8.2a8 8 0 1 0 11.6 0" />
+                        </svg>
+                        开启常驻
                       </button>
                     </div>
                   </div>
@@ -394,6 +414,11 @@
                     <span class="tc-tab-label">Claude Code</span>
                     <span class="tc-tab-dot" id="tcDotClaude"></span>
                   </button>
+                  <button type="button" class="tool-console-tab" data-console-tool="opencode">
+                    <span class="tc-tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5" opacity="0.5"/><path d="M9 8l-3 4 3 4"/><path d="M15 8l3 4-3 4"/><path d="M13 6l-2 12"/></svg></span>
+                    <span class="tc-tab-label">OpenCode</span>
+                    <span class="tc-tab-dot" id="tcDotOpenCode"></span>
+                  </button>
                   <button type="button" class="tool-console-tab" data-console-tool="openclaw">
                     <span class="tc-tab-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity="0.5"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/></svg></span>
                     <span class="tc-tab-label">OpenClaw</span>
@@ -421,8 +446,29 @@
           <!-- ─── Tools / Install Page ─── -->
           <section class="page-view" data-page="tools">
             <div class="tools-page">
+              <div class="tools-toolbar">
+                <label class="tools-search">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" /></svg>
+                  <input id="toolsCatalogSearchInput" type="search" placeholder="搜索工具、扩展、集成…" />
+                </label>
+                <div class="tools-tags" id="toolsCatalogTags">
+                  <button class="tools-tag active" data-tools-tag="all">全部</button>
+                  <button class="tools-tag" data-tools-tag="cli">CLI</button>
+                  <button class="tools-tag" data-tools-tag="desktop">桌面版</button>
+                  <button class="tools-tag" data-tools-tag="extension">扩展</button>
+                  <button class="tools-tag" data-tools-tag="integration">集成</button>
+                  <button class="tools-tag" data-tools-tag="installed">已安装</button>
+                  <button class="tools-tag" data-tools-tag="automation">可自动化</button>
+                </div>
+              </div>
               <div class="tools-grid">
                 <!-- Dynamically rendered by renderToolsPage() -->
+              </div>
+              <div class="tools-empty hide" id="toolsCatalogEmpty">没有找到匹配项，试试更短的关键词或切换标签。</div>
+              <div class="tools-pagination" id="toolsCatalogPagination">
+                <button class="tools-page-btn" id="toolsCatalogPrevBtn" type="button">上一页</button>
+                <div class="tools-page-meta" id="toolsCatalogPageMeta">第 1 / 1 页</div>
+                <button class="tools-page-btn" id="toolsCatalogNextBtn" type="button">下一页</button>
               </div>
             </div>
           </section>
@@ -622,6 +668,16 @@
                         <path d="M8 12h8M12 8v8" />
                       </svg>
                       <span>Claude Code</span>
+                    </button>
+                    <button type="button" class="cfg-editor-tab" data-cfg-tool="opencode" aria-pressed="false">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="5" opacity="0.5" />
+                        <path d="M9 8l-3 4 3 4" />
+                        <path d="M15 8l3 4-3 4" />
+                        <path d="M13 6l-2 12" />
+                      </svg>
+                      <span>OpenCode</span>
                     </button>
                     <button type="button" class="cfg-editor-tab" data-cfg-tool="openclaw" aria-pressed="false">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
@@ -974,6 +1030,41 @@
                       <div class="editor-grid dense-grid">
                         <label class="field field-wide"><span>settings.json 路径（只读）</span><input id="ccCfgSettingsPath" placeholder="~/.claude/settings.json" readonly /></label>
                         <label class="field field-wide"><span>历史模型（只读）</span><textarea id="ccCfgUsedModels" rows="3" placeholder="暂无" readonly></textarea></label>
+                      </div>
+                    </div>
+                  </details>
+                </section>
+                <!-- ═══ OpenCode Config Editor ═══ -->
+                <section class="config-editor-main hide" data-tool-editor="opencode">
+                  <details class="cfg-section" open>
+                    <summary class="cfg-section-header">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
+                      <span>模型与 Provider</span>
+                      <svg class="cfg-section-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                    </summary>
+                    <div class="cfg-section-body">
+                      <div class="editor-grid dense-grid">
+                        <label class="field"><span>默认模型</span><input id="opCfgModelInput" placeholder="如 custom/gpt-4.1" /></label>
+                        <label class="field"><span>轻量模型</span><input id="opCfgSmallModelInput" placeholder="如 custom/gpt-4.1-mini" /></label>
+                        <label class="field"><span>Provider Key</span><input id="opCfgProviderKeyInput" placeholder="如 custom / openrouter / work" /></label>
+                        <label class="field"><span>Provider 名称</span><input id="opCfgProviderNameInput" placeholder="如 My Gateway" /></label>
+                        <label class="field"><span>Base URL</span><input id="opCfgBaseUrlInput" placeholder="https://your-provider.com/v1" /></label>
+                        <label class="field"><span>API Key</span><input id="opCfgApiKeyInput" type="password" placeholder="留空表示保持当前" /></label>
+                        <label class="field"><span>Provider 包</span><input id="opCfgProviderPackageInput" placeholder="默认 @ai-sdk/openai-compatible" /></label>
+                      </div>
+                    </div>
+                  </details>
+                  <details class="cfg-section">
+                    <summary class="cfg-section-header">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9.5a3.5 3.5 0 0 0 5 0l1-1a3.54 3.54 0 0 0-5-5l-.5.5"/><path d="M9.5 6.5a3.5 3.5 0 0 0-5 0l-1 1a3.54 3.54 0 0 0 5 5l.5-.5"/></svg>
+                      <span>状态信息</span>
+                      <svg class="cfg-section-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                    </summary>
+                    <div class="cfg-section-body">
+                      <div class="editor-grid dense-grid">
+                        <label class="field field-wide"><span>配置文件路径</span><input id="opCfgConfigPath" readonly placeholder="~/.config/opencode/opencode.json" /></label>
+                        <label class="field field-wide"><span>认证文件路径</span><input id="opCfgAuthPath" readonly placeholder="~/.local/share/opencode/auth.json" /></label>
+                        <label class="field field-wide"><span>已配置 Provider</span><textarea id="opCfgProvidersSummary" rows="3" readonly placeholder="暂无"></textarea></label>
                       </div>
                     </div>
                   </details>
@@ -2332,6 +2423,16 @@
                     <textarea id="ccCfgRawJsonTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
                     <div class="toml-hint">支持 JSON 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存并生效」。</div>
                   </div>
+                  <!-- OpenCode raw JSON -->
+                  <div class="config-side-section hide" data-tool-editor-side="opencode">
+                    <div class="subline">
+                      <span class="eyebrow">当前原始 JSON/JSONC — opencode.json</span>
+                      <div class="raw-config-actions"><span class="raw-editor-chip">Ace Editor</span></div>
+                    </div>
+                    <div id="opCfgRawJsonEditor" class="raw-code-editor" aria-label="OpenCode opencode.json 编辑器"></div>
+                    <textarea id="opCfgRawJsonTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
+                    <div class="toml-hint">支持 JSON / JSONC 文本编辑；修改后点击顶部「保存并生效」。</div>
+                  </div>
                   <!-- OpenClaw raw JSON -->
                   <div class="config-side-section hide" data-tool-editor-side="openclaw">
                     <div class="subline">
@@ -2573,6 +2674,23 @@
                   <div class="wtc-content">
                     <div class="wtc-name">Claude Code</div>
                     <div class="wtc-desc">Anthropic 终端原生 AI 编程助手</div>
+                  </div>
+                  <div class="wtc-check"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2.5">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg></div>
+                </button>
+                <button class="wizard-tool-card" data-wizard-tool="opencode">
+                  <div class="wtc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="5" opacity="0.4" />
+                      <path d="M9 8l-3 4 3 4" />
+                      <path d="M15 8l3 4-3 4" />
+                      <path d="M13 6l-2 12" />
+                    </svg></div>
+                  <div class="wtc-content">
+                    <div class="wtc-name">OpenCode</div>
+                    <div class="wtc-desc">开放式 AI 编程助手 CLI</div>
                   </div>
                   <div class="wtc-check"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                       stroke="currentColor" stroke-width="2.5">

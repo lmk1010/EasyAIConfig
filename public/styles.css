@@ -8123,15 +8123,15 @@ select:focus {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .brand-logo {
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
+  flex: 0 0 52px;
+  width: 52px;
+  height: 52px;
   opacity: 1;
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.2));
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.24));
 }
 
 .brand-name {
@@ -8209,50 +8209,141 @@ select:focus {
 
 /* ═══════════════  Tools / Install Page  ═══════════════ */
 .tools-page {
-  padding: 8px 12px;
+  padding: 8px 12px 16px;
+}
+
+.tools-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.tools-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(232, 238, 248, 0.5);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.tools-search:focus-within {
+  border-color: rgba(141, 192, 255, 0.22);
+  box-shadow: 0 0 0 3px rgba(141, 192, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tools-search input {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 0;
+  color: rgba(232, 238, 248, 0.92);
+  font-size: 0.78rem;
+  outline: none;
+}
+
+.tools-search input:focus {
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.tools-search input::-webkit-search-decoration,
+.tools-search input::-webkit-search-cancel-button,
+.tools-search input::-webkit-search-results-button,
+.tools-search input::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+}
+
+.tools-search input::placeholder {
+  color: rgba(232, 238, 248, 0.34);
+}
+
+.tools-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tools-tag {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(232, 238, 248, 0.62);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tools-tag.active {
+  color: rgba(232, 238, 248, 0.96);
+  border-color: rgba(141, 192, 255, 0.28);
+  background: rgba(141, 192, 255, 0.14);
 }
 
 .tools-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
 }
 
 .tool-card {
   background: rgba(255, 255, 255, 0.028);
   border: 1px solid rgba(255, 255, 255, 0.055);
   border-radius: 14px;
-  padding: 18px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  gap: 10px;
+  min-height: 184px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .tool-card:hover {
-  border-color: rgba(141, 192, 255, 0.12);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  border-color: rgba(141, 192, 255, 0.14);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+  transform: translateY(-1px);
 }
 
 .tool-card-soon {
-  opacity: 0.5;
-  pointer-events: none;
+  opacity: 0.56;
 }
 
 .tool-card-head {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
+  gap: 12px;
 }
 
 .tool-icon {
   flex-shrink: 0;
-  width: 42px;
-  height: 42px;
-  border-radius: 11px;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.tool-icon svg {
+  width: 26px;
+  height: 26px;
 }
 
 .tool-icon-codex {
@@ -8260,7 +8351,8 @@ select:focus {
   color: rgba(141, 192, 255, 0.9);
 }
 
-.tool-icon-claude {
+.tool-icon-claude,
+.tool-icon-claudecode {
   background: linear-gradient(135deg, rgba(255, 160, 100, 0.15), rgba(255, 140, 80, 0.08));
   color: rgba(255, 170, 120, 0.9);
 }
@@ -8270,13 +8362,33 @@ select:focus {
   color: rgba(130, 225, 170, 0.9);
 }
 
+.tool-icon-opencode,
+.tool-icon-opencode-desktop,
+.tool-icon-opencode-vscode,
+.tool-icon-opencode-cursor,
+.tool-icon-opencode-windsurf,
+.tool-icon-opencode-vscodium,
+.tool-icon-opencode-zed,
+.tool-icon-opencode-github,
+.tool-icon-opencode-gitlab {
+  background: linear-gradient(135deg, rgba(180, 120, 255, 0.15), rgba(150, 100, 255, 0.08));
+  color: rgba(198, 156, 255, 0.92);
+}
+
 .tool-info {
   flex: 1;
   min-width: 0;
 }
 
+.tool-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
 .tool-name {
-  font-size: 0.88rem;
+  font-size: 0.86rem;
   font-weight: 650;
   color: rgba(232, 238, 248, 0.92);
   display: flex;
@@ -8285,40 +8397,59 @@ select:focus {
   flex-wrap: wrap;
 }
 
-.tool-desc {
-  font-size: 0.7rem;
-  color: rgba(232, 238, 248, 0.42);
-  line-height: 1.5;
-  margin-top: 3px;
-}
-
-.tool-soon-tag {
+.tool-type-tag,
+.tool-soon-tag,
+.tool-chip {
   display: inline-flex;
   align-items: center;
   height: 18px;
   padding: 0 7px;
-  border-radius: 5px;
+  border-radius: 999px;
   font-size: 0.58rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  color: rgba(232, 238, 248, 0.4);
+  color: rgba(232, 238, 248, 0.48);
+}
+
+.tool-desc {
+  font-size: 0.68rem;
+  color: rgba(232, 238, 248, 0.42);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.tool-chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tool-chip-active {
+  color: #7be1b2;
+  border-color: rgba(123, 225, 178, 0.15);
+  background: rgba(123, 225, 178, 0.08);
 }
 
 .tool-status {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 0;
+  padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .tool-version {
-  font-size: 0.74rem;
+  flex: 1;
+  min-width: 0;
+  font-size: 0.72rem;
   font-weight: 560;
   color: rgba(232, 238, 248, 0.72);
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-version-muted {
@@ -8330,7 +8461,7 @@ select:focus {
   font-size: 0.6rem;
   font-weight: 600;
   padding: 2px 7px;
-  border-radius: 5px;
+  border-radius: 999px;
 }
 
 .tool-badge-ok {
@@ -8340,17 +8471,26 @@ select:focus {
 }
 
 .tool-actions {
+  margin-top: auto;
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tool-actions::-webkit-scrollbar {
+  display: none;
 }
 
 .tool-action-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   height: 30px;
-  padding: 0 12px;
+  padding: 0 10px;
+  flex: 0 0 auto;
   border-radius: 8px;
   font-size: 0.72rem;
   font-weight: 560;
@@ -8376,6 +8516,55 @@ select:focus {
 .tool-action-danger:hover {
   background: rgba(255, 100, 100, 0.1) !important;
   color: rgba(255, 130, 130, 0.92) !important;
+}
+
+.tools-empty {
+  margin-top: 14px;
+  padding: 22px 14px;
+  border-radius: 14px;
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  text-align: center;
+  font-size: 0.78rem;
+  color: rgba(232, 238, 248, 0.44);
+}
+
+.tools-empty.hide {
+  display: none;
+}
+
+.tools-pagination {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.tools-pagination.hide {
+  display: none;
+}
+
+.tools-page-btn {
+  height: 32px;
+  min-width: 84px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(232, 238, 248, 0.82);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tools-page-btn:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
+.tools-page-meta {
+  font-size: 0.72rem;
+  color: rgba(232, 238, 248, 0.52);
 }
 
 /* ── Tool button busy / spinner ── */
@@ -10645,6 +10834,57 @@ select:focus {
 }
 
 /* ─── Tools page ─── */
+[data-theme="light"] .tools-search {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+  color: rgba(30, 40, 60, 0.42);
+}
+
+[data-theme="light"] .tools-search:focus-within {
+  border-color: rgba(59, 130, 246, 0.22);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+[data-theme="light"] .tools-search input {
+  color: var(--text);
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+[data-theme="light"] .tools-search input:focus {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+[data-theme="light"] .tools-search input::placeholder {
+  color: rgba(30, 40, 60, 0.34);
+}
+
+[data-theme="light"] .tools-tag {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.06);
+  color: rgba(30, 40, 60, 0.68);
+}
+
+[data-theme="light"] .tools-tag.active {
+  color: #1d4ed8;
+  border-color: rgba(59, 130, 246, 0.22);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+[data-theme="light"] .tools-page-btn {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+
+[data-theme="light"] .tools-page-meta {
+  color: var(--muted);
+}
+
 [data-theme="light"] .tool-card {
   background: rgba(0, 0, 0, 0.02);
   border-color: rgba(0, 0, 0, 0.06);
@@ -10652,7 +10892,7 @@ select:focus {
 
 [data-theme="light"] .tool-card:hover {
   border-color: rgba(59, 130, 246, 0.2);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06);
 }
 
 [data-theme="light"] .tool-name {
@@ -10694,6 +10934,19 @@ select:focus {
 [data-theme="light"] .tool-icon-openclaw {
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(34, 197, 94, 0.05));
   color: rgba(22, 163, 74, 0.8);
+}
+
+[data-theme="light"] .tool-icon-opencode,
+[data-theme="light"] .tool-icon-opencode-desktop,
+[data-theme="light"] .tool-icon-opencode-vscode,
+[data-theme="light"] .tool-icon-opencode-cursor,
+[data-theme="light"] .tool-icon-opencode-windsurf,
+[data-theme="light"] .tool-icon-opencode-vscodium,
+[data-theme="light"] .tool-icon-opencode-zed,
+[data-theme="light"] .tool-icon-opencode-github,
+[data-theme="light"] .tool-icon-opencode-gitlab {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(139, 92, 246, 0.05));
+  color: rgba(109, 40, 217, 0.82);
 }
 
 [data-theme="light"] .tool-soon-tag {
