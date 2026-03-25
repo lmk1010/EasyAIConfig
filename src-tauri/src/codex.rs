@@ -365,6 +365,32 @@ fn collect_detected_binary_candidates(candidate_paths: Vec<PathBuf>, fallback_co
   })
 }
 
+#[cfg(target_os = "windows")]
+fn windows_registry_path_entries() -> Vec<String> {
+  static CACHED: OnceLock<Vec<String>> = OnceLock::new();
+  CACHED
+    .get_or_init(|| {
+      let script = "$user=[Environment]::GetEnvironmentVariable('Path','User');$machine=[Environment]::GetEnvironmentVariable('Path','Machine');Write-Output $user;Write-Output $machine";
+      let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .output()
+        .ok();
+      let mut parts = Vec::new();
+      if let Some(out) = output.filter(|out| out.status.success()) {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+          for item in line.split(';') {
+            let entry = item.trim();
+            if !entry.is_empty() {
+              parts.push(entry.to_string());
+            }
+          }
+        }
+      }
+      parts
+    })
+    .clone()
+}
+
 fn build_windows_full_path_env() -> String {
   let current = std::env::var("PATH").unwrap_or_default();
   let mut parts: Vec<String> = Vec::new();
@@ -374,6 +400,8 @@ fn build_windows_full_path_env() -> String {
   }
   parts.extend(windows_user_extra_bin_dirs());
   parts.extend(windows_mingit_cmd_dirs());
+  #[cfg(target_os = "windows")]
+  parts.extend(windows_registry_path_entries());
   for p in current.split(';') {
     let item = p.trim();
     if !item.is_empty() {
@@ -1981,6 +2009,23 @@ fn ensure_node_and_npm_available(task_id: &str) -> bool {
   false
 }
 
+fn apply_windows_user_npm_env(command: &mut Command) {
+  if !cfg!(target_os = "windows") {
+    return;
+  }
+  if let Some(prefix) = windows_user_npm_prefix() {
+    let prefix_str = prefix.to_string_lossy().to_string();
+    let mut path_parts = vec![prefix_str.clone()];
+    let current = full_path_env();
+    path_parts.extend(current.split(';').filter(|entry| !entry.trim().is_empty()).map(|entry| entry.trim().to_string()));
+    let mut seen = HashSet::new();
+    path_parts.retain(|entry| seen.insert(entry.to_ascii_lowercase()));
+    command.env("NPM_CONFIG_PREFIX", &prefix_str);
+    command.env("npm_config_prefix", &prefix_str);
+    command.env("PATH", path_parts.join(";"));
+  }
+}
+
 fn apply_windows_openclaw_npm_env(command: &mut Command, use_cn_registry: bool) {
   if !cfg!(target_os = "windows") {
     return;
@@ -2143,12 +2188,17 @@ pub(crate) fn find_codex_binary() -> Value {
 }
 
 pub(crate) fn codex_npm_action(args: &[&str]) -> Result<Value, String> {
-  let result = run_command(npm_command(), args, None)?;
+  let mut cmd = create_command(npm_command());
+  cmd.args(args).stdin(Stdio::null());
+  apply_windows_user_npm_env(&mut cmd);
+  let output = cmd.output().map_err(|error| error.to_string())?;
+  let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+  let stderr = String::from_utf8_lossy(&output.stderr).to_string();
   Ok(json!({
-    "ok": result.get("ok").and_then(Value::as_bool).unwrap_or(false),
-    "code": result.get("code").cloned().unwrap_or(Value::Null),
-    "stdout": result.get("stdout").cloned().unwrap_or(Value::String(String::new())),
-    "stderr": result.get("stderr").cloned().unwrap_or(Value::String(String::new())),
+    "ok": output.status.success(),
+    "code": output.status.code(),
+    "stdout": stdout,
+    "stderr": stderr,
     "command": format!("{} {}", npm_command(), args.join(" ")),
   }))
 }
@@ -3715,9 +3765,10 @@ fn launch_terminal_command(cwd: &Path, command_text: &str, tool_label: &str) -> 
 
   if cfg!(target_os = "windows") {
     let launcher_path = write_windows_terminal_launcher(cwd, command_text)?;
-    let launcher_arg = quote_windows_cmd_arg(&normalize_windows_cmd_path(&launcher_path.to_string_lossy()));
+    let launcher_arg = normalize_windows_cmd_path(&launcher_path.to_string_lossy());
     create_command("cmd.exe")
-      .args(["/c", "start", "", "cmd.exe", "/d", "/k", &launcher_arg])
+      .args(["/c", "start", "", "cmd.exe", "/d", "/k", "call"])
+      .arg(&launcher_arg)
       .spawn()
       .map_err(|error| error.to_string())?;
     return Ok(format!("{} 已在新命令窗口中启动", tool_label));

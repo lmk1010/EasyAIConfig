@@ -1,6 +1,6 @@
 [package]
 name = "easy_ai_config"
-version = "1.0.33"
+version = "1.0.34"
 description = "EasyAIConfig desktop app"
 authors = ["EasyAIConfig Contributors"]
 license = "MIT"
