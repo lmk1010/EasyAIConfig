@@ -50,6 +50,8 @@ const state = {
   configEditorTimer: null,
   configEditorTool: 'codex',
   appUpdate: null,
+  appUpdateProgress: null,
+  appUpdateProgressTimer: 0,
   updateDialogOpen: false,
   updateDialogTimer: null,
   updateDialogResolver: null,
@@ -3362,6 +3364,7 @@ function applyQuickInstallState({
 }
 
 function applyCodexQuickInstallState() {
+  const showManualInputs = state.codexAuthView !== 'official';
   applyQuickInstallState({
     toolId: 'codex',
     installed: isCodexInstalled(),
@@ -3369,9 +3372,9 @@ function applyCodexQuickInstallState() {
     sectionTitleText: isCodexInstalled() ? '连接配置' : 'Codex 未安装',
     heroSubtitleText: isCodexInstalled() ? '用户通常只需要 `URL` 和 `API Key`，这里一步完成。' : '当前设备还没有安装 Codex，先一键安装，安装完成后再配置登录和 Provider。',
     detectionMetaText: isCodexInstalled() ? '默认只需要 URL 和 API Key；缺少 http/https 会自动补全。' : '当前未检测到 codex，请先安装；安装完成后这里才会显示登录和配置项。',
-    showBaseUrl: true,
-    showApiKey: true,
-    showDetect: true,
+    showBaseUrl: showManualInputs,
+    showApiKey: showManualInputs,
+    showDetect: showManualInputs,
     showModel: true,
     showCodexAuthBlock: true,
   });
@@ -9471,17 +9474,68 @@ function syncAboutUpdateActions() {
   const installBtn = el('aboutInstallUpdateBtn');
   const checkBtn = el('aboutCheckUpdateBtn');
   if (!installBtn || !checkBtn) return;
+  const progress = state.appUpdateProgress || {};
+  const updating = ['checking', 'downloading', 'installing'].includes(String(progress.status || ''));
   installBtn.hidden = !Boolean(info.available);
+  installBtn.disabled = updating;
+  checkBtn.disabled = updating;
   checkBtn.classList.toggle('about-update-btn-secondary', Boolean(info.available));
+}
+
+function renderAboutUpdateProgress() {
+  const wrap = el('aboutUpdateProgressWrap');
+  const bar = el('aboutUpdateProgressBar');
+  const meta = el('aboutUpdateProgressMeta');
+  if (!wrap || !bar || !meta) return;
+  const progress = state.appUpdateProgress || {};
+  const status = String(progress.status || '');
+  const active = ['checking', 'downloading', 'installing'].includes(status);
+  if (!active) {
+    wrap.classList.add('hide');
+    bar.style.width = '0%';
+    meta.textContent = '';
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  const downloaded = Number(progress.downloadedBytes || 0);
+  const total = Number(progress.totalBytes || 0);
+  wrap.classList.remove('hide');
+  bar.style.width = `${pct.toFixed(1)}%`;
+  if (status === 'downloading') {
+    meta.textContent = total > 0
+      ? `${pct.toFixed(1)}% · ${formatBytes(downloaded)} / ${formatBytes(total)}`
+      : `${formatBytes(downloaded)} · 正在下载`;
+    return;
+  }
+  if (status === 'checking') {
+    meta.textContent = '正在检查可用更新包…';
+    return;
+  }
+  meta.textContent = '下载完成，正在安装…';
 }
 
 function populateAboutPanel() {
   const info = state.appUpdate || {};
   const appVersion = info.currentVersion || '1.0.0';
+  const progress = state.appUpdateProgress || {};
+  const progressStatus = String(progress.status || '');
   const status = el('aboutUpdaterStatus');
   el('aboutAppVersion').textContent = appVersion;
   el('aboutCodexVersion').textContent = appVersion;
-  if (info.available) {
+  if (progressStatus === 'checking') {
+    status.textContent = '正在准备更新…';
+    status.className = 'about-status';
+  } else if (progressStatus === 'downloading') {
+    const pct = Number(progress.percent || 0);
+    status.textContent = `正在下载更新 ${pct.toFixed(1)}%`;
+    status.className = 'about-status about-status-update';
+  } else if (progressStatus === 'installing') {
+    status.textContent = '正在安装更新…';
+    status.className = 'about-status about-status-update';
+  } else if (progressStatus === 'error') {
+    status.textContent = progress.error || '更新失败';
+    status.className = 'about-status about-status-error';
+  } else if (info.available) {
     status.textContent = `可更新到 v${info.version || '-'}`;
     status.className = 'about-status about-status-update';
   } else if (info.networkBlocked) {
@@ -9494,6 +9548,7 @@ function populateAboutPanel() {
     status.textContent = '';
     status.className = 'about-status';
   }
+  renderAboutUpdateProgress();
   syncAboutUpdateActions();
   el('aboutRepo').textContent = info.repository || '-';
   el('aboutEndpoint').textContent = info.endpoint || '-';
@@ -14727,6 +14782,36 @@ async function loadAppUpdateState({ manual = false } = {}) {
   return state.appUpdate;
 }
 
+function stopAppUpdateProgressPolling() {
+  if (state.appUpdateProgressTimer) {
+    clearInterval(state.appUpdateProgressTimer);
+    state.appUpdateProgressTimer = 0;
+  }
+}
+
+async function loadAppUpdateProgressState({ silent = true } = {}) {
+  const json = await api('/api/app/update/progress');
+  if (!json.ok) {
+    if (!silent) flash(json.error || '读取更新进度失败', 'error');
+    return null;
+  }
+  state.appUpdateProgress = json.data || null;
+  const status = String(state.appUpdateProgress?.status || '');
+  if (!['checking', 'downloading', 'installing'].includes(status)) {
+    stopAppUpdateProgressPolling();
+  }
+  populateAboutPanel();
+  return state.appUpdateProgress;
+}
+
+function startAppUpdateProgressPolling() {
+  stopAppUpdateProgressPolling();
+  void loadAppUpdateProgressState({ silent: true });
+  state.appUpdateProgressTimer = window.setInterval(() => {
+    void loadAppUpdateProgressState({ silent: true });
+  }, 600);
+}
+
 async function handleAppUpdate(buttonId = 'appUpdateBtn') {
   const info = state.appUpdate || await loadAppUpdateState({ manual: true });
   if (!info) return;
@@ -14741,7 +14826,9 @@ async function handleAppUpdate(buttonId = 'appUpdateBtn') {
 
   setBusy('appUpdateBtn', true, '下载中...');
   if (buttonId !== 'appUpdateBtn') setBusy(buttonId, true, '更新中...');
+  startAppUpdateProgressPolling();
   const json = await api('/api/app/update', { method: 'POST', timeoutMs: 300000 });
+  await loadAppUpdateProgressState({ silent: true });
   setBusy('appUpdateBtn', false);
   if (buttonId !== 'appUpdateBtn') setBusy(buttonId, false);
   if (!json.ok) return flash(json.error || '客户端更新失败', 'error');
@@ -17173,6 +17260,7 @@ function bindEvents() {
   el('openAdvancedBtn').addEventListener('click', () => setConfigEditorOpen(true));
   el('openAboutBtn').addEventListener('click', async () => {
     if (!state.appUpdate) await loadAppUpdateState();
+    await loadAppUpdateProgressState({ silent: true });
     populateAboutPanel();
     setPage('about');
   });
@@ -17864,6 +17952,7 @@ loadState({ preserveForm: false }).then(() => {
 });
 loadBackups();
 loadAppUpdateState();
+loadAppUpdateProgressState({ silent: true });
 loadTools();
 
 /* ── Window drag support ── */

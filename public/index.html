@@ -529,6 +529,12 @@
               <h2 class="about-app-name">EasyAIConfig</h2>
               <p class="about-version">Version <span id="aboutAppVersion">1.0.0</span></p>
               <p class="about-status" id="aboutUpdaterStatus"></p>
+              <div id="aboutUpdateProgressWrap" class="about-update-progress-wrap hide" aria-live="polite">
+                <div class="about-update-progress-track">
+                  <div id="aboutUpdateProgressBar" class="about-update-progress-bar" style="width:0%"></div>
+                </div>
+                <div id="aboutUpdateProgressMeta" class="about-update-progress-meta"></div>
+              </div>
               <div class="about-update-actions">
                 <button id="aboutCheckUpdateBtn" class="about-update-btn">
                   <svg class="about-update-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"

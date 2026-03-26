@@ -24,7 +24,7 @@ use crate::config::{
   save_raw_config, save_settings, test_saved_provider,
 };
 use crate::provider::detect_provider;
-use crate::updater::{get_app_update_info, install_app_update};
+use crate::updater::{get_app_update_info, get_app_update_progress, install_app_update};
 use crate::{fail, ok, OPENAI_CODEX_PACKAGE, CLAUDE_CODE_PACKAGE, OPENCLAW_PACKAGE};
 
 async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value, body: &Value) -> Result<Value, String> {
@@ -111,6 +111,7 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/backups/restore", "POST") => restore_backup(body),
     ("/api/app/update", "GET") => get_app_update_info(app).await,
     ("/api/app/update", "POST") => install_app_update(app).await,
+    ("/api/app/update/progress", "GET") => get_app_update_progress(),
     _ => Err(format!("Unsupported request: {method} {path}")),
   }
 }
