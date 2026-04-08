@@ -3628,23 +3628,23 @@ async function readClaudeTelemetryUsage({ days = 30 } = {}) {
           bucket.output += u.output;
           bucket.cacheRead += u.cacheRead;
           bucket.cacheCreation += u.cacheCreation;
-          bucket.total += u.input + u.output;
+          bucket.total += u.input + u.output + u.cacheRead + u.cacheCreation;
           bucket.cost += calcCost(u, model);
 
           // Daily model tokens
           if (!dailyModelTokens.has(dayKey)) dailyModelTokens.set(dayKey, { date: dayKey, tokensByModel: {} });
           const dmt = dailyModelTokens.get(dayKey);
           if (model && !model.startsWith('<')) {
-            dmt.tokensByModel[model] = (dmt.tokensByModel[model] || 0) + u.input + u.output;
+            dmt.tokensByModel[model] = (dmt.tokensByModel[model] || 0) + u.input + u.output + u.cacheRead + u.cacheCreation;
           }
         }
       }
 
       // Skip sessions outside time window or with no data
       if (!lastTimestamp || lastTimestamp < cutoffMs) continue;
-      if (sessionUsage.input === 0 && sessionUsage.output === 0) continue;
+      if (sessionUsage.input === 0 && sessionUsage.output === 0 && sessionUsage.cacheRead === 0 && sessionUsage.cacheCreation === 0) continue;
 
-      sessionUsage.total = sessionUsage.input + sessionUsage.output;
+      sessionUsage.total = sessionUsage.input + sessionUsage.output + sessionUsage.cacheRead + sessionUsage.cacheCreation;
       sessionUsage.cost = 0;
       for (const [model, mu] of sessionModels) {
         sessionUsage.cost += calcCost(mu, model);
@@ -3654,7 +3654,7 @@ async function readClaudeTelemetryUsage({ days = 30 } = {}) {
         prev.output += mu.output;
         prev.cacheRead += mu.cacheRead;
         prev.cacheCreation += mu.cacheCreation;
-        prev.total += mu.input + mu.output;
+        prev.total += mu.input + mu.output + mu.cacheRead + mu.cacheCreation;
         modelTotals.set(model, prev);
       }
 

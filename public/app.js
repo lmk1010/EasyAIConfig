@@ -6238,15 +6238,15 @@ function calcModelCost(modelEntry) {
   if (!pricing) return null;
   const inp = (modelEntry.totals?.input || 0) / 1e6;
   const out = (modelEntry.totals?.output || 0) / 1e6;
-  // Support both Codex (cachedInput) and Claude (cacheRead) field names
-  const cached = (modelEntry.totals?.cachedInput || modelEntry.totals?.cacheRead || 0) / 1e6;
+  const cachedRead = (modelEntry.totals?.cachedInput || modelEntry.totals?.cacheRead || 0) / 1e6;
+  const cacheWrite = (modelEntry.totals?.cacheCreation || 0) / 1e6;
   const reasoning = (modelEntry.totals?.reasoning || 0) / 1e6;
-  // Reasoning tokens are charged at output rate
   const inputCost = inp * pricing.input;
   const outputCost = (out + reasoning) * pricing.output;
-  const cachedCost = cached * pricing.cached;
-  const totalCost = inputCost + outputCost + cachedCost;
-  return { inputCost, outputCost, cachedCost, totalCost, pricing };
+  const cachedReadCost = cachedRead * pricing.cached;
+  const cacheWriteCost = cacheWrite * (pricing.input * 1.25);
+  const totalCost = inputCost + outputCost + cachedReadCost + cacheWriteCost;
+  return { inputCost, outputCost, cachedReadCost, cacheWriteCost, totalCost, pricing };
 }
 
 function renderModelCostRows(models = [], totalTokens = 0) {
@@ -6260,13 +6260,14 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     const costStr = cost ? '$' + cost.totalCost.toFixed(4) : '–';
     const inputCostStr = cost ? '$' + cost.inputCost.toFixed(4) : '–';
     const outputCostStr = cost ? '$' + cost.outputCost.toFixed(4) : '–';
-    const cachedCostStr = cost ? '$' + cost.cachedCost.toFixed(4) : '–';
+    const cachedReadCostStr = cost ? '$' + cost.cachedReadCost.toFixed(4) : '–';
+    const cacheWriteCostStr = cost ? '$' + cost.cacheWriteCost.toFixed(4) : '–';
     return `<div class="db2-model-row">
       <div class="db2-model-name" title="${escapeHtml(entry.model)}">${escapeHtml(modelLabel)}</div>
       <div class="db2-model-bar-cell"><div class="db2-model-bar" style="width:${barWidth}%"></div></div>
       <div class="db2-model-tokens">${escapeHtml(formatDashboardMetric(tokens))}</div>
       <div class="db2-model-pct">${pct}%</div>
-      <div class="db2-model-cost ${cost ? '' : 'db2-model-cost--na'}" title="输入 ${escapeHtml(inputCostStr)} · 输出 ${escapeHtml(outputCostStr)} · 缓存 ${escapeHtml(cachedCostStr)}">${escapeHtml(costStr)}</div>
+      <div class="db2-model-cost ${cost ? '' : 'db2-model-cost--na'}" title="输入 ${escapeHtml(inputCostStr)} · 输出 ${escapeHtml(outputCostStr)} · 缓存读 ${escapeHtml(cachedReadCostStr)} · 缓存写 ${escapeHtml(cacheWriteCostStr)}">${escapeHtml(costStr)}</div>
     </div>`;
   });
   // Total row
@@ -6542,15 +6543,15 @@ function renderDashboardPage() {
   const claudeHtml = `
     <div class="db2-layout">
 
-      <!-- Stat Cards -->
       ${statStrip([
         { label: '总 Token', value: formatDashboardMetric(ct.total), sub: ct.total ? '近' + daysWindow + '天累计' : '该时段无用量', accent: true },
         { label: '输入', value: formatDashboardMetric(ct.input), sub: ct.total ? Math.round(ct.input / ct.total * 100) + '%' : '–' },
         { label: '输出', value: formatDashboardMetric(ct.output), sub: ct.total ? Math.round(ct.output / ct.total * 100) + '%' : '–' },
         { label: '缓存读', value: formatDashboardMetric(ct.cacheRead), sub: ct.total ? Math.round(ct.cacheRead / ct.total * 100) + '%' : '–' },
-        { label: '缓存写', value: formatDashboardMetric(ct.cacheCreate), sub: '上下文填充' },
-        { label: '官方累计', value: claudeOfficialCost ? '$' + claudeOfficialCost.toFixed(2) : '$0.00', sub: '来自 .claude.json', isCost: true },
+        { label: '缓存写', value: formatDashboardMetric(ct.cacheCreate), sub: ct.total ? Math.round(ct.cacheCreate / ct.total * 100) + '%' : '上下文填充' },
+        { label: '费用估算', value: claudeAllCost ? '$' + claudeAllCost.toFixed(2) : '$0.00', sub: '按 Anthropic 官方定价', isCost: true },
       ])}
+
 
       <!-- Main 2-column layout -->
       <div class="db2-main-grid">
@@ -6613,7 +6614,7 @@ function renderDashboardPage() {
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
                 费用趋势
               </div>
-              <div class="db2-card-meta">每日实际消耗</div>
+              <div class="db2-card-meta">按 Anthropic 官方定价估算</div>
             </div>
             ${renderClaudeCostTrendChart(claudeDailySliced, daysWindow)}
           </div>
@@ -6926,10 +6927,10 @@ function _initDbInteractiveChart(chartId) {
               const dayTokens = dayTotal * share;
               const inpShare = (m.totals?.input || 0) / ((m.totals?.total || 1));
               const outShare = (m.totals?.output || 0) / ((m.totals?.total || 1));
-              const cachedShare = (m.totals?.cachedInput || 0) / ((m.totals?.total || 1));
-              dayCost += (dayTokens * inpShare / 1e6 * pricing.input) + (dayTokens * outShare / 1e6 * pricing.output) + (dayTokens * cachedShare / 1e6 * pricing.cached);
+              const cachedShare = ((m.totals?.cachedInput || m.totals?.cacheRead || 0)) / ((m.totals?.total || 1));
+              const cacheWriteShare = (m.totals?.cacheCreation || 0) / ((m.totals?.total || 1));
+              dayCost += (dayTokens * inpShare / 1e6 * pricing.input) + (dayTokens * outShare / 1e6 * pricing.output) + (dayTokens * cachedShare / 1e6 * pricing.cached) + (dayTokens * cacheWriteShare / 1e6 * (pricing.input * 1.25));
             });
-            costLine = `<div class="db2-tip-row db2-tip-cost"><span>💰 估算</span><strong>$${dayCost.toFixed(4)}</strong></div>`;
           }
         }
 
