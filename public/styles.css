@@ -18975,6 +18975,156 @@ body {
   box-shadow: inset 0 0 0 1px rgba(107, 158, 255, 0.2);
 }
 
+.shell-v2 .ch-ribbon-spacer {
+  flex: 1;
+  min-width: 12px;
+}
+
+/* ── Auto-detect frequency (borderless trigger + floating glass menu) ── */
+.shell-v2 .ch-autodetect {
+  position: relative;
+  padding-bottom: 10px; /* align with ribbon item bottom padding */
+}
+
+.shell-v2 .ch-autodetect-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: var(--s2-muted);
+  font-size: 0.74rem;
+  font-weight: 540;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition: color 140ms ease;
+  height: auto;
+  min-height: 0;
+}
+
+.shell-v2 .ch-autodetect-trigger:hover {
+  color: var(--s2-text);
+}
+
+.shell-v2 .ch-autodetect-trigger > svg:first-of-type {
+  opacity: 0.65;
+  flex-shrink: 0;
+}
+
+.shell-v2 .ch-autodetect-label {
+  opacity: 0.88;
+}
+
+.shell-v2 .ch-autodetect-value {
+  font-weight: 620;
+  color: var(--s2-text);
+  letter-spacing: -0.005em;
+}
+
+.shell-v2 .ch-autodetect-chev {
+  opacity: 0.55;
+  transition: transform 180ms ease;
+  flex-shrink: 0;
+}
+
+.shell-v2 .ch-autodetect[data-open="true"] .ch-autodetect-chev {
+  transform: rotate(180deg);
+}
+
+.shell-v2 .ch-autodetect.is-on .ch-autodetect-value,
+.shell-v2 .ch-autodetect.is-on .ch-autodetect-trigger > svg:first-of-type {
+  color: var(--s2-accent);
+  opacity: 1;
+}
+
+/* ── Menu popover ── */
+.shell-v2 .ch-autodetect-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 140px;
+  padding: 6px;
+  background: rgba(22, 28, 44, 0.92);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-radius: 10px;
+  box-shadow:
+    0 12px 32px -8px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  animation: ch-autodetect-open 140ms cubic-bezier(0.22, 0.95, 0.32, 1);
+  transform-origin: top right;
+}
+
+[data-theme="light"] .shell-v2 .ch-autodetect-menu {
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 10px 28px -6px rgba(15, 23, 42, 0.18),
+    inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+
+@keyframes ch-autodetect-open {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.shell-v2 .ch-autodetect-menu > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 10px 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--s2-text);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 120ms ease;
+  box-shadow: none;
+  min-height: 0;
+}
+
+.shell-v2 .ch-autodetect-menu > button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="light"] .shell-v2 .ch-autodetect-menu > button:hover {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.shell-v2 .ch-autodetect-menu > button.active {
+  color: var(--s2-accent);
+  background: rgba(107, 158, 255, 0.1);
+  font-weight: 620;
+}
+
+[data-theme="light"] .shell-v2 .ch-autodetect-menu > button.active {
+  color: #2563eb;
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.shell-v2 .ch-autodetect-menu > button.active::after {
+  content: "";
+  width: 12px;
+  height: 12px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2.5 6.5l2.5 2.5 4.5-5' fill='none' stroke='%236b9eff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+[data-theme="light"] .shell-v2 .ch-autodetect-menu > button.active::after {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2.5 6.5l2.5 2.5 4.5-5' fill='none' stroke='%232563eb' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+}
+
 /* ───────── Provider list ───────── */
 .shell-v2 .ch-list-wrap {
   flex: 1;
@@ -19021,9 +19171,50 @@ body {
   background: var(--s2-line-soft);
 }
 
+.shell-v2 .ch-group-head-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
 .shell-v2 .ch-group-head .count {
   font-weight: 540;
   opacity: 0.7;
+}
+
+.shell-v2 .ch-group-head-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--s2-muted);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: none;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+.shell-v2 .ch-group-head-add:hover {
+  background: rgba(107, 158, 255, 0.1);
+  color: var(--s2-accent);
+  border-color: rgba(107, 158, 255, 0.35);
+  transform: translateY(-1px);
+}
+.shell-v2 .ch-group-head-add svg { opacity: 0.9; }
+[data-theme="light"] .shell-v2 .ch-group-head-add {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+  color: #64748b;
+}
+[data-theme="light"] .shell-v2 .ch-group-head-add:hover {
+  background: rgba(59, 130, 246, 0.08);
+  color: #2563eb;
+  border-color: rgba(59, 130, 246, 0.35);
 }
 
 .shell-v2 .ch-row {
@@ -19176,46 +19367,147 @@ body {
   justify-self: end;
 }
 
+/* Icons are always visible (not hover-only) so the user can detect / edit
+   any row without first having to hover — especially important for keyboard
+   and touch flows. */
 .shell-v2 .ch-row-actions {
-  display: none;
+  display: inline-flex;
   align-items: center;
   gap: 2px;
   justify-self: end;
 }
 
-.shell-v2 .ch-row:hover .ch-row-actions,
-.shell-v2 .ch-row:focus-within .ch-row-actions {
-  display: inline-flex;
-}
-
 .shell-v2 .ch-row-icon-btn {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--s2-faint);
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--s2-muted);
   border: 0;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 140ms ease, color 140ms ease;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="light"] .shell-v2 .ch-row-icon-btn {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--s2-muted);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
+.shell-v2 .ch-row-icon-btn svg {
+  width: 15px !important;
+  height: 15px !important;
+  stroke-width: 1.9;
 }
 
 .shell-v2 .ch-row-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(107, 158, 255, 0.12);
   color: var(--s2-accent);
+  box-shadow: inset 0 0 0 1px rgba(107, 158, 255, 0.28);
+  transform: translateY(-1px);
 }
 
 [data-theme="light"] .shell-v2 .ch-row-icon-btn:hover {
-  background: rgba(15, 23, 42, 0.06);
+  background: rgba(59, 130, 246, 0.1);
   color: #2563eb;
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.28);
 }
 
-/* Hide the spinning dot when row has ch-row-actions visible (icons replace status) */
-.shell-v2 .ch-row:hover .ch-row-status,
-.shell-v2 .ch-row:focus-within .ch-row-status {
-  display: none;
+.shell-v2 .ch-row-icon-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1.5px var(--s2-accent),
+    0 0 0 3px var(--s2-accent-glow);
+}
+
+.shell-v2 .ch-row-icon-btn.loading svg {
+  animation: ch-spin 0.9s linear infinite;
+}
+
+/* Primary variant — used by the "save current OAuth as profile" action so the
+   call-to-action is visually distinct from the muted edit / delete icons. */
+.shell-v2 .ch-row-icon-btn.primary {
+  color: #fff;
+  background: linear-gradient(180deg, #4f86ff, #3d6dff);
+  box-shadow: inset 0 0 0 1px rgba(80, 120, 255, 0.5), 0 2px 10px rgba(60, 110, 255, 0.25);
+}
+.shell-v2 .ch-row-icon-btn.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px rgba(100, 140, 255, 0.6), 0 4px 14px rgba(60, 110, 255, 0.35);
+}
+
+/* Plan pill — Pro / Plus / Team / Enterprise indicator on OAuth rows */
+.shell-v2 .ch-row-plan {
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  color: #c7b67a;
+  background: rgba(201, 168, 66, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(201, 168, 66, 0.32);
+}
+.shell-v2 .ch-row-plan[data-plan="pro"] {
+  color: #e6c472;
+  background: rgba(230, 196, 114, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(230, 196, 114, 0.38);
+}
+.shell-v2 .ch-row-plan[data-plan="plus"] {
+  color: #8bc9ff;
+  background: rgba(139, 201, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(139, 201, 255, 0.32);
+}
+.shell-v2 .ch-row-plan[data-plan="team"],
+.shell-v2 .ch-row-plan[data-plan="teams"] {
+  color: #a9f2c7;
+  background: rgba(169, 242, 199, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(169, 242, 199, 0.28);
+}
+.shell-v2 .ch-row-plan[data-plan="enterprise"] {
+  color: #e3a9ff;
+  background: rgba(227, 169, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(227, 169, 255, 0.3);
+}
+.shell-v2 .ch-row-plan[data-plan="free"] {
+  color: var(--s2-faint);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+[data-theme="light"] .shell-v2 .ch-row-plan {
+  color: #8a6d13;
+  background: rgba(230, 196, 114, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(230, 196, 114, 0.38);
+}
+
+@keyframes ch-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Inline glyph chips used in hub subtitle */
+.shell-v2 .ch-inline-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin: 0 2px 0 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  color: var(--s2-text);
+  font-size: 0.7rem;
+  line-height: 1;
+  vertical-align: -4px;
+}
+
+[data-theme="light"] .shell-v2 .ch-inline-key {
+  background: rgba(15, 23, 42, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
 }
 
 .shell-v2 .ch-list-empty {
@@ -19362,6 +19654,97 @@ body {
 .shell-v2 .ch-so-body .flow-grid > .action-field:not(.hide),
 .shell-v2 .ch-so-body .flow-grid > .model-field.field-wide:not(.hide) {
   grid-column: 1 / -1 !important;
+}
+
+/* ── OAuth / API Key toggle is chosen at the outer row level; inside the
+   edit drawer the form is always API-Key-mode, so we hide the inner tabs. ── */
+.shell-v2 .ch-so-body .codex-auth-block {
+  display: none !important;
+}
+
+/* "编辑配置" jumps to the heavy config-editor page — redundant when the user
+   is already in the edit drawer. Hide it inside the slide-over. */
+.shell-v2 .ch-so-body #editConfigQuickBtn {
+  display: none !important;
+}
+
+/* "启动 Codex" belongs on the Hero (applies to the currently-active provider).
+   Inside the edit drawer the primary action is strictly 保存 — launching the
+   provider you're editing (which may not be the active one) would be confusing. */
+.shell-v2 .ch-so-body #launchBtn,
+.shell-v2 .ch-so-body #claudeOauthLoginBtn {
+  display: none !important;
+}
+
+/* OpenClaw terminal hint row is also irrelevant inside the drawer. */
+.shell-v2 .ch-so-body .launch-terminal-row {
+  display: none !important;
+}
+
+/* Collapse the orphaned "连接检测" label-row. The model row's refresh icon
+   and the ribbon's auto-detect handle connectivity; keeping a full-width
+   labeled button row for a single ghost button just looked heavy. */
+.shell-v2 .ch-so-body .field.action-field {
+  display: none !important;
+}
+
+/* Tighter, consistent field label inside drawer */
+.shell-v2 .ch-so-body .field > span,
+.shell-v2 .ch-so-body .action-field > span {
+  font-size: 0.72rem !important;
+  font-weight: 620 !important;
+  letter-spacing: 0.02em !important;
+  text-transform: uppercase !important;
+  color: var(--s2-muted) !important;
+  margin-bottom: 8px !important;
+}
+
+/* Model row: force the refresh icon button visible (it auto-hides by default
+   if no models detected — but inside the drawer we always want it reachable
+   so the user can re-pull the model list). */
+.shell-v2 .ch-so-body .model-refresh-btn {
+  display: inline-flex !important;
+}
+
+/* Inside the drawer the primary-actions row holds exactly one button: save.
+   Promote it to a primary blue action (it was "secondary" ghost outside). */
+.shell-v2 .ch-so-body .primary-actions {
+  justify-content: flex-end !important;
+  gap: 10px !important;
+}
+
+.shell-v2 .ch-so-body .primary-actions > #editConfigQuickBtn {
+  margin-right: 0 !important;
+}
+
+.shell-v2 .ch-so-body #saveBtn {
+  height: 40px !important;
+  padding: 0 26px !important;
+  border-radius: 10px !important;
+  font-size: 0.84rem !important;
+  font-weight: 640 !important;
+  color: #0b1420 !important;
+  background: linear-gradient(135deg, #a0c8ff, #6b9eff) !important;
+  box-shadow:
+    0 4px 14px -4px rgba(107, 158, 255, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14) !important;
+  border: 0 !important;
+  min-width: 140px;
+}
+
+[data-theme="light"] .shell-v2 .ch-so-body #saveBtn {
+  color: #fff !important;
+  background: linear-gradient(135deg, #60a5fa, #3b82f6) !important;
+  box-shadow:
+    0 4px 14px -4px rgba(59, 130, 246, 0.4),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18) !important;
+}
+
+.shell-v2 .ch-so-body #saveBtn:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 6px 18px -4px rgba(107, 158, 255, 0.55),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2) !important;
 }
 
 /* Make primary-actions inside the slide-over sticky at bottom */

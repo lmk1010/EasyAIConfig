@@ -13847,17 +13847,28 @@ function renderCurrentConfig() {
 
 async function refreshProviderHealth(force = false) {
   const providers = (state.current?.providers || []).filter((provider) => provider.hasApiKey && provider.baseUrl);
+  // Respect the user-configured auto-detect interval when deciding whether a
+  // cached result is still fresh. Without this, every loadState() (triggered
+  // e.g. by a row-switch) would spray /api/provider/test-saved across every
+  // saved provider, regardless of the "30 分钟" setting.
+  let freshnessWindowMs = 300000; // 5 min default for recently-checked results
+  try {
+    const raw = localStorage.getItem('easyaiconfig_ch_autodetect_interval_sec');
+    const sec = raw ? Math.max(0, parseInt(raw, 10) || 0) : 0;
+    if (sec > 0) freshnessWindowMs = sec * 1000;
+  } catch (_) { /* fall back to default */ }
+
   await Promise.all(providers.map(async (provider) => {
     const existing = state.providerHealth[provider.key];
-    // Skip if already checked or currently loading (with a staleness guard of 12s)
     if (!force && existing) {
-      if (existing.checked) return;
       if (existing.loading && existing.startedAt && (Date.now() - existing.startedAt < 12000)) return;
+      if (existing.checked && existing.checkedAt && (Date.now() - existing.checkedAt < freshnessWindowMs)) return;
+      // No checkedAt → legacy record; still treat as fresh so we don't retest
+      if (existing.checked && !existing.checkedAt) return;
     }
     state.providerHealth[provider.key] = { loading: true, checked: false, startedAt: Date.now() };
     renderCurrentConfig();
     try {
-      // Race: API call vs hard timeout so we never stay stuck
       const result = await Promise.race([
         api('/api/provider/test-saved', {
           method: 'POST',
@@ -13873,10 +13884,10 @@ async function refreshProviderHealth(force = false) {
         }),
         new Promise(resolve => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 9000)),
       ]);
-      state.providerHealth[provider.key] = { loading: false, checked: true, ok: Boolean(result?.ok) };
+      state.providerHealth[provider.key] = { loading: false, checked: true, ok: Boolean(result?.ok), checkedAt: Date.now() };
     } catch (err) {
       console.warn('Provider health check failed:', provider.key, err);
-      state.providerHealth[provider.key] = { loading: false, checked: true, ok: false };
+      state.providerHealth[provider.key] = { loading: false, checked: true, ok: false, checkedAt: Date.now() };
     }
     renderCurrentConfig();
   }));
@@ -14596,7 +14607,18 @@ async function loadState({ preserveForm = true } = {}) {
       if (activeFromMerged) state.current.activeProvider = activeFromMerged;
     }
   }
-  state.providerHealth = {};
+  // Preserve providerHealth across loadState so the user-configured
+  // auto-detect cadence actually sticks. refreshProviderHealth() has its own
+  // freshness window check that respects the localStorage interval, and
+  // prunes stale keys for providers that no longer exist.
+  if (state.providerHealth && typeof state.providerHealth === 'object') {
+    const validKeys = new Set((state.current?.providers || []).map((p) => p.key));
+    for (const k of Object.keys(state.providerHealth)) {
+      if (!validKeys.has(k)) delete state.providerHealth[k];
+    }
+  } else {
+    state.providerHealth = {};
+  }
   state.codexTerminalProfiles = Array.isArray(state.current?.launch?.terminalProfiles) ? state.current.launch.terminalProfiles : [];
   fillAdvancedFromState();
   renderCodexTerminalPicker();
@@ -18115,6 +18137,7 @@ loadTools();
           baseUrl: p.baseUrl || '',
           model: p.isActive ? (s.current?.summary?.model || '') : '',
           mode: 'apikey',
+          kind: 'codex-apikey',
           isActive: Boolean(p.isActive),
           hasCredential: Boolean(p.hasApiKey),
           historyOnly: Boolean(p.historyOnly),
@@ -18123,21 +18146,73 @@ loadTools();
           tool,
         };
       });
-      if (login.loggedIn) {
-        rows.unshift({
-          key: '__codex_official_oauth__',
-          name: login.orgName || login.email || 'OpenAI 官方登录',
-          baseUrl: 'https://chatgpt.com (ChatGPT)',
-          model: login.plan || '',
+
+      const oauthCache = window.__chOauthProfiles || { loaded: false, data: null };
+      const oauthData = oauthCache.data || { profiles: [], active: '', live: {}, liveHasUnsavedTokens: false };
+      const savedProfiles = Array.isArray(oauthData.profiles) ? oauthData.profiles : [];
+      const oauthIsChosen = login.loggedIn && !providers.some((p) => p.isActive);
+
+      for (const prof of savedProfiles) {
+        const id = prof.id || '';
+        const isActiveProfile = Boolean(oauthData.active && oauthData.active === id);
+        const isChosen = isActiveProfile && oauthIsChosen;
+        rows.push({
+          key: `__codex_oauth_profile:${id}`,
+          name: prof.name || prof.email || 'OAuth 账号',
+          baseUrl: 'ChatGPT 官方登录',
+          model: isChosen ? (login.plan || prof.plan || '') : '',
           mode: 'oauth',
-          isActive: !providers.some((p) => p.isActive),
+          kind: 'codex-oauth-profile',
+          isActive: isChosen,
+          hasCredential: true,
+          health: isActiveProfile ? { ok: true, checked: true } : null,
+          ref: prof,
+          plan: prof.plan || '',
+          email: prof.email || '',
+          profileId: id,
+          tool,
+        });
+      }
+
+      // Live tokens exist but don't map to any saved profile → offer "save as profile".
+      if (oauthCache.loaded && oauthData.liveHasUnsavedTokens) {
+        rows.push({
+          key: '__codex_oauth_unsaved__',
+          name: '未保存的官方登录',
+          baseUrl: 'ChatGPT 官方登录 · 尚未存入 profile',
+          model: (oauthData.live && oauthData.live.plan) || login.plan || '',
+          mode: 'oauth',
+          kind: 'codex-oauth-unsaved',
+          isActive: oauthIsChosen,
           hasCredential: true,
           health: { ok: true, checked: true },
           ref: null,
+          plan: (oauthData.live && oauthData.live.plan) || '',
+          email: (oauthData.live && oauthData.live.email) || '',
           tool,
-          readOnly: true,
         });
       }
+
+      // Fallback synthetic row: no cache yet, but login exists — show legacy pill
+      // so the hub never blinks empty on the very first render.
+      if (!oauthCache.loaded && login.loggedIn && savedProfiles.length === 0) {
+        rows.push({
+          key: '__codex_oauth_unsaved__',
+          name: login.orgName || login.email || '官方登录',
+          baseUrl: 'ChatGPT 官方登录',
+          model: login.plan || '',
+          mode: 'oauth',
+          kind: 'codex-oauth-unsaved',
+          isActive: oauthIsChosen,
+          hasCredential: true,
+          health: { ok: true, checked: true },
+          ref: null,
+          plan: login.plan || '',
+          email: login.email || '',
+          tool,
+        });
+      }
+
       return rows;
     }
 
@@ -18264,12 +18339,39 @@ loadTools();
       dotCls = 'muted'; statusCls = 'muted'; statusTxt = '未检测';
     }
 
+    let actions = '';
+    if (r.kind === 'codex-oauth-profile') {
+      actions = `
+          <button type="button" class="ch-row-icon-btn" data-ch-oauth-rename="${safeEscape(r.profileId || '')}" title="重命名" aria-label="重命名 ${safeEscape(r.name)}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
+          </button>
+          <button type="button" class="ch-row-icon-btn" data-ch-oauth-delete="${safeEscape(r.profileId || '')}" title="删除" aria-label="删除 ${safeEscape(r.name)}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+          </button>`;
+    } else if (r.kind === 'codex-oauth-unsaved') {
+      actions = `
+          <button type="button" class="ch-row-icon-btn primary" data-ch-oauth-save-current="1" title="保存为 OAuth profile" aria-label="保存为 OAuth profile">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          </button>`;
+    } else {
+      actions = `
+          <button type="button" class="ch-row-icon-btn" data-ch-row-edit="${safeEscape(r.key)}" title="编辑" aria-label="编辑 ${safeEscape(r.name)}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
+          </button>
+          <button type="button" class="ch-row-icon-btn" data-ch-row-detect="${safeEscape(r.key)}" title="重检" aria-label="重检 ${safeEscape(r.name)}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
+          </button>`;
+    }
+
+    const planPill = r.plan ? `<span class="ch-row-plan" data-plan="${safeEscape(String(r.plan).toLowerCase())}">${safeEscape(String(r.plan).toUpperCase())}</span>` : '';
+
     return `
       <div class="ch-row ${r.isActive ? 'current' : ''}" role="listitem" data-ch-key="${safeEscape(r.key)}" tabindex="0">
         <span class="ch-row-dot ${dotCls}"></span>
         <span class="ch-row-body">
           <span class="ch-row-title">
             <span class="ch-row-name">${safeEscape(r.name)}</span>
+            ${planPill}
             ${r.isActive ? '<span class="ch-row-current-tag">当前</span>' : ''}
           </span>
           <span class="ch-row-meta">
@@ -18278,31 +18380,37 @@ loadTools();
           </span>
         </span>
         <span class="ch-row-status"><span class="ch-status ${statusCls}">${safeEscape(statusTxt)}</span></span>
-        <span class="ch-row-actions">
-          <button type="button" class="ch-row-icon-btn" data-ch-row-edit="${safeEscape(r.key)}" title="编辑" aria-label="编辑 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
-          </button>
-          <button type="button" class="ch-row-icon-btn" data-ch-row-detect="${safeEscape(r.key)}" title="重检" aria-label="重检 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
-          </button>
+        <span class="ch-row-actions">${actions}
         </span>
       </div>`;
   }
 
   function renderListHTML(rows) {
-    if (!rows.length) {
-      return '<div class="ch-list-empty">没有匹配的 provider</div>';
-    }
+    const s = hubState();
+    const tool = s?.activeTool || 'codex';
     const oauth = rows.filter((r) => r.mode === 'oauth');
     const apikey = rows.filter((r) => r.mode === 'apikey');
     const pieces = [];
-    if (oauth.length) {
-      pieces.push(`<div class="ch-group-head">OAUTH<span class="count">· ${oauth.length}</span></div>`);
-      pieces.push(oauth.map(rowHTML).join(''));
+
+    // For Codex we always render the OAuth group header (even when empty) so the
+    // "+ 新增 OAuth 账号" button on the right side is discoverable.
+    if (tool === 'codex' || oauth.length) {
+      const addBtn = tool === 'codex'
+        ? `<button type="button" class="ch-group-head-add" data-ch-oauth-add title="新增 OAuth 账号 (codex login)">
+             <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+             <span>新增</span>
+           </button>`
+        : '';
+      pieces.push(`<div class="ch-group-head"><span class="ch-group-head-text">OAUTH<span class="count">· ${oauth.length}</span></span>${addBtn}</div>`);
+      if (oauth.length) pieces.push(oauth.map(rowHTML).join(''));
     }
+
     if (apikey.length) {
       pieces.push(`<div class="ch-group-head">API KEY<span class="count">· ${apikey.length}</span></div>`);
       pieces.push(apikey.map(rowHTML).join(''));
+    }
+    if (!rows.length && tool !== 'codex') {
+      return '<div class="ch-list-empty">没有匹配的 provider</div>';
     }
     return pieces.join('');
   }
@@ -18355,25 +18463,67 @@ loadTools();
   }
 
   // ── Interactions ────────────────────────────────────────────────
+  // Populate the underlying form with a provider's current values WITHOUT saving.
+  // The user can then edit and hit 保存配置 to apply; a save also re-activates
+  // that provider, so "click row → edit → save" is the one-click switch path.
+  function loadProviderIntoForm(key) {
+    if (!key) return null;
+    const s = hubState();
+    if (!s) return null;
+    const tool = s.activeTool || 'codex';
+    if (tool === 'codex') {
+      if (key === '__codex_official_oauth__') return null;
+      if (key === '__codex_oauth_unsaved__' || key.startsWith('__codex_oauth_profile:')) return null;
+      const p = (s.current?.providers || []).find((x) => x.key === key);
+      if (p && typeof fillFromProvider === 'function') {
+        try { fillFromProvider(p); } catch (err) { console.warn('[ch] fillFromProvider failed', err); }
+      }
+      return p || null;
+    }
+    if (tool === 'claudecode') {
+      const profiles = typeof getClaudeProviderProfiles === 'function' ? getClaudeProviderProfiles(s.claudeCodeState) : [];
+      return (profiles || []).find((x) => x.key === key) || null;
+    }
+    if (tool === 'opencode') {
+      return ((s.opencodeState?.providers) || []).find((x) => x.key === key) || null;
+    }
+    return null;
+  }
+
   function openSlideover(mode, providerKey) {
     const so = document.getElementById('chSlideover');
     if (!so) return;
+
+    // OAuth mode is chosen at the outer-list level; inside the drawer we only
+    // ever show the API-Key form. Pin the state + rerun the form visibility
+    // sync (hides the now-invisible auth block but unhides URL / Key fields).
+    const s = hubState();
+    if (s && (s.activeTool || 'codex') === 'codex') {
+      s.codexAuthView = 'api_key';
+      if (typeof syncCodexAuthView === 'function') {
+        try { syncCodexAuthView(); } catch (_) {}
+      }
+    }
+
     so.classList.remove('hide');
     // Two rAFs so the initial display:block commits before .open animates in
     requestAnimationFrame(() => requestAnimationFrame(() => so.classList.add('open')));
     so.setAttribute('aria-hidden', 'false');
     document.body.classList.add('ch-so-active');
     const title = document.getElementById('chSlideoverTitle');
-    if (title) title.textContent = mode === 'add' ? '新增 Provider' : '编辑 Provider';
 
     if (mode === 'edit' && providerKey) {
-      switchToRow(providerKey).catch(() => {});
+      const provider = loadProviderIntoForm(providerKey);
+      if (title) title.textContent = provider ? `编辑 · ${provider.name || provider.key}` : '编辑 Provider';
     } else if (mode === 'add') {
+      if (title) title.textContent = '新增 Provider';
       const urlEl = document.getElementById('baseUrlInput');
       const keyEl = document.getElementById('apiKeyInput');
       if (urlEl) urlEl.value = '';
       if (keyEl) keyEl.value = '';
       setTimeout(() => urlEl && urlEl.focus(), 260);
+    } else if (title) {
+      title.textContent = '编辑 Provider';
     }
   }
 
@@ -18386,7 +18536,170 @@ loadTools();
     document.body.classList.remove('ch-so-active');
   }
 
-  async function switchToRow(key) {
+  // ── Codex OAuth profile store (remote) ─────────────────────────
+  // Cache layout: { loaded: bool, data: {active, profiles, live, liveHasUnsavedTokens} }
+  window.__chOauthProfiles = window.__chOauthProfiles || { loaded: false, data: null };
+
+  async function loadCodexOauthProfiles(opts) {
+    const allowAutoSave = !(opts && opts.skipAutoSave);
+    try {
+      const res = await api('/api/codex/oauth/profiles', { method: 'GET' });
+      if (!res || !res.ok) {
+        window.__chOauthProfiles = { loaded: true, data: { active: '', profiles: [], live: {}, liveHasUnsavedTokens: false } };
+        renderConnectionHub();
+        return;
+      }
+      window.__chOauthProfiles = { loaded: true, data: res.data || {} };
+    } catch (err) {
+      console.warn('[ch] load oauth profiles failed', err);
+      window.__chOauthProfiles = { loaded: true, data: { active: '', profiles: [], live: {}, liveHasUnsavedTokens: false } };
+      renderConnectionHub();
+      return;
+    }
+
+    // Auto-save: if the live auth.json has OAuth tokens that aren't mapped to
+    // any saved profile yet, snapshot it silently. The backend picks a sensible
+    // default name (email / "OAuth (PLAN)"); user can rename via ✏ later.
+    // Re-entrancy guarded by opts.skipAutoSave so the post-save reload doesn't
+    // loop.
+    if (allowAutoSave && window.__chOauthProfiles.data?.liveHasUnsavedTokens) {
+      try {
+        const saveRes = await api('/api/codex/oauth/profiles/save-current', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: '' }),
+        });
+        if (saveRes?.ok) {
+          if (typeof flash === 'function') flash('已自动保存官方登录为 OAuth profile', 'success');
+          await loadCodexOauthProfiles({ skipAutoSave: true });
+          return;
+        }
+      } catch (err) {
+        console.warn('[ch] auto-save oauth profile failed', err);
+      }
+    }
+
+    renderConnectionHub();
+  }
+
+  async function reloadCodexStateThenHub() {
+    try {
+      if (typeof loadState === 'function') await loadState();
+    } catch (err) {
+      console.warn('[ch] loadState failed', err);
+    }
+    await loadCodexOauthProfiles();
+  }
+
+  async function saveCurrentOauthAsProfile() {
+    const defaultName = (() => {
+      const d = window.__chOauthProfiles?.data;
+      const live = d?.live || {};
+      if (live.email) return live.email;
+      if (live.plan) return `OAuth (${String(live.plan).toUpperCase()})`;
+      return '';
+    })();
+    const name = window.prompt('给这个 OAuth 账号起个名字（可留空自动命名）', defaultName || '') ;
+    if (name === null) return; // cancelled
+    const res = await api('/api/codex/oauth/profiles/save-current', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    if (!res || !res.ok) {
+      if (typeof flash === 'function') flash(res?.error || '保存 OAuth profile 失败', 'error');
+      return;
+    }
+    if (typeof flash === 'function') flash('已保存为 OAuth profile', 'success');
+    await loadCodexOauthProfiles();
+  }
+
+  async function switchOauthProfile(id) {
+    if (!id) return;
+    const res = await api('/api/codex/oauth/profiles/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    if (!res || !res.ok) {
+      if (typeof flash === 'function') flash(res?.error || '切换 OAuth 账号失败', 'error');
+      return;
+    }
+    if (typeof flash === 'function') flash('已切换 OAuth 账号', 'success');
+    await reloadCodexStateThenHub();
+  }
+
+  async function renameOauthProfile(id) {
+    if (!id) return;
+    const current = (window.__chOauthProfiles?.data?.profiles || []).find((p) => p.id === id);
+    const name = window.prompt('新的名字', current?.name || '');
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const res = await api('/api/codex/oauth/profiles/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, name: trimmed }),
+    });
+    if (!res || !res.ok) {
+      if (typeof flash === 'function') flash(res?.error || '重命名失败', 'error');
+      return;
+    }
+    await loadCodexOauthProfiles();
+  }
+
+  async function deleteOauthProfile(id) {
+    if (!id) return;
+    const confirmed = window.confirm('删除该 OAuth profile（只删除我们存储的副本，不会登出 ChatGPT）？');
+    if (!confirmed) return;
+    const res = await api('/api/codex/oauth/profiles/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    if (!res || !res.ok) {
+      if (typeof flash === 'function') flash(res?.error || '删除失败', 'error');
+      return;
+    }
+    if (typeof flash === 'function') flash('已删除该 profile', 'success');
+    await loadCodexOauthProfiles();
+  }
+
+  async function addNewOauthAccount() {
+    const data = window.__chOauthProfiles?.data || {};
+    if (data.liveHasUnsavedTokens) {
+      const saveFirst = window.confirm('检测到当前 ~/.codex/auth.json 里有一个还没保存成 profile 的官方登录。\n新登录会覆盖它 —— 要不要先把当前的存成 profile？\n\n确定 = 先保存；取消 = 直接继续新登录（当前登录会被覆盖）。');
+      if (saveFirst) {
+        await saveCurrentOauthAsProfile();
+      }
+    }
+    const go = window.confirm('接下来会在终端里打开 codex login 进行浏览器授权。\n完成授权后回到这里，再次点击“新增 OAuth 账号”就会自动保存为 profile。');
+    if (!go) return;
+    try {
+      if (typeof launchCodexLogin === 'function') {
+        await launchCodexLogin();
+      } else {
+        if (typeof flash === 'function') flash('未找到 codex login 启动器', 'error');
+        return;
+      }
+    } catch (err) {
+      console.warn('[ch] launchCodexLogin failed', err);
+    }
+
+    // Poll a few times so the "未保存登录" row shows up once the CLI finishes writing auth.json.
+    let tries = 0;
+    const pollId = setInterval(async () => {
+      tries += 1;
+      await reloadCodexStateThenHub();
+      const d = window.__chOauthProfiles?.data;
+      if ((d && d.liveHasUnsavedTokens) || tries >= 60) clearInterval(pollId);
+    }, 2500);
+  }
+
+  // Row-body click: activate this provider (modifies Codex's model_provider
+  // pointer). Editing that same provider's URL / Key / model is done via the
+  // ✏ icon which opens the drawer.
+  async function switchRow(key) {
     if (!key) return;
     const s = hubState();
     if (!s) return;
@@ -18394,6 +18707,16 @@ loadTools();
     try {
       if (tool === 'codex') {
         if (key === '__codex_official_oauth__') return;
+        if (key === '__codex_oauth_unsaved__') {
+          // Body click on the unsaved OAuth row = save it as a profile.
+          await saveCurrentOauthAsProfile();
+          return;
+        }
+        if (key.startsWith('__codex_oauth_profile:')) {
+          const id = key.slice('__codex_oauth_profile:'.length);
+          await switchOauthProfile(id);
+          return;
+        }
         const p = (s.current?.providers || []).find((x) => x.key === key);
         if (p && typeof quickSwitchCodexProvider === 'function') await quickSwitchCodexProvider(p);
       } else if (tool === 'claudecode') {
@@ -18416,12 +18739,135 @@ loadTools();
     if (tool === 'codex') {
       const p = (s.current?.providers || []).find((x) => x.key === key);
       if (p && typeof testCodexProviderConnectivity === 'function') {
-        try { await testCodexProviderConnectivity(p); } catch (_) {}
+        try {
+          const result = await testCodexProviderConnectivity(p);
+          if (result && result.ok === false && result.error && typeof flash === 'function') {
+            flash(result.error, 'warning');
+          }
+        } catch (err) {
+          console.warn('[ch] detect failed', err);
+        }
         return;
       }
     }
-    // Fallback: trigger the (now hidden) detect button in the slide-over form
     document.getElementById('detectBtn')?.click();
+  }
+
+  // ── Auto-detect frequency ────────────────────────────────────────
+  // Persist user's preferred cadence in localStorage. When > 0, schedules a
+  // refreshProviderHealth(true) tick so every saved provider gets re-tested.
+  const AUTODETECT_LS_KEY = 'easyaiconfig_ch_autodetect_interval_sec';
+  const AUTODETECT_MIN_SEC = 30; // guard against <30s cadence (server-side pressure)
+  let autodetectTimerId = 0;
+
+  function clearAutodetectTimer() {
+    if (autodetectTimerId) {
+      clearInterval(autodetectTimerId);
+      autodetectTimerId = 0;
+    }
+  }
+
+  function scheduleAutodetect(sec) {
+    clearAutodetectTimer();
+    if (!sec || sec < AUTODETECT_MIN_SEC) return;
+    autodetectTimerId = setInterval(() => {
+      // Only run for tools that have a health-check function wired
+      const s = hubState();
+      if (!s) return;
+      if (document.hidden) return; // skip when window backgrounded
+      if (typeof refreshProviderHealth === 'function' && (s.activeTool || 'codex') === 'codex') {
+        try { refreshProviderHealth(true); } catch (_) {}
+      }
+    }, sec * 1000);
+  }
+
+  const AUTODETECT_OPTIONS = [
+    { value: 0,    label: '关闭' },
+    { value: 60,   label: '60 秒' },
+    { value: 300,  label: '5 分钟' },
+    { value: 1800, label: '30 分钟' },
+    { value: 3600, label: '1 小时' },
+  ];
+
+  function labelForInterval(sec) {
+    const opt = AUTODETECT_OPTIONS.find((o) => o.value === sec);
+    return opt ? opt.label : '关闭';
+  }
+
+  function applyAutodetectUi(sec) {
+    const container = document.getElementById('chAutodetect');
+    if (container) container.classList.toggle('is-on', sec > 0);
+    const valueEl = document.getElementById('chAutodetectValue');
+    if (valueEl) valueEl.textContent = labelForInterval(sec);
+    document.querySelectorAll('#chAutodetectMenu [data-ad-value]').forEach((btn) => {
+      btn.classList.toggle('active', Number(btn.getAttribute('data-ad-value')) === sec);
+    });
+  }
+
+  function closeAutodetectMenu() {
+    const menu = document.getElementById('chAutodetectMenu');
+    const trigger = document.getElementById('chAutodetectTrigger');
+    const container = document.getElementById('chAutodetect');
+    if (menu) menu.classList.add('hide');
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    if (container) container.dataset.open = 'false';
+  }
+
+  function openAutodetectMenu() {
+    const menu = document.getElementById('chAutodetectMenu');
+    const trigger = document.getElementById('chAutodetectTrigger');
+    const container = document.getElementById('chAutodetect');
+    if (menu) menu.classList.remove('hide');
+    if (trigger) trigger.setAttribute('aria-expanded', 'true');
+    if (container) container.dataset.open = 'true';
+  }
+
+  function initAutodetect() {
+    const trigger = document.getElementById('chAutodetectTrigger');
+    const menu = document.getElementById('chAutodetectMenu');
+    if (!trigger || !menu) return;
+
+    let saved = 0;
+    try {
+      const raw = localStorage.getItem(AUTODETECT_LS_KEY);
+      if (raw != null) saved = Math.max(0, parseInt(raw, 10) || 0);
+    } catch (_) { /* localStorage may be denied; fall back to off */ }
+    const allowed = AUTODETECT_OPTIONS.map((o) => o.value);
+    if (!allowed.includes(saved)) saved = 0;
+    applyAutodetectUi(saved);
+    scheduleAutodetect(saved);
+
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = !menu.classList.contains('hide');
+      if (isOpen) closeAutodetectMenu();
+      else openAutodetectMenu();
+    });
+
+    menu.addEventListener('click', (e) => {
+      const btn = e.target instanceof Element ? e.target.closest('[data-ad-value]') : null;
+      if (!btn) return;
+      const sec = Math.max(0, parseInt(btn.getAttribute('data-ad-value'), 10) || 0);
+      try { localStorage.setItem(AUTODETECT_LS_KEY, String(sec)); } catch (_) {}
+      applyAutodetectUi(sec);
+      scheduleAutodetect(sec);
+      closeAutodetectMenu();
+      if (sec > 0 && typeof refreshProviderHealth === 'function') {
+        try { refreshProviderHealth(true); } catch (_) {}
+      }
+    });
+
+    // Dismiss on outside click / Escape
+    document.addEventListener('click', (e) => {
+      const container = document.getElementById('chAutodetect');
+      if (!container || menu.classList.contains('hide')) return;
+      if (!container.contains(e.target)) closeAutodetectMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !menu.classList.contains('hide')) closeAutodetectMenu();
+    });
+
+    window.addEventListener('beforeunload', clearAutodetectTimer);
   }
 
   // ── Delegated event wiring (runs once on DOMContentLoaded) ─────
@@ -18472,18 +18918,45 @@ loadTools();
     list?.addEventListener('click', (e) => {
       const target = e.target instanceof Element ? e.target : null;
       if (!target) return;
+      // OAuth profile actions (rename / delete / save-current / add-new)
+      const addOauth = target.closest('[data-ch-oauth-add]');
+      if (addOauth) { e.stopPropagation(); addNewOauthAccount(); return; }
+      const saveOauth = target.closest('[data-ch-oauth-save-current]');
+      if (saveOauth) { e.stopPropagation(); saveCurrentOauthAsProfile(); return; }
+      const renameOauth = target.closest('[data-ch-oauth-rename]');
+      if (renameOauth) { e.stopPropagation(); renameOauthProfile(renameOauth.getAttribute('data-ch-oauth-rename')); return; }
+      const deleteOauth = target.closest('[data-ch-oauth-delete]');
+      if (deleteOauth) { e.stopPropagation(); deleteOauthProfile(deleteOauth.getAttribute('data-ch-oauth-delete')); return; }
+
       const editBtn = target.closest('[data-ch-row-edit]');
       if (editBtn) { e.stopPropagation(); openSlideover('edit', editBtn.getAttribute('data-ch-row-edit')); return; }
       const detectBtn = target.closest('[data-ch-row-detect]');
       if (detectBtn) { e.stopPropagation(); detectRow(detectBtn.getAttribute('data-ch-row-detect')); return; }
       const row = target.closest('[data-ch-key]');
-      if (row) switchToRow(row.getAttribute('data-ch-key'));
+      if (row) {
+        const key = row.getAttribute('data-ch-key');
+        // OAuth is managed by `codex login`; can't switch / edit in-app.
+        if (key === '__codex_official_oauth__') {
+          if (typeof flash === 'function') {
+            flash('官方登录由 Codex CLI 管理，请在终端运行 codex login', 'info');
+          }
+          return;
+        }
+        // Body click = switch to / activate this provider.
+        // Editing its contents is the ✏ icon (opens the drawer).
+        switchRow(key);
+      }
     });
     list?.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       const target = e.target instanceof Element ? e.target : null;
       const row = target && target.closest('[data-ch-key]');
-      if (row) { e.preventDefault(); switchToRow(row.getAttribute('data-ch-key')); }
+      if (row) {
+        const key = row.getAttribute('data-ch-key');
+        if (key === '__codex_official_oauth__') return;
+        e.preventDefault();
+        switchRow(key);
+      }
     });
 
     // Ribbon filter
@@ -18530,27 +19003,79 @@ loadTools();
       }
     });
 
-    // When the existing form's Save / Launch runs, close the slide-over so the
-    // hub view (now holding the updated state) takes focus again.
-    ['saveBtn', 'launchBtn'].forEach((id) => {
-      const btn = document.getElementById(id);
-      if (btn) btn.addEventListener('click', () => {
-        // Close shortly after so the handler has time to mutate state
+    // Save button: when the drawer is open we want edit-in-place semantics —
+    // the save should update this provider's URL / Key / model, but NOT change
+    // Codex's active pointer (switching is a separate, outer action). The
+    // legacy save call always re-activates whatever the form points at, so we
+    // intercept in the capture phase, perform the save ourselves, and then
+    // restore the previous active provider if it was different from the edit
+    // target. When the drawer is closed the default save handler takes over.
+    const saveBtn = document.getElementById('saveBtn');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async (e) => {
+        const so = document.getElementById('chSlideover');
+        if (!so || !so.classList.contains('open')) return; // let default handler run
+        // Only Codex supports the restore-active flow; other tools keep their
+        // normal save semantics.
+        const s = hubState();
+        if (!s || (s.activeTool || 'codex') !== 'codex') return;
+        e.stopImmediatePropagation();
+        e.preventDefault();
+
+        const prevActive = s.current?.activeProvider || null;
+        const prevActiveKey = prevActive?.key || null;
+
+        try {
+          if (typeof saveConfigOnly === 'function') {
+            await saveConfigOnly();
+          }
+        } catch (err) {
+          console.warn('[ch] drawer save failed', err);
+        }
+
+        // After save, if active got switched to the edit target (which the
+        // save API always does), restore the previous active provider.
+        const s2 = hubState();
+        const newActiveKey = s2?.current?.activeProvider?.key || null;
+        if (prevActiveKey && newActiveKey && prevActiveKey !== newActiveKey) {
+          const prev = (s2.current.providers || []).find((p) => p.key === prevActiveKey);
+          if (prev && typeof quickSwitchCodexProvider === 'function') {
+            try { await quickSwitchCodexProvider(prev); } catch (_) {}
+          }
+        }
+
+        if (so.classList.contains('open')) closeSlideover();
+      }, true); // capture phase — runs before the bubble-phase saveConfigOnly listener
+    }
+
+    // Launch button: close drawer after launch (same as before, no save-restore needed)
+    const launchBtn = document.getElementById('launchBtn');
+    if (launchBtn) {
+      launchBtn.addEventListener('click', () => {
         setTimeout(() => {
           const so = document.getElementById('chSlideover');
           if (so && so.classList.contains('open')) closeSlideover();
         }, 120);
       });
-    });
+    }
+
+    // Auto-detect frequency
+    initAutodetect();
   }
 
   // Expose hub render so renderCurrentConfig() can call it
   window.renderConnectionHub = renderConnectionHub;
+  window.__chLoadOauthProfiles = loadCodexOauthProfiles;
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { wire(); renderConnectionHub(); });
+    document.addEventListener('DOMContentLoaded', () => {
+      wire();
+      renderConnectionHub();
+      loadCodexOauthProfiles();
+    });
   } else {
     wire();
     renderConnectionHub();
+    loadCodexOauthProfiles();
   }
 })();

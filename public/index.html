@@ -299,7 +299,7 @@
                       <span class="ch-title-sep">·</span>
                       <span class="ch-title-main">连接配置</span>
                     </div>
-                    <p class="ch-sub">选一个 provider 作为启动线路，点击切换，长按查看详情</p>
+                    <p class="ch-sub">点击行 = 切换当前线路 · <span class="ch-inline-key">✏</span> 编辑该 provider 内容 · <span class="ch-inline-key">↻</span> 手动重检</p>
                   </header>
 
                   <article class="ch-hero" id="chHero">
@@ -333,6 +333,27 @@
                     <button type="button" class="ch-ribbon-item" data-ch-filter="apikey">
                       <span>API Key</span><span class="ch-ribbon-count" data-count="apikey">0</span>
                     </button>
+                    <div class="ch-ribbon-spacer"></div>
+                    <div class="ch-autodetect" id="chAutodetect" title="自动检测所有 provider 的连接状态">
+                      <button type="button" class="ch-autodetect-trigger" id="chAutodetectTrigger" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <circle cx="12" cy="13" r="8"/>
+                          <path d="M12 9v4l2 1M9 2h6M12 5v2"/>
+                        </svg>
+                        <span class="ch-autodetect-label">自动检测</span>
+                        <span class="ch-autodetect-value" id="chAutodetectValue">关闭</span>
+                        <svg class="ch-autodetect-chev" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
+                          <path d="M2 4l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                      </button>
+                      <div class="ch-autodetect-menu hide" id="chAutodetectMenu" role="menu">
+                        <button type="button" role="menuitem" data-ad-value="0">关闭</button>
+                        <button type="button" role="menuitem" data-ad-value="60">60 秒</button>
+                        <button type="button" role="menuitem" data-ad-value="300">5 分钟</button>
+                        <button type="button" role="menuitem" data-ad-value="1800">30 分钟</button>
+                        <button type="button" role="menuitem" data-ad-value="3600">1 小时</button>
+                      </div>
+                    </div>
                   </nav>
 
                   <div class="ch-list-wrap">

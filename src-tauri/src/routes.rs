@@ -23,6 +23,10 @@ use crate::config::{
   get_provider_secret, list_backups, load_state, pick_directory, restore_backup, save_config,
   save_raw_config, save_settings, test_saved_provider,
 };
+use crate::oauth_profiles::{
+  delete_oauth_profile, list_oauth_profiles, rename_oauth_profile, save_current_oauth_profile,
+  switch_oauth_profile,
+};
 use crate::provider::detect_provider;
 use crate::updater::{get_app_update_info, get_app_update_progress, install_app_update};
 use crate::{fail, ok, OPENAI_CODEX_PACKAGE, CLAUDE_CODE_PACKAGE, OPENCLAW_PACKAGE};
@@ -46,6 +50,11 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/codex/uninstall", "POST") => codex_npm_action(&["uninstall", "-g", OPENAI_CODEX_PACKAGE]),
     ("/api/codex/launch", "POST") => launch_codex(body),
     ("/api/codex/login", "POST") => login_codex(body),
+    ("/api/codex/oauth/profiles", "GET") => list_oauth_profiles(query),
+    ("/api/codex/oauth/profiles/save-current", "POST") => save_current_oauth_profile(body),
+    ("/api/codex/oauth/profiles/switch", "POST") => switch_oauth_profile(body),
+    ("/api/codex/oauth/profiles/rename", "POST") => rename_oauth_profile(body),
+    ("/api/codex/oauth/profiles/delete", "POST") => delete_oauth_profile(body),
     ("/api/codex/sessions", "GET") => list_codex_sessions(query),
     ("/api/codex/session-detail", "GET") => get_codex_session_detail(query),
     ("/api/codex/resume", "POST") => resume_codex_session(body),

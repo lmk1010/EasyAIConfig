@@ -297,6 +297,7 @@ mod config;
 mod provider;
 mod updater;
 mod codex;
+mod oauth_profiles;
 mod routes;
 
 use routes::backend_request;
