@@ -18280,9 +18280,16 @@ loadTools();
       const defaultHasTokens = Boolean(defaultPlanObj.subscriptionType) || cliLoggedIn;
 
       if (defaultHasTokens) {
+        // Name prefers our own backend's defaultPlan.email (read directly from
+        // ~/.claude.json by /api/claudecode/oauth/profiles) over cc.login.email
+        // (populated by the slower load_claudecode_state path). This way the
+        // hero shows the right identity on the very first paint instead of
+        // flashing "默认账号" until cc.login arrives.
+        const defaultEmail = defaultPlanObj.email || ccLogin.email || '';
+        const defaultOrg = defaultPlanObj.organizationName || ccLogin.orgName || '';
         rows.push({
           key: '__claudecode_oauth_default__',
-          name: ccLogin.email || ccLogin.orgName || '默认账号',
+          name: defaultEmail || defaultOrg || '默认账号',
           baseUrl: '~/.claude/ · Claude Code 默认',
           model: activeId === '' ? defaultPlan : '',
           mode: 'oauth',
@@ -18292,7 +18299,7 @@ loadTools();
           health: { ok: true, checked: true },
           ref: null,
           plan: defaultPlan,
-          email: ccLogin.email || '',
+          email: defaultEmail,
           tool,
         });
       }

@@ -28,12 +28,43 @@
 
 use chrono::Utc;
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::provider::get_string;
 use crate::{app_home, ensure_dir, parse_json_object, read_text, write_text};
+
+// In-memory cache for Keychain plan/tier lookups, keyed by the Keychain
+// service name. Every `security find-generic-password` spawns a subprocess
+// and blocks, which adds up to a visible ~300–600ms delay on first paint
+// when the hub renders multiple profiles. The values we're reading
+// (subscriptionType, rateLimitTier) only change when the user upgrades
+// their plan or re-logs in, so a 60-second TTL is safe and the hub feels
+// instant on repeat renders.
+static KEYCHAIN_CACHE: Mutex<Option<HashMap<String, (Instant, (String, String))>>> = Mutex::new(None);
+const KEYCHAIN_TTL: Duration = Duration::from_secs(60);
+
+fn cache_get(service: &str) -> Option<(String, String)> {
+  let mut guard = KEYCHAIN_CACHE.lock().ok()?;
+  let map = guard.get_or_insert_with(HashMap::new);
+  let (stamp, value) = map.get(service)?;
+  if stamp.elapsed() > KEYCHAIN_TTL {
+    map.remove(service);
+    return None;
+  }
+  Some(value.clone())
+}
+
+fn cache_put(service: &str, pair: (String, String)) {
+  if let Ok(mut guard) = KEYCHAIN_CACHE.lock() {
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.insert(service.to_string(), (Instant::now(), pair));
+  }
+}
 
 const PROFILES_DIRNAME: &str = "claudecode-oauth-profiles";
 const PROFILES_INDEX: &str = "profiles.json";
@@ -146,6 +177,13 @@ fn read_profile_plan_tier(dir: &std::path::Path) -> (String, String) {
 
 #[cfg(target_os = "macos")]
 fn read_keychain_plan_tier(service: &str) -> Option<(String, String)> {
+  // Fast path: return cached value if still fresh.
+  if let Some(cached) = cache_get(service) {
+    if !cached.0.is_empty() || !cached.1.is_empty() {
+      return Some(cached);
+    }
+  }
+
   use std::process::Command;
   let user = std::env::var("USER").unwrap_or_default();
   if user.is_empty() { return None; }
@@ -163,14 +201,20 @@ fn read_keychain_plan_tier(service: &str) -> Option<(String, String)> {
   // Strategy 1: current Claude Code format — plain JSON written by `security -X`.
   if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
     let (s, t) = extract_plan_tier(&v);
-    if !s.is_empty() || !t.is_empty() { return Some((s, t)); }
+    if !s.is_empty() || !t.is_empty() {
+      cache_put(service, (s.clone(), t.clone()));
+      return Some((s, t));
+    }
   }
 
   // Strategy 2: legacy hex-encoded JSON (seen in older builds / docs).
   if let Some(bytes) = hex_decode(trimmed) {
     if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
       let (s, t) = extract_plan_tier(&v);
-      if !s.is_empty() || !t.is_empty() { return Some((s, t)); }
+      if !s.is_empty() || !t.is_empty() {
+        cache_put(service, (s.clone(), t.clone()));
+        return Some((s, t));
+      }
     }
   }
 
@@ -295,17 +339,49 @@ pub(crate) fn list_claudecode_oauth_profiles(_query: &Value) -> Result<Value, St
     .cloned()
     .unwrap_or_default();
 
+  // Read each profile's metadata (which includes a Keychain lookup on macOS)
+  // in parallel so N profiles don't take N * ~200ms on cold cache. Cached
+  // hits return in microseconds anyway, so this only matters for the first
+  // paint after an app restart.
+  struct ProfileInput {
+    id: String,
+    name: String,
+    created_at: i64,
+    updated_at: i64,
+    dir: PathBuf,
+  }
+  let inputs: Vec<ProfileInput> = profiles_arr
+    .iter()
+    .filter_map(|p| {
+      let id = p.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+      if id.is_empty() { return None; }
+      let dir = profile_dir(&id).ok()?;
+      Some(ProfileInput {
+        id: id.clone(),
+        name: p.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+        created_at: p.get("createdAt").and_then(Value::as_i64).unwrap_or(0),
+        updated_at: p.get("updatedAt").and_then(Value::as_i64).unwrap_or(0),
+        dir,
+      })
+    })
+    .collect();
+
+  let metas: Vec<(ProfileInput, Value)> = std::thread::scope(|scope| {
+    let handles: Vec<_> = inputs
+      .into_iter()
+      .map(|input| {
+        scope.spawn(move || {
+          let meta = read_profile_metadata(&input.dir);
+          (input, meta)
+        })
+      })
+      .collect();
+    handles.into_iter().filter_map(|h| h.join().ok()).collect()
+  });
+
   let mut enriched = Vec::new();
-  for p in profiles_arr {
-    let id = p.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-    if id.is_empty() {
-      continue;
-    }
-    let name = p.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-    let created_at = p.get("createdAt").and_then(Value::as_i64).unwrap_or(0);
-    let updated_at = p.get("updatedAt").and_then(Value::as_i64).unwrap_or(0);
-    let dir = profile_dir(&id)?;
-    let meta = read_profile_metadata(&dir);
+  for (input, meta) in metas {
+    let ProfileInput { id, name, created_at, updated_at, dir } = input;
     enriched.push(json!({
       "id": id,
       "name": name,
@@ -342,10 +418,31 @@ pub(crate) fn list_claudecode_oauth_profiles(_query: &Value) -> Result<Value, St
 
 fn read_default_claude_plan() -> Value {
   let (sub, tier) = read_default_plan_tier();
+
+  // Also surface the default login's email / org so the hub's "默认" row
+  // can render the identity immediately, without waiting for the separate
+  // load_claudecode_state fetch to populate cc.login. Source of truth is
+  // ~/.claude.json :: oauthAccount (the global config file Claude CLI writes
+  // when CLAUDE_CONFIG_DIR is unset).
+  let (email, org_name) = crate::home_dir()
+    .ok()
+    .and_then(|home| {
+      let text = std::fs::read_to_string(home.join(".claude.json")).ok()?;
+      let v: Value = serde_json::from_str(&text).ok()?;
+      let account = v.get("oauthAccount").and_then(Value::as_object)?;
+      Some((
+        get_str_obj(account, "emailAddress"),
+        get_str_obj(account, "organizationName"),
+      ))
+    })
+    .unwrap_or_default();
+
   json!({
     "subscriptionType": sub,
     "rateLimitTier": tier,
     "plan": plan_label(&sub, &tier),
+    "email": email,
+    "organizationName": org_name,
   })
 }
 
