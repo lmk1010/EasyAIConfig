@@ -18345,10 +18345,17 @@ loadTools();
         </div>`;
     }
     const h = active.health || {};
-    const statusCls = active.isActive && h.ok ? 'ok' : h.loading ? 'warn loading' : h.ok ? 'ok' : h.checked ? 'bad' : 'muted';
-    const statusTxt = h.loading ? '检测中' : h.ok ? '已通' : h.checked ? '失败' : '未检测';
+    const isOauth = active.mode === 'oauth';
+    // Official OAuth sessions: no connectivity probing — status is always
+    // "当前 (OAUTH)". Only API-key sessions show the actual probe result.
+    const statusCls = isOauth
+      ? 'ok'
+      : (active.isActive && h.ok ? 'ok' : h.loading ? 'warn loading' : h.ok ? 'ok' : h.checked ? 'bad' : 'muted');
+    const statusTxt = isOauth
+      ? '当前'
+      : (h.loading ? '检测中' : h.ok ? '已通' : h.checked ? '失败' : '未检测');
     const launchLabel = LAUNCH_LABELS[tool] || '启动';
-    const modeTxt = active.mode === 'oauth' ? 'OAUTH' : 'API KEY';
+    const modeTxt = isOauth ? 'OAUTH' : 'API KEY';
 
     return `
       <div class="ch-hero-info">
@@ -18364,14 +18371,14 @@ loadTools();
         ${active.baseUrl ? `<div class="ch-hero-url">${safeEscape(active.baseUrl)}</div>` : ''}
       </div>
       <div class="ch-hero-actions">
-        <button type="button" class="ch-hero-ghost" data-ch-detect title="重新检测连接">
+        ${isOauth ? '' : `<button type="button" class="ch-hero-ghost" data-ch-detect title="重新检测连接">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
           重检
-        </button>
-        <button type="button" class="ch-hero-ghost" data-ch-edit title="编辑当前 provider">
+        </button>`}
+        ${isOauth ? '' : `<button type="button" class="ch-hero-ghost" data-ch-edit title="编辑当前 provider">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
           编辑
-        </button>
+        </button>`}
         <button type="button" class="ch-hero-launch" data-ch-launch>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>
           ${safeEscape(launchLabel)}
@@ -18382,11 +18389,15 @@ loadTools();
   // ── List HTML ─────────────────────────────────────────────────────
   function rowHTML(r) {
     const h = r.health || {};
+    const isOauth = r.mode === 'oauth';
     let dotCls, statusCls, statusTxt;
     if (r.isActive) {
       dotCls = 'current';
       statusCls = 'active';
       statusTxt = '当前';
+    } else if (isOauth) {
+      // Official OAuth identities don't get probed — row is pure metadata.
+      dotCls = 'ok'; statusCls = ''; statusTxt = '';
     } else if (h.loading) {
       dotCls = 'warn'; statusCls = 'warn loading'; statusTxt = '检测中';
     } else if (h.ok) {
@@ -18454,7 +18465,7 @@ loadTools();
             ${r.baseUrl ? `<span class="ch-row-url">${safeEscape(r.baseUrl)}</span>` : ''}
           </span>
         </span>
-        <span class="ch-row-status"><span class="ch-status ${statusCls}">${safeEscape(statusTxt)}</span></span>
+        <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}">${safeEscape(statusTxt)}</span>` : ''}</span>
         <span class="ch-row-actions">${actions}
         </span>
       </div>`;
