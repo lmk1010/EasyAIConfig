@@ -7704,6 +7704,32 @@ function formatRelativeTime(iso) {
   return `${day} 天前`;
 }
 
+// Collapse verbose vendor model IDs into something a human reads at a glance.
+//   claude-sonnet-4-5-20250929  → Sonnet 4.5
+//   claude-3-7-opus-20250229    → Opus 3.7
+//   gpt-5.4                     → GPT-5.4
+//   gpt-4o-mini-2024-07-18      → GPT-4o mini
+// Falls back to the raw string when the shape isn't recognized.
+function formatModelLabel(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  // Claude: claude-<tier>-<version>[-date]  (tier + version order varies)
+  const c = s.match(/^claude[-_ ](?:(\d[\d-]*)[-_ ])?(sonnet|haiku|opus)[-_ ]?(\d[\d-]*)?(?:[-_ ]\d{6,})?$/i);
+  if (c) {
+    const tier = c[2][0].toUpperCase() + c[2].slice(1).toLowerCase();
+    const ver = (c[1] || c[3] || '').replace(/-/g, '.');
+    return ver ? `${tier} ${ver}` : tier;
+  }
+  // GPT: gpt-4o-mini-xxxx, gpt-5.4, gpt-4-turbo-xxxx
+  const g = s.match(/^gpt[-_ ]?([\d.]+)(?:[-_ ](o|turbo|mini))?(?:[-_ ](mini|nano|turbo|pro))?/i);
+  if (g) {
+    const ver = g[1];
+    const suffix = [g[2], g[3]].filter(Boolean).map((x) => x.toLowerCase()).join(' ');
+    return suffix ? `GPT-${ver} ${suffix}` : `GPT-${ver}`;
+  }
+  return s;
+}
+
 function renderConsoleV3Firewall() {
   const el = document.getElementById('consoleV2Firewall');
   if (!el) return;
@@ -7726,9 +7752,13 @@ function renderConsoleV3Firewall() {
         <span class="cv3-fw-icon">🛡</span>
         <div class="cv3-fw-body">
           <div class="cv3-fw-title">官方线路安全检测 · 无法获取 IP</div>
-          <div class="cv3-fw-copy">${esc(n.error || '未知错误')}。建议确认本机网络或代理后重试。</div>
+          <div class="cv3-fw-copy">${esc(n.error || '未知错误')}</div>
+          <div class="cv3-fw-copy cv3-fw-hint">已尝试多个中立节点（ipapi.co / ipwho.is / ip-api.com / ipify.org）。可能的原因：<br>· 本机完全没联网<br>· 代理 / VPN 阻断了出站 HTTPS<br>· 企业网络拦截第三方 IP 查询<br>启动 Codex / Claude 官方登录时会弹窗让你确认是否继续。</div>
+          ${renderLatencyStripHTML()}
         </div>
-        <button type="button" class="cv3-fw-refresh" data-console-v3-refresh-ip>重试</button>
+        <div class="cv3-fw-actions">
+          <button type="button" class="cv3-fw-refresh" data-console-v3-refresh-ip>重试</button>
+        </div>
       </div>`;
     return;
   }
@@ -7749,7 +7779,7 @@ function renderConsoleV3Firewall() {
           <span class="cv3-fw-verdict">${esc(verdictLabel)}</span>
         </div>
         <div class="cv3-fw-grid">
-          <div class="cv3-fw-row"><span class="cv3-fw-key">出口 IP</span><span class="cv3-fw-val"><code>${esc(n.ip || '-')}</code> <span class="cv3-fw-geo">${flag} ${esc(n.country || '未知')}${n.city ? ' · ' + esc(n.city) : ''}${n.isp ? ' · ' + esc(n.isp) : ''}</span></span></div>
+          <div class="cv3-fw-row"><span class="cv3-fw-key">出口 IP</span><span class="cv3-fw-val"><code>${esc(n.ip || '-')}</code> <span class="cv3-fw-geo">${flag} ${esc(n.country || '未知')}${n.city ? ' · ' + esc(n.city) : ''}${n.isp ? ' · ' + esc(n.isp) : ''}</span>${n.via ? `<span class="cv3-fw-src" title="IP 信息来源">via ${esc(n.via)}</span>` : ''}</span></div>
           <div class="cv3-fw-row"><span class="cv3-fw-key">代理</span><span class="cv3-fw-val">${hasProxy ? `已配置 · <code>${esc((n.proxy.hints || [])[0] || '')}</code>` : '未配置'}</span></div>
           <div class="cv3-fw-row"><span class="cv3-fw-key">判定</span><span class="cv3-fw-val">${esc(n.verdictCopy || '')}</span></div>
           <div class="cv3-fw-row"><span class="cv3-fw-key">硬拦截</span><span class="cv3-fw-val">
@@ -7812,19 +7842,24 @@ function renderConsoleV3Procs(tool, toolLabel) {
   const rowsHtml = rows.map((p) => {
     const mem = p.memMB ? `${p.memMB} MB` : (p.memPct ? `${p.memPct.toFixed(1)}%` : '—');
     const cpu = (typeof p.cpu === 'number') ? `${p.cpu.toFixed(1)}%` : '—';
-    const cwd = p.cwd ? `<span class="cv3-proc-cwd">${esc(p.cwd)}</span>` : '';
+    // Trim the most common shell boilerplate for a cleaner command preview.
+    const cmdClean = (p.command || '').replace(/^\S*\/node\s+/, 'node ').trim();
+    const cwd = p.cwd ? `<span class="cv3-proc-cwd" title="${esc(p.cwd)}">${esc(p.cwd)}</span>` : '';
     return `
       <div class="cv3-proc-row">
-        <div class="cv3-proc-main">
+        <div class="cv3-proc-head">
           <span class="cv3-proc-dot"></span>
           <span class="cv3-proc-pid">PID ${esc(String(p.pid))}</span>
-          ${cwd}
+          <span class="cv3-proc-elapsed" title="已运行">${esc(p.elapsed || '—')}</span>
+          <span class="cv3-proc-cpu" title="CPU 占用">CPU ${esc(cpu)}</span>
+          <span class="cv3-proc-mem" title="内存占用">MEM ${esc(mem)}</span>
+          <span class="cv3-proc-actions">
+            ${p.cwd ? `<button type="button" class="cv3-proc-btn" data-cv3-proc-reveal="${esc(p.cwd)}" title="在 Finder 打开该目录">打开目录</button>` : ''}
+            <button type="button" class="cv3-proc-btn cv3-proc-btn-danger" data-cv3-proc-kill="${esc(String(p.pid))}" title="结束该进程 (SIGTERM)">结束</button>
+          </span>
         </div>
-        <div class="cv3-proc-metrics">
-          <span class="cv3-proc-metric" title="已运行时间">⏱ ${esc(p.elapsed || '—')}</span>
-          <span class="cv3-proc-metric" title="CPU">CPU ${esc(cpu)}</span>
-          <span class="cv3-proc-metric" title="内存">MEM ${esc(mem)}</span>
-        </div>
+        ${cmdClean ? `<div class="cv3-proc-cmd" title="${esc(cmdClean)}">${esc(cmdClean)}</div>` : ''}
+        ${cwd ? `<div class="cv3-proc-cwd-row"><span class="cv3-proc-cwd-label">cwd</span>${cwd}</div>` : ''}
       </div>`;
   }).join('');
   el.innerHTML = `
@@ -7855,17 +7890,21 @@ function renderConsoleV3Usage(tool) {
     const recent = Array.isArray(s.recent) ? s.recent : [];
     const recentHtml = recent.length ? `
       <div class="cv3-session-list">
-        ${recent.map((r) => `
+        ${recent.map((r) => {
+          const modelLabel = formatModelLabel(r.model);
+          const preview = (r.firstMessage || '').trim() || '(无用户消息)';
+          return `
           <div class="cv3-session-row">
             <div class="cv3-session-row-main">
-              <span class="cv3-session-title">${esc(r.firstMessage || '(空会话)')}</span>
-              <span class="cv3-session-meta">
-                ${r.model ? `<code>${esc(r.model)}</code>` : ''}
-                <span>${esc(String(r.messageCount || 0))} 条</span>
-                <span>${esc(formatRelativeTime(r.lastActiveAt))}</span>
-              </span>
+              <div class="cv3-session-title">${esc(preview)}</div>
+              <div class="cv3-session-meta">
+                ${modelLabel ? `<span class="cv3-session-chip">${esc(modelLabel)}</span>` : ''}
+                <span class="cv3-session-count">${esc(String(r.messageCount || 0))} 条</span>
+                <span class="cv3-session-when">${esc(formatRelativeTime(r.lastActiveAt))}</span>
+              </div>
             </div>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
 
     el.innerHTML = `
@@ -7913,18 +7952,24 @@ function renderConsoleV3Usage(tool) {
     const recent = Array.isArray(u.recent) ? u.recent : [];
     const recentHtml = recent.length ? `
       <div class="cv3-session-list">
-        ${recent.map((r) => `
+        ${recent.map((r) => {
+          const modelLabel = formatModelLabel(r.model);
+          const preview = (r.firstMessage || '').trim() || '(无用户消息)';
+          // Claude's project slug is a flattened path — unflatten for display.
+          const projDisplay = r.project ? r.project.replace(/^-+/, '').replace(/-+/g, '/') : '';
+          return `
           <div class="cv3-session-row">
             <div class="cv3-session-row-main">
-              <span class="cv3-session-title">${esc(r.firstMessage || '(空会话)')}</span>
-              <span class="cv3-session-meta">
-                ${r.model ? `<code>${esc(r.model)}</code>` : ''}
-                ${r.project ? `<span class="cv3-session-proj">${esc(r.project)}</span>` : ''}
-                <span>${esc(String(r.messageCount || 0))} 条</span>
-                <span>${esc(formatRelativeTime(r.lastActiveAt))}</span>
-              </span>
+              <div class="cv3-session-title">${esc(preview)}</div>
+              <div class="cv3-session-meta">
+                ${modelLabel ? `<span class="cv3-session-chip">${esc(modelLabel)}</span>` : ''}
+                ${projDisplay ? `<span class="cv3-session-proj" title="${esc(r.project || '')}">${esc(projDisplay)}</span>` : ''}
+                <span class="cv3-session-count">${esc(String(r.messageCount || 0))} 条</span>
+                <span class="cv3-session-when">${esc(formatRelativeTime(r.lastActiveAt))}</span>
+              </div>
             </div>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
 
     el.innerHTML = `
@@ -18231,6 +18276,38 @@ function bindEvents() {
         const tool = state.consoleTool || 'codex';
         if (tool === 'claudecode') { window.__consoleV3.claudeUsage = null; loadConsoleClaudeUsage(); }
         else if (tool === 'codex') { window.__consoleV3.codexStats = null; loadConsoleCodexStats(); }
+        return;
+      }
+      const killBtn = t.closest('[data-cv3-proc-kill]');
+      if (killBtn) {
+        const pid = parseInt(killBtn.getAttribute('data-cv3-proc-kill'), 10);
+        if (!pid) return;
+        if (!window.confirm(`结束进程 PID ${pid}？\n会发送 SIGTERM 让它优雅退出；如果进程无响应可以再次点击以 SIGKILL 强制结束。`)) return;
+        (async () => {
+          const res = await api('/api/system/process-kill', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pid, signal: 'TERM' }),
+          });
+          if (res?.ok) {
+            flash?.(`已发送 SIGTERM 到 PID ${pid}`, 'success');
+            setTimeout(() => loadConsoleProcs(state.consoleTool || 'codex'), 600);
+          } else {
+            flash?.(res?.error || '结束进程失败', 'error');
+          }
+        })();
+        return;
+      }
+      const revealBtn = t.closest('[data-cv3-proc-reveal]');
+      if (revealBtn) {
+        const path = revealBtn.getAttribute('data-cv3-proc-reveal');
+        if (!path) return;
+        // Reuse the existing shell "open in file manager" path.
+        api('/api/open-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: `file://${path}` }),
+        }).catch(() => {});
         return;
       }
     });

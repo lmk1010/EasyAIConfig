@@ -20193,20 +20193,26 @@ body {
 }
 .shell-v2 .cv3-link-btn:hover { color: var(--s2-accent); }
 
-/* Process list */
-.shell-v2 .cv3-proc-list { display: flex; flex-direction: column; gap: 2px; }
+/* Process list — two-line rows: metrics header + command / cwd body */
+.shell-v2 .cv3-proc-list { display: flex; flex-direction: column; gap: 6px; }
 .shell-v2 .cv3-proc-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: center;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
-.shell-v2 .cv3-proc-row:hover { background: rgba(255, 255, 255, 0.02); }
-[data-theme="light"] .shell-v2 .cv3-proc-row:hover { background: rgba(15, 23, 42, 0.03); }
+[data-theme="light"] .shell-v2 .cv3-proc-row {
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.05);
+}
 
-.shell-v2 .cv3-proc-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.shell-v2 .cv3-proc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.7rem;
+}
 .shell-v2 .cv3-proc-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: #4ade80;
@@ -20214,26 +20220,66 @@ body {
   flex-shrink: 0;
 }
 .shell-v2 .cv3-proc-pid {
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-  font-size: 0.72rem;
   color: var(--s2-text);
   font-weight: 600;
-  flex-shrink: 0;
+}
+.shell-v2 .cv3-proc-elapsed,
+.shell-v2 .cv3-proc-cpu,
+.shell-v2 .cv3-proc-mem {
+  color: var(--s2-muted);
+}
+
+.shell-v2 .cv3-proc-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+}
+.shell-v2 .cv3-proc-btn {
+  font-family: inherit;
+  font-size: 0.66rem;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--s2-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.shell-v2 .cv3-proc-btn:hover { background: rgba(107, 158, 255, 0.16); color: var(--s2-accent); }
+.shell-v2 .cv3-proc-btn-danger:hover { background: rgba(239, 82, 82, 0.18); color: #ef5252; }
+[data-theme="light"] .shell-v2 .cv3-proc-btn { background: rgba(15, 23, 42, 0.06); }
+
+.shell-v2 .cv3-proc-cmd {
+  margin-top: 6px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.68rem;
+  color: var(--s2-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+.shell-v2 .cv3-proc-cwd-row {
+  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.66rem;
+}
+.shell-v2 .cv3-proc-cwd-label {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  color: var(--s2-faint);
+  letter-spacing: 0.04em;
 }
 .shell-v2 .cv3-proc-cwd {
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   color: var(--s2-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
   min-width: 0;
-}
-.shell-v2 .cv3-proc-metrics { display: flex; gap: 14px; flex-shrink: 0; }
-.shell-v2 .cv3-proc-metric {
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-  font-size: 0.68rem;
-  color: var(--s2-muted);
 }
 .shell-v2 .cv3-proc-empty {
   padding: 14px 14px;
@@ -20468,20 +20514,26 @@ body {
 .shell-v2 .cv3-session-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 0.68rem;
+  gap: 8px;
+  font-size: 0.7rem;
   color: var(--s2-muted);
+  flex-wrap: wrap;
 }
-.shell-v2 .cv3-session-meta code {
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-  font-size: 0.64rem;
-  background: rgba(255, 255, 255, 0.04);
-  padding: 1px 6px;
+.shell-v2 .cv3-session-chip {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 7px;
   border-radius: 4px;
+  background: rgba(107, 158, 255, 0.12);
+  color: var(--s2-accent);
+  box-shadow: inset 0 0 0 1px rgba(107, 158, 255, 0.22);
 }
-[data-theme="light"] .shell-v2 .cv3-session-meta code {
-  background: rgba(15, 23, 42, 0.05);
+.shell-v2 .cv3-session-count {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.66rem;
 }
+.shell-v2 .cv3-session-when { font-size: 0.68rem; color: var(--s2-faint); }
 .shell-v2 .cv3-session-proj {
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
   font-size: 0.64rem;
@@ -20489,5 +20541,17 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 220px;
+  max-width: 260px;
+}
+.shell-v2 .cv3-fw-src {
+  font-size: 0.62rem;
+  color: var(--s2-faint);
+  margin-left: 8px;
+  opacity: 0.8;
+}
+.shell-v2 .cv3-fw-hint {
+  margin-top: 6px;
+  font-size: 0.68rem;
+  color: var(--s2-muted);
+  line-height: 1.55;
 }

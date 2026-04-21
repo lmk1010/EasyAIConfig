@@ -15,19 +15,65 @@ use serde_json::{json, Value};
 use crate::parse_json_object;
 use crate::provider::get_string;
 
+// Does this `ps` line really represent the tool we're looking for?
+//
+// Naïve substring match is wrong: the user's own repo path ("codex-config-ui")
+// contains "codex", our Tauri dev build is typically launched from that path,
+// and any shell with the project as cwd will match too. We need a stricter
+// check: look at the command binary's basename (or the script filename, for
+// node-wrapped CLIs like Claude Code).
 fn filter_matches(line: &str, needle: &str, self_pid: u32) -> bool {
-  if line.trim().is_empty() { return false; }
-  let lower = line.to_ascii_lowercase();
-  let needle_l = needle.to_ascii_lowercase();
-  if !lower.contains(&needle_l) { return false; }
-  // Exclude our own process and the grep/ps we spawned.
-  if lower.contains("grep") { return false; }
+  let raw = line.trim_start();
+  if raw.is_empty() { return false; }
+
+  // Early reject: our own things.
+  let lower = raw.to_ascii_lowercase();
+  if lower.contains("grep ") || lower.starts_with("grep") { return false; }
   if lower.contains("easy_ai_config") { return false; }
   if lower.contains("easyaiconfig") { return false; }
-  if self_pid > 0 && line.split_whitespace().next() == Some(&self_pid.to_string()) {
+  if lower.contains("codex-config-ui") { return false; }   // our dev repo path
+  if lower.contains("config-editor") { return false; }      // our sub-dirs
+
+  // Column layout from ps -axo pid,pcpu,pmem,etime,command is:
+  //   <pid>  <cpu>  <mem>  <etime>  <command...>
+  let parts: Vec<&str> = raw.split_whitespace().collect();
+  if parts.len() < 5 { return false; }
+  let pid: u32 = parts[0].parse().unwrap_or(0);
+  if pid > 0 && pid == self_pid { return false; }
+
+  let cmd_argv0 = parts[4];
+  let basename = cmd_argv0.rsplit('/').next().unwrap_or(cmd_argv0).to_ascii_lowercase();
+  let needle_l = needle.to_ascii_lowercase();
+
+  // Case 1: the binary's basename IS the needle (e.g. `/usr/local/bin/codex`).
+  if basename == needle_l { return true; }
+
+  // Case 2: node / bun / deno / npx wrapper invoking a JS CLI. The needle
+  // should then appear as a path segment OR filename later in argv.
+  let is_interp = matches!(basename.as_str(), "node" | "bun" | "deno" | "npx" | "pnpm" | "yarn");
+  if is_interp {
+    let rest = parts[5..].join(" ");
+    let rest_l = rest.to_ascii_lowercase();
+    // Match the canonical install paths / package names.
+    let codex_markers = ["@openai/codex", "openai-codex", "/codex/bin/", "/codex.js", "/codex-cli"];
+    let claude_markers = ["@anthropic-ai/claude", "claude-code", "/claude/bin/", "/cli.js"];
+    let opencode_markers = ["opencode-ai", "/opencode/bin/", "opencode.js"];
+    let openclaw_markers = ["openclaw", "/openclaw/bin/"];
+    let markers: &[&str] = match needle_l.as_str() {
+      "codex" => &codex_markers,
+      "claude" | "claudecode" => &claude_markers,
+      "opencode" => &opencode_markers,
+      "openclaw" => &openclaw_markers,
+      _ => &[],
+    };
+    if markers.iter().any(|m| rest_l.contains(m)) { return true; }
     return false;
   }
-  true
+
+  // Case 3: binary basename starts with the needle (e.g. `codex-rpc`), but NOT
+  // when it's a parent-path collision (e.g. "node_modules/foo/bar/codex-..." —
+  // we've already exited through Case 2 if it's node-wrapped).
+  basename.starts_with(&needle_l)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -205,6 +251,52 @@ fn list_windows(needle: &str) -> Vec<Value> {
     }));
   }
   rows
+}
+
+// Kill a process by PID. Refuses to touch our own PID or PID 1. Accepts an
+// optional `signal` field; defaults to SIGTERM (graceful). Frontend offers a
+// confirm() before calling.
+pub(crate) fn kill_process(body: &Value) -> Result<Value, String> {
+  let obj = parse_json_object(body);
+  let pid_u64 = obj.get("pid").and_then(Value::as_u64).unwrap_or(0);
+  if pid_u64 == 0 { return Err("pid 必填".to_string()); }
+  let pid_u32: u32 = pid_u64.try_into().map_err(|_| "pid 越界".to_string())?;
+  if pid_u32 == std::process::id() { return Err("不能结束自己".to_string()); }
+  if pid_u32 == 1 { return Err("不能结束 init 进程".to_string()); }
+
+  let signal = get_string(&obj, "signal");
+  let signal = if signal.is_empty() { "TERM".to_string() } else { signal };
+  // Allowlist: TERM / INT / KILL only. Anything else is user mistake.
+  if !matches!(signal.as_str(), "TERM" | "INT" | "KILL") {
+    return Err(format!("不支持的信号: {}", signal));
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  {
+    use std::process::Command;
+    let out = Command::new("kill")
+      .args([&format!("-{}", signal), &pid_u32.to_string()])
+      .output()
+      .map_err(|e| format!("kill 调用失败: {}", e))?;
+    if !out.status.success() {
+      let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+      return Err(if err.is_empty() { format!("kill 退出码 {}", out.status) } else { err });
+    }
+  }
+  #[cfg(target_os = "windows")]
+  {
+    use std::process::Command;
+    let flag = if signal == "KILL" { "/F" } else { "" };
+    let mut args = vec!["/PID".to_string(), pid_u32.to_string()];
+    if !flag.is_empty() { args.insert(0, flag.to_string()); }
+    let out = Command::new("taskkill").args(&args).output().map_err(|e| format!("taskkill 调用失败: {}", e))?;
+    if !out.status.success() {
+      let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+      return Err(if err.is_empty() { format!("taskkill 退出码 {}", out.status) } else { err });
+    }
+  }
+
+  Ok(json!({ "ok": true, "pid": pid_u32, "signal": signal }))
 }
 
 pub(crate) fn list_processes(query: &Value) -> Result<Value, String> {

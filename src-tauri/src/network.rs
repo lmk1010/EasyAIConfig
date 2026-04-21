@@ -24,8 +24,37 @@ use crate::{app_home, ensure_dir, parse_json_object, read_text, write_text};
 use crate::provider::get_string;
 
 const IP_HISTORY_FILE: &str = "ip-history.jsonl";
-const IP_API_URL: &str = "http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,isp,org,as,query";
 const CACHE_TTL: Duration = Duration::from_secs(300); // 5 min
+
+// Ordered list of geo-IP providers to try. The first one that returns a
+// well-formed response wins. We prefer HTTPS so captive portals / firewalls
+// that strip HTTP don't leave us blind; ip-api.com is kept as a last-resort
+// fallback because it has the richest data but only speaks plain HTTP on the
+// free tier.
+struct IpProvider {
+  label: &'static str,
+  url: &'static str,
+  kind: IpProviderKind,
+}
+
+#[derive(Clone, Copy)]
+enum IpProviderKind {
+  // { ip, country_code, country_name, region, city, org, ... }
+  IpapiCo,
+  // { ip, country, country_code, city, region, org, isp, ... }
+  Ipwhois,
+  // { status:"success", country, countryCode, regionName, city, isp, org, as, query }
+  IpApiCom,
+  // just { ip }
+  Ipify,
+}
+
+const IP_PROVIDERS: &[IpProvider] = &[
+  IpProvider { label: "ipapi.co",   url: "https://ipapi.co/json/",                    kind: IpProviderKind::IpapiCo },
+  IpProvider { label: "ipwho.is",   url: "https://ipwho.is/",                          kind: IpProviderKind::Ipwhois },
+  IpProvider { label: "ip-api.com", url: "http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,isp,org,as,query", kind: IpProviderKind::IpApiCom },
+  IpProvider { label: "ipify.org",  url: "https://api.ipify.org?format=json",         kind: IpProviderKind::Ipify },
+];
 
 // Country codes whose IPs we flag as 'block' for the official OAuth paths.
 // Kept conservative on purpose — we only include regions known to actively
@@ -90,24 +119,110 @@ fn verdict_for(country_code: &str, has_proxy: bool) -> (&'static str, String) {
   ("safe", format!("出口 IP 位于 {}，可正常使用 Codex / Claude Code 官方登录。", cc))
 }
 
+// Walks IP_PROVIDERS in order, returning the first provider whose response
+// parses cleanly. Normalizes each provider's shape into the same flat
+// object the rest of the module expects:
+//   { query, country, countryCode, regionName, city, isp, org, as, via }
 fn fetch_ip_info_remote() -> Result<Value, String> {
   let client = reqwest::blocking::Client::builder()
     .connect_timeout(Duration::from_secs(3))
     .timeout(Duration::from_secs(6))
+    .user_agent("EasyAIConfig/1.0 (IP geolocation probe)")
     .build()
     .map_err(|e| format!("build http client failed: {}", e))?;
-  let resp = client
-    .get(IP_API_URL)
-    .send()
-    .map_err(|e| format!("IP 查询失败: {}", e))?;
-  if !resp.status().is_success() {
-    return Err(format!("IP 查询返回 {}", resp.status()));
+
+  let mut last_error = String::new();
+  for p in IP_PROVIDERS {
+    let resp = match client.get(p.url).send() {
+      Ok(r) => r,
+      Err(e) => { last_error = format!("{}: {}", p.label, e); continue; }
+    };
+    if !resp.status().is_success() {
+      last_error = format!("{}: HTTP {}", p.label, resp.status());
+      continue;
+    }
+    let body: Value = match resp.json() {
+      Ok(v) => v,
+      Err(e) => { last_error = format!("{}: parse {}", p.label, e); continue; }
+    };
+    if let Some(norm) = normalize_provider_response(p, body) {
+      return Ok(norm);
+    }
+    last_error = format!("{}: 返回结构不符", p.label);
   }
-  let body: Value = resp.json().map_err(|e| format!("IP 响应解析失败: {}", e))?;
-  if body.get("status").and_then(Value::as_str) != Some("success") {
-    return Err("IP 查询未返回 success".to_string());
+  Err(if last_error.is_empty() { "所有 IP 查询服务均不可达".to_string() } else { format!("IP 查询失败（最后错误: {})", last_error) })
+}
+
+fn normalize_provider_response(p: &IpProvider, body: Value) -> Option<Value> {
+  let obj = body.as_object()?;
+  let s = |k: &str| obj.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+
+  match p.kind {
+    IpProviderKind::IpapiCo => {
+      if !obj.contains_key("ip") { return None; }
+      Some(json!({
+        "query": s("ip"),
+        "country": s("country_name"),
+        "countryCode": s("country_code"),
+        "regionName": s("region"),
+        "city": s("city"),
+        "isp": s("org"),
+        "org": s("org"),
+        "as": s("asn"),
+        "via": p.label,
+      }))
+    }
+    IpProviderKind::Ipwhois => {
+      // ipwho.is uses "success" bool and fields {ip, country, country_code, city, region, connection.isp}
+      if obj.get("success").and_then(Value::as_bool) == Some(false) { return None; }
+      let ip = s("ip");
+      if ip.is_empty() { return None; }
+      let conn = obj.get("connection").and_then(Value::as_object);
+      let isp = conn.and_then(|c| c.get("isp").and_then(Value::as_str)).unwrap_or("").to_string();
+      let org = conn.and_then(|c| c.get("org").and_then(Value::as_str)).unwrap_or("").to_string();
+      let as_s = conn.and_then(|c| c.get("asn").and_then(|v| v.as_u64().map(|n| n.to_string()).or_else(|| v.as_str().map(|s| s.to_string())))).unwrap_or_default();
+      Some(json!({
+        "query": ip,
+        "country": s("country"),
+        "countryCode": s("country_code"),
+        "regionName": s("region"),
+        "city": s("city"),
+        "isp": isp,
+        "org": org,
+        "as": as_s,
+        "via": p.label,
+      }))
+    }
+    IpProviderKind::IpApiCom => {
+      if obj.get("status").and_then(Value::as_str) != Some("success") { return None; }
+      Some(json!({
+        "query": s("query"),
+        "country": s("country"),
+        "countryCode": s("countryCode"),
+        "regionName": s("regionName"),
+        "city": s("city"),
+        "isp": s("isp"),
+        "org": s("org"),
+        "as": s("as"),
+        "via": p.label,
+      }))
+    }
+    IpProviderKind::Ipify => {
+      let ip = s("ip");
+      if ip.is_empty() { return None; }
+      Some(json!({
+        "query": ip,
+        "country": "",
+        "countryCode": "",
+        "regionName": "",
+        "city": "",
+        "isp": "",
+        "org": "",
+        "as": "",
+        "via": p.label,
+      }))
+    }
   }
-  Ok(body)
 }
 
 fn append_history(entry: &Value) -> Result<(), String> {
@@ -216,6 +331,7 @@ fn build_status(force: bool) -> Value {
   let isp = remote.get("isp").and_then(Value::as_str).unwrap_or("").to_string();
   let org = remote.get("org").and_then(Value::as_str).unwrap_or("").to_string();
   let asn = remote.get("as").and_then(Value::as_str).unwrap_or("").to_string();
+  let via = remote.get("via").and_then(Value::as_str).unwrap_or("").to_string();
 
   let (verdict, verdict_copy) = verdict_for(&country_code, has_proxy);
 
@@ -243,6 +359,7 @@ fn build_status(force: bool) -> Value {
     "isp": isp,
     "org": org,
     "asn": asn,
+    "via": via,
     "proxy": proxy,
     "verdict": verdict,
     "verdictCopy": verdict_copy,

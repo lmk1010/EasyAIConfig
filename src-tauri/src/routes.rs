@@ -36,7 +36,7 @@ use crate::app_settings::{load_app_settings, save_app_settings};
 use crate::network::{
   get_network_latency, get_network_status, list_network_ip_history, refresh_network_status,
 };
-use crate::processes::list_processes;
+use crate::processes::{kill_process, list_processes};
 use crate::provider::detect_provider;
 use crate::usage_stats::{claudecode_local_usage, codex_session_stats};
 use crate::updater::{get_app_update_info, get_app_update_progress, install_app_update};
@@ -143,6 +143,7 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/app-settings", "GET") => load_app_settings(query),
     ("/api/app-settings", "POST") => save_app_settings(body),
     ("/api/system/processes", "GET") => list_processes(query),
+    ("/api/system/process-kill", "POST") => kill_process(body),
     ("/api/codex/session-stats", "GET") => codex_session_stats(query),
     ("/api/claudecode/local-usage", "GET") => claudecode_local_usage(query),
     ("/api/app/update", "GET") => get_app_update_info(app).await,
