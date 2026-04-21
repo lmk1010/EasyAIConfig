@@ -10127,6 +10127,9 @@ function setPage(page = 'quick') {
   }
   if (page === 'configEditor') {
     applyConfigEditorSearch();
+    // Populate hero chips on page entry — populateConfigEditor isn't
+    // always called on setPage (it re-runs only after state reloads).
+    try { renderCfg3Hero(getConfigEditorTool()); } catch (_) {}
   }
   if (page === 'systemSettings') {
     renderSystemSettingsPage();
@@ -10732,10 +10735,106 @@ async function pickDirectoryPath(targetInputId, { title = '选择目录' } = {})
   target.value = json.data.path || '';
 }
 
+// ─── Config editor v3 hero chips ────────────────────────────────
+// Shows 5 at-a-glance chips (model / provider / sandbox / approval /
+// reasoning) so users immediately see "what's set right now" without
+// hunting through the form. Each chip is clickable and scrolls +
+// highlights the corresponding input.
+function renderCfg3Hero(tool) {
+  const host = document.getElementById('cfg3HeroChips');
+  if (!host) return;
+  tool = tool || (typeof getConfigEditorTool === 'function' ? getConfigEditorTool() : 'codex');
+  const esc = typeof escapeHtml === 'function' ? escapeHtml : ((s) => String(s ?? ''));
+
+  const chipsFor = {
+    codex: () => {
+      const cfg = state.current?.config || {};
+      const summary = state.current?.summary || {};
+      return [
+        { label: '模型',    value: summary.model || cfg.model || '—', target: 'cfgModelInput', tone: 'accent' },
+        { label: 'Provider', value: summary.modelProvider || cfg.model_provider || '—', target: 'cfgProviderInput' },
+        { label: '沙箱',    value: summary.sandboxMode || cfg.sandbox_mode || 'read-only', target: 'cfgSandboxSelect',
+          tone: /danger/i.test(summary.sandboxMode || cfg.sandbox_mode || '') ? 'warn' : '' },
+        { label: '审批',    value: summary.approvalPolicy || cfg.approval_policy || '默认', target: 'cfgApprovalSelect' },
+        { label: '推理',    value: summary.reasoningEffort || cfg.model_reasoning_effort || '默认', target: 'cfgReasoningSelect' },
+      ];
+    },
+    claudecode: () => {
+      const cc = state.claudeCodeState || {};
+      const login = cc.login || {};
+      return [
+        { label: '账号',    value: login.email || login.orgName || (login.loggedIn ? 'OAuth' : '未登录'), tone: 'accent' },
+        { label: '认证',    value: login.loggedIn ? (login.method === 'oauth' ? 'OAuth' : 'API Key') : '未认证' },
+        { label: '模型',    value: cc.model || '由 Claude 决定' },
+        { label: 'Think',   value: cc.alwaysThinkingEnabled ? '开启' : '关闭' },
+        { label: '危险权限', value: cc.skipDangerousModePermissionPrompt ? '已跳过' : '保持提示',
+          tone: cc.skipDangerousModePermissionPrompt ? 'warn' : '' },
+      ];
+    },
+    opencode: () => {
+      const oc = state.opencodeState || {};
+      const active = oc.activeProvider || null;
+      return [
+        { label: '模型',    value: oc.model || '—', tone: 'accent' },
+        { label: 'Small',   value: oc.smallModel || '—' },
+        { label: 'Provider', value: active?.key || '—' },
+        { label: 'auth',    value: oc.activeAuth?.key || '—' },
+        { label: '作用域',  value: oc.scope === 'project' ? '项目级' : '全局' },
+      ];
+    },
+    openclaw: () => {
+      const ow = state.openclawState || {};
+      const gatewayUp = Boolean(ow.gatewayStatus?.ok || ow.gatewayRunning);
+      return [
+        { label: 'Gateway', value: gatewayUp ? '运行中' : '未运行', tone: gatewayUp ? 'accent' : 'warn' },
+        { label: '端口',    value: String(ow.gatewayPort || '—') },
+        { label: '端口监听', value: ow.gatewayPortListening ? '活跃' : '—' },
+        { label: '版本',    value: ow.binary?.version || '未知' },
+        { label: '安装',    value: ow.binary?.installed ? '已安装' : '未安装' },
+      ];
+    },
+  };
+
+  const getChips = chipsFor[tool] || chipsFor.codex;
+  const chips = getChips();
+  host.innerHTML = chips.map((c) => {
+    const targetAttr = c.target ? `data-cfg3-focus="${esc(c.target)}"` : '';
+    const toneCls = c.tone ? ` cfg3-chip-${esc(c.tone)}` : '';
+    return `
+      <button type="button" class="cfg3-chip${toneCls}" ${targetAttr}>
+        <span class="cfg3-chip-value">${esc(String(c.value))}</span>
+        <span class="cfg3-chip-label">${esc(c.label)}</span>
+      </button>`;
+  }).join('');
+}
+
+function openCfg3Drawer() {
+  const drawer = document.getElementById('cfg3Drawer');
+  const scrim = document.getElementById('cfg3DrawerScrim');
+  if (!drawer) return;
+  drawer.classList.add('open');
+  if (scrim) scrim.classList.remove('hide');
+  document.body.classList.add('cfg3-drawer-active');
+}
+function closeCfg3Drawer() {
+  const drawer = document.getElementById('cfg3Drawer');
+  const scrim = document.getElementById('cfg3DrawerScrim');
+  if (!drawer) return;
+  drawer.classList.remove('open');
+  if (scrim) scrim.classList.add('hide');
+  document.body.classList.remove('cfg3-drawer-active');
+}
+window.openCfg3Drawer = openCfg3Drawer;
+window.closeCfg3Drawer = closeCfg3Drawer;
+
 function populateConfigEditor() {
   syncConfigEditorForTool();
 
   const tool = getConfigEditorTool();
+
+  // Refresh the v3 hero chips (top-of-page snapshot) every time the form
+  // is re-populated so they stay in sync with the underlying config.
+  try { renderCfg3Hero(tool); } catch (_) { /* hero is optional chrome */ }
 
   if (tool === 'openclaw') {
     populateOpenClawConfigEditor();
@@ -18263,6 +18362,37 @@ function bindEvents() {
       if (window.refreshCustomSelects) window.refreshCustomSelects();
     });
   }
+
+  // Config Editor v3: hero chip click → scroll to + focus target input.
+  const cfgHeroChipsHost = document.getElementById('cfg3HeroChips');
+  if (cfgHeroChipsHost) {
+    cfgHeroChipsHost.addEventListener('click', (e) => {
+      const chip = e.target instanceof Element ? e.target.closest('[data-cfg3-focus]') : null;
+      if (!chip) return;
+      const targetId = chip.getAttribute('data-cfg3-focus');
+      if (!targetId) return;
+      const target = document.getElementById(targetId);
+      if (!target) return;
+      // Ensure the <details> ancestor is open so the field is visible.
+      let ancestor = target.closest('details.cfg-section');
+      if (ancestor && !ancestor.open) ancestor.open = true;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Brief highlight so user sees where we landed.
+      target.classList.add('cfg3-focus-pulse');
+      setTimeout(() => target.classList.remove('cfg3-focus-pulse'), 1400);
+      if (typeof target.focus === 'function') setTimeout(() => target.focus({ preventScroll: true }), 260);
+    });
+  }
+
+  // Drawer open/close
+  document.getElementById('cfg3OpenDrawerBtn')?.addEventListener('click', () => openCfg3Drawer());
+  document.getElementById('cfg3CloseDrawerBtn')?.addEventListener('click', () => closeCfg3Drawer());
+  document.getElementById('cfg3DrawerScrim')?.addEventListener('click', () => closeCfg3Drawer());
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const drawer = document.getElementById('cfg3Drawer');
+    if (drawer && drawer.classList.contains('open')) closeCfg3Drawer();
+  });
 
   const consoleTabs = el('toolConsoleTabs');
   if (consoleTabs) {

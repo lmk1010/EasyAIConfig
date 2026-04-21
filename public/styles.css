@@ -20652,6 +20652,280 @@ body {
   border-color: rgba(15, 23, 42, 0.06);
 }
 
+/* ============================================================
+   Config Editor v3 — hero chips + drawer + simplified topbar
+   ============================================================ */
+
+/* Topbar action buttons: one primary, three icon-only secondary. */
+.shell-v2 #configEditorActions .cfg3-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 0;
+  background: transparent;
+  color: var(--s2-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 140ms ease, color 140ms ease;
+}
+.shell-v2 #configEditorActions .cfg3-icon-btn:hover {
+  background: rgba(107, 158, 255, 0.12);
+  color: var(--s2-accent);
+}
+[data-theme="light"] .shell-v2 #configEditorActions .cfg3-icon-btn:hover {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+.shell-v2 #configEditorActions .cfg3-primary-btn {
+  height: 34px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #4f86ff, #3d6dff);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(60, 110, 255, 0.28);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+.shell-v2 #configEditorActions .cfg3-primary-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(60, 110, 255, 0.4);
+}
+
+/* Hero: 5 chips in a glass card on top of the form. */
+.shell-v2 .cfg3-hero {
+  padding: 16px 18px 14px;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(107, 158, 255, 0.09) 0%, transparent 55%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01));
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 20px rgba(0, 0, 0, 0.12);
+  margin-bottom: 16px;
+}
+[data-theme="light"] .shell-v2 .cfg3-hero {
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.08) 0%, transparent 55%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 4px 14px rgba(15, 23, 42, 0.05);
+}
+.shell-v2 .cfg3-hero-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.shell-v2 .cfg3-hero-title {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+}
+.shell-v2 .cfg3-hero-drawer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  color: var(--s2-muted);
+  border-radius: 7px;
+  font-size: 0.68rem;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.shell-v2 .cfg3-hero-drawer-btn:hover {
+  background: rgba(107, 158, 255, 0.1);
+  color: var(--s2-accent);
+  border-color: rgba(107, 158, 255, 0.3);
+}
+[data-theme="light"] .shell-v2 .cfg3-hero-drawer-btn {
+  border-color: rgba(15, 23, 42, 0.08);
+}
+[data-theme="light"] .shell-v2 .cfg3-hero-drawer-btn:hover {
+  background: rgba(59, 130, 246, 0.08);
+  color: #2563eb;
+}
+.shell-v2 .cfg3-hero-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+.shell-v2 .cfg3-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  min-width: 0;
+}
+.shell-v2 .cfg3-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(107, 158, 255, 0.28);
+  background: rgba(107, 158, 255, 0.06);
+}
+[data-theme="light"] .shell-v2 .cfg3-chip {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(15, 23, 42, 0.06);
+}
+.shell-v2 .cfg3-chip-value {
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--s2-text);
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell-v2 .cfg3-chip-label {
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+}
+.shell-v2 .cfg3-chip-accent .cfg3-chip-value { color: var(--s2-accent); }
+.shell-v2 .cfg3-chip-warn { border-color: rgba(234, 167, 51, 0.35); }
+.shell-v2 .cfg3-chip-warn .cfg3-chip-value { color: #fbbf24; }
+[data-theme="light"] .shell-v2 .cfg3-chip-warn .cfg3-chip-value { color: #b45309; }
+
+/* Focus pulse — brief highlight when a hero chip click scrolls to a field. */
+.shell-v2 .cfg3-focus-pulse {
+  animation: cfg3-pulse 1.2s ease-out;
+}
+@keyframes cfg3-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(107, 158, 255, 0.55); }
+  60%  { box-shadow: 0 0 0 8px rgba(107, 158, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(107, 158, 255, 0); }
+}
+
+/* Form layout in v3: single column, full width. Drops the old 2-column
+   split so fields can breathe. Raw editor lives in a drawer instead. */
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="form"] {
+  display: block;
+  grid-template-columns: none;
+}
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="form"] .config-editor-main {
+  max-width: 960px;
+  width: 100%;
+}
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] {
+  display: block;
+}
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] .config-editor-main {
+  display: none;
+}
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] .cfg3-hero {
+  display: none;
+}
+/* In code mode the drawer takes the full editor space. */
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] .cfg3-drawer {
+  position: static;
+  transform: none;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] .cfg3-drawer-head {
+  display: none;
+}
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] .cfg3-drawer-scrim {
+  display: none;
+}
+
+/* Drawer (form-mode default) — right-slide panel with scrim. */
+.shell-v2 .cfg3-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 40;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  pointer-events: none;
+}
+.shell-v2 .cfg3-drawer-scrim:not(.hide) {
+  opacity: 1;
+  pointer-events: auto;
+}
+.shell-v2 .config-editor-layout[data-view-mode="form"] .cfg3-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(560px, 92vw);
+  height: 100vh;
+  padding: 18px 16px 16px;
+  background:
+    radial-gradient(130% 150% at 100% 0%, rgba(107, 158, 255, 0.1) 0%, transparent 55%),
+    linear-gradient(190deg, rgba(28, 32, 48, 0.96), rgba(20, 24, 38, 0.98));
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.4);
+  transform: translateX(100%);
+  transition: transform 220ms cubic-bezier(0.22, 0.9, 0.28, 1);
+  z-index: 50;
+  overflow-y: auto;
+}
+[data-theme="light"] .shell-v2 .config-editor-layout[data-view-mode="form"] .cfg3-drawer {
+  background:
+    radial-gradient(130% 150% at 100% 0%, rgba(59, 130, 246, 0.08) 0%, transparent 55%),
+    linear-gradient(190deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 253, 1));
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.14);
+}
+.shell-v2 .config-editor-layout[data-view-mode="form"] .cfg3-drawer.open {
+  transform: translateX(0);
+}
+.shell-v2 .cfg3-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+}
+[data-theme="light"] .shell-v2 .cfg3-drawer-head { border-bottom-color: rgba(15, 23, 42, 0.08); }
+.shell-v2 .cfg3-drawer-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+}
+.shell-v2 .cfg3-drawer-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--s2-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 140ms ease, color 140ms ease;
+}
+.shell-v2 .cfg3-drawer-close:hover {
+  background: rgba(239, 82, 82, 0.14);
+  color: #ef5252;
+}
+
 @media (max-width: 720px) {
   .shell-v2 .dashboard-page .db3-hero-stats {
     grid-template-columns: repeat(2, 1fr);
