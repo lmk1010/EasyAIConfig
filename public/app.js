@@ -7741,7 +7741,20 @@ const CV3_ICONS = {
   lock:   '<svg class="cv3-ico" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>',
   unlock: '<svg class="cv3-ico" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0"/></svg>',
   refresh:'<svg class="cv3-ico" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 8A6 6 0 0 1 3.4 11.8L2 13M2 8a6 6 0 0 1 10.6-3.8L14 3"/><path d="M14 3v3.5h-3.5M2 13V9.5h3.5"/></svg>',
+  // Section-head icons (14px, matched line style).
+  globe:  '<svg class="cv3-sec-ico" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2.2 3 5 3 6s-1 3.8-3 6c-2-2.2-3-5-3-6s1-3.8 3-6z"/></svg>',
+  cpu:    '<svg class="cv3-sec-ico" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6 4V2M10 4V2M6 14v-2M10 14v-2M4 6H2M4 10H2M14 6h-2M14 10h-2"/></svg>',
+  clock:  '<svg class="cv3-sec-ico" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5l2.2 1.3"/></svg>',
+  sliders:'<svg class="cv3-sec-ico" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.4" fill="currentColor" stroke="none"/><circle cx="11" cy="8" r="1.4" fill="currentColor" stroke="none"/><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>',
+  alert:  '<svg class="cv3-sec-ico" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 1.5 13.5h13L8 2z"/><path d="M8 6.5v3M8 11.5v.5"/></svg>',
 };
+
+// Helper to render a section head with icon + label + optional count + extras.
+function cv3SectionHead(icon, label, { count, extras = '' } = {}) {
+  const esc = escapeHtml;
+  const countHtml = (count || count === 0) ? `<span class="count">· ${esc(String(count))}</span>` : '';
+  return `<div class="console-v2-section-head">${icon || ''}<span class="cv3-sec-label">${esc(label)}</span>${countHtml}${extras}</div>`;
+}
 
 // Slim one-line IP strip embedded inside the hero card. Dense, no emoji
 // decorations — just the IP, geo, verdict color, proxy hint, and the two
@@ -7763,11 +7776,13 @@ function renderHeroIpStripHTML() {
       : `<span class="cv3-ipstrip-proxy dim" title="没有识别到任何代理配置">${CV3_ICONS.proxy}无代理</span>`;
     return `
       <div class="cv3-ipstrip bad">
-        ${CV3_ICONS.shield}
-        <span class="cv3-ipstrip-label">无法获取 IP</span>
-        ${proxyHint}
-        <span class="cv3-ipstrip-err" title="${esc(n.error || '')}">${esc((n.error || '').slice(0, 60))}</span>
-        <span class="cv3-ipstrip-actions">${gateBtn}${refreshBtn}</span>
+        <div class="cv3-ipstrip-left">
+          ${CV3_ICONS.shield}
+          <span class="cv3-ipstrip-label">无法获取 IP</span>
+          ${proxyHint}
+          <span class="cv3-ipstrip-err" title="${esc(n.error || '')}">${esc((n.error || '').slice(0, 60))}</span>
+        </div>
+        <div class="cv3-ipstrip-right">${gateBtn}${refreshBtn}</div>
       </div>`;
   }
 
@@ -7777,18 +7792,18 @@ function renderHeroIpStripHTML() {
   const flag = flagMap[cc] || '';
   const splitTag = n.splitTunnel ? `<span class="cv3-ipstrip-split" title="多个视角看到不同 IP（分流）">分流</span>` : '';
   const hasProxy = Boolean(n.proxy?.hasProxy);
-  // Combine country + city + ISP in one slot, but truncate so ISP doesn't
-  // push the buttons off the line.
   const locBits = [flag && flag, n.country, n.city, n.isp].filter(Boolean).join(' · ');
 
   return `
     <div class="cv3-ipstrip ${esc(verdict)}">
-      ${CV3_ICONS.shield}
-      <span class="cv3-ipstrip-ip"><code>${esc(n.ip || '-')}</code></span>
-      <span class="cv3-ipstrip-geo">${esc(locBits)}</span>
-      ${splitTag}
-      ${hasProxy ? `<span class="cv3-ipstrip-proxy" title="${esc((n.proxy.hints || [])[0] || '')}">${CV3_ICONS.proxy}代理</span>` : ''}
-      <span class="cv3-ipstrip-actions">${gateBtn}${refreshBtn}</span>
+      <div class="cv3-ipstrip-left">
+        ${CV3_ICONS.shield}
+        <span class="cv3-ipstrip-ip"><code>${esc(n.ip || '-')}</code></span>
+        <span class="cv3-ipstrip-geo">${esc(locBits)}</span>
+        ${splitTag}
+        ${hasProxy ? `<span class="cv3-ipstrip-proxy" title="${esc((n.proxy.hints || [])[0] || '')}">${CV3_ICONS.proxy}代理</span>` : ''}
+      </div>
+      <div class="cv3-ipstrip-right">${gateBtn}${refreshBtn}</div>
     </div>`;
 }
 
@@ -7840,12 +7855,13 @@ function renderConsoleV3Vantages() {
       </div>`;
   }).join('');
 
+  const splitChip = n.splitTunnel ? '<span class="cv3-vantage-alert" title="多视角看到的 IP 不一致">⚠ 分流</span>' : '';
+  const refreshBtn = '<button type="button" class="cv3-link-btn" data-console-v3-refresh-ip>重测</button>';
   el.innerHTML = `
-    <div class="console-v2-section-head">
-      网络视角 <span class="count">· ${vantages.length} 路</span>
-      ${n.splitTunnel ? '<span class="cv3-vantage-alert" title="多视角看到的 IP 不一致">⚠ 分流</span>' : ''}
-      <button type="button" class="cv3-link-btn" data-console-v3-refresh-ip>重测</button>
-    </div>
+    ${cv3SectionHead(CV3_ICONS.globe, '网络视角', {
+      count: `${vantages.length} 路`,
+      extras: splitChip + refreshBtn,
+    })}
     <div class="cv3-vantage-grid">${rowsHtml}</div>
     ${renderLatencyStripHTML()}`;
 }
@@ -7876,19 +7892,17 @@ function renderConsoleV3Procs(tool, toolLabel) {
   if (!el) return;
   const esc = escapeHtml;
   const rows = window.__consoleV3.procsByTool[tool] || null;
+  const refreshProcsBtn = '<button type="button" class="cv3-link-btn" data-console-v3-refresh-procs>刷新</button>';
+  const headLabel = `运行中的 ${toolLabel}`;
   if (rows === null) {
     el.innerHTML = `
-      <div class="console-v2-section-head">正在运行的 ${esc(toolLabel)} 进程 <span class="count">· …</span>
-        <button type="button" class="cv3-link-btn" data-console-v3-refresh-procs>刷新</button>
-      </div>
+      ${cv3SectionHead(CV3_ICONS.cpu, headLabel, { count: '…', extras: refreshProcsBtn })}
       <div class="cv3-proc-empty">正在扫描进程…</div>`;
     return;
   }
   if (!rows.length) {
     el.innerHTML = `
-      <div class="console-v2-section-head">正在运行的 ${esc(toolLabel)} 进程 <span class="count">· 0</span>
-        <button type="button" class="cv3-link-btn" data-console-v3-refresh-procs>刷新</button>
-      </div>
+      ${cv3SectionHead(CV3_ICONS.cpu, headLabel, { count: 0, extras: refreshProcsBtn })}
       <div class="cv3-proc-empty">当前没有在跑的 ${esc(toolLabel)} 进程</div>`;
     return;
   }
@@ -7916,9 +7930,7 @@ function renderConsoleV3Procs(tool, toolLabel) {
       </div>`;
   }).join('');
   el.innerHTML = `
-    <div class="console-v2-section-head">正在运行的 ${esc(toolLabel)} 进程 <span class="count">· ${rows.length}</span>
-      <button type="button" class="cv3-link-btn" data-console-v3-refresh-procs>刷新</button>
-    </div>
+    ${cv3SectionHead(CV3_ICONS.cpu, headLabel, { count: rows.length, extras: refreshProcsBtn })}
     <div class="cv3-proc-list">${rowsHtml}</div>`;
 }
 
@@ -7930,7 +7942,7 @@ function renderConsoleV3Usage(tool) {
   if (tool === 'codex') {
     const s = window.__consoleV3.codexStats;
     if (!s) {
-      el.innerHTML = `<div class="console-v2-section-head">本地会话</div><div class="cv3-proc-empty">读取 ~/.codex/sessions/ 中…</div>`;
+      el.innerHTML = `${cv3SectionHead(CV3_ICONS.clock, '本地会话')}<div class="cv3-proc-empty">读取 ~/.codex/sessions/ 中…</div>`;
       return;
     }
     const dist = Array.isArray(s.modelDistribution) ? s.modelDistribution : [];
@@ -7960,10 +7972,9 @@ function renderConsoleV3Usage(tool) {
         }).join('')}
       </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
 
+    const refreshUsage = '<button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>';
     el.innerHTML = `
-      <div class="console-v2-section-head">本地会话
-        <button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>
-      </div>
+      ${cv3SectionHead(CV3_ICONS.clock, '本地会话', { extras: refreshUsage })}
       <div class="cv3-usage-grid">
         <div class="cv3-usage-cell">
           <div class="cv3-usage-label">总数</div>
@@ -7991,7 +8002,7 @@ function renderConsoleV3Usage(tool) {
   if (tool === 'claudecode') {
     const u = window.__consoleV3.claudeUsage;
     if (!u) {
-      el.innerHTML = `<div class="console-v2-section-head">本地 5h 窗口 (估算)</div><div class="cv3-proc-empty">读取 ~/.claude/projects/ 中…</div>`;
+      el.innerHTML = `${cv3SectionHead(CV3_ICONS.clock, '本地 5h 窗口 (估算)')}<div class="cv3-proc-empty">读取 ~/.claude/projects/ 中…</div>`;
       return;
     }
     const firstAt = u.windowFirstMessageAt ? new Date(u.windowFirstMessageAt) : null;
@@ -8025,10 +8036,9 @@ function renderConsoleV3Usage(tool) {
         }).join('')}
       </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
 
+    const refreshUsageClaude = '<button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>';
     el.innerHTML = `
-      <div class="console-v2-section-head">本地 5h 窗口 (估算)
-        <button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>
-      </div>
+      ${cv3SectionHead(CV3_ICONS.clock, '本地 5h 窗口 (估算)', { extras: refreshUsageClaude })}
       <div class="cv3-usage-grid">
         <div class="cv3-usage-cell">
           <div class="cv3-usage-label">本机消息</div>
@@ -8238,9 +8248,6 @@ function renderConsoleV2(tool) {
   // render — each loader guards itself against re-entry.
   primeConsoleV3(tool);
 
-  const titleToolEl = document.getElementById('consoleV2TitleTool');
-  if (titleToolEl) titleToolEl.textContent = model.toolLabel;
-
   // v3 sections (vantage matrix replaces the old standalone firewall card).
   renderConsoleV3Procs(tool, model.toolLabel);
   renderConsoleV3Usage(tool);
@@ -8253,7 +8260,7 @@ function renderConsoleV2(tool) {
     heroEl.innerHTML = `
       <div class="console-v2-hero-info">
         <div class="console-v2-hero-eyebrow">
-          <span>CURRENT SESSION</span>
+          <span>${esc(model.toolLabel.toUpperCase())} · SESSION</span>
           <span class="ch-status ${esc(h.healthCls)}">${esc(h.healthTxt)}</span>
         </div>
         <h2 class="console-v2-hero-name">${esc(h.name)}</h2>
@@ -8287,7 +8294,7 @@ function renderConsoleV2(tool) {
       metaEl.innerHTML = '';
     } else {
       metaEl.innerHTML = `
-        <div class="console-v2-section-head">当前配置</div>
+        ${cv3SectionHead(CV3_ICONS.sliders, '当前配置')}
         <div class="console-v2-meta-list">
           ${model.meta.map((m) => `
             <div class="console-v2-meta-row${m.tone ? ' cv3-meta-' + esc(m.tone) : ''}">
@@ -8309,7 +8316,7 @@ function renderConsoleV2(tool) {
     } else {
       issuesEl.classList.remove('hide');
       issuesEl.innerHTML = `
-        <div class="console-v2-section-head">异常检测<span class="count">· ${model.issues.length}</span></div>
+        ${cv3SectionHead(CV3_ICONS.alert, '异常检测', { count: model.issues.length })}
         <div class="console-v2-issue-list">
           ${model.issues.map((i) => `
             <div class="console-v2-issue ${esc(i.tone || 'warn')}">

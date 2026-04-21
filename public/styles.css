@@ -19913,25 +19913,18 @@ body {
 .shell-v2 .console-v2-section-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 14px 6px 6px;
-  font-size: 0.62rem;
+  font-size: 0.64rem;
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--s2-faint);
-}
-.shell-v2 .console-v2-section-head::before,
-.shell-v2 .console-v2-meta-head::before {
-  content: "";
-  display: inline-block;
-  width: 16px;
-  height: 1px;
-  background: var(--s2-line-soft);
 }
 .shell-v2 .console-v2-section-head .count {
   font-weight: 540;
   opacity: 0.7;
+  margin-left: -2px;
 }
 .shell-v2 .console-v2-meta-list {
   display: flex;
@@ -20076,25 +20069,70 @@ body {
    Console v3 — IP strip in hero + multi-vantage matrix
    ============================================================ */
 
-/* Hero-embedded IP strip — one line on normal widths, wraps to max two. */
+/* Hero-embedded IP strip — NO card chrome (it's inside the hero already).
+   Two-part flex: info on the left grows/ellipses, actions pinned right. */
 .shell-v2 .cv3-ipstrip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 12px;
   margin-top: 10px;
-  padding: 5px 10px;
-  border-radius: 7px;
+  padding: 6px 0 0;
   font-size: 0.72rem;
-  background: rgba(255, 255, 255, 0.03);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
-  min-height: 28px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  min-height: 26px;
 }
+[data-theme="light"] .shell-v2 .cv3-ipstrip {
+  border-top-color: rgba(15, 23, 42, 0.08);
+}
+.shell-v2 .cv3-ipstrip-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+.shell-v2 .cv3-ipstrip-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.shell-v2 .cv3-ipstrip.safe,
+.shell-v2 .cv3-ipstrip.warn,
+.shell-v2 .cv3-ipstrip.block,
+.shell-v2 .cv3-ipstrip.bad,
+.shell-v2 .cv3-ipstrip.loading {
+  /* Verdict is carried by the shield icon color + the status chip in the
+     hero eyebrow; no per-variant background needed here. */
+  background: transparent;
+  box-shadow: none;
+}
+.shell-v2 .cv3-ipstrip.safe .cv3-ico { color: #4ade80; opacity: 1; }
+.shell-v2 .cv3-ipstrip.warn .cv3-ico { color: #fbbf24; opacity: 1; }
+.shell-v2 .cv3-ipstrip.block .cv3-ico,
+.shell-v2 .cv3-ipstrip.bad .cv3-ico { color: #ef5252; opacity: 1; }
+
 .shell-v2 .cv3-ico {
   opacity: 0.75;
   flex-shrink: 0;
   display: inline-block;
   vertical-align: -2px;
+}
+
+/* Section head icons — small, inherit muted color, sit before the label. */
+.shell-v2 .cv3-sec-ico {
+  opacity: 0.75;
+  color: var(--s2-muted);
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 6px;
+}
+.shell-v2 .console-v2-section-head .cv3-sec-label {
+  /* The label lives in a span now; we want the full-width separator line
+     to still appear before it, matching the old ::before decorator. */
+  letter-spacing: 0.14em;
 }
 .shell-v2 .cv3-ipstrip.safe {
   background: rgba(74, 222, 128, 0.08);

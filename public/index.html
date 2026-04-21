@@ -640,14 +640,9 @@
 
           <section class="page-view" data-page="console">
             <div class="console-v2" id="toolConsolePage">
-              <header class="console-v2-head">
-                <div class="console-v2-title">
-                  <span class="console-v2-title-tool" id="consoleV2TitleTool">Codex</span>
-                  <span class="console-v2-title-sep">·</span>
-                  <span class="console-v2-title-main">运行控制台</span>
-                </div>
-                <p class="console-v2-sub">只读视图，不对官方 API 做任何主动探测</p>
-              </header>
+              <!-- The workspace topbar (#pageTitle) already renders "运行控制台"
+                   aligned with the sidebar title; we don't need a second inline
+                   title here. The tool name is shown in the hero eyebrow. -->
 
               <!-- 1 · 当前会话 hero — 内嵌 IP 安全状态 -->
               <article class="console-v2-hero" id="consoleV2Hero"></article>
