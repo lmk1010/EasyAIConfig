@@ -18549,6 +18549,27 @@ loadTools();
     const tool = s.activeTool || 'codex';
     if (toolTitleEl) toolTitleEl.textContent = TOOL_LABELS[tool] || tool;
 
+    // Loading sentinel: if the OAuth profile fetch for this tool hasn't
+    // resolved yet, render an explicit loading state instead of either (a)
+    // guessing with stale cached data or (b) showing a misleading empty
+    // "还没有激活的 Provider" hero. Honest over snappy.
+    const codexLoaded = Boolean(window.__chOauthProfiles && window.__chOauthProfiles.loaded);
+    const claudeLoaded = Boolean(window.__chClaudeOauthProfiles && window.__chClaudeOauthProfiles.loaded);
+    const isLoading = (tool === 'codex' && !codexLoaded) || (tool === 'claudecode' && !claudeLoaded);
+    if (isLoading) {
+      heroEl.classList.add('empty');
+      heroEl.innerHTML = `
+        <div class="ch-hero-info">
+          <div class="ch-hero-eyebrow"><span>CURRENT SESSION</span></div>
+          <div class="ch-hero-empty-title">加载中…</div>
+          <div class="ch-hero-empty-sub">从本地配置读取 OAuth 状态…</div>
+        </div>`;
+      listEl.innerHTML = '<div class="ch-list-empty">加载中…</div>';
+      updateRibbonCounts([]);
+      if (emptyEl) emptyEl.classList.add('hide');
+      return;
+    }
+
     const allRows = buildProviderRows(tool);
     updateRibbonCounts(allRows);
 
@@ -18806,29 +18827,15 @@ loadTools();
     }, 2500);
   }
 
-  // ── Claude Code OAuth profile store (remote) ────────────────────
-  // Cache: { loaded, data: {active, lastSwitchAt, profiles: [...], defaultPlan} }
-  // We snapshot the last successful response into localStorage so a cold
-  // app start renders the correct OAuth rows on its very first paint, before
-  // any backend call has resolved. The actual source of truth is always the
-  // backend — we overwrite the cache on every successful fetch.
-  const CC_OAUTH_CACHE_LS_KEY = 'easyaiconfig_ch_claudecode_oauth_cache_v1';
-  function hydrateClaudeOauthCacheFromLs() {
-    try {
-      const raw = localStorage.getItem(CC_OAUTH_CACHE_LS_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return;
-      window.__chClaudeOauthProfiles = { loaded: false, data: parsed };
-    } catch (_) { /* corrupt cache — ignore */ }
-  }
-  function persistClaudeOauthCacheToLs(data) {
-    try {
-      localStorage.setItem(CC_OAUTH_CACHE_LS_KEY, JSON.stringify(data || {}));
-    } catch (_) { /* quota / denied — ignore */ }
-  }
+  // ── Claude Code OAuth profile store ─────────────────────────────
+  // Single source of truth: the backend reads
+  //   ~/.codex-config-ui/claudecode-oauth-profiles/profiles.json
+  //   + ~/.claude/.claude.json + macOS Keychain entry for the default dir.
+  // We hold the last-good response in a module-scoped cache so repeat
+  // renders during the same session don't re-fetch. When the cache is
+  // `loaded: false` the hub renders a "loading" state instead of guessing
+  // — no localStorage, no optimistic rendering.
   window.__chClaudeOauthProfiles = window.__chClaudeOauthProfiles || { loaded: false, data: null };
-  if (!window.__chClaudeOauthProfiles.data) hydrateClaudeOauthCacheFromLs();
 
   async function loadClaudeCodeOauthProfiles() {
     try {
@@ -18836,9 +18843,7 @@ loadTools();
       if (!res || !res.ok) {
         window.__chClaudeOauthProfiles = { loaded: true, data: { active: '', profiles: [], lastSwitchAt: 0 } };
       } else {
-        const data = res.data || {};
-        window.__chClaudeOauthProfiles = { loaded: true, data };
-        persistClaudeOauthCacheToLs(data);
+        window.__chClaudeOauthProfiles = { loaded: true, data: res.data || {} };
       }
     } catch (err) {
       console.warn('[ch] load claudecode oauth profiles failed', err);
@@ -19358,11 +19363,18 @@ loadTools();
   window.__chLoadOauthProfiles = loadCodexOauthProfiles;
   window.__chLoadClaudeCodeOauthProfiles = loadClaudeCodeOauthProfiles;
 
-  function initialLoad() {
+  async function initialLoad() {
     wire();
-    renderConnectionHub();
-    loadCodexOauthProfiles();
-    loadClaudeCodeOauthProfiles();
+    // Kick off both OAuth profile fetches in parallel. Each loader calls
+    // renderConnectionHub() on completion, so the first user-visible render
+    // already has real backend data — no localStorage cache, no guessing.
+    // If renderCurrentConfig / tool switches call renderConnectionHub in the
+    // meantime, the hub falls back to an explicit "加载中..." state for the
+    // still-loading tool (handled in renderConnectionHub itself).
+    await Promise.all([
+      loadCodexOauthProfiles(),
+      loadClaudeCodeOauthProfiles(),
+    ]);
   }
 
   if (document.readyState === 'loading') {
