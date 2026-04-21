@@ -291,6 +291,72 @@
                   </button>
                 </div>
 
+                <!-- ── Connection hub: hero + list + slide-over edit ── -->
+                <section class="connection-hub" id="connectionHub">
+                  <header class="ch-header">
+                    <div class="ch-title-row">
+                      <span class="ch-title-tool" id="chTitleTool">Codex</span>
+                      <span class="ch-title-sep">·</span>
+                      <span class="ch-title-main">连接配置</span>
+                    </div>
+                    <p class="ch-sub">选一个 provider 作为启动线路，点击切换，长按查看详情</p>
+                  </header>
+
+                  <article class="ch-hero" id="chHero">
+                    <!-- Rendered by renderConnectionHub() -->
+                  </article>
+
+                  <div class="ch-toolbar">
+                    <label class="ch-search">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="7" cy="7" r="4.5"/>
+                        <path d="M10.5 10.5 14 14"/>
+                      </svg>
+                      <input id="chSearchInput" type="search" placeholder="搜索 provider / URL / 模型" autocomplete="off"/>
+                      <button type="button" class="ch-search-clear hide" id="chSearchClear" aria-label="清空">✕</button>
+                    </label>
+                    <button type="button" class="ch-add-btn" id="chAddBtn">
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                        <path d="M8 3v10M3 8h10"/>
+                      </svg>
+                      新增 Provider
+                    </button>
+                  </div>
+
+                  <nav class="ch-ribbon" id="chRibbon" aria-label="按模式过滤">
+                    <button type="button" class="ch-ribbon-item active" data-ch-filter="all">
+                      <span>全部</span><span class="ch-ribbon-count" data-count="all">0</span>
+                    </button>
+                    <button type="button" class="ch-ribbon-item" data-ch-filter="oauth">
+                      <span>官方 OAuth</span><span class="ch-ribbon-count" data-count="oauth">0</span>
+                    </button>
+                    <button type="button" class="ch-ribbon-item" data-ch-filter="apikey">
+                      <span>API Key</span><span class="ch-ribbon-count" data-count="apikey">0</span>
+                    </button>
+                  </nav>
+
+                  <div class="ch-list-wrap">
+                    <div class="ch-list" id="chList" role="list">
+                      <!-- Rendered by renderConnectionHub() -->
+                    </div>
+                    <div class="ch-empty hide" id="chEmpty">
+                      <div class="ch-empty-title">还没有 provider</div>
+                      <div class="ch-empty-sub">点击右上角 <strong>新增 Provider</strong> 开始</div>
+                    </div>
+                  </div>
+                </section>
+
+                <!-- ── Slide-over edit panel (wraps the existing form section) ── -->
+                <div class="ch-slideover hide" id="chSlideover" aria-hidden="true">
+                  <div class="ch-slideover-scrim" data-ch-close></div>
+                  <aside class="ch-slideover-panel" role="dialog" aria-labelledby="chSlideoverTitle">
+                    <header class="ch-so-head">
+                      <div class="ch-so-title" id="chSlideoverTitle">编辑 Provider</div>
+                      <button type="button" class="ch-so-close" data-ch-close aria-label="关闭">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
+                      </button>
+                    </header>
+                    <div class="ch-so-body">
                 <section class="view-section flow-section">
                   <div class="section-head compact-head">
                     <div>
@@ -436,6 +502,9 @@
                   </div>
                   <div id="codexTerminalMenu" class="provider-dropdown hide"></div>
                 </section>
+                    </div><!-- /.ch-so-body -->
+                  </aside>
+                </div><!-- /.ch-slideover -->
               </section>
 
               <aside class="quick-rail">

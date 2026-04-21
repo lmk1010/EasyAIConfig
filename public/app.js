@@ -13590,6 +13590,12 @@ function providerHealthLabel(provider) {
 }
 
 function renderCurrentConfig() {
+  // Keep the new connection hub in sync with every state change that the legacy
+  // rail re-render covers. Hub-layer render is cheap and side-effect-free.
+  // Reach via window.* because this file is an ES module — bare identifier
+  // wouldn't resolve across module/IIFE scopes.
+  try { window.renderConnectionHub?.(); } catch (_) { /* hub optional during early boot */ }
+
   // ── Claude Code tab ──
   if (state.activeTool === 'claudecode') {
     const cc = state.claudeCodeState;
@@ -18054,4 +18060,497 @@ loadTools();
       }
     });
   };
+})();
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CONNECTION HUB — render + wiring.
+   Reuses existing state + quickSwitchXxxProvider() functions.
+   ══════════════════════════════════════════════════════════════════════════ */
+(function connectionHub() {
+  'use strict';
+
+  const TOOL_LABELS = {
+    codex: 'Codex',
+    claudecode: 'Claude Code',
+    opencode: 'OpenCode',
+    openclaw: 'OpenClaw',
+  };
+  const LAUNCH_LABELS = {
+    codex: '启动 Codex',
+    claudecode: '启动 Claude Code',
+    opencode: '启动 OpenCode',
+    openclaw: '启动 OpenClaw',
+  };
+
+  function safeEscape(v) {
+    if (typeof escapeHtml === 'function') return escapeHtml(v);
+    return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function hubState() {
+    // `state` is the module-level object declared at the top of app.js; accessible via closure.
+    if (typeof state === 'undefined' || !state) return null;
+    if (typeof state.chSearch !== 'string') state.chSearch = '';
+    if (typeof state.chFilter !== 'string') state.chFilter = 'all';
+    return state;
+  }
+
+  // ── Provider row model (tool-agnostic) ──────────────────────────────
+  function buildProviderRows(tool) {
+    const s = hubState();
+    if (!s) return [];
+
+    if (tool === 'codex') {
+      if (typeof isCodexInstalled === 'function' && !isCodexInstalled()) return [];
+      const providers = Array.isArray(s.current?.providers) ? s.current.providers : [];
+      const login = s.current?.login || {};
+      const health = s.providerHealth || {};
+      const rows = providers.map((p) => {
+        const h = health[p.key];
+        return {
+          key: p.key,
+          name: p.name || p.key,
+          baseUrl: p.baseUrl || '',
+          model: p.isActive ? (s.current?.summary?.model || '') : '',
+          mode: 'apikey',
+          isActive: Boolean(p.isActive),
+          hasCredential: Boolean(p.hasApiKey),
+          historyOnly: Boolean(p.historyOnly),
+          health: h || null,
+          ref: p,
+          tool,
+        };
+      });
+      if (login.loggedIn) {
+        rows.unshift({
+          key: '__codex_official_oauth__',
+          name: login.orgName || login.email || 'OpenAI 官方登录',
+          baseUrl: 'https://chatgpt.com (ChatGPT)',
+          model: login.plan || '',
+          mode: 'oauth',
+          isActive: !providers.some((p) => p.isActive),
+          hasCredential: true,
+          health: { ok: true, checked: true },
+          ref: null,
+          tool,
+          readOnly: true,
+        });
+      }
+      return rows;
+    }
+
+    if (tool === 'claudecode') {
+      const cc = s.claudeCodeState || {};
+      if (typeof isClaudeCodeInstalled === 'function' && !isClaudeCodeInstalled(cc)) return [];
+      const profiles = typeof getClaudeProviderProfiles === 'function' ? (getClaudeProviderProfiles(cc) || []) : [];
+      const selectedKey = s.claudeSelectedProviderKey;
+      return profiles.map((p) => {
+        const isOfficial = typeof isClaudeOfficialProvider === 'function' ? isClaudeOfficialProvider(p) : false;
+        const oauthReady = isOfficial && typeof isClaudeOauthLoggedIn === 'function' && isClaudeOauthLoggedIn(cc);
+        const hasCredential = Boolean(p.hasApiKey) || oauthReady;
+        return {
+          key: p.key,
+          name: p.name || p.key,
+          baseUrl: p.baseUrl || 'https://api.anthropic.com',
+          model: (p.key === selectedKey) ? (cc.model || '') : '',
+          mode: isOfficial ? 'oauth' : 'apikey',
+          isActive: p.key === selectedKey,
+          hasCredential,
+          health: hasCredential ? { ok: true, checked: true } : null,
+          ref: p,
+          tool,
+        };
+      });
+    }
+
+    if (tool === 'opencode') {
+      const data = s.opencodeState || {};
+      if (typeof isOpenCodeInstalled === 'function' && !isOpenCodeInstalled(data)) return [];
+      const providers = Array.isArray(data.providers) ? data.providers : [];
+      return providers.map((p) => {
+        const authType = String(p.authType || '').toLowerCase();
+        const isOauth = Boolean(p.hasAuth) && authType.includes('oauth');
+        return {
+          key: p.key,
+          name: p.name || p.key,
+          baseUrl: p.baseUrl || '',
+          model: (p.key === data.activeProviderKey) ? (data.model || '') : '',
+          mode: isOauth ? 'oauth' : 'apikey',
+          isActive: p.key === data.activeProviderKey,
+          hasCredential: Boolean(p.hasCredential),
+          health: p.hasCredential ? { ok: true, checked: true } : null,
+          ref: p,
+          tool,
+        };
+      });
+    }
+
+    // openclaw: no provider concept
+    return [];
+  }
+
+  // ── Hero HTML ─────────────────────────────────────────────────────
+  function renderHeroHTML(active, tool) {
+    if (!active) {
+      return `
+        <div class="ch-hero-info">
+          <div class="ch-hero-eyebrow">CURRENT SESSION</div>
+          <div class="ch-hero-empty-title">还没有激活的 Provider</div>
+          <div class="ch-hero-empty-sub">点击下方任意一项切换，或 <strong>新增 Provider</strong> 开始配置。</div>
+        </div>
+        <div class="ch-hero-actions">
+          <button type="button" class="ch-hero-ghost" data-ch-add>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+            新增
+          </button>
+        </div>`;
+    }
+    const h = active.health || {};
+    const statusCls = active.isActive && h.ok ? 'ok' : h.loading ? 'warn loading' : h.ok ? 'ok' : h.checked ? 'bad' : 'muted';
+    const statusTxt = h.loading ? '检测中' : h.ok ? '已通' : h.checked ? '失败' : '未检测';
+    const launchLabel = LAUNCH_LABELS[tool] || '启动';
+    const modeTxt = active.mode === 'oauth' ? 'OAUTH' : 'API KEY';
+
+    return `
+      <div class="ch-hero-info">
+        <div class="ch-hero-eyebrow">
+          <span>CURRENT SESSION</span>
+          <span class="ch-status ${statusCls}">${safeEscape(statusTxt)}</span>
+        </div>
+        <h2 class="ch-hero-name">${safeEscape(active.name)}</h2>
+        <div class="ch-hero-badges">
+          <span class="ch-mode ${active.mode}">${modeTxt}</span>
+          ${active.model ? `<span class="ch-hero-model">${safeEscape(active.model)}</span>` : ''}
+        </div>
+        ${active.baseUrl ? `<div class="ch-hero-url">${safeEscape(active.baseUrl)}</div>` : ''}
+      </div>
+      <div class="ch-hero-actions">
+        <button type="button" class="ch-hero-ghost" data-ch-detect title="重新检测连接">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
+          重检
+        </button>
+        <button type="button" class="ch-hero-ghost" data-ch-edit title="编辑当前 provider">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
+          编辑
+        </button>
+        <button type="button" class="ch-hero-launch" data-ch-launch>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+          ${safeEscape(launchLabel)}
+        </button>
+      </div>`;
+  }
+
+  // ── List HTML ─────────────────────────────────────────────────────
+  function rowHTML(r) {
+    const h = r.health || {};
+    let dotCls, statusCls, statusTxt;
+    if (r.isActive) {
+      dotCls = 'current';
+      statusCls = 'active';
+      statusTxt = '当前';
+    } else if (h.loading) {
+      dotCls = 'warn'; statusCls = 'warn loading'; statusTxt = '检测中';
+    } else if (h.ok) {
+      dotCls = 'ok'; statusCls = 'ok'; statusTxt = '已通';
+    } else if (h.checked) {
+      dotCls = 'bad'; statusCls = 'bad'; statusTxt = '失败';
+    } else if (r.historyOnly) {
+      dotCls = 'muted'; statusCls = 'muted'; statusTxt = '历史';
+    } else if (!r.hasCredential) {
+      dotCls = 'muted'; statusCls = 'warn'; statusTxt = '缺 Key';
+    } else {
+      dotCls = 'muted'; statusCls = 'muted'; statusTxt = '未检测';
+    }
+
+    return `
+      <div class="ch-row ${r.isActive ? 'current' : ''}" role="listitem" data-ch-key="${safeEscape(r.key)}" tabindex="0">
+        <span class="ch-row-dot ${dotCls}"></span>
+        <span class="ch-row-body">
+          <span class="ch-row-title">
+            <span class="ch-row-name">${safeEscape(r.name)}</span>
+            ${r.isActive ? '<span class="ch-row-current-tag">当前</span>' : ''}
+          </span>
+          <span class="ch-row-meta">
+            ${r.model ? `<span class="ch-row-model">${safeEscape(r.model)}</span>` : ''}
+            ${r.baseUrl ? `<span class="ch-row-url">${safeEscape(r.baseUrl)}</span>` : ''}
+          </span>
+        </span>
+        <span class="ch-row-status"><span class="ch-status ${statusCls}">${safeEscape(statusTxt)}</span></span>
+        <span class="ch-row-actions">
+          <button type="button" class="ch-row-icon-btn" data-ch-row-edit="${safeEscape(r.key)}" title="编辑" aria-label="编辑 ${safeEscape(r.name)}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
+          </button>
+          <button type="button" class="ch-row-icon-btn" data-ch-row-detect="${safeEscape(r.key)}" title="重检" aria-label="重检 ${safeEscape(r.name)}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
+          </button>
+        </span>
+      </div>`;
+  }
+
+  function renderListHTML(rows) {
+    if (!rows.length) {
+      return '<div class="ch-list-empty">没有匹配的 provider</div>';
+    }
+    const oauth = rows.filter((r) => r.mode === 'oauth');
+    const apikey = rows.filter((r) => r.mode === 'apikey');
+    const pieces = [];
+    if (oauth.length) {
+      pieces.push(`<div class="ch-group-head">OAUTH<span class="count">· ${oauth.length}</span></div>`);
+      pieces.push(oauth.map(rowHTML).join(''));
+    }
+    if (apikey.length) {
+      pieces.push(`<div class="ch-group-head">API KEY<span class="count">· ${apikey.length}</span></div>`);
+      pieces.push(apikey.map(rowHTML).join(''));
+    }
+    return pieces.join('');
+  }
+
+  function updateRibbonCounts(allRows) {
+    const all = allRows.length;
+    const oauth = allRows.filter((r) => r.mode === 'oauth').length;
+    const apikey = allRows.filter((r) => r.mode === 'apikey').length;
+    document.querySelectorAll('#chRibbon [data-count]').forEach((el) => {
+      const k = el.dataset.count;
+      const n = k === 'all' ? all : k === 'oauth' ? oauth : apikey;
+      el.textContent = String(n);
+    });
+  }
+
+  // ── Public render entry ────────────────────────────────────────
+  function renderConnectionHub() {
+    const hub = document.getElementById('connectionHub');
+    if (!hub) return;
+    const heroEl = document.getElementById('chHero');
+    const listEl = document.getElementById('chList');
+    const emptyEl = document.getElementById('chEmpty');
+    const toolTitleEl = document.getElementById('chTitleTool');
+    const s = hubState();
+    if (!s || !heroEl || !listEl) return;
+
+    const tool = s.activeTool || 'codex';
+    if (toolTitleEl) toolTitleEl.textContent = TOOL_LABELS[tool] || tool;
+
+    const allRows = buildProviderRows(tool);
+    updateRibbonCounts(allRows);
+
+    // Apply search + filter
+    const search = (s.chSearch || '').trim().toLowerCase();
+    const filter = s.chFilter || 'all';
+    const filtered = allRows.filter((r) => {
+      if (filter === 'oauth' && r.mode !== 'oauth') return false;
+      if (filter === 'apikey' && r.mode !== 'apikey') return false;
+      if (!search) return true;
+      const hay = [r.name, r.baseUrl, r.model, r.key].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(search);
+    });
+
+    const active = allRows.find((r) => r.isActive) || null;
+    heroEl.innerHTML = renderHeroHTML(active, tool);
+    heroEl.classList.toggle('empty', !active);
+    listEl.innerHTML = renderListHTML(filtered);
+
+    if (emptyEl) emptyEl.classList.toggle('hide', allRows.length > 0);
+  }
+
+  // ── Interactions ────────────────────────────────────────────────
+  function openSlideover(mode, providerKey) {
+    const so = document.getElementById('chSlideover');
+    if (!so) return;
+    so.classList.remove('hide');
+    // Two rAFs so the initial display:block commits before .open animates in
+    requestAnimationFrame(() => requestAnimationFrame(() => so.classList.add('open')));
+    so.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('ch-so-active');
+    const title = document.getElementById('chSlideoverTitle');
+    if (title) title.textContent = mode === 'add' ? '新增 Provider' : '编辑 Provider';
+
+    if (mode === 'edit' && providerKey) {
+      switchToRow(providerKey).catch(() => {});
+    } else if (mode === 'add') {
+      const urlEl = document.getElementById('baseUrlInput');
+      const keyEl = document.getElementById('apiKeyInput');
+      if (urlEl) urlEl.value = '';
+      if (keyEl) keyEl.value = '';
+      setTimeout(() => urlEl && urlEl.focus(), 260);
+    }
+  }
+
+  function closeSlideover() {
+    const so = document.getElementById('chSlideover');
+    if (!so) return;
+    so.classList.remove('open');
+    so.setAttribute('aria-hidden', 'true');
+    setTimeout(() => so.classList.add('hide'), 220);
+    document.body.classList.remove('ch-so-active');
+  }
+
+  async function switchToRow(key) {
+    if (!key) return;
+    const s = hubState();
+    if (!s) return;
+    const tool = s.activeTool || 'codex';
+    try {
+      if (tool === 'codex') {
+        if (key === '__codex_official_oauth__') return;
+        const p = (s.current?.providers || []).find((x) => x.key === key);
+        if (p && typeof quickSwitchCodexProvider === 'function') await quickSwitchCodexProvider(p);
+      } else if (tool === 'claudecode') {
+        const profiles = typeof getClaudeProviderProfiles === 'function' ? getClaudeProviderProfiles(s.claudeCodeState) : [];
+        const p = (profiles || []).find((x) => x.key === key);
+        if (p && typeof quickSwitchClaudeProvider === 'function') await quickSwitchClaudeProvider(p);
+      } else if (tool === 'opencode') {
+        const p = ((s.opencodeState?.providers) || []).find((x) => x.key === key);
+        if (p && typeof quickSwitchOpenCodeProvider === 'function') await quickSwitchOpenCodeProvider(p);
+      }
+    } catch (err) {
+      console.warn('[ch] switch failed', err);
+    }
+  }
+
+  async function detectRow(key) {
+    const s = hubState();
+    if (!s) return;
+    const tool = s.activeTool || 'codex';
+    if (tool === 'codex') {
+      const p = (s.current?.providers || []).find((x) => x.key === key);
+      if (p && typeof testCodexProviderConnectivity === 'function') {
+        try { await testCodexProviderConnectivity(p); } catch (_) {}
+        return;
+      }
+    }
+    // Fallback: trigger the (now hidden) detect button in the slide-over form
+    document.getElementById('detectBtn')?.click();
+  }
+
+  // ── Delegated event wiring (runs once on DOMContentLoaded) ─────
+  function wire() {
+    const hub = document.getElementById('connectionHub');
+    if (!hub || hub.dataset.chWired === '1') return;
+    hub.dataset.chWired = '1';
+
+    // Add button
+    document.getElementById('chAddBtn')?.addEventListener('click', () => openSlideover('add'));
+
+    // Hero actions
+    const hero = document.getElementById('chHero');
+    hero?.addEventListener('click', (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target) return;
+      const launch = target.closest('[data-ch-launch]');
+      if (launch) {
+        const s = hubState();
+        const tool = s?.activeTool || 'codex';
+        // Call the underlying launch function directly — the real #launchBtn lives
+        // inside the slide-over (display:none) so simulating its click would make
+        // the terminal picker menu position at (0,0).
+        if (tool === 'codex' && typeof launchCodex === 'function') {
+          launchCodex('launchBtn', 'Codex 已启动', 'auto').catch(console.warn);
+        } else {
+          document.getElementById('launchBtn')?.click();
+        }
+        return;
+      }
+      const edit = target.closest('[data-ch-edit]');
+      if (edit) { openSlideover('edit'); return; }
+      const detect = target.closest('[data-ch-detect]');
+      if (detect) {
+        const s = hubState();
+        const rows = buildProviderRows(s?.activeTool || 'codex');
+        const active = rows.find((r) => r.isActive);
+        if (active && !active.readOnly) detectRow(active.key);
+        else document.getElementById('detectBtn')?.click();
+        return;
+      }
+      const add = target.closest('[data-ch-add]');
+      if (add) { openSlideover('add'); return; }
+    });
+
+    // Row clicks
+    const list = document.getElementById('chList');
+    list?.addEventListener('click', (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target) return;
+      const editBtn = target.closest('[data-ch-row-edit]');
+      if (editBtn) { e.stopPropagation(); openSlideover('edit', editBtn.getAttribute('data-ch-row-edit')); return; }
+      const detectBtn = target.closest('[data-ch-row-detect]');
+      if (detectBtn) { e.stopPropagation(); detectRow(detectBtn.getAttribute('data-ch-row-detect')); return; }
+      const row = target.closest('[data-ch-key]');
+      if (row) switchToRow(row.getAttribute('data-ch-key'));
+    });
+    list?.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const target = e.target instanceof Element ? e.target : null;
+      const row = target && target.closest('[data-ch-key]');
+      if (row) { e.preventDefault(); switchToRow(row.getAttribute('data-ch-key')); }
+    });
+
+    // Ribbon filter
+    const ribbon = document.getElementById('chRibbon');
+    ribbon?.addEventListener('click', (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      const btn = target && target.closest('[data-ch-filter]');
+      if (!btn) return;
+      const s = hubState();
+      if (!s) return;
+      s.chFilter = btn.getAttribute('data-ch-filter');
+      ribbon.querySelectorAll('.ch-ribbon-item').forEach((b) => b.classList.toggle('active', b === btn));
+      renderConnectionHub();
+    });
+
+    // Search
+    const search = document.getElementById('chSearchInput');
+    const clear = document.getElementById('chSearchClear');
+    if (search) {
+      search.addEventListener('input', () => {
+        const s = hubState();
+        if (!s) return;
+        s.chSearch = search.value;
+        if (clear) clear.classList.toggle('hide', !search.value);
+        renderConnectionHub();
+      });
+    }
+    if (clear) {
+      clear.addEventListener('click', () => {
+        if (search) { search.value = ''; search.focus(); }
+        const s = hubState();
+        if (s) s.chSearch = '';
+        clear.classList.add('hide');
+        renderConnectionHub();
+      });
+    }
+
+    // Close slide-over (scrim, X button, Escape)
+    document.querySelectorAll('[data-ch-close]').forEach((el) => el.addEventListener('click', closeSlideover));
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const so = document.getElementById('chSlideover');
+        if (so && so.classList.contains('open')) closeSlideover();
+      }
+    });
+
+    // When the existing form's Save / Launch runs, close the slide-over so the
+    // hub view (now holding the updated state) takes focus again.
+    ['saveBtn', 'launchBtn'].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.addEventListener('click', () => {
+        // Close shortly after so the handler has time to mutate state
+        setTimeout(() => {
+          const so = document.getElementById('chSlideover');
+          if (so && so.classList.contains('open')) closeSlideover();
+        }, 120);
+      });
+    });
+  }
+
+  // Expose hub render so renderCurrentConfig() can call it
+  window.renderConnectionHub = renderConnectionHub;
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { wire(); renderConnectionHub(); });
+  } else {
+    wire();
+    renderConnectionHub();
+  }
 })();
