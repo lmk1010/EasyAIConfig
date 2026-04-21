@@ -20183,6 +20183,137 @@ body {
   padding: 0 0 10px;
 }
 
+/* ============================================================
+   Dashboard v3 — same glass + flat treatment as the console
+   ============================================================ */
+
+/* Page header — tool name · 数据看板 on the left, toolbar on the right.
+   Aligned with the workspace topbar's own title so the two visually sit
+   on the same horizontal line as the sidebar group label. */
+.shell-v2 .db3-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 4px 8px;
+  flex-wrap: wrap;
+}
+.shell-v2 .db3-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--s2-text);
+}
+.shell-v2 .db3-title-tool { color: var(--s2-accent); }
+.shell-v2 .db3-title-sep { color: var(--s2-faint); }
+.shell-v2 .db3-title-main { color: var(--s2-text); }
+.shell-v2 .db3-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Old inline tabs no longer render — hide if any legacy render leaks. */
+.shell-v2 .dashboard-tabs,
+.shell-v2 .dashboard-toolbar {
+  display: none;
+}
+
+/* Give every .db2-section the same glass shell the console uses. The
+   content inside stays flat — no nested cards. */
+.shell-v2 .dashboard-page .db2-section {
+  padding: 14px 18px 16px;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(107, 158, 255, 0.07) 0%, transparent 55%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008));
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 8px 20px rgba(0, 0, 0, 0.14);
+  gap: 12px;
+}
+[data-theme="light"] .shell-v2 .dashboard-page .db2-section {
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.06) 0%, transparent 55%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 4px 14px rgba(15, 23, 42, 0.05);
+}
+
+/* .db2-stat-cards: wrap the whole strip in ONE glass container and let
+   each stat cell be flat with a thin vertical divider between them. */
+.shell-v2 .dashboard-page .db2-stat-cards {
+  padding: 14px 10px;
+  border-radius: 16px;
+  gap: 0;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(107, 158, 255, 0.07) 0%, transparent 55%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008));
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 8px 20px rgba(0, 0, 0, 0.14);
+}
+[data-theme="light"] .shell-v2 .dashboard-page .db2-stat-cards {
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.06) 0%, transparent 55%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 4px 14px rgba(15, 23, 42, 0.05);
+}
+
+.shell-v2 .dashboard-page .db2-stat-card {
+  background: transparent !important;
+  border: 0 !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: 0;
+  padding: 6px 14px;
+  box-shadow: none !important;
+  transform: none !important;
+  transition: none;
+  gap: 4px;
+}
+.shell-v2 .dashboard-page .db2-stat-card:first-child {
+  border-left: 0 !important;
+}
+[data-theme="light"] .shell-v2 .dashboard-page .db2-stat-card {
+  border-left-color: rgba(15, 23, 42, 0.06) !important;
+}
+.shell-v2 .dashboard-page .db2-stat-card:hover {
+  background: transparent !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+.shell-v2 .dashboard-page .db2-stat-card--accent {
+  background: transparent !important;
+  border-left-color: rgba(91, 140, 255, 0.45) !important;
+}
+.shell-v2 .dashboard-page .db2-stat-card--cost {
+  background: transparent !important;
+  border-left-color: rgba(74, 222, 128, 0.45) !important;
+}
+.shell-v2 .dashboard-page .db2-sc-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+}
+.shell-v2 .dashboard-page .db2-sc-value { font-size: 1.35rem; }
+
 .shell-v2 .cv3-ipstrip-ip code {
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
   font-size: 0.74rem;

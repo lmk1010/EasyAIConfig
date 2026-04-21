@@ -6480,11 +6480,23 @@ function renderDashboardPage() {
         ? openclawHtml
         : codexHtml;
 
+  // Sync the left-rail active state with the current dashboardTool.
+  document.querySelectorAll('[data-dashboard-rail-tool]').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-dashboard-rail-tool') === dashboardTool);
+  });
+
+  // Tool name (used by the header "Codex · 数据看板").
+  const toolLabel = (tabs.find((t) => t.key === dashboardTool) || tabs[0]).label;
+
   root.innerHTML = `
     <div class="dashboard-shell ${isLoading ? 'is-loading' : ''}">
-      <div class="dashboard-toolbar">
-        <div class="dashboard-tabs">
-          ${tabs.map((item) => `<button type="button" class="dashboard-tab ${item.key === dashboardTool ? 'active' : ''}" data-dashboard-tool="${item.key}">${item.icon}<span>${escapeHtml(item.label)}</span><span class="dashboard-tab-dot" style="background:${item.dot}"></span></button>`).join('')}
+      <header class="db3-head">
+        <div class="db3-title">
+          <span class="db3-title-tool">${escapeHtml(toolLabel)}</span>
+          <span class="db3-title-sep">·</span>
+          <span class="db3-title-main">数据看板</span>
+        </div>
+        <div class="db3-toolbar">
           <span class="db2-period-wrap">
             <div class="db2-period-dropdown" data-period-dropdown>
               <button type="button" class="db2-period-trigger" data-period-trigger>${state.dashboardDays} 天 <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
@@ -6493,9 +6505,10 @@ function renderDashboardPage() {
               </div>
             </div>
           </span>
+          ${showDashboardRefresh ? `<span class="dashboard-fetch-state ${isLoading ? 'loading' : ''}">${escapeHtml(dashboardStatusText)}</span>
+          <button type="button" class="dashboard-refresh-btn ${state.dashboardRefreshing ? 'is-busy' : ''}" data-dashboard-refresh ${state.dashboardRefreshing ? 'disabled' : ''}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${escapeHtml(state.dashboardRefreshing ? '刷新中' : '刷新')}</button>` : ''}
         </div>
-        ${showDashboardRefresh ? `<div class="dashboard-toolbar-actions"><span class="dashboard-fetch-state ${isLoading ? 'loading' : ''}">${escapeHtml(dashboardStatusText)}</span><button type="button" class="dashboard-refresh-btn ${state.dashboardRefreshing ? 'is-busy' : ''}" data-dashboard-refresh ${state.dashboardRefreshing ? 'disabled' : ''}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${escapeHtml(state.dashboardRefreshing ? '刷新中' : '刷新')}</button></div>` : ''}
-      </div>
+      </header>
       ${content}
     </div>
   `;
@@ -18289,6 +18302,29 @@ function bindEvents() {
       if (!btn) return;
       state.consoleTool = btn.getAttribute('data-console-rail-tool') || 'codex';
       renderToolConsole();
+    });
+  }
+
+  // Dashboard left-rail tool switcher (mirrors console's pattern)
+  const dashboardRailList = document.getElementById('dashboardToolList');
+  if (dashboardRailList) {
+    dashboardRailList.addEventListener('click', async (e) => {
+      const btn = e.target instanceof Element ? e.target.closest('[data-dashboard-rail-tool]') : null;
+      if (!btn) return;
+      const tool = btn.getAttribute('data-dashboard-rail-tool') || 'codex';
+      state.dashboardTool = tool;
+      // Mirror the old inline-tab lazy-load: Claude data isn't prefetched
+      // until the user flips to it.
+      if (tool === 'claudecode') {
+        const hasCachedData = state.claudeCodeState?.usage?.daily?.length > 0;
+        if (!hasCachedData) {
+          state.dashboardLoading = true;
+          renderDashboardPage();
+          try { await ensureClaudeDashboardData(); } catch (_) {}
+          state.dashboardLoading = false;
+        }
+      }
+      renderDashboardPage();
     });
   }
 

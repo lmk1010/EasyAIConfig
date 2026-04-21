@@ -159,6 +159,55 @@
             </div>
             <div class="sec-empty">预设管理即将上线<br><span>每条预设即一个可快速切换的 URL + Key 组合</span></div>
           </div>
+          <div class="sec-group" data-sec-for="dashboard" style="display:none">
+            <div class="sec-group-head">
+              <span class="sec-group-label">工具</span>
+              <span class="sec-group-meta">数据来源</span>
+            </div>
+            <div class="sec-list" id="dashboardToolList">
+              <button type="button" class="sec-item active" data-dashboard-rail-tool="codex" style="--accent-a:#ffd0a8;--accent-b:#ff8c5a">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" opacity="0.5" />
+                    <path d="M12 12l9-5M12 12v10M12 12L3 7" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Codex</span>
+                  <span class="sec-subtitle">OpenAI Codex 用量</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-dashboard-rail-tool="claudecode" style="--accent-a:#ffc69a;--accent-b:#e07a3f">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="9" opacity="0.5" />
+                    <path d="M8 12h8M12 8v8" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Claude Code</span>
+                  <span class="sec-subtitle">Anthropic 本地用量</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-dashboard-rail-tool="openclaw" style="--accent-a:#d5c5ff;--accent-b:#8162d6">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="9" opacity="0.5" />
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                    <circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" />
+                    <circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">OpenClaw</span>
+                  <span class="sec-subtitle">网关与通道</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+            </div>
+          </div>
           <div class="sec-group" data-sec-for="console" style="display:none">
             <div class="sec-group-head">
               <span class="sec-group-label">工具</span>
