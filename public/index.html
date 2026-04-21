@@ -646,24 +646,35 @@
                   <span class="console-v2-title-sep">·</span>
                   <span class="console-v2-title-main">运行控制台</span>
                 </div>
-                <p class="console-v2-sub">集中查看当前工具的安装、配置与 Provider 健康状态</p>
+                <p class="console-v2-sub">只读视图，不对官方 API 做任何主动探测</p>
               </header>
 
+              <!-- 1 · IP 防火墙段 - 最重要，放最顶 -->
+              <section class="console-v2-firewall" id="consoleV2Firewall"></section>
+
+              <!-- 2 · 当前会话（精简 hero） -->
               <article class="console-v2-hero" id="consoleV2Hero"></article>
 
+              <!-- 3 · 正在运行的 CLI 进程 -->
+              <section class="console-v2-procs" id="consoleV2Procs"></section>
+
+              <!-- 4 · 本地使用统计 -->
+              <section class="console-v2-usage" id="consoleV2Usage"></section>
+
+              <!-- 5 · 状态快览（精简,只保留真正需要的配置值） -->
               <section class="console-v2-meta" id="consoleV2Meta"></section>
 
+              <!-- 6 · 异常（条件渲染） -->
               <section class="console-v2-issues" id="consoleV2Issues"></section>
 
-              <section class="console-v2-providers" id="consoleV2Providers"></section>
-
-              <!-- Legacy containers retained so existing render paths don't error
-                   out — hidden; rendered content goes into the v2 slots above. -->
+              <!-- Legacy no-op containers — kept hidden so old listeners/selectors
+                   still resolve, but never rendered into. -->
               <div id="toolConsoleSummary" hidden></div>
               <div id="toolConsoleTabs" hidden></div>
               <section id="toolConsoleMain" hidden></section>
               <aside id="toolConsoleSide" hidden></aside>
               <section id="toolConsoleActivity" hidden></section>
+              <div id="consoleV2Providers" hidden></div>
               <button type="button" id="toolConsoleRefreshBtn" hidden></button>
               <span id="tcDotCodex" hidden></span>
               <span id="tcDotClaude" hidden></span>

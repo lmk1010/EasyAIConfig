@@ -20070,3 +20070,236 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ============================================================
+   Console v3 additions — IP firewall / procs / usage
+   ============================================================ */
+.shell-v2 .cv3-fw {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.shell-v2 .cv3-fw-safe {
+  background: rgba(74, 222, 128, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.22);
+}
+.shell-v2 .cv3-fw-warn,
+.shell-v2 .cv3-fw-loading {
+  background: rgba(234, 167, 51, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(234, 167, 51, 0.26);
+}
+.shell-v2 .cv3-fw-block {
+  background: rgba(239, 82, 82, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(239, 82, 82, 0.32);
+}
+[data-theme="light"] .shell-v2 .cv3-fw-safe { background: rgba(34, 197, 94, 0.1); box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.3); }
+[data-theme="light"] .shell-v2 .cv3-fw-warn,
+[data-theme="light"] .shell-v2 .cv3-fw-loading { background: rgba(234, 167, 51, 0.15); box-shadow: inset 0 0 0 1px rgba(234, 167, 51, 0.4); }
+[data-theme="light"] .shell-v2 .cv3-fw-block { background: rgba(239, 68, 68, 0.12); box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.38); }
+
+.shell-v2 .cv3-fw-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+[data-theme="light"] .shell-v2 .cv3-fw-icon { background: rgba(255, 255, 255, 0.7); }
+
+.shell-v2 .cv3-fw-body { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.shell-v2 .cv3-fw-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--s2-text);
+}
+.shell-v2 .cv3-fw-verdict {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+[data-theme="light"] .shell-v2 .cv3-fw-verdict { background: rgba(15, 23, 42, 0.06); }
+
+.shell-v2 .cv3-fw-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.74rem;
+}
+.shell-v2 .cv3-fw-row {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+.shell-v2 .cv3-fw-key {
+  color: var(--s2-faint);
+  font-size: 0.7rem;
+}
+.shell-v2 .cv3-fw-val { color: var(--s2-text); word-break: break-all; }
+.shell-v2 .cv3-fw-val code {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.68rem;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+[data-theme="light"] .shell-v2 .cv3-fw-val code { background: rgba(15, 23, 42, 0.05); }
+.shell-v2 .cv3-fw-geo { color: var(--s2-muted); margin-left: 4px; }
+.shell-v2 .cv3-fw-copy { font-size: 0.74rem; color: var(--s2-muted); }
+
+.shell-v2 .cv3-fw-actions { display: flex; gap: 8px; align-self: center; flex-shrink: 0; }
+.shell-v2 .cv3-fw-refresh {
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--s2-text);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.shell-v2 .cv3-fw-refresh:hover { background: rgba(107, 158, 255, 0.18); color: var(--s2-accent); }
+[data-theme="light"] .shell-v2 .cv3-fw-refresh { background: rgba(15, 23, 42, 0.06); }
+[data-theme="light"] .shell-v2 .cv3-fw-refresh:hover { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+
+/* Section header link-style refresh button */
+.shell-v2 .cv3-link-btn {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--s2-muted);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-transform: none;
+}
+.shell-v2 .cv3-link-btn:hover { color: var(--s2-accent); }
+
+/* Process list */
+.shell-v2 .cv3-proc-list { display: flex; flex-direction: column; gap: 2px; }
+.shell-v2 .cv3-proc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 8px;
+}
+.shell-v2 .cv3-proc-row:hover { background: rgba(255, 255, 255, 0.02); }
+[data-theme="light"] .shell-v2 .cv3-proc-row:hover { background: rgba(15, 23, 42, 0.03); }
+
+.shell-v2 .cv3-proc-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.shell-v2 .cv3-proc-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.55);
+  flex-shrink: 0;
+}
+.shell-v2 .cv3-proc-pid {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.72rem;
+  color: var(--s2-text);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.shell-v2 .cv3-proc-cwd {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.68rem;
+  color: var(--s2-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.shell-v2 .cv3-proc-metrics { display: flex; gap: 14px; flex-shrink: 0; }
+.shell-v2 .cv3-proc-metric {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.68rem;
+  color: var(--s2-muted);
+}
+.shell-v2 .cv3-proc-empty {
+  padding: 14px 14px;
+  font-size: 0.76rem;
+  color: var(--s2-faint);
+}
+
+/* Usage stats grid */
+.shell-v2 .cv3-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  padding: 4px 0;
+}
+.shell-v2 .cv3-usage-cell {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+[data-theme="light"] .shell-v2 .cv3-usage-cell {
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.05);
+}
+.shell-v2 .cv3-usage-cell-wide { grid-column: span 2; }
+.shell-v2 .cv3-usage-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+}
+.shell-v2 .cv3-usage-value {
+  margin-top: 4px;
+  font-size: 1.2rem;
+  font-weight: 650;
+  color: var(--s2-text);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.shell-v2 .cv3-usage-hint {
+  margin-top: 4px;
+  font-size: 0.68rem;
+  color: var(--s2-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell-v2 .cv3-usage-hint code {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.62rem;
+}
+.shell-v2 .cv3-usage-note {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(234, 167, 51, 0.08);
+  color: var(--s2-muted);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+/* Meta row warn tone */
+.shell-v2 .cv3-meta-warn .console-v2-meta-value {
+  color: #fbbf24;
+}
+[data-theme="light"] .shell-v2 .cv3-meta-warn .console-v2-meta-value {
+  color: #b45309;
+}

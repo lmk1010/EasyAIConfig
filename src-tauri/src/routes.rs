@@ -32,7 +32,10 @@ use crate::claudecode_oauth_profiles::{
   create_claudecode_oauth_profile, delete_claudecode_oauth_profile, list_claudecode_oauth_profiles,
   rename_claudecode_oauth_profile, switch_claudecode_oauth_profile,
 };
+use crate::network::{get_network_status, list_network_ip_history, refresh_network_status};
+use crate::processes::list_processes;
 use crate::provider::detect_provider;
+use crate::usage_stats::{claudecode_local_usage, codex_session_stats};
 use crate::updater::{get_app_update_info, get_app_update_progress, install_app_update};
 use crate::{fail, ok, OPENAI_CODEX_PACKAGE, CLAUDE_CODE_PACKAGE, OPENCLAW_PACKAGE};
 
@@ -130,6 +133,12 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/open-url", "POST") => open_url_in_browser(body),
     ("/api/backups", "GET") => list_backups(),
     ("/api/backups/restore", "POST") => restore_backup(body),
+    ("/api/network/status", "GET") => get_network_status(query),
+    ("/api/network/check", "POST") => refresh_network_status(body),
+    ("/api/network/ip-history", "GET") => list_network_ip_history(query),
+    ("/api/system/processes", "GET") => list_processes(query),
+    ("/api/codex/session-stats", "GET") => codex_session_stats(query),
+    ("/api/claudecode/local-usage", "GET") => claudecode_local_usage(query),
     ("/api/app/update", "GET") => get_app_update_info(app).await,
     ("/api/app/update", "POST") => install_app_update(app).await,
     ("/api/app/update/progress", "GET") => get_app_update_progress(),

@@ -299,6 +299,9 @@ mod updater;
 mod codex;
 mod oauth_profiles;
 mod claudecode_oauth_profiles;
+mod network;
+mod processes;
+mod usage_stats;
 mod routes;
 
 use routes::backend_request;
