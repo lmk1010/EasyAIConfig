@@ -19815,19 +19815,20 @@ body {
 .shell-v2 .console-v2 {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
   max-width: 980px;
   width: 100%;
-  padding: 18px 26px 32px 12px;
+  padding: 0 26px 28px 12px;
 }
 .shell-v2 .console-v2-head {
   padding: 0 4px;
+  margin-top: -2px;
 }
 .shell-v2 .console-v2-title {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  font-size: 1.35rem;
+  font-size: 1.25rem;
   font-weight: 650;
   letter-spacing: -0.01em;
   color: var(--s2-text);
@@ -19836,8 +19837,8 @@ body {
 .shell-v2 .console-v2-title-sep { color: var(--s2-faint); }
 .shell-v2 .console-v2-title-main { color: var(--s2-text); }
 .shell-v2 .console-v2-sub {
-  margin: 6px 0 0;
-  font-size: 0.78rem;
+  margin: 4px 0 0;
+  font-size: 0.72rem;
   color: var(--s2-muted);
   line-height: 1.5;
 }
@@ -20075,18 +20076,25 @@ body {
    Console v3 — IP strip in hero + multi-vantage matrix
    ============================================================ */
 
-/* Hero-embedded one-line IP strip */
+/* Hero-embedded IP strip — one line on normal widths, wraps to max two. */
 .shell-v2 .cv3-ipstrip {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  margin-top: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 0.74rem;
+  margin-top: 10px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  font-size: 0.72rem;
   background: rgba(255, 255, 255, 0.03);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  min-height: 28px;
+}
+.shell-v2 .cv3-ico {
+  opacity: 0.75;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: -2px;
 }
 .shell-v2 .cv3-ipstrip.safe {
   background: rgba(74, 222, 128, 0.08);
@@ -20108,53 +20116,70 @@ body {
 [data-theme="light"] .shell-v2 .cv3-ipstrip.block,
 [data-theme="light"] .shell-v2 .cv3-ipstrip.bad { background: rgba(239, 68, 68, 0.13); box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.38); }
 
-.shell-v2 .cv3-ipstrip-icon { flex-shrink: 0; font-size: 0.8rem; }
 .shell-v2 .cv3-ipstrip-ip code {
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
   font-size: 0.74rem;
   font-weight: 600;
   background: rgba(255, 255, 255, 0.05);
-  padding: 2px 8px;
-  border-radius: 5px;
+  padding: 2px 7px;
+  border-radius: 4px;
 }
 [data-theme="light"] .shell-v2 .cv3-ipstrip-ip code { background: rgba(15, 23, 42, 0.06); }
-.shell-v2 .cv3-ipstrip-geo { color: var(--s2-muted); font-size: 0.72rem; }
+.shell-v2 .cv3-ipstrip-geo {
+  color: var(--s2-muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 .shell-v2 .cv3-ipstrip-msg,
 .shell-v2 .cv3-ipstrip-err,
-.shell-v2 .cv3-ipstrip-label { color: var(--s2-muted); font-size: 0.72rem; }
+.shell-v2 .cv3-ipstrip-label { color: var(--s2-muted); font-size: 0.7rem; }
+.shell-v2 .cv3-ipstrip-err { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .shell-v2 .cv3-ipstrip-split {
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  padding: 1px 7px;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
   border-radius: 3px;
   background: rgba(234, 167, 51, 0.2);
   color: #fbbf24;
   text-transform: uppercase;
 }
-.shell-v2 .cv3-ipstrip-proxy { font-size: 0.68rem; color: var(--s2-muted); }
-.shell-v2 .cv3-ipstrip-actions { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; }
+.shell-v2 .cv3-ipstrip-proxy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  color: var(--s2-muted);
+}
+.shell-v2 .cv3-ipstrip-proxy.dim { opacity: 0.55; }
+.shell-v2 .cv3-ipstrip-actions { margin-left: auto; display: inline-flex; gap: 3px; align-items: center; flex-shrink: 0; }
 .shell-v2 .cv3-ipstrip-toggle,
 .shell-v2 .cv3-ipstrip-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: 0;
-  background: rgba(255, 255, 255, 0.06);
+  background: transparent;
   color: var(--s2-muted);
-  font-size: 0.68rem;
-  padding: 3px 9px;
+  font-size: 0.66rem;
+  padding: 3px 7px;
   border-radius: 5px;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
 .shell-v2 .cv3-ipstrip-toggle.on {
-  background: rgba(74, 222, 128, 0.18);
+  background: rgba(74, 222, 128, 0.14);
   color: #4ade80;
 }
 .shell-v2 .cv3-ipstrip-toggle:hover,
 .shell-v2 .cv3-ipstrip-refresh:hover {
-  background: rgba(107, 158, 255, 0.18);
+  background: rgba(107, 158, 255, 0.14);
   color: var(--s2-accent);
 }
-.shell-v2 .cv3-ipstrip-refresh { padding: 3px 7px; }
+.shell-v2 .cv3-ipstrip-refresh { padding: 3px 6px; }
 
 /* Multi-vantage grid — inspired by ip111.cn's 3-column layout */
 .shell-v2 .console-v2-vantages { padding: 0 4px; }
@@ -20170,14 +20195,22 @@ body {
 }
 .shell-v2 .cv3-vantage-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+  /* 4 columns on normal widths so all vantages fit a single row; collapses
+     to auto-fit on narrow layouts only. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 900px) {
+  .shell-v2 .cv3-vantage-grid {
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  }
 }
 .shell-v2 .cv3-vantage {
-  padding: 12px 14px;
-  border-radius: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
   background: rgba(255, 255, 255, 0.02);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  min-width: 0;
 }
 [data-theme="light"] .shell-v2 .cv3-vantage {
   background: rgba(255, 255, 255, 0.55);
@@ -20214,14 +20247,21 @@ body {
   font-size: 0.62rem;
   color: var(--s2-faint);
 }
+.shell-v2 .cv3-vantage-ip {
+  min-width: 0;
+}
 .shell-v2 .cv3-vantage-ip code {
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-  font-size: 0.92rem;
+  font-size: 0.82rem;
   font-weight: 650;
   color: var(--s2-text);
   letter-spacing: -0.005em;
   background: transparent;
   padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
 }
 .shell-v2 .cv3-vantage.bad .cv3-vantage-ip code { color: #ef5252; }
 .shell-v2 .cv3-vantage-geo {

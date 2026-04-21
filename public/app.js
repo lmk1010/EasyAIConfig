@@ -7733,27 +7733,37 @@ function formatModelLabel(raw) {
   return s;
 }
 
-// Slim one-line IP strip embedded inside the hero card. Shows verdict color,
-// current IP, country flag, proxy hint, firewall gate toggle, and a refresh
-// affordance. Expanded details live in the multi-vantage matrix below the
-// hero — no separate big card anymore.
+// Minimal one-line SVGs reused across the strip. Outline / line style, not
+// emoji — keeps the strip dense and consistent with the rest of the hub.
+const CV3_ICONS = {
+  shield: '<svg class="cv3-ico" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5 3 3.5v4c0 3.2 2.1 6 5 7 2.9-1 5-3.8 5-7v-4L8 1.5z"/></svg>',
+  proxy:  '<svg class="cv3-ico" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6a6 6 0 0 1 12 0M4 8a4 4 0 0 1 8 0M6 10a2 2 0 0 1 4 0"/><circle cx="8" cy="12.5" r="0.9" fill="currentColor" stroke="none"/></svg>',
+  lock:   '<svg class="cv3-ico" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>',
+  unlock: '<svg class="cv3-ico" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0"/></svg>',
+  refresh:'<svg class="cv3-ico" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 8A6 6 0 0 1 3.4 11.8L2 13M2 8a6 6 0 0 1 10.6-3.8L14 3"/><path d="M14 3v3.5h-3.5M2 13V9.5h3.5"/></svg>',
+};
+
+// Slim one-line IP strip embedded inside the hero card. Dense, no emoji
+// decorations — just the IP, geo, verdict color, proxy hint, and the two
+// control buttons. Target: 1 line on normal widths, wrapping to 2 lines
+// only when the hero is very narrow.
 function renderHeroIpStripHTML() {
   const esc = escapeHtml;
   const n = window.__consoleV3.network;
   if (!n) {
-    return `<div class="cv3-ipstrip loading"><span class="cv3-ipstrip-icon">🛡</span><span class="cv3-ipstrip-msg">正在检测出口 IP…</span></div>`;
+    return `<div class="cv3-ipstrip loading">${CV3_ICONS.shield}<span class="cv3-ipstrip-msg">正在检测出口 IP…</span></div>`;
   }
   const gateOn = isIpGateEnabled();
-  const gateBtn = `<button type="button" class="cv3-ipstrip-toggle ${gateOn ? 'on' : ''}" data-console-v3-toggle-gate-btn title="${gateOn ? '硬拦截已开启 — 高风险 IP 时阻止启动' : '硬拦截已关闭 — 高风险仅弹窗提醒'}">${gateOn ? '🔒 硬拦截' : '🔓 仅提醒'}</button>`;
-  const refreshBtn = `<button type="button" class="cv3-ipstrip-refresh" data-console-v3-refresh-ip title="重新检测">↻</button>`;
+  const gateBtn = `<button type="button" class="cv3-ipstrip-toggle ${gateOn ? 'on' : ''}" data-console-v3-toggle-gate-btn title="${gateOn ? '硬拦截已开启 — 高风险 IP 时阻止启动' : '硬拦截已关闭 — 高风险仅弹窗提醒'}">${gateOn ? CV3_ICONS.lock + '硬拦截' : CV3_ICONS.unlock + '仅提醒'}</button>`;
+  const refreshBtn = `<button type="button" class="cv3-ipstrip-refresh" data-console-v3-refresh-ip title="重新检测">${CV3_ICONS.refresh}</button>`;
 
   if (n.ok === false) {
     const proxyHint = n.proxy?.hasProxy
-      ? `<span class="cv3-ipstrip-proxy" title="${esc((n.proxy.hints || []).join(' | '))}">📡 ${esc((n.proxy.hints || [])[0] || 'proxy')}</span>`
-      : `<span class="cv3-ipstrip-proxy" title="没有识别到任何代理配置">📡 未检测到代理</span>`;
+      ? `<span class="cv3-ipstrip-proxy" title="${esc((n.proxy.hints || []).join(' | '))}">${CV3_ICONS.proxy}代理</span>`
+      : `<span class="cv3-ipstrip-proxy dim" title="没有识别到任何代理配置">${CV3_ICONS.proxy}无代理</span>`;
     return `
       <div class="cv3-ipstrip bad">
-        <span class="cv3-ipstrip-icon">🛡</span>
+        ${CV3_ICONS.shield}
         <span class="cv3-ipstrip-label">无法获取 IP</span>
         ${proxyHint}
         <span class="cv3-ipstrip-err" title="${esc(n.error || '')}">${esc((n.error || '').slice(0, 60))}</span>
@@ -7764,18 +7774,20 @@ function renderHeroIpStripHTML() {
   const verdict = n.verdict || 'warn';
   const cc = (n.countryCode || '').toUpperCase();
   const flagMap = { CN: '🇨🇳', US: '🇺🇸', SG: '🇸🇬', JP: '🇯🇵', HK: '🇭🇰', TW: '🇹🇼', KR: '🇰🇷', DE: '🇩🇪', GB: '🇬🇧', FR: '🇫🇷', CA: '🇨🇦', AU: '🇦🇺' };
-  const flag = flagMap[cc] || '🌐';
-  const verdictIcon = verdict === 'safe' ? '✅' : verdict === 'block' ? '🚫' : '⚠';
+  const flag = flagMap[cc] || '';
   const splitTag = n.splitTunnel ? `<span class="cv3-ipstrip-split" title="多个视角看到不同 IP（分流）">分流</span>` : '';
   const hasProxy = Boolean(n.proxy?.hasProxy);
+  // Combine country + city + ISP in one slot, but truncate so ISP doesn't
+  // push the buttons off the line.
+  const locBits = [flag && flag, n.country, n.city, n.isp].filter(Boolean).join(' · ');
 
   return `
     <div class="cv3-ipstrip ${esc(verdict)}">
-      <span class="cv3-ipstrip-icon">🛡 ${verdictIcon}</span>
+      ${CV3_ICONS.shield}
       <span class="cv3-ipstrip-ip"><code>${esc(n.ip || '-')}</code></span>
-      <span class="cv3-ipstrip-geo">${flag} ${esc(n.country || '未知')}${n.city ? ' · ' + esc(n.city) : ''}${n.isp ? ' · ' + esc(n.isp) : ''}</span>
+      <span class="cv3-ipstrip-geo">${esc(locBits)}</span>
       ${splitTag}
-      ${hasProxy ? `<span class="cv3-ipstrip-proxy" title="${esc((n.proxy.hints || [])[0] || '')}">📡 代理</span>` : ''}
+      ${hasProxy ? `<span class="cv3-ipstrip-proxy" title="${esc((n.proxy.hints || [])[0] || '')}">${CV3_ICONS.proxy}代理</span>` : ''}
       <span class="cv3-ipstrip-actions">${gateBtn}${refreshBtn}</span>
     </div>`;
 }
