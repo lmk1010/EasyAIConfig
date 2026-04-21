@@ -18211,7 +18211,30 @@ function bindEvents() {
     });
   }
 
-  // Config Editor tab switcher
+  // Config Editor tab switcher (legacy in-page tabs + new left-rail buttons)
+  async function cfgEditorSwitchTool(tool) {
+    tool = normalizeConfigEditorTool(tool || 'codex');
+    if (tool === getConfigEditorTool()) return;
+    state.configEditorTool = tool;
+    syncConfigEditorForTool();
+    if (tool === 'openclaw' && !state.openclawState) await loadOpenClawQuickState();
+    if (tool === 'claudecode' && !state.claudeCodeState) await loadClaudeCodeQuickState();
+    populateConfigEditor();
+  }
+
+  const cfgRailList = document.getElementById('configEditorToolList');
+  if (cfgRailList) {
+    cfgRailList.addEventListener('click', (e) => {
+      const btn = e.target instanceof Element ? e.target.closest('[data-cfg-rail-tool]') : null;
+      if (!btn) return;
+      cfgEditorSwitchTool(btn.getAttribute('data-cfg-rail-tool') || 'codex');
+      // Sync rail active state
+      cfgRailList.querySelectorAll('[data-cfg-rail-tool]').forEach((b) => {
+        b.classList.toggle('active', b === btn);
+      });
+    });
+  }
+
   const cfgEditorTabs = document.getElementById('configEditorTabs');
   if (cfgEditorTabs) {
     cfgEditorTabs.addEventListener('click', async (e) => {
@@ -18223,6 +18246,10 @@ function bindEvents() {
 
       state.configEditorTool = tool;
       syncConfigEditorForTool();
+      // Mirror the change to the left rail.
+      document.querySelectorAll('[data-cfg-rail-tool]').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-cfg-rail-tool') === tool);
+      });
 
       if (tool === 'openclaw' && !state.openclawState) {
         await loadOpenClawQuickState();
