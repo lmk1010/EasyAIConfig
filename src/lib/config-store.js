@@ -402,6 +402,34 @@ function diffCodexUsageSnapshot(current = {}, previous = null) {
   };
 }
 
+function readUsageIdentityValue(source, pathExpr) {
+  if (!source || typeof source !== 'object') return '';
+  let value = source;
+  for (const part of String(pathExpr || '').split('.')) {
+    if (!part) continue;
+    if (!value || typeof value !== 'object') return '';
+    value = value[part];
+  }
+  return (typeof value === 'string' || typeof value === 'number') ? String(value).trim() : '';
+}
+
+function pickUsageIdentityValue(sources = [], pathExprs = []) {
+  for (const pathExpr of pathExprs) {
+    for (const source of sources) {
+      const value = readUsageIdentityValue(source, pathExpr);
+      if (value) return value;
+    }
+  }
+  return '';
+}
+
+function buildUsageRequestKey({ sessionKey = '', sources = [], idPaths = [], parentPaths = [] } = {}) {
+  const requestId = pickUsageIdentityValue(sources, idPaths);
+  if (!requestId) return '';
+  const parentId = pickUsageIdentityValue(sources, parentPaths);
+  return [sessionKey, requestId, parentId].filter(Boolean).join(':');
+}
+
 function normalizeUnixTimestampMs(value) {
   const raw = Number(value || 0);
   if (!Number.isFinite(raw) || raw <= 0) return 0;
@@ -839,6 +867,7 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
           cwd,
           totals: createCodexUsageTotals(),
           updatedAt: ts,
+          requestUsageSnapshots: new Map(),
           lastTotalUsage: null,
           lastUsageSignature: '',
         });
@@ -850,17 +879,39 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
       if (!item.provider && providerKey) item.provider = providerKey;
       if (currentModel && item.model === 'unknown') item.model = currentModel;
 
-      const totalUsage = payload.info?.total_token_usage;
+      const info = payload.info || {};
+      const requestKey = buildUsageRequestKey({
+        sessionKey,
+        sources: [info, payload, event],
+        idPaths: ['request_id', 'requestId', 'request.id', 'response_id', 'responseId', 'completion_id', 'completionId', 'turn_id', 'turnId', 'message_id', 'messageId', 'id', 'uuid'],
+        parentPaths: ['parent_uuid', 'parentUuid', 'parent_id', 'parentId'],
+      });
+      const totalUsage = info.total_token_usage;
       let usage = null;
       if (totalUsage) {
-        usage = diffCodexUsageSnapshot(totalUsage, item.lastTotalUsage);
-        item.lastTotalUsage = normalizeCodexUsageSnapshot(totalUsage);
-      } else if (payload.info?.last_token_usage) {
-        const lastUsage = normalizeCodexUsageSnapshot(payload.info.last_token_usage);
-        const signature = JSON.stringify(lastUsage);
-        if (signature === item.lastUsageSignature) continue;
-        item.lastUsageSignature = signature;
-        usage = lastUsage;
+        const currentSnapshot = normalizeCodexUsageSnapshot(totalUsage);
+        if (requestKey) {
+          const previousSnapshot = item.requestUsageSnapshots.get(requestKey) || null;
+          usage = diffCodexUsageSnapshot(currentSnapshot, previousSnapshot);
+          if (previousSnapshot && currentSnapshot.total_tokens < Number(previousSnapshot.total_tokens || 0)) usage = currentSnapshot;
+          item.requestUsageSnapshots.set(requestKey, currentSnapshot);
+        } else {
+          usage = diffCodexUsageSnapshot(currentSnapshot, item.lastTotalUsage);
+          item.lastTotalUsage = currentSnapshot;
+        }
+      } else if (info.last_token_usage) {
+        const lastUsage = normalizeCodexUsageSnapshot(info.last_token_usage);
+        if (requestKey) {
+          const previousSnapshot = item.requestUsageSnapshots.get(requestKey) || null;
+          usage = diffCodexUsageSnapshot(lastUsage, previousSnapshot);
+          if (previousSnapshot && lastUsage.total_tokens < Number(previousSnapshot.total_tokens || 0)) usage = lastUsage;
+          item.requestUsageSnapshots.set(requestKey, lastUsage);
+        } else {
+          const signature = JSON.stringify(lastUsage);
+          if (signature === item.lastUsageSignature) continue;
+          item.lastUsageSignature = signature;
+          usage = lastUsage;
+        }
       }
       if (!usage || !usage.total_tokens) continue;
 
@@ -3670,11 +3721,17 @@ async function readClaudeTelemetryUsage({ days = 30 } = {}) {
           cacheCreation: Number(usage.cache_creation_input_tokens || 0),
         };
         const total = u.input + u.output + u.cacheRead + u.cacheCreation;
-        const usageKey = String(msg.id || record.requestId || record.uuid || `${sessionId}:${parsedTs}:${model}:${total}`).trim();
+        const usageKey = buildUsageRequestKey({
+          sessionKey: sessionId,
+          sources: [record, msg, usage],
+          idPaths: ['requestId', 'request_id', 'request.id', 'message.requestId', 'message.request_id', 'messageId', 'message_id', 'id', 'uuid'],
+          parentPaths: ['conversationId', 'conversation_id', 'threadId', 'thread_id'],
+        }) || `${sessionId}:${parsedTs}:${model}:${u.input}:${u.output}:${u.cacheRead}:${u.cacheCreation}`;
         const prev = usageEntries.get(usageKey);
-        if (!prev || total >= prev.total) {
+        if (!prev || total > prev.total || (total === prev.total && parsedTs > prev.timestamp)) {
           usageEntries.set(usageKey, { timestamp: parsedTs, model, usage: u, total });
         }
+
       }
 
       if (!usageEntries.size) continue;

@@ -625,7 +625,7 @@ function getToolCatalogItems() {
       version: installed ? (tool.binary?.version || tool.binary?.path || '已安装') : (isSoon ? '暂未支持' : '未安装'),
       badge: installed ? '已安装' : isSoon ? '即将支持' : 'CLI',
       tags: ['cli'].concat(installed ? ['installed'] : []),
-      chips: ['CLI', installed ? '已安装' : '未安装'],
+      chips: ['CLI'],
       tool,
     };
   });
@@ -692,6 +692,7 @@ function renderToolCardActions(item, actionSvgs) {
 }
 
 function renderToolCatalogCard(item, actionSvgs) {
+  const chips = (item.chips || []).filter(Boolean);
   return `
     <div class="tool-card ${!item.supported ? 'tool-card-soon' : ''}" data-tool-id="${item.id}">
       <div class="tool-card-head">
@@ -706,9 +707,10 @@ function renderToolCatalogCard(item, actionSvgs) {
           <div class="tool-desc">${escapeHtml(item.description)}</div>
         </div>
       </div>
+      ${chips.length ? `
       <div class="tool-chip-row">
-        ${(item.chips || []).map((chip, index) => `<span class="tool-chip ${index === 1 && item.installed ? 'tool-chip-active' : ''}">${escapeHtml(chip)}</span>`).join('')}
-      </div>
+        ${chips.map((chip, index) => `<span class="tool-chip ${index === 1 && item.installed ? 'tool-chip-active' : ''}">${escapeHtml(chip)}</span>`).join('')}
+      </div>` : ''}
       <div class="tool-status">
         <span class="tool-version ${!item.installed ? 'tool-version-muted' : ''}">${escapeHtml(item.version)}</span>
         <span class="tool-badge ${item.installed ? 'tool-badge-ok' : ''}">${escapeHtml(item.badge)}</span>
@@ -717,6 +719,7 @@ function renderToolCatalogCard(item, actionSvgs) {
     </div>
   `;
 }
+
 
 function bindToolsCatalogControls() {
   const searchInput = el('toolsCatalogSearchInput');

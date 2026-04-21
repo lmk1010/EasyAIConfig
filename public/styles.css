@@ -46,6 +46,8 @@ body {
     radial-gradient(circle at right center, rgba(90, 206, 255, 0.06), transparent 26%),
     var(--bg);
   color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 button,
@@ -2959,7 +2961,20 @@ button.running {
 
 .config-editor-topbar {
   align-items: flex-start;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+}
+
+.config-editor-topbar h2 {
+  margin: 0;
+  font-size: clamp(1.02rem, 1.15vw, 1.24rem) !important;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+}
+
+.config-editor-topbar p {
+  margin: 6px 0 0;
+  font-size: 0.76rem;
+  line-height: 1.42;
 }
 
 .config-editor-actions {
@@ -4165,19 +4180,19 @@ button {
 }
 
 .brand-title {
-  font-size: 0.86rem;
+  font-size: 0.8rem;
 }
 
 .brand-copy {
   max-width: 130px;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
 }
 
 .nav-item {
-  height: 32px;
-  padding: 0 10px 0 12px;
-  font-size: 0.82rem;
-  gap: 8px;
+  height: 30px;
+  padding: 0 10px 0 11px;
+  font-size: 0.76rem;
+  gap: 7px;
 }
 
 .nav-icon {
@@ -4811,49 +4826,50 @@ select {
 }
 
 .sidebar-nav {
-  margin-top: 10px;
-  padding: 0 4px;
-  gap: 4px;
+  margin-top: 8px;
+  padding: 0 3px;
+  gap: 3px;
 }
 
 .nav-item {
-  height: 34px;
-  padding: 0 12px;
+  height: 32px;
+  padding: 0 11px;
   border-radius: 8px;
-  gap: 9px;
+  gap: 8px;
   justify-content: flex-start;
 }
 
 .nav-item::before {
   left: -4px;
-  top: 8px;
-  bottom: 8px;
+  top: 7px;
+  bottom: 7px;
 }
 
 .nav-icon {
-  width: 13px;
-  height: 13px;
-  flex-basis: 13px;
+  width: 12px;
+  height: 12px;
+  flex-basis: 12px;
 }
 
 .sidebar-status {
   margin-left: 4px;
   margin-right: 4px;
-  gap: 12px;
+  gap: 10px;
 }
 
 .sidebar-line {
-  gap: 6px;
+  gap: 5px;
 }
 
 .sidebar-label {
   padding-left: 4px;
+  font-size: 0.64rem;
 }
 
 .sidebar-inline .badge,
 .sidebar-inline .ghost-btn {
-  min-height: 28px;
-  height: 28px;
+  min-height: 26px;
+  height: 26px;
 }
 
 .workspace {
@@ -8621,11 +8637,11 @@ select:focus {
   background: rgba(255, 255, 255, 0.028);
   border: 1px solid rgba(255, 255, 255, 0.055);
   border-radius: 14px;
-  padding: 14px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 184px;
+  gap: 8px;
+  min-height: 160px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
@@ -8642,22 +8658,22 @@ select:focus {
 .tool-card-head {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
 }
 
 .tool-icon {
   flex-shrink: 0;
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .tool-icon svg {
-  width: 26px;
-  height: 26px;
+  width: 23px;
+  height: 23px;
 }
 
 .tool-icon-codex {
@@ -8697,18 +8713,19 @@ select:focus {
 .tool-name-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   justify-content: space-between;
 }
 
 .tool-name {
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   font-weight: 650;
   color: rgba(232, 238, 248, 0.92);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
+  line-height: 1.2;
 }
 
 .tool-type-tag,
@@ -8716,10 +8733,10 @@ select:focus {
 .tool-chip {
   display: inline-flex;
   align-items: center;
-  height: 18px;
-  padding: 0 7px;
+  height: 16px;
+  padding: 0 6px;
   border-radius: 999px;
-  font-size: 0.58rem;
+  font-size: 0.54rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   background: rgba(255, 255, 255, 0.05);
@@ -8728,15 +8745,15 @@ select:focus {
 }
 
 .tool-desc {
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   color: rgba(232, 238, 248, 0.42);
-  line-height: 1.5;
-  margin-top: 4px;
+  line-height: 1.42;
+  margin-top: 3px;
 }
 
 .tool-chip-row {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   flex-wrap: wrap;
 }
 
@@ -8750,14 +8767,14 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .tool-version {
   flex: 1;
   min-width: 0;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 560;
   color: rgba(232, 238, 248, 0.72);
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
@@ -8772,9 +8789,9 @@ select:focus {
 }
 
 .tool-badge {
-  font-size: 0.6rem;
+  font-size: 0.56rem;
   font-weight: 600;
-  padding: 2px 7px;
+  padding: 1px 6px;
   border-radius: 999px;
 }
 
@@ -8787,7 +8804,7 @@ select:focus {
 .tool-actions {
   margin-top: auto;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
@@ -8801,12 +8818,12 @@ select:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 10px;
+  gap: 4px;
+  height: 28px;
+  padding: 0 9px;
   flex: 0 0 auto;
   border-radius: 8px;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 560;
   cursor: pointer;
   transition: all 0.18s ease;
@@ -8816,6 +8833,8 @@ select:focus {
 .tool-action-btn svg {
   flex-shrink: 0;
   opacity: 0.7;
+  width: 13px;
+  height: 13px;
 }
 
 .tool-action-btn:hover svg {
@@ -16492,20 +16511,20 @@ textarea {
 .hero-strip { padding: 10px 0 8px !important; }
 .hero-title { font-size: 1rem; }
 .hero-subtitle { max-width: 56ch; font-size: 0.78rem; }
-.tool-selector { gap: 6px; padding: 4px; border-radius: 14px; background: rgba(255, 255, 255, 0.025); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04); }
-.tool-tab { height: 32px !important; padding: 0 10px !important; font-size: 0.75rem !important; }
+.tool-selector { gap: 4px; padding: 3px; border-radius: 12px; background: rgba(255, 255, 255, 0.025); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04); }
+.tool-tab { height: 28px !important; padding: 0 9px !important; font-size: 0.71rem !important; }
 .flow-section { padding-top: 16px !important; }
 .compact-head { margin-bottom: 10px !important; }
 .flow-grid { grid-template-columns: 90px minmax(0, 1fr) !important; column-gap: 10px; row-gap: 8px; }
 .field, .field-wide, .action-field { max-width: none !important; }
 .field { gap: 4px; }
 .field > span, .action-field > span { padding-top: 10px; font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(232, 238, 248, 0.44); }
-input, select { height: 36px; }
+input, select { height: 34px; }
 textarea { padding: 10px 12px; }
 .model-select-row { gap: 8px; }
 .action-field { align-self: end; }
-.primary-actions { margin-top: 10px !important; gap: 8px; }
-.primary-actions button { height: 36px; padding: 0 12px; }
+.primary-actions { margin-top: 10px !important; gap: 7px; }
+.primary-actions button { height: 32px; padding: 0 11px; font-size: 0.78rem; border-radius: 10px; }
 .launch-terminal-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.05); }
 .quick-rail .current-config, .quick-rail .feature-panel { margin-top: 0 !important; }
 .quick-rail .current-config .current-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding-bottom: 8px; }
@@ -16580,27 +16599,27 @@ pre,
 }
 
 #pageEyebrow {
-  margin-bottom: 8px;
-  font-size: 0.78rem;
-  letter-spacing: 0.22em;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
   font-weight: 650;
   color: rgba(141, 192, 255, 0.78);
 }
 
 .workspace-topbar h1 {
   margin: 0 !important;
-  font-size: clamp(1.6rem, 2.2vw, 2.2rem) !important;
-  line-height: 1.02;
-  letter-spacing: -0.035em;
-  font-weight: 760;
+  font-size: clamp(1.24rem, 1.5vw, 1.56rem) !important;
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+  font-weight: 740;
 }
 
 .workspace-topbar p,
 #pageSubtitle {
-  margin: 10px 0 0 !important;
+  margin: 8px 0 0 !important;
   max-width: 60ch;
-  font-size: 0.98rem !important;
-  line-height: 1.58;
+  font-size: 0.84rem !important;
+  line-height: 1.5;
   color: rgba(226, 233, 247, 0.72);
 }
 
@@ -16608,28 +16627,28 @@ pre,
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .workspace-actions button {
-  min-height: 40px;
-  padding: 0 16px;
-  border-radius: 14px;
-  font-size: 0.92rem;
-  font-weight: 620;
+  min-height: 34px;
+  padding: 0 13px;
+  border-radius: 11px;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .topbar-icon-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
   background: rgba(255, 255, 255, 0.045);
 }
 
 .topbar-icon-btn svg {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
 }
 
 .sys-page {
@@ -16794,7 +16813,7 @@ pre,
 
 @media (max-width: 640px) {
   .workspace-topbar h1 {
-    font-size: 1.34rem !important;
+    font-size: 1.12rem !important;
   }
 
   .workspace-actions button,
