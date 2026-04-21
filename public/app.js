@@ -7469,18 +7469,31 @@ function getToolStatusDot(tool) {
 }
 
 function renderToolConsole() {
+  const tool = state.consoleTool || 'codex';
+
+  // v2 page uses the hub-style lean layout; if the v2 container exists we
+  // render into it and stop. Legacy tabs + 4-stat-card layout is retained
+  // behind hidden DOM only to keep any ancient event listeners happy.
+  const v2 = document.getElementById('toolConsolePage');
+  if (v2 && v2.classList.contains('console-v2')) {
+    // Sync the left-rail tool list active state.
+    document.querySelectorAll('[data-console-rail-tool]').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-console-rail-tool') === tool);
+    });
+    renderConsoleV2(tool);
+    return;
+  }
+
+  // ─── Legacy render path (kept for safety; not reachable with v2 DOM) ───
   const summary = el('toolConsoleSummary');
   const main = el('toolConsoleMain');
   const side = el('toolConsoleSide');
   const activityEl = el('toolConsoleActivity');
   if (!summary || !main || !side) return;
 
-  const tool = state.consoleTool || 'codex';
   document.querySelectorAll('[data-console-tool]').forEach((button) => {
     button.classList.toggle('active', button.dataset.consoleTool === tool);
   });
-
-  // Update status dots
   const dotCodex = el('tcDotCodex');
   const dotClaude = el('tcDotClaude');
   const dotOpenCode = el('tcDotOpenCode');
@@ -7502,7 +7515,6 @@ function renderToolConsole() {
   main.innerHTML = view.main;
   side.innerHTML = view.side;
 
-  // Activity panel (only for OpenClaw currently)
   if (activityEl) {
     if (view.activity) {
       activityEl.innerHTML = view.activity;
@@ -7510,6 +7522,296 @@ function renderToolConsole() {
     } else {
       activityEl.innerHTML = '';
       activityEl.classList.remove('has-content');
+    }
+  }
+}
+
+// ─── Console v2 — hub-style layout ───────────────────────────────
+// Reads directly from the same state.* sources the legacy builders use,
+// but emits a flatter, card-light DOM aligned with the 一键配置 hub.
+
+function buildConsoleV2Model(tool) {
+  const esc = typeof escapeHtml === 'function' ? escapeHtml : ((s) => String(s ?? ''));
+
+  if (tool === 'codex') {
+    const data = state.current || {};
+    const codexBinary = typeof getToolBinaryStatus === 'function'
+      ? getToolBinaryStatus('codex', data.codexBinary)
+      : (data.codexBinary || {});
+    const login = data.login || {};
+    const active = data.activeProvider || null;
+    const providers = Array.isArray(data.providers) ? data.providers : [];
+    const health = active ? state.providerHealth[active.key] : null;
+
+    const heroName = active?.name || (login.loggedIn ? (login.orgName || login.email || 'OpenAI 官方登录') : '尚未激活 Provider');
+    const heroBase = active?.baseUrl || (login.loggedIn ? 'ChatGPT / OpenAI 官方' : '');
+    const heroModel = data.summary?.model || '';
+    const heroMode = active ? 'apikey' : (login.loggedIn ? 'oauth' : '');
+
+    const issues = [];
+    if (!codexBinary.installed) issues.push({ tone: 'error', title: 'Codex 未安装', copy: '还没检测到 codex 命令，先去「工具安装」页面。' });
+    if (!data.configExists) issues.push({ tone: 'warn', title: '还没有 config.toml', copy: '当前作用域尚未写入 Codex 配置；建议先完成一次快速配置。' });
+    if (!providers.length && !login.loggedIn) issues.push({ tone: 'error', title: '没有可用 Provider', copy: '既没有保存任何 Provider，也没有官方登录。' });
+    if (active && !active.hasApiKey) issues.push({ tone: 'error', title: '当前 Provider 缺 Key', copy: `活动 Provider「${active.name}」未检测到可用 API Key。` });
+    if (health?.checked && !health.ok) issues.push({ tone: 'warn', title: '连通性检测失败', copy: `最近一次对「${active?.name || '当前 Provider'}」的检测未通过。` });
+
+    const meta = [
+      { label: '安装状态', value: codexBinary.installed ? (codexBinary.version || '已安装') : '未安装' },
+      { label: '作用域', value: data.scope === 'project' ? '项目级' : '全局', code: data.rootPath ? data.rootPath : '' },
+      { label: '配置文件', code: data.configPath || '-' },
+      { label: '环境变量', code: data.envPath || '-' },
+      { label: 'Sandbox', value: data.summary?.sandboxMode || '默认' },
+      { label: '审批策略', value: data.summary?.approvalPolicy || '默认' },
+      { label: '推理强度', value: data.summary?.reasoningEffort || '默认' },
+      { label: '当前模型', value: heroModel || '—' },
+    ];
+
+    const providerRows = providers.map((p) => {
+      const h = state.providerHealth[p.key];
+      let statusTxt = '未检测';
+      let statusCls = 'muted';
+      if (p.isActive) { statusTxt = '当前'; statusCls = 'active'; }
+      else if (h?.loading) { statusTxt = '检测中'; statusCls = 'warn'; }
+      else if (h?.ok) { statusTxt = '已通'; statusCls = 'ok'; }
+      else if (h?.checked) { statusTxt = '失败'; statusCls = 'bad'; }
+      else if (!p.hasApiKey) { statusTxt = '缺 Key'; statusCls = 'warn'; }
+      return { name: p.name || p.key, baseUrl: p.baseUrl || '', isActive: Boolean(p.isActive), statusTxt, statusCls };
+    });
+
+    return {
+      tool,
+      toolLabel: 'Codex',
+      hero: {
+        name: heroName,
+        baseUrl: heroBase,
+        mode: heroMode,
+        model: heroModel,
+        plan: login.loggedIn ? (login.plan || '') : '',
+        healthTxt: active ? (health?.loading ? '检测中' : health?.ok ? '已通' : health?.checked ? '失败' : '未检测') : (login.loggedIn ? '当前' : '未激活'),
+        healthCls: active ? (health?.loading ? 'warn' : health?.ok ? 'ok' : health?.checked ? 'bad' : 'muted') : (login.loggedIn ? 'ok' : 'muted'),
+      },
+      meta,
+      issues,
+      providers: providerRows,
+      canLaunch: Boolean(codexBinary.installed),
+    };
+  }
+
+  if (tool === 'claudecode') {
+    const data = state.claudeCodeState || {};
+    const login = data.login || {};
+    const installed = Boolean(data.binary?.installed);
+
+    const issues = [];
+    if (!installed) issues.push({ tone: 'error', title: 'Claude Code 未安装', copy: '还没检测到 claude 命令，请先完成安装。' });
+    if (!login.loggedIn && !data.hasApiKey) issues.push({ tone: 'error', title: '未认证', copy: '当前既没有 OAuth 登录，也没有检测到 ANTHROPIC_API_KEY。' });
+    if (!data.model) issues.push({ tone: 'warn', title: '未显式指定模型', copy: '未设置默认模型时 Claude Code 会回退到内置默认值。' });
+
+    const meta = [
+      { label: '安装状态', value: installed ? (data.binary?.version || '已安装') : '未安装' },
+      { label: 'settings.json', code: data.settingsPath || '-' },
+      { label: '认证方式', value: login.loggedIn ? (login.method === 'oauth' ? 'OAuth' : 'API Key') : '未认证' },
+      { label: '登录账号', value: login.email || login.orgName || '—' },
+      { label: '默认模型', value: data.model || '由 Claude Code 决定' },
+      { label: 'Always thinking', value: data.alwaysThinkingEnabled ? '开启' : '关闭' },
+      { label: '危险权限提示', value: data.skipDangerousModePermissionPrompt ? '已跳过' : '保持提示' },
+    ];
+
+    const historyModels = (data.usedModels || []).slice(0, 10);
+
+    return {
+      tool,
+      toolLabel: 'Claude Code',
+      hero: {
+        name: login.email || login.orgName || (login.loggedIn ? '官方登录' : (installed ? '未登录' : '未安装')),
+        baseUrl: login.loggedIn ? 'ChatGPT / Anthropic 官方' : 'https://api.anthropic.com',
+        mode: login.method === 'oauth' ? 'oauth' : 'apikey',
+        model: data.model || '',
+        plan: login.plan || '',
+        healthTxt: login.loggedIn ? '已登录' : (data.hasApiKey ? 'Key 就绪' : '未认证'),
+        healthCls: login.loggedIn ? 'ok' : (data.hasApiKey ? 'ok' : 'muted'),
+      },
+      meta,
+      issues,
+      providers: [], // Claude providers are surfaced in the hub; console stays meta-only.
+      historyModels,
+      canLaunch: installed && (login.loggedIn || data.hasApiKey),
+    };
+  }
+
+  if (tool === 'opencode') {
+    const data = state.opencodeState || {};
+    const active = data.activeProvider || null;
+    const activeAuth = data.activeAuth || null;
+    const installed = Boolean(data.binary?.installed);
+
+    const issues = [];
+    if (!installed) issues.push({ tone: 'error', title: 'OpenCode 未安装', copy: '没有检测到 opencode 命令，先到「工具安装」。' });
+    if (!data.configExists) issues.push({ tone: 'warn', title: '还没有 opencode.json', copy: '当前作用域没有写入配置。' });
+    if (!data.model) issues.push({ tone: 'warn', title: '默认模型未设置', copy: 'OpenCode 模型格式是 provider/model。' });
+    if (active && !active.hasCredential) issues.push({ tone: 'warn', title: '当前 Provider 缺凭证', copy: `活动 Provider「${active.name || active.key}」还没有 Key / auth 登录。` });
+
+    const meta = [
+      { label: '安装状态', value: installed ? (data.binary?.version || '已安装') : '未安装' },
+      { label: '配置文件', code: data.configPath || '-' },
+      { label: '鉴权文件', code: data.authPath || '-' },
+      { label: '作用域', value: data.scope === 'project' ? '项目级' : '全局' },
+      { label: '默认模型', value: data.model || '—' },
+      { label: 'small_model', value: data.smallModel || '—' },
+      { label: '当前 Provider', value: active?.key || '—' },
+      { label: '当前 auth', value: activeAuth?.key || '—' },
+    ];
+
+    return {
+      tool,
+      toolLabel: 'OpenCode',
+      hero: {
+        name: active?.name || active?.key || '尚未激活 Provider',
+        baseUrl: active?.baseUrl || '',
+        mode: (activeAuth && String(activeAuth.type || '').toLowerCase().includes('oauth')) ? 'oauth' : 'apikey',
+        model: data.model || '',
+        plan: '',
+        healthTxt: active?.hasCredential ? '凭证就绪' : '缺凭证',
+        healthCls: active?.hasCredential ? 'ok' : 'warn',
+      },
+      meta,
+      issues,
+      providers: [],
+      canLaunch: installed,
+    };
+  }
+
+  // openclaw
+  const data = state.openclawState || {};
+  const installed = Boolean(data.binary?.installed);
+  const gatewayUp = Boolean(data.gatewayStatus?.ok || data.gatewayRunning);
+  const issues = [];
+  if (!installed) issues.push({ tone: 'error', title: 'OpenClaw 未安装', copy: '请先在「工具安装」完成安装。' });
+  else if (!gatewayUp) issues.push({ tone: 'warn', title: 'Gateway 未运行', copy: '点击启动后 Dashboard 才能用。' });
+
+  const meta = [
+    { label: '安装状态', value: installed ? (data.binary?.version || '已安装') : '未安装' },
+    { label: 'Gateway 端口', value: String(data.gatewayPort || '—') },
+    { label: 'Gateway 状态', value: gatewayUp ? '运行中' : '未运行' },
+    { label: 'Dashboard URL', code: data.dashboardUrl || '—' },
+    { label: '数据目录', code: data.dataRoot || '—' },
+  ];
+
+  return {
+    tool: 'openclaw',
+    toolLabel: 'OpenClaw',
+    hero: {
+      name: installed ? 'OpenClaw' : '未安装',
+      baseUrl: data.dashboardUrl || '',
+      mode: '',
+      model: '',
+      plan: '',
+      healthTxt: gatewayUp ? '运行中' : '未运行',
+      healthCls: gatewayUp ? 'ok' : 'warn',
+    },
+    meta,
+    issues,
+    providers: [],
+    canLaunch: installed,
+  };
+}
+
+function renderConsoleV2(tool) {
+  const esc = typeof escapeHtml === 'function' ? escapeHtml : ((s) => String(s ?? ''));
+  const model = buildConsoleV2Model(tool);
+
+  const titleToolEl = document.getElementById('consoleV2TitleTool');
+  if (titleToolEl) titleToolEl.textContent = model.toolLabel;
+
+  const heroEl = document.getElementById('consoleV2Hero');
+  if (heroEl) {
+    const h = model.hero;
+    const modeTxt = h.mode === 'oauth' ? 'OAUTH' : h.mode === 'apikey' ? 'API KEY' : '';
+    heroEl.innerHTML = `
+      <div class="console-v2-hero-info">
+        <div class="console-v2-hero-eyebrow">
+          <span>CURRENT SESSION</span>
+          <span class="ch-status ${esc(h.healthCls)}">${esc(h.healthTxt)}</span>
+        </div>
+        <h2 class="console-v2-hero-name">${esc(h.name)}</h2>
+        <div class="console-v2-hero-badges">
+          ${modeTxt ? `<span class="ch-mode ${esc(h.mode)}">${modeTxt}</span>` : ''}
+          ${h.plan ? `<span class="ch-row-plan" data-plan="${esc(String(h.plan).toLowerCase())}">${esc(String(h.plan).toUpperCase())}</span>` : ''}
+          ${h.model ? `<span class="ch-hero-model">${esc(h.model)}</span>` : ''}
+        </div>
+        ${h.baseUrl ? `<div class="console-v2-hero-url">${esc(h.baseUrl)}</div>` : ''}
+      </div>
+      <div class="console-v2-hero-actions">
+        <button type="button" class="ch-hero-ghost" data-console-v2-refresh>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
+          重新检测
+        </button>
+        <button type="button" class="ch-hero-ghost" data-console-v2-goto-quick>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M4 6h16M4 18h10"/></svg>
+          快速配置
+        </button>
+        <button type="button" class="ch-hero-ghost" data-console-v2-goto-editor>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
+          配置编辑
+        </button>
+      </div>`;
+  }
+
+  const metaEl = document.getElementById('consoleV2Meta');
+  if (metaEl) {
+    metaEl.innerHTML = `
+      <div class="console-v2-meta-head">状态总览</div>
+      <div class="console-v2-meta-list">
+        ${model.meta.map((m) => `
+          <div class="console-v2-meta-row">
+            <span class="console-v2-meta-label">${esc(m.label)}</span>
+            <span class="console-v2-meta-value">
+              ${m.value ? `<span>${esc(m.value)}</span>` : ''}
+              ${m.code ? `<span class="console-v2-code">${esc(m.code)}</span>` : ''}
+            </span>
+          </div>`).join('')}
+      </div>`;
+  }
+
+  const issuesEl = document.getElementById('consoleV2Issues');
+  if (issuesEl) {
+    if (!model.issues.length) {
+      issuesEl.innerHTML = '';
+      issuesEl.classList.add('hide');
+    } else {
+      issuesEl.classList.remove('hide');
+      issuesEl.innerHTML = `
+        <div class="console-v2-section-head">异常检测<span class="count">· ${model.issues.length}</span></div>
+        <div class="console-v2-issue-list">
+          ${model.issues.map((i) => `
+            <div class="console-v2-issue ${esc(i.tone || 'warn')}">
+              <div class="console-v2-issue-title">${esc(i.title)}</div>
+              <div class="console-v2-issue-copy">${esc(i.copy)}</div>
+            </div>`).join('')}
+        </div>`;
+    }
+  }
+
+  const providersEl = document.getElementById('consoleV2Providers');
+  if (providersEl) {
+    if (!model.providers.length) {
+      providersEl.innerHTML = '';
+      providersEl.classList.add('hide');
+    } else {
+      providersEl.classList.remove('hide');
+      providersEl.innerHTML = `
+        <div class="console-v2-section-head">已保存 Provider<span class="count">· ${model.providers.length}</span></div>
+        <div class="console-v2-provider-list">
+          ${model.providers.map((p) => `
+            <div class="console-v2-provider ${p.isActive ? 'current' : ''}">
+              <span class="console-v2-provider-dot ${esc(p.statusCls)}"></span>
+              <span class="console-v2-provider-body">
+                <span class="console-v2-provider-name">${esc(p.name)}</span>
+                ${p.baseUrl ? `<span class="console-v2-provider-url">${esc(p.baseUrl)}</span>` : ''}
+              </span>
+              <span class="ch-status ${esc(p.statusCls)}">${esc(p.statusTxt)}</span>
+            </div>`).join('')}
+        </div>`;
     }
   }
 }
@@ -17434,6 +17736,43 @@ function bindEvents() {
       if (!button) return;
       state.consoleTool = button.dataset.consoleTool || 'codex';
       renderToolConsole();
+    });
+  }
+
+  // Console v2 left-rail tool switcher
+  const consoleRailList = document.getElementById('consoleToolList');
+  if (consoleRailList) {
+    consoleRailList.addEventListener('click', (e) => {
+      const btn = e.target instanceof Element ? e.target.closest('[data-console-rail-tool]') : null;
+      if (!btn) return;
+      state.consoleTool = btn.getAttribute('data-console-rail-tool') || 'codex';
+      renderToolConsole();
+    });
+  }
+
+  // Console v2 hero actions (delegated on the page root)
+  const consoleV2Root = document.getElementById('toolConsolePage');
+  if (consoleV2Root) {
+    consoleV2Root.addEventListener('click', (e) => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (!t) return;
+      if (t.closest('[data-console-v2-refresh]')) {
+        refreshToolConsoleData({ manual: true });
+        return;
+      }
+      if (t.closest('[data-console-v2-goto-quick]')) {
+        const tool = state.consoleTool || 'codex';
+        if (state.toolLastPage) state.toolLastPage[tool] = 'quick';
+        state.activeTool = tool;
+        setPage?.('quick');
+        return;
+      }
+      if (t.closest('[data-console-v2-goto-editor]')) {
+        const tool = state.consoleTool || 'codex';
+        state.activeTool = tool;
+        setPage?.('configEditor');
+        return;
+      }
     });
   }
 
