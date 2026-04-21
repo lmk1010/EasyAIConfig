@@ -114,40 +114,26 @@ fn keychain_hash_suffix(dir: &std::path::Path) -> String {
 }
 
 // Pull the stored OAuth blob for a given profile dir. Tries Keychain first on
-// macOS (for default-dir profiles the suffix is empty, matching Claude Code's
-// behavior), then falls back to <dir>/.credentials.json (the Linux/Windows
+// macOS, then falls back to <dir>/.credentials.json (the Linux/Windows
 // plaintext fallback that Claude Code also uses on macOS when Keychain is
 // unavailable).
 //
-// Returns `(subscriptionType, rateLimitTier)`. Both are empty strings when the
-// blob can't be read or parsed.
+// Keychain payload format note: current Claude Code stores the blob as plain
+// JSON (verified against `security -w` output). Older / staging builds may
+// store it hex-encoded. We try plain JSON first and fall back to hex-decode.
+//
+// Returns `(subscriptionType, rateLimitTier)`. Both empty when unreadable.
 fn read_profile_plan_tier(dir: &std::path::Path) -> (String, String) {
-  // Step 1: macOS Keychain
   #[cfg(target_os = "macos")]
   {
-    use std::process::Command;
     let suffix = keychain_hash_suffix(dir);
     let service = format!("Claude Code-credentials-{}", suffix);
-    let user = std::env::var("USER").unwrap_or_default();
-    if !user.is_empty() {
-      let out = Command::new("security")
-        .args(["find-generic-password", "-a", &user, "-s", &service, "-w"])
-        .output();
-      if let Ok(out) = out {
-        if out.status.success() {
-          let hex_str = String::from_utf8_lossy(&out.stdout);
-          if let Some(bytes) = hex_decode(hex_str.trim()) {
-            if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
-              let (s, t) = extract_plan_tier(&v);
-              if !s.is_empty() || !t.is_empty() { return (s, t); }
-            }
-          }
-        }
-      }
+    if let Some(pair) = read_keychain_plan_tier(&service) {
+      return pair;
     }
   }
 
-  // Step 2: plaintext fallback
+  // Plaintext fallback — <dir>/.credentials.json.
   let plain = dir.join(".credentials.json");
   if let Ok(text) = std::fs::read_to_string(&plain) {
     if let Ok(v) = serde_json::from_str::<Value>(&text) {
@@ -156,6 +142,39 @@ fn read_profile_plan_tier(dir: &std::path::Path) -> (String, String) {
   }
 
   (String::new(), String::new())
+}
+
+#[cfg(target_os = "macos")]
+fn read_keychain_plan_tier(service: &str) -> Option<(String, String)> {
+  use std::process::Command;
+  let user = std::env::var("USER").unwrap_or_default();
+  if user.is_empty() { return None; }
+
+  let out = Command::new("security")
+    .args(["find-generic-password", "-a", &user, "-s", service, "-w"])
+    .output()
+    .ok()?;
+  if !out.status.success() { return None; }
+
+  let raw = String::from_utf8_lossy(&out.stdout);
+  let trimmed = raw.trim();
+  if trimmed.is_empty() { return None; }
+
+  // Strategy 1: current Claude Code format — plain JSON written by `security -X`.
+  if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+    let (s, t) = extract_plan_tier(&v);
+    if !s.is_empty() || !t.is_empty() { return Some((s, t)); }
+  }
+
+  // Strategy 2: legacy hex-encoded JSON (seen in older builds / docs).
+  if let Some(bytes) = hex_decode(trimmed) {
+    if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+      let (s, t) = extract_plan_tier(&v);
+      if !s.is_empty() || !t.is_empty() { return Some((s, t)); }
+    }
+  }
+
+  None
 }
 
 fn extract_plan_tier(blob: &Value) -> (String, String) {
@@ -333,23 +352,8 @@ fn read_default_claude_plan() -> Value {
 fn read_default_plan_tier() -> (String, String) {
   #[cfg(target_os = "macos")]
   {
-    use std::process::Command;
-    let user = std::env::var("USER").unwrap_or_default();
-    if !user.is_empty() {
-      let out = Command::new("security")
-        .args(["find-generic-password", "-a", &user, "-s", "Claude Code-credentials", "-w"])
-        .output();
-      if let Ok(out) = out {
-        if out.status.success() {
-          let hex_str = String::from_utf8_lossy(&out.stdout);
-          if let Some(bytes) = hex_decode(hex_str.trim()) {
-            if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
-              let (s, t) = extract_plan_tier(&v);
-              if !s.is_empty() || !t.is_empty() { return (s, t); }
-            }
-          }
-        }
-      }
+    if let Some(pair) = read_keychain_plan_tier("Claude Code-credentials") {
+      return pair;
     }
   }
 

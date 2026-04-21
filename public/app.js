@@ -18254,20 +18254,24 @@ loadTools();
       const ccCache = window.__chClaudeOauthProfiles || { loaded: false, data: null };
       const ccData = ccCache.data || { active: '', profiles: [], lastSwitchAt: 0 };
       const savedProfiles = Array.isArray(ccData.profiles) ? ccData.profiles : [];
-      const hasLogin = typeof isClaudeOauthLoggedIn === 'function' && isClaudeOauthLoggedIn(cc);
       const activeId = ccData.active || '';
       const ccLogin = cc.login || {};
+      const cliLoggedIn = typeof isClaudeOauthLoggedIn === 'function' && isClaudeOauthLoggedIn(cc);
 
       // "默认" row — represents ~/.claude/ (Claude Code's default CONFIG_DIR).
-      // Only rendered when the user has logged in at least once there; otherwise
-      // there's nothing to show and we want to avoid implying that launching
-      // without a profile is a viable path for an un-logged-in user.
-      //
-      // Plan label comes from ccData.defaultPlan (backend reads the default
-      // Keychain entry), not cc.login.plan which just mirrors .claude.json's
-      // oauthAccount.accountPlan (a legacy field that's usually empty).
-      const defaultPlan = (ccData.defaultPlan && ccData.defaultPlan.plan) || '';
-      if (hasLogin) {
+      // We render it whenever we have *any* signal of a default login. To
+      // avoid the first-paint flicker (cc.login often races the profile list
+      // fetch), we combine three independent signals:
+      //   1. isClaudeOauthLoggedIn(cc)        — from load_claudecode_state
+      //   2. ccData.defaultPlan.subscriptionType  — from our profiles list
+      //                                              (reads Keychain)
+      //   3. ccData.defaultPlan.hasDefault    — future flag for "file exists"
+      // As long as any one is set, the row is stable across renders.
+      const defaultPlanObj = ccData.defaultPlan || {};
+      const defaultPlan = defaultPlanObj.plan || '';
+      const defaultHasTokens = Boolean(defaultPlanObj.subscriptionType) || cliLoggedIn;
+
+      if (defaultHasTokens) {
         rows.push({
           key: '__claudecode_oauth_default__',
           name: ccLogin.email || ccLogin.orgName || '默认账号',
@@ -18803,8 +18807,28 @@ loadTools();
   }
 
   // ── Claude Code OAuth profile store (remote) ────────────────────
-  // Cache: { loaded, data: {active, lastSwitchAt, profiles: [...]} }
+  // Cache: { loaded, data: {active, lastSwitchAt, profiles: [...], defaultPlan} }
+  // We snapshot the last successful response into localStorage so a cold
+  // app start renders the correct OAuth rows on its very first paint, before
+  // any backend call has resolved. The actual source of truth is always the
+  // backend — we overwrite the cache on every successful fetch.
+  const CC_OAUTH_CACHE_LS_KEY = 'easyaiconfig_ch_claudecode_oauth_cache_v1';
+  function hydrateClaudeOauthCacheFromLs() {
+    try {
+      const raw = localStorage.getItem(CC_OAUTH_CACHE_LS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return;
+      window.__chClaudeOauthProfiles = { loaded: false, data: parsed };
+    } catch (_) { /* corrupt cache — ignore */ }
+  }
+  function persistClaudeOauthCacheToLs(data) {
+    try {
+      localStorage.setItem(CC_OAUTH_CACHE_LS_KEY, JSON.stringify(data || {}));
+    } catch (_) { /* quota / denied — ignore */ }
+  }
   window.__chClaudeOauthProfiles = window.__chClaudeOauthProfiles || { loaded: false, data: null };
+  if (!window.__chClaudeOauthProfiles.data) hydrateClaudeOauthCacheFromLs();
 
   async function loadClaudeCodeOauthProfiles() {
     try {
@@ -18812,7 +18836,9 @@ loadTools();
       if (!res || !res.ok) {
         window.__chClaudeOauthProfiles = { loaded: true, data: { active: '', profiles: [], lastSwitchAt: 0 } };
       } else {
-        window.__chClaudeOauthProfiles = { loaded: true, data: res.data || {} };
+        const data = res.data || {};
+        window.__chClaudeOauthProfiles = { loaded: true, data };
+        persistClaudeOauthCacheToLs(data);
       }
     } catch (err) {
       console.warn('[ch] load claudecode oauth profiles failed', err);

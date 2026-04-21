@@ -19504,14 +19504,18 @@ body {
   justify-content: center;
   width: 18px;
   height: 18px;
-  margin: 0 2px 0 4px;
+  margin: 0 3px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.045);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
   color: var(--s2-text);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   line-height: 1;
-  vertical-align: -4px;
+  /* Align the center of the chip with the x-height of the surrounding text
+     instead of the baseline — chips read as punctuation that way. */
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
 }
 
 [data-theme="light"] .shell-v2 .ch-inline-key {
