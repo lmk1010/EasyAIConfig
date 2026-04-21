@@ -264,6 +264,108 @@ pub(crate) fn refresh_network_status(body: &Value) -> Result<Value, String> {
   Ok(build_status(force))
 }
 
+// Measures round-trip latency to a handful of neutral endpoints via raw TCP
+// connect. Gives the user a sense of how fast their current line is without
+// ever touching an AI vendor's API — reaching api.openai.com or
+// api.anthropic.com from a flagged region is the exact signal that gets
+// accounts banned, so those are deliberately excluded.
+//
+// Each probe uses std::net::TcpStream::connect_timeout to port 443 with a
+// short cap. The user-visible "latency" is the TCP handshake time, not ICMP
+// ping — good enough as a relative signal.
+pub(crate) fn get_network_latency(_query: &Value) -> Result<Value, String> {
+  use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+  use std::time::Instant;
+
+  struct Target {
+    label: &'static str,
+    host: &'static str,
+    port: u16,
+    why: &'static str,
+  }
+
+  let targets = [
+    Target { label: "Cloudflare DNS", host: "1.1.1.1", port: 443, why: "最近公网节点" },
+    Target { label: "Google DNS",     host: "8.8.8.8", port: 443, why: "海外公网节点" },
+    Target { label: "ip-api.com",     host: "ip-api.com", port: 80, why: "IP 查询服务（我们自己也在用）" },
+    // HK edge / CN edge if reachable — gives a "近端 vs 远端" picture
+    Target { label: "Github",         host: "github.com", port: 443, why: "常用代码站点" },
+  ];
+
+  // Run probes in parallel so total runtime is max-of rather than sum-of.
+  let handles: Vec<_> = targets
+    .iter()
+    .map(|t| {
+      let host = t.host.to_string();
+      let port = t.port;
+      let label = t.label.to_string();
+      let why = t.why.to_string();
+      std::thread::spawn(move || {
+        let addr_res: Result<Vec<SocketAddr>, _> =
+          (host.as_str(), port).to_socket_addrs().map(|i| i.collect());
+        let resolved_ip = addr_res
+          .as_ref()
+          .ok()
+          .and_then(|v| v.first().map(|s| s.ip().to_string()))
+          .unwrap_or_default();
+        let start = Instant::now();
+        let outcome = match addr_res {
+          Ok(addrs) => {
+            let Some(first) = addrs.first().copied() else {
+              return json!({
+                "label": label, "host": host, "port": port, "why": why,
+                "ok": false, "error": "DNS 解析失败", "ms": 0, "ip": resolved_ip,
+              });
+            };
+            match TcpStream::connect_timeout(&first, std::time::Duration::from_millis(3000)) {
+              Ok(_) => {
+                let ms = start.elapsed().as_millis() as u64;
+                json!({
+                  "label": label, "host": host, "port": port, "why": why,
+                  "ok": true, "ms": ms, "ip": resolved_ip,
+                })
+              }
+              Err(e) => json!({
+                "label": label, "host": host, "port": port, "why": why,
+                "ok": false, "error": e.to_string(), "ms": 0, "ip": resolved_ip,
+              }),
+            }
+          }
+          Err(e) => json!({
+            "label": label, "host": host, "port": port, "why": why,
+            "ok": false, "error": format!("DNS: {}", e), "ms": 0, "ip": resolved_ip,
+          }),
+        };
+        outcome
+      })
+    })
+    .collect();
+
+  let rows: Vec<Value> = handles.into_iter().filter_map(|h| h.join().ok()).collect();
+
+  // Summary stats to make the section glanceable.
+  let oks: Vec<u64> = rows
+    .iter()
+    .filter_map(|r| if r.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+      r.get("ms").and_then(Value::as_u64)
+    } else { None })
+    .collect();
+  let avg = if oks.is_empty() { 0 } else { oks.iter().sum::<u64>() / oks.len() as u64 };
+  let max = oks.iter().copied().max().unwrap_or(0);
+  let reachable = oks.len();
+  let total = rows.len();
+
+  Ok(json!({
+    "rows": rows,
+    "summary": {
+      "avgMs": avg,
+      "maxMs": max,
+      "reachable": reachable,
+      "total": total,
+    },
+  }))
+}
+
 pub(crate) fn list_network_ip_history(query: &Value) -> Result<Value, String> {
   let obj = parse_json_object(query);
   let limit = get_string(&obj, "limit")

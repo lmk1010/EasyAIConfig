@@ -302,6 +302,7 @@ mod claudecode_oauth_profiles;
 mod network;
 mod processes;
 mod usage_stats;
+mod app_settings;
 mod routes;
 
 use routes::backend_request;

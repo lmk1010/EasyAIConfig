@@ -20303,3 +20303,191 @@ body {
 [data-theme="light"] .shell-v2 .cv3-meta-warn .console-v2-meta-value {
   color: #b45309;
 }
+
+/* Gate toggle row */
+.shell-v2 .cv3-fw-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.74rem;
+  color: var(--s2-text);
+}
+.shell-v2 .cv3-fw-toggle input[type="checkbox"] {
+  width: 34px;
+  height: 18px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  position: relative;
+  cursor: pointer;
+  transition: background 140ms ease;
+  flex-shrink: 0;
+}
+.shell-v2 .cv3-fw-toggle input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 160ms ease;
+}
+.shell-v2 .cv3-fw-toggle input[type="checkbox"]:checked {
+  background: #4ade80;
+}
+.shell-v2 .cv3-fw-toggle input[type="checkbox"]:checked::before {
+  transform: translateX(16px);
+}
+[data-theme="light"] .shell-v2 .cv3-fw-toggle input[type="checkbox"] {
+  background: rgba(15, 23, 42, 0.1);
+}
+
+/* Latency strip */
+.shell-v2 .cv3-latency-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  font-size: 0.7rem;
+}
+[data-theme="light"] .shell-v2 .cv3-latency-strip {
+  border-top-color: rgba(15, 23, 42, 0.08);
+}
+.shell-v2 .cv3-latency-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+  margin-right: 4px;
+}
+.shell-v2 .cv3-latency-pill {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.66rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--s2-text);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.shell-v2 .cv3-latency-pill.ok { color: #4ade80; }
+.shell-v2 .cv3-latency-pill.okish { color: #fbbf24; }
+.shell-v2 .cv3-latency-pill.warn { color: #fb923c; }
+.shell-v2 .cv3-latency-pill.bad { color: #ef5252; opacity: 0.9; }
+[data-theme="light"] .shell-v2 .cv3-latency-pill {
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+.shell-v2 .cv3-latency-sum {
+  margin-left: auto;
+  font-size: 0.66rem;
+  color: var(--s2-muted);
+}
+.shell-v2 .cv3-latency-hint {
+  font-size: 0.7rem;
+  color: var(--s2-muted);
+}
+.shell-v2 .cv3-latency-refresh { margin-left: 8px; }
+
+/* Session distribution chips */
+.shell-v2 .cv3-session-dist {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  font-size: 0.72rem;
+}
+.shell-v2 .cv3-session-dist-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+  margin-right: 4px;
+}
+.shell-v2 .cv3-session-dist-chip {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.66rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  color: var(--s2-text);
+}
+.shell-v2 .cv3-session-dist-chip em {
+  font-style: normal;
+  color: var(--s2-accent);
+  margin-left: 4px;
+}
+[data-theme="light"] .shell-v2 .cv3-session-dist-chip {
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+
+/* Session list — "最近会话" */
+.shell-v2 .cv3-session-head {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+  padding: 12px 14px 6px;
+}
+.shell-v2 .cv3-session-list { display: flex; flex-direction: column; gap: 2px; }
+.shell-v2 .cv3-session-row {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 8px;
+}
+.shell-v2 .cv3-session-row:hover { background: rgba(255, 255, 255, 0.02); }
+[data-theme="light"] .shell-v2 .cv3-session-row:hover { background: rgba(15, 23, 42, 0.03); }
+.shell-v2 .cv3-session-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.shell-v2 .cv3-session-title {
+  font-size: 0.78rem;
+  color: var(--s2-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shell-v2 .cv3-session-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.68rem;
+  color: var(--s2-muted);
+}
+.shell-v2 .cv3-session-meta code {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.64rem;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+[data-theme="light"] .shell-v2 .cv3-session-meta code {
+  background: rgba(15, 23, 42, 0.05);
+}
+.shell-v2 .cv3-session-proj {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 0.64rem;
+  color: var(--s2-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}

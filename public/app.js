@@ -7532,21 +7532,58 @@ function renderToolConsole() {
 window.__consoleV3 = window.__consoleV3 || {
   network: null,          // { ok, ip, country, countryCode, verdict, verdictCopy, ... }
   networkLoading: false,
+  latency: null,          // { rows:[{label,ms,ok}], summary:{avgMs,reachable,total} }
+  latencyLoading: false,
   procsByTool: {},        // { codex: [...], claudecode: [...], ... }
   procsLoading: {},
-  codexStats: null,       // { total, today, latestMtime }
-  claudeUsage: null,      // { messagesInWindow, windowFirstMessageAt, ... }
+  codexStats: null,       // { total, today, week, latestMtime, recent, modelDistribution }
+  claudeUsage: null,      // { messagesInWindow, windowFirstMessageAt, recent, ... }
 };
 
-// Preference key: strict gate (default OFF). When ON the launcher refuses to
-// start an official OAuth tool if the current IP is verdict=block. When OFF
-// we only nudge via a confirm() so the user can make the call.
-const IP_GATE_LS_KEY = 'easyaiconfig_ip_gate_block_v1';
-function isIpGateEnabled() {
-  try { return localStorage.getItem(IP_GATE_LS_KEY) === '1'; } catch (_) { return false; }
+// Persistent preference — lives on disk at
+//   ~/.codex-config-ui/app-settings.json :: ipGateBlock
+// NOT in localStorage; safety-critical toggles must survive browser storage
+// wipes. Frontend holds a read-through cache; writes go through the backend
+// and the cache is updated on success.
+window.__appSettings = window.__appSettings || { loaded: false, data: null };
+
+async function loadAppSettings() {
+  try {
+    const res = await api('/api/app-settings', { method: 'GET' });
+    if (res?.ok) {
+      window.__appSettings = { loaded: true, data: res.data || {} };
+    } else {
+      window.__appSettings = { loaded: true, data: {} };
+    }
+  } catch (_) {
+    window.__appSettings = { loaded: true, data: {} };
+  }
+  return window.__appSettings.data;
 }
-function setIpGateEnabled(enabled) {
-  try { localStorage.setItem(IP_GATE_LS_KEY, enabled ? '1' : '0'); } catch (_) {}
+
+async function patchAppSettings(patch) {
+  try {
+    const res = await api('/api/app-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch || {}),
+    });
+    if (res?.ok) {
+      window.__appSettings = { loaded: true, data: res.data || {} };
+      return true;
+    }
+  } catch (err) {
+    console.warn('[app-settings] patch failed', err);
+  }
+  return false;
+}
+
+function isIpGateEnabled() {
+  return Boolean(window.__appSettings?.data?.ipGateBlock);
+}
+async function setIpGateEnabled(enabled) {
+  await patchAppSettings({ ipGateBlock: Boolean(enabled) });
+  if (state.activePage === 'console') renderToolConsole();
 }
 
 // Called by launchCodex / launchClaudeCodeOnly / launchCodexLogin before
@@ -7563,12 +7600,16 @@ async function preLaunchIpFirewallCheck(toolLabel) {
     if (!n || n.ok === false) return true; // no IP = no verdict, let the user decide
     if (n.verdict !== 'block') return true;
 
+    // Backend-persisted gate preference (NOT localStorage — must survive
+    // browser-storage wipes since this is a safety toggle).
+    if (!window.__appSettings?.loaded) await loadAppSettings();
     const gate = isIpGateEnabled();
-    const msg = `🛡 ${n.verdictCopy || '当前 IP 被判定为高风险。'}\n\n出口 IP: ${n.ip} (${n.countryCode})\n\n${gate ? '已开启强制拦截。启动被阻止。' : '继续启动 ' + toolLabel + '？(建议 "取消" 并切换线路)'}`;
+
     if (gate) {
       flash?.(`🚫 启动被防火墙拦截：${n.verdictCopy || '当前 IP 风险高'}`, 'error');
       return false;
     }
+    const msg = `🛡 ${n.verdictCopy || '当前 IP 被判定为高风险。'}\n\n出口 IP: ${n.ip} (${n.countryCode})\n\n继续启动 ${toolLabel}？(建议 "取消" 并切换线路)`;
     return window.confirm(msg);
   } catch (_) {
     return true;
@@ -7590,6 +7631,20 @@ async function loadConsoleNetworkStatus({ force = false } = {}) {
     window.__consoleV3.network = { ok: false, error: String(err) };
   } finally {
     window.__consoleV3.networkLoading = false;
+    if (state.activePage === 'console') renderToolConsole();
+  }
+}
+
+async function loadConsoleLatency() {
+  if (window.__consoleV3.latencyLoading) return;
+  window.__consoleV3.latencyLoading = true;
+  try {
+    const res = await api('/api/network/latency', { method: 'GET', timeoutMs: 8000 });
+    window.__consoleV3.latency = res?.ok ? (res.data || null) : null;
+  } catch (_) {
+    window.__consoleV3.latency = null;
+  } finally {
+    window.__consoleV3.latencyLoading = false;
     if (state.activePage === 'console') renderToolConsole();
   }
 }
@@ -7626,7 +7681,9 @@ async function loadConsoleClaudeUsage() {
 
 async function primeConsoleV3(tool) {
   // Fire in parallel; each updates render-on-arrival.
+  if (!window.__appSettings.loaded) loadAppSettings();
   if (!window.__consoleV3.network) loadConsoleNetworkStatus({ force: false });
+  if (!window.__consoleV3.latency) loadConsoleLatency();
   if (!window.__consoleV3.procsByTool[tool]) loadConsoleProcs(tool);
   if (tool === 'codex' && !window.__consoleV3.codexStats) loadConsoleCodexStats();
   if (tool === 'claudecode' && !window.__consoleV3.claudeUsage) loadConsoleClaudeUsage();
@@ -7681,6 +7738,8 @@ function renderConsoleV3Firewall() {
   const flagMap = { CN: '🇨🇳', US: '🇺🇸', SG: '🇸🇬', JP: '🇯🇵', HK: '🇭🇰', TW: '🇹🇼', KR: '🇰🇷', DE: '🇩🇪', GB: '🇬🇧', FR: '🇫🇷', CA: '🇨🇦', AU: '🇦🇺' };
   const flag = flagMap[cc] || '🌐';
   const verdictLabel = verdict === 'safe' ? '✅ 安全' : verdict === 'block' ? '🚫 高风险' : '⚠ 需确认';
+  const gateOn = isIpGateEnabled();
+  const gateLabel = gateOn ? '已开启 · 高风险时阻止启动' : '已关闭 · 仅弹窗提醒';
   el.innerHTML = `
     <div class="cv3-fw cv3-fw-${esc(verdict)}">
       <span class="cv3-fw-icon">🛡</span>
@@ -7691,14 +7750,42 @@ function renderConsoleV3Firewall() {
         </div>
         <div class="cv3-fw-grid">
           <div class="cv3-fw-row"><span class="cv3-fw-key">出口 IP</span><span class="cv3-fw-val"><code>${esc(n.ip || '-')}</code> <span class="cv3-fw-geo">${flag} ${esc(n.country || '未知')}${n.city ? ' · ' + esc(n.city) : ''}${n.isp ? ' · ' + esc(n.isp) : ''}</span></span></div>
-          <div class="cv3-fw-row"><span class="cv3-fw-key">代理状态</span><span class="cv3-fw-val">${hasProxy ? `已配置 · <code>${esc((n.proxy.hints || [])[0] || '')}</code>` : '未配置'}</span></div>
+          <div class="cv3-fw-row"><span class="cv3-fw-key">代理</span><span class="cv3-fw-val">${hasProxy ? `已配置 · <code>${esc((n.proxy.hints || [])[0] || '')}</code>` : '未配置'}</span></div>
           <div class="cv3-fw-row"><span class="cv3-fw-key">判定</span><span class="cv3-fw-val">${esc(n.verdictCopy || '')}</span></div>
+          <div class="cv3-fw-row"><span class="cv3-fw-key">硬拦截</span><span class="cv3-fw-val">
+            <label class="cv3-fw-toggle">
+              <input type="checkbox" ${gateOn ? 'checked' : ''} data-console-v3-toggle-gate>
+              <span>${esc(gateLabel)}</span>
+            </label>
+          </span></div>
         </div>
+        ${renderLatencyStripHTML()}
       </div>
       <div class="cv3-fw-actions">
         <button type="button" class="cv3-fw-refresh" data-console-v3-refresh-ip>重新检测</button>
       </div>
     </div>`;
+}
+
+// Small inline latency strip — shown inside the firewall card so users see
+// network quality alongside the verdict.
+function renderLatencyStripHTML() {
+  const esc = escapeHtml;
+  const l = window.__consoleV3.latency;
+  if (!l) {
+    return `<div class="cv3-latency-strip"><span class="cv3-latency-label">网络时延</span><span class="cv3-latency-hint">测量中…</span></div>`;
+  }
+  const rows = Array.isArray(l.rows) ? l.rows : [];
+  if (!rows.length) return '';
+  const pills = rows.map((r) => {
+    if (!r.ok) {
+      return `<span class="cv3-latency-pill bad" title="${esc(r.error || '')}">${esc(r.label)}: —</span>`;
+    }
+    const cls = r.ms > 500 ? 'warn' : r.ms > 150 ? 'okish' : 'ok';
+    return `<span class="cv3-latency-pill ${cls}" title="${esc(r.host)} · ${esc(r.why || '')}">${esc(r.label)}: ${esc(String(r.ms))}ms</span>`;
+  }).join('');
+  const summary = l.summary ? `<span class="cv3-latency-sum">${l.summary.reachable}/${l.summary.total} 可达 · 平均 ${l.summary.avgMs}ms</span>` : '';
+  return `<div class="cv3-latency-strip"><span class="cv3-latency-label">网络时延</span>${pills}${summary}<button type="button" class="cv3-link-btn cv3-latency-refresh" data-console-v3-refresh-latency>重测</button></div>`;
 }
 
 function renderConsoleV3Procs(tool, toolLabel) {
@@ -7758,23 +7845,54 @@ function renderConsoleV3Usage(tool) {
       el.innerHTML = `<div class="console-v2-section-head">本地会话</div><div class="cv3-proc-empty">读取 ~/.codex/sessions/ 中…</div>`;
       return;
     }
+    const dist = Array.isArray(s.modelDistribution) ? s.modelDistribution : [];
+    const distHtml = dist.length ? `
+      <div class="cv3-session-dist">
+        <span class="cv3-session-dist-label">近 7 天模型分布</span>
+        ${dist.map((d) => `<span class="cv3-session-dist-chip">${esc(d.model)} <em>${esc(String(d.count))}</em></span>`).join('')}
+      </div>` : '';
+
+    const recent = Array.isArray(s.recent) ? s.recent : [];
+    const recentHtml = recent.length ? `
+      <div class="cv3-session-list">
+        ${recent.map((r) => `
+          <div class="cv3-session-row">
+            <div class="cv3-session-row-main">
+              <span class="cv3-session-title">${esc(r.firstMessage || '(空会话)')}</span>
+              <span class="cv3-session-meta">
+                ${r.model ? `<code>${esc(r.model)}</code>` : ''}
+                <span>${esc(String(r.messageCount || 0))} 条</span>
+                <span>${esc(formatRelativeTime(r.lastActiveAt))}</span>
+              </span>
+            </div>
+          </div>`).join('')}
+      </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
+
     el.innerHTML = `
-      <div class="console-v2-section-head">本地会话</div>
+      <div class="console-v2-section-head">本地会话
+        <button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>
+      </div>
       <div class="cv3-usage-grid">
         <div class="cv3-usage-cell">
-          <div class="cv3-usage-label">总会话数</div>
+          <div class="cv3-usage-label">总数</div>
           <div class="cv3-usage-value">${esc(String(s.total || 0))}</div>
         </div>
         <div class="cv3-usage-cell">
-          <div class="cv3-usage-label">最近 24h</div>
+          <div class="cv3-usage-label">近 24h</div>
           <div class="cv3-usage-value">${esc(String(s.today || 0))}</div>
         </div>
-        <div class="cv3-usage-cell cv3-usage-cell-wide">
+        <div class="cv3-usage-cell">
+          <div class="cv3-usage-label">近 7 天</div>
+          <div class="cv3-usage-value">${esc(String(s.week || 0))}</div>
+        </div>
+        <div class="cv3-usage-cell">
           <div class="cv3-usage-label">最近活动</div>
           <div class="cv3-usage-value">${s.latestMtime ? esc(formatRelativeTime(s.latestMtime)) : '无'}</div>
-          <div class="cv3-usage-hint">${s.sessionsDir ? `<code>${esc(s.sessionsDir)}</code>` : ''}</div>
         </div>
-      </div>`;
+      </div>
+      ${distHtml}
+      <div class="cv3-session-head">最近会话</div>
+      ${recentHtml}`;
     return;
   }
 
@@ -7792,6 +7910,23 @@ function renderConsoleV3Usage(tool) {
       const rem = min % 60;
       return hr > 0 ? `${hr}h ${rem}m` : `${rem}m`;
     })();
+    const recent = Array.isArray(u.recent) ? u.recent : [];
+    const recentHtml = recent.length ? `
+      <div class="cv3-session-list">
+        ${recent.map((r) => `
+          <div class="cv3-session-row">
+            <div class="cv3-session-row-main">
+              <span class="cv3-session-title">${esc(r.firstMessage || '(空会话)')}</span>
+              <span class="cv3-session-meta">
+                ${r.model ? `<code>${esc(r.model)}</code>` : ''}
+                ${r.project ? `<span class="cv3-session-proj">${esc(r.project)}</span>` : ''}
+                <span>${esc(String(r.messageCount || 0))} 条</span>
+                <span>${esc(formatRelativeTime(r.lastActiveAt))}</span>
+              </span>
+            </div>
+          </div>`).join('')}
+      </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
+
     el.innerHTML = `
       <div class="console-v2-section-head">本地 5h 窗口 (估算)
         <button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>
@@ -7813,11 +7948,13 @@ function renderConsoleV3Usage(tool) {
           <div class="cv3-usage-hint">到期后计数重置</div>
         </div>
         <div class="cv3-usage-cell">
-          <div class="cv3-usage-label">最近 24h 会话</div>
+          <div class="cv3-usage-label">近 24h 会话</div>
           <div class="cv3-usage-value">${esc(String(u.todaySessions || 0))}</div>
           <div class="cv3-usage-hint">共 ${esc(String(u.totalSessions || 0))} 个</div>
         </div>
       </div>
+      <div class="cv3-session-head">最近会话</div>
+      ${recentHtml}
       <div class="cv3-usage-note">⚠ 只统计本机 jsonl 历史；跨机 / web claude.ai 用量不在内，以账号服务端为准。</div>`;
     return;
   }
@@ -18074,6 +18211,13 @@ function bindEvents() {
         window.__consoleV3.network = null;
         renderConsoleV3Firewall();
         loadConsoleNetworkStatus({ force: true });
+        loadConsoleLatency();
+        return;
+      }
+      if (t.closest('[data-console-v3-refresh-latency]')) {
+        window.__consoleV3.latency = null;
+        renderConsoleV3Firewall();
+        loadConsoleLatency();
         return;
       }
       if (t.closest('[data-console-v3-refresh-procs]')) {
@@ -18088,6 +18232,19 @@ function bindEvents() {
         if (tool === 'claudecode') { window.__consoleV3.claudeUsage = null; loadConsoleClaudeUsage(); }
         else if (tool === 'codex') { window.__consoleV3.codexStats = null; loadConsoleCodexStats(); }
         return;
+      }
+    });
+    // Checkbox change — can't be delegated from the click listener above
+    // since `click` fires on <input type="checkbox"> after the value toggles;
+    // we want the final value so `change` is the right event.
+    consoleV2Root.addEventListener('change', (e) => {
+      const t = e.target instanceof HTMLInputElement ? e.target : null;
+      if (!t) return;
+      if (t.matches('[data-console-v3-toggle-gate]')) {
+        setIpGateEnabled(t.checked);
+        if (typeof flash === 'function') {
+          flash(t.checked ? '✅ 已开启防火墙硬拦截' : '已关闭硬拦截（仍有弹窗提醒）', 'success');
+        }
       }
     });
   }
@@ -20094,6 +20251,9 @@ loadTools();
 
   async function initialLoad() {
     wire();
+    // Prime persistent app settings (ipGateBlock etc.) so launches have the
+    // right policy even if the user never opens the console page.
+    if (typeof loadAppSettings === 'function') loadAppSettings();
     // Kick off both OAuth profile fetches in parallel. Each loader calls
     // renderConnectionHub() on completion, so the first user-visible render
     // already has real backend data — no localStorage cache, no guessing.
