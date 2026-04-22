@@ -1,0 +1,3 @@
+line 1: original
+line 2: edited via edit tool
+line 3: untouched

@@ -332,6 +332,30 @@
               </button>
             </div>
           </div>
+          <div class="sec-group" data-sec-for="tools" style="display:none">
+            <div class="tools-sec-summary">
+              <div class="tools-sec-stat">
+                <span class="tools-sec-stat-label">已安装</span>
+                <strong class="tools-sec-stat-value" id="toolsSideInstalledCount">0</strong>
+                <span class="tools-sec-stat-sub">当前就绪</span>
+              </div>
+              <div class="tools-sec-stat">
+                <span class="tools-sec-stat-label">待处理</span>
+                <strong class="tools-sec-stat-value" id="toolsSidePendingCount">0</strong>
+                <span class="tools-sec-stat-sub">可继续补齐</span>
+              </div>
+            </div>
+            <div class="sec-group-head">
+              <span class="sec-group-label">已安装</span>
+              <span class="sec-group-meta" id="toolsInstalledMeta">0 项</span>
+            </div>
+            <div class="sec-list" id="toolsInstalledList"></div>
+            <div class="sec-group-head sec-group-head-divider">
+              <span class="sec-group-label">待处理</span>
+              <span class="sec-group-meta" id="toolsPendingMeta">0 项</span>
+            </div>
+            <div class="sec-list" id="toolsPendingList"></div>
+          </div>
           <div class="sec-group" data-sec-for="__fallback">
             <div class="sec-fallback">
               <div class="sec-fallback-icon">
@@ -382,43 +406,6 @@
             <button id="openSystemSettingsBtn" class="secondary subtle-btn">系统设置</button>
             <button id="openAdvancedBtn" class="secondary subtle-btn">配置编辑</button>
             <button id="openAboutBtn" class="secondary subtle-btn">关于</button>
-          </div>
-          <div class="workspace-actions hide" id="configEditorActions">
-            <div class="cfg-editor-search-anchor" id="configEditorSearchAnchor">
-              <button type="button" id="configEditorSearchToggleBtn" class="secondary subtle-btn cfg-editor-search-toggle" title="搜索配置项">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="7" cy="7" r="4.5" />
-                  <path d="M10.5 10.5 14 14" />
-                </svg>
-              </button>
-              <div class="cfg-editor-search-popover hide" id="configEditorSearchBar">
-                <div class="cfg-editor-search">
-                  <svg class="cfg-editor-search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                    stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="7" cy="7" r="4.5" />
-                    <path d="M10.5 10.5 14 14" />
-                  </svg>
-                  <input id="configEditorSearchInput" type="search" placeholder="搜索配置项…如 沙箱、审批、网关、Telegram"
-                    autocomplete="off" />
-                  <button type="button" id="configEditorSearchClearBtn" class="tiny-icon-btn hide" title="清空搜索">×</button>
-                </div>
-              </div>
-            </div>
-            <button id="validateConfigBtn" class="cfg3-icon-btn" title="验证配置是否合法" aria-label="验证">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 3l-8.5 8.5L2 8" />
-              </svg>
-            </button>
-            <button id="resetConfigEditorBtn" class="cfg3-icon-btn hide" title="重置当前配置（保留 Provider）" aria-label="重置">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M1 3v4h4M14.5 9a6 6 0 0 1-11.2 2.5M1.5 7a6 6 0 0 1 11.2-2.5"/>
-              </svg>
-            </button>
-            <!-- Hidden legacy secondary save button — kept for any JS path still
-                 bound to it; save-and-apply is the only visible primary. -->
-            <button id="saveConfigEditorBtn" class="secondary subtle-btn" hidden>保存配置</button>
-            <button id="closeConfigEditorBtn" class="secondary subtle-btn" hidden>关闭</button>
-            <button id="applyConfigEditorBtn" class="cfg3-primary-btn">保存并生效</button>
           </div>
         </header>
 
@@ -1017,98 +1004,104 @@
 
           <section id="configEditorView" class="page-view" data-page="configEditor">
             <div class="config-editor-page">
-              <!-- ═══ Config Editor Inline Header ═══ -->
-              <div class="cfg-editor-header">
-                <div class="cfg-editor-header-left">
-                  <div class="config-editor-tabs" id="configEditorTabs">
-                    <button type="button" class="cfg-editor-tab active" data-cfg-tool="codex" aria-pressed="true">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" opacity="0.5" />
-                        <path d="M12 12l9-5M12 12v10M12 12L3 7" />
+              <header class="config-editor-shell-head">
+                <div class="config-editor-shell-main">
+                  <div class="config-editor-shell-copy">
+                    <div class="config-editor-shell-eyebrow">
+                      <span class="config-editor-shell-tool" id="configEditorShellTool">Codex</span>
+                      <span class="config-editor-shell-dot" aria-hidden="true"></span>
+                      <span>Current Config</span>
+                    </div>
+                    <h2 class="config-editor-shell-title" id="configEditorShellTitle">Codex 配置编辑</h2>
+                    <p class="config-editor-shell-subtitle" id="configEditorShellSubtitle">优先用表单调整常用项，复杂项再打开原始配置文件。</p>
+                  </div>
+                  <div class="workspace-actions hide" id="configEditorActions">
+                    <div class="cfg-editor-search-anchor" id="configEditorSearchAnchor">
+                      <button type="button" id="configEditorSearchToggleBtn" class="secondary subtle-btn cfg-editor-search-toggle" title="搜索配置项">
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                          <circle cx="7" cy="7" r="4.5" />
+                          <path d="M10.5 10.5 14 14" />
+                        </svg>
+                      </button>
+                      <div class="cfg-editor-search-popover hide" id="configEditorSearchBar">
+                        <div class="cfg-editor-search">
+                          <svg class="cfg-editor-search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                            stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="7" cy="7" r="4.5" />
+                            <path d="M10.5 10.5 14 14" />
+                          </svg>
+                          <input id="configEditorSearchInput" type="search" placeholder="搜索配置项…如 沙箱、审批、网关、Telegram"
+                            autocomplete="off" />
+                          <button type="button" id="configEditorSearchClearBtn" class="tiny-icon-btn hide" title="清空搜索">×</button>
+                        </div>
+                      </div>
+                    </div>
+                    <button id="validateConfigBtn" class="cfg3-icon-btn" title="验证配置是否合法" aria-label="验证">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 3l-8.5 8.5L2 8" />
                       </svg>
-                      <span>Codex</span>
                     </button>
-                    <button type="button" class="cfg-editor-tab" data-cfg-tool="claudecode" aria-pressed="false">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="9" opacity="0.5" />
-                        <path d="M8 12h8M12 8v8" />
+                    <button id="resetConfigEditorBtn" class="cfg3-icon-btn hide" title="重置当前配置（保留 Provider）" aria-label="重置">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M1 3v4h4M14.5 9a6 6 0 0 1-11.2 2.5M1.5 7a6 6 0 0 1 11.2-2.5"/>
                       </svg>
-                      <span>Claude Code</span>
                     </button>
-                    <button type="button" class="cfg-editor-tab" data-cfg-tool="opencode" aria-pressed="false">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="3" width="18" height="18" rx="5" opacity="0.5" />
-                        <path d="M9 8l-3 4 3 4" />
-                        <path d="M15 8l3 4-3 4" />
-                        <path d="M13 6l-2 12" />
-                      </svg>
-                      <span>OpenCode</span>
-                    </button>
-                    <button type="button" class="cfg-editor-tab" data-cfg-tool="openclaw" aria-pressed="false">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="9" opacity="0.5" />
-                        <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-                        <circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" />
-                        <circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
-                      </svg>
-                      <span>OpenClaw</span>
-                    </button>
+                    <button id="saveConfigEditorBtn" class="secondary subtle-btn" hidden>保存配置</button>
+                    <button id="closeConfigEditorBtn" class="secondary subtle-btn" hidden>关闭</button>
+                    <button id="applyConfigEditorBtn" class="cfg3-primary-btn">保存并生效</button>
                   </div>
                 </div>
-                <div class="cfg-editor-header-right">
-                  <!-- View mode icons — 2 states only: 表单 (默认) / 纯 TOML -->
-                  <div class="cfg-view-icons" id="cfgViewIcons">
-                    <button type="button" class="cfg-view-icon active" data-cfg-view="form" title="表单模式">
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="14" height="10" rx="2"/><path d="M1 6h14M5 6v7"/></svg>
-                    </button>
-                    <button type="button" class="cfg-view-icon" data-cfg-view="code" title="纯代码模式 (全屏 TOML)">
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3L1 8l4 5M11 3l4 5-4 5"/></svg>
-                    </button>
+                <div class="cfg-editor-header">
+                  <div class="config-editor-shell-meta">
+                    <span class="config-editor-shell-meta-item" id="configEditorShellFile">config.toml / auth.json</span>
+                    <span class="config-editor-shell-meta-item" id="configEditorShellMode">表单编辑</span>
+                    <span class="config-editor-shell-meta-item">表单与原始文件共享同一份配置</span>
                   </div>
-                  <!-- OpenClaw config view switch (inline, shown only for openclaw) -->
-                  <div class="oc-header-config-switch hide" id="ocHeaderConfigSwitch">
-                    <span class="oc-header-sep"></span>
-                    <button type="button" class="secondary tiny-btn active" data-oc-config-view="minimal">最小</button>
-                    <button type="button" class="secondary tiny-btn" data-oc-config-view="full">完整</button>
+                  <div class="cfg-editor-header-right">
+                    <!-- Hidden legacy tabs; left secondary rail is now the main switcher. -->
+                    <div class="config-editor-tabs hide" id="configEditorTabs"></div>
+                    <!-- View mode icons — 2 states only: 表单 (默认) / 纯 TOML -->
+                    <div class="cfg-view-icons" id="cfgViewIcons">
+                      <button type="button" class="cfg-view-icon active" data-cfg-view="form" title="表单模式">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="14" height="10" rx="2"/><path d="M1 6h14M5 6v7"/></svg>
+                      </button>
+                      <button type="button" class="cfg-view-icon" data-cfg-view="code" title="纯代码模式 (全屏 TOML)">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3L1 8l4 5M11 3l4 5-4 5"/></svg>
+                      </button>
+                    </div>
+                    <!-- OpenClaw config view switch (inline, shown only for openclaw) -->
+                    <div class="oc-header-config-switch hide" id="ocHeaderConfigSwitch">
+                      <span class="oc-header-sep"></span>
+                      <button type="button" class="secondary tiny-btn active" data-oc-config-view="minimal">最小</button>
+                      <button type="button" class="secondary tiny-btn" data-oc-config-view="full">完整</button>
+                    </div>
+                    <button type="button" class="cfg3-secondary-btn" id="cfg3OpenDrawerBtn" title="查看原始文件">
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 3L1 8l4 5M11 3l4 5-4 5"/>
+                      </svg>
+                      <span>原始文件</span>
+                    </button>
+                    <button class="config-store-btn" id="openConfigStoreBtn" title="打开配置商店，浏览预设方案">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" opacity="0.4" />
+                        <rect x="8" y="13" width="8" height="7" rx="1" />
+                        <path d="M10 13v-2a2 2 0 0 1 4 0v2" />
+                      </svg>
+                      <span>配置商店</span>
+                      <span class="config-store-hint">浏览预设方案</span>
+                      <svg class="config-store-arrow" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 3l5 5-5 5" />
+                      </svg>
+                    </button>
+                    <!-- Hidden search elements for backward compatibility -->
+                    <input id="ocRecipeSearchInput" type="hidden" />
+                    <div id="ocRecipeResults" class="oc-recipe-results hide"></div>
                   </div>
-                  <button class="config-store-btn" id="openConfigStoreBtn" title="打开配置商店，浏览预设方案">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" opacity="0.4" />
-                      <rect x="8" y="13" width="8" height="7" rx="1" />
-                      <path d="M10 13v-2a2 2 0 0 1 4 0v2" />
-                    </svg>
-                    <span>配置商店</span>
-                    <span class="config-store-hint">浏览预设方案</span>
-                    <svg class="config-store-arrow" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                      stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M6 3l5 5-5 5" />
-                    </svg>
-                  </button>
-                  <!-- Hidden search elements for backward compatibility -->
-                  <input id="ocRecipeSearchInput" type="hidden" />
-                  <div id="ocRecipeResults" class="oc-recipe-results hide"></div>
                 </div>
-              </div>
+              </header>
               <div id="configEditorSearchEmpty" class="config-editor-search-empty hide">没有找到匹配的配置项，试试更短的关键词。</div>
-
-              <!-- ═══ v3 Hero — 核心配置快照 (5 chips) + Drawer 开关 ═══ -->
-              <article class="cfg3-hero" id="cfg3Hero">
-                <div class="cfg3-hero-head">
-                  <div class="cfg3-hero-title">当前配置</div>
-                  <button type="button" class="cfg3-hero-drawer-btn" id="cfg3OpenDrawerBtn" title="查看原始 TOML / JSON">
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3L1 8l4 5M11 3l4 5-4 5"/></svg>
-                    查看原始文件
-                  </button>
-                </div>
-                <div class="cfg3-hero-chips" id="cfg3HeroChips">
-                  <!-- Populated by renderCfg3Hero(tool) -->
-                </div>
-              </article>
 
               <div class="config-editor-layout" id="configEditorLayout" data-view-mode="form">
 
@@ -3007,7 +3000,7 @@
                 <div class="cfg3-drawer-scrim hide" id="cfg3DrawerScrim" aria-hidden="true"></div>
                 <aside class="config-editor-side cfg3-drawer" id="cfg3Drawer">
                   <div class="cfg3-drawer-head">
-                    <span class="cfg3-drawer-title">原始文件</span>
+                    <span class="cfg3-drawer-title" id="cfg3DrawerTitle">原始文件</span>
                     <button type="button" class="cfg3-drawer-close" id="cfg3CloseDrawerBtn" title="收起抽屉">
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
                     </button>

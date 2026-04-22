@@ -1,0 +1,2 @@
+edit tool test
+line two edited

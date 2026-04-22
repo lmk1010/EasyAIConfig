@@ -8539,27 +8539,29 @@ select:focus {
 
 /* ═══════════════  Tools / Install Page  ═══════════════ */
 .tools-page {
-  padding: 8px 12px 16px;
+  padding: 6px 12px 16px;
 }
 
 .tools-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .tools-search {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 44px;
-  padding: 0 16px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   color: rgba(232, 238, 248, 0.5);
   transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
 }
 
 .tools-search:focus-within {
@@ -8601,6 +8603,32 @@ select:focus {
 
 .tools-search input::placeholder {
   color: rgba(232, 238, 248, 0.34);
+}
+
+/* Use ID to outrank the .shell-v2 input:not(...) catch-all that paints a second pill */
+.shell-v2 #toolsCatalogSearchInput {
+  flex: 1 !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 32px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  font-size: 0.78rem !important;
+  color: rgba(232, 238, 248, 0.92) !important;
+  outline: none !important;
+}
+
+.shell-v2 #toolsCatalogSearchInput:focus,
+.shell-v2 #toolsCatalogSearchInput:hover {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.shell-v2 #toolsCatalogSearchInput::-webkit-search-cancel-button {
+  display: none;
 }
 
 .tools-tags {
@@ -8980,6 +9008,92 @@ select:focus {
 .cfg-editor-search-popover .cfg-editor-search {
   width: 100%;
   max-width: none;
+}
+
+.config-editor-shell-head {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.config-editor-shell-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.config-editor-shell-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.config-editor-shell-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(232, 238, 248, 0.42);
+}
+
+.config-editor-shell-tool,
+.config-editor-shell-meta-item {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.config-editor-shell-tool {
+  color: rgba(141, 192, 255, 0.92);
+  border-color: rgba(141, 192, 255, 0.16);
+  background: rgba(141, 192, 255, 0.08);
+}
+
+.config-editor-shell-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.config-editor-shell-title {
+  margin: 0;
+  font-size: 1.24rem;
+  line-height: 1.12;
+  color: var(--text);
+}
+
+.config-editor-shell-subtitle {
+  margin: 0;
+  max-width: 720px;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.config-editor-shell-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.config-editor-shell-meta-item {
+  font-size: 0.72rem;
+  color: rgba(232, 238, 248, 0.62);
 }
 
 #configEditorActions {
@@ -9419,18 +9533,29 @@ select:focus {
     width: min(360px, calc(100vw - 32px));
   }
 
+  .config-editor-shell-main {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #configEditorActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .cfg-editor-header {
     flex-direction: column;
     align-items: stretch;
   }
 
   .cfg-editor-header-left,
-  .cfg-editor-header-right {
+  .cfg-editor-header-right,
+  .config-editor-shell-meta {
     width: 100%;
   }
 
   .cfg-editor-header-right {
-    justify-content: stretch;
+    justify-content: flex-start;
     flex-wrap: wrap;
   }
 
@@ -11315,6 +11440,12 @@ select:focus {
 
 [data-theme="light"] .tools-search input::placeholder {
   color: rgba(30, 40, 60, 0.34);
+}
+
+[data-theme="light"] .shell-v2 #toolsCatalogSearchInput {
+  color: var(--text) !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 [data-theme="light"] .tools-tag {
@@ -17389,6 +17520,117 @@ body {
   color: var(--s2-faint);
 }
 
+.tools-sec-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 4px 10px;
+}
+
+.tools-sec-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 11px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(20px) saturate(135%);
+  -webkit-backdrop-filter: blur(20px) saturate(135%);
+}
+
+.tools-sec-stat-label {
+  font-size: 0.58rem;
+  font-weight: 680;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+}
+
+.tools-sec-stat-value {
+  font-size: 1.02rem;
+  font-weight: 720;
+  line-height: 1.05;
+  color: var(--s2-text);
+}
+
+.tools-sec-stat-sub {
+  font-size: 0.64rem;
+  color: var(--s2-muted);
+}
+
+.tools-sec-item {
+  grid-template-columns: 28px minmax(0, 1fr) auto !important;
+  gap: 8px;
+}
+
+.tools-sec-ico {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.tools-sec-ico svg {
+  width: 15px;
+  height: 15px;
+}
+
+.tools-sec-item .sec-text {
+  gap: 2px;
+}
+
+.tools-sec-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  min-width: 50px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 660;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.tools-sec-badge.is-installed {
+  color: #7ad7a6;
+  background: rgba(94, 207, 151, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(94, 207, 151, 0.16);
+}
+
+.tools-sec-badge.is-pending {
+  color: #8dbdff;
+  background: rgba(107, 158, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(107, 158, 255, 0.18);
+}
+
+.tools-sec-empty {
+  margin-top: 0;
+}
+
+[data-theme="light"] .tools-sec-stat {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(236, 244, 255, 0.72));
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+[data-theme="light"] .tools-sec-badge.is-installed {
+  color: #0f8a54;
+  background: rgba(34, 197, 94, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.14);
+}
+
+[data-theme="light"] .tools-sec-badge.is-pending {
+  color: #2563eb;
+  background: rgba(59, 130, 246, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.16);
+}
+
 .sec-fallback {
   padding: 20px 14px;
   text-align: center;
@@ -20455,76 +20697,268 @@ body {
   display: none !important;
 }
 
-/* Header row: no in-page title (workspace topbar already has it).
-   Keep only the right-side action cluster (view mode icons, config
-   store button, openclaw config-view toggle) and right-align it. */
-.shell-v2 .config-editor-page .cfg-editor-header {
-  padding: 0 4px 10px;
-  border: 0;
-  background: transparent;
-  justify-content: flex-end;
+.shell-v2 .config-editor-page .config-editor-shell-head {
+  margin-bottom: 18px;
+  padding: 18px 20px;
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(107, 158, 255, 0.1) 0%, transparent 56%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015));
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 26px rgba(0, 0, 0, 0.12);
 }
-
-/* Main layout: the old 2-column split (form left / raw right) stays
-   functional; we just tune spacing and kill the heavy dividers. */
-.shell-v2 .config-editor-page .config-editor-layout {
+[data-theme="light"] .shell-v2 .config-editor-page .config-editor-shell-head {
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.08) 0%, transparent 56%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.66));
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 6px 18px rgba(15, 23, 42, 0.05);
+}
+.shell-v2 .config-editor-page .config-editor-shell-main {
   gap: 18px;
 }
-
-/* Section card → flat section with uppercase head, matching the
-   console + dashboard pattern. Details/summary still works as before
-   for collapse behavior. */
-.shell-v2 .config-editor-page .cfg-section {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  margin: 0 0 18px;
+.shell-v2 .config-editor-page .config-editor-shell-copy {
+  gap: 10px;
+}
+.shell-v2 .config-editor-page .config-editor-shell-eyebrow {
+  color: var(--s2-faint);
+}
+.shell-v2 .config-editor-page .config-editor-shell-tool,
+.shell-v2 .config-editor-page .config-editor-shell-meta-item {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+.shell-v2 .config-editor-page .config-editor-shell-tool {
+  color: var(--s2-accent);
+  border-color: rgba(107, 158, 255, 0.2);
+  background: rgba(107, 158, 255, 0.1);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .config-editor-shell-tool,
+[data-theme="light"] .shell-v2 .config-editor-page .config-editor-shell-meta-item {
+  border-color: rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.76);
+}
+.shell-v2 .config-editor-page .config-editor-shell-title {
+  font-size: 1.42rem;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+  color: var(--s2-text);
+}
+.shell-v2 .config-editor-page .config-editor-shell-subtitle {
+  color: var(--s2-muted);
+}
+.shell-v2 .config-editor-page #configEditorActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.shell-v2 .config-editor-page .cfg-editor-search-anchor {
+  flex-shrink: 0;
+}
+.shell-v2 .config-editor-page .cfg-editor-header {
+  margin: 0;
   padding: 0;
-  transition: none;
+  border: 0;
+  background: transparent;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.shell-v2 .config-editor-page .cfg-editor-header-right {
+  gap: 10px;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+}
+.shell-v2 .config-editor-page .cfg3-secondary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--s2-text);
+  cursor: pointer;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+.shell-v2 .config-editor-page .cfg3-secondary-btn:hover {
+  background: rgba(107, 158, 255, 0.12);
+  color: var(--s2-accent);
+  box-shadow:
+    inset 0 0 0 1px rgba(107, 158, 255, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .cfg3-secondary-btn {
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .cfg3-secondary-btn:hover {
+  background: rgba(59, 130, 246, 0.08);
+  color: #2563eb;
+  box-shadow:
+    inset 0 0 0 1px rgba(59, 130, 246, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+.shell-v2 .config-editor-page .cfg-view-icons {
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.shell-v2 .config-editor-page .cfg-view-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--s2-faint);
+}
+.shell-v2 .config-editor-page .cfg-view-icon:hover {
+  color: var(--s2-text);
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+.shell-v2 .config-editor-page .cfg-view-icon.active {
+  color: var(--s2-accent);
+  background: rgba(107, 158, 255, 0.12) !important;
+}
+[data-theme="light"] .shell-v2 .config-editor-page .cfg-view-icons {
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+.shell-v2 .config-editor-page .oc-header-config-switch .tiny-btn {
+  min-width: 48px;
+  height: 32px;
+  border-radius: 8px;
+}
+.shell-v2 .config-editor-page .config-editor-shell-meta-item {
+  color: var(--s2-muted);
+}
+
+/* Secondary toolbar: view mode, raw drawer and config store live here,
+   visually quieter than the primary save action above. */
+.shell-v2 .config-editor-page .cfg-editor-header {
+  padding-top: 4px;
+}
+
+/* Main layout */
+.shell-v2 .config-editor-page .config-editor-layout {
+  gap: 20px;
+}
+.shell-v2 .page-view[data-page="configEditor"] .config-editor-layout[data-view-mode="form"] .config-editor-side {
+  display: block !important;
+}
+.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="form"] .config-editor-main {
+  max-width: 1180px;
+  width: 100%;
+}
+.shell-v2 .config-editor-page .config-editor-main[data-tool-editor] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Form surface: dense glass cards with tighter spacing. */
+.shell-v2 .config-editor-page .cfg-section {
+  margin: 0;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.018)),
+    radial-gradient(120% 140% at 0% 0%, rgba(107, 158, 255, 0.08) 0%, transparent 55%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 28px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  overflow: hidden;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
 }
 .shell-v2 .config-editor-page .cfg-section:hover {
-  border: 0;
+  border-color: rgba(107, 158, 255, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.022)),
+    radial-gradient(120% 140% at 0% 0%, rgba(107, 158, 255, 0.1) 0%, transparent 58%);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .cfg-section {
+  border-color: rgba(15, 23, 42, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.76)),
+    radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.08) 0%, transparent 55%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 8px 18px rgba(15, 23, 42, 0.06);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .cfg-section:hover {
+  border-color: rgba(59, 130, 246, 0.16);
 }
 .shell-v2 .config-editor-page .cfg-section-header {
-  padding: 14px 4px 8px;
-  font-size: 0.64rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--s2-faint);
-  gap: 8px;
+  padding: 14px 16px 12px;
+  font-size: 0.84rem;
+  font-weight: 620;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--s2-text);
+  gap: 10px;
 }
 .shell-v2 .config-editor-page .cfg-section-header:hover {
-  color: var(--s2-muted);
+  color: var(--s2-text);
 }
 .shell-v2 .config-editor-page .cfg-section-header > svg:first-child {
-  color: var(--s2-muted);
-  opacity: 0.8;
+  color: var(--s2-accent);
+  opacity: 0.92;
 }
 .shell-v2 .config-editor-page .cfg-section-header > span {
   flex: 1;
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
 }
 .shell-v2 .config-editor-page .cfg-section-chevron {
   color: var(--s2-faint);
-  opacity: 0.55;
+  opacity: 0.7;
 }
 .shell-v2 .config-editor-page .cfg-section[open] > .cfg-section-header .cfg-section-chevron {
-  color: var(--s2-muted);
+  color: var(--s2-accent);
 }
 .shell-v2 .config-editor-page .cfg-section-body {
-  padding: 2px 4px 8px;
+  padding: 0 16px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .cfg-section-body {
+  border-top-color: rgba(15, 23, 42, 0.06);
+}
+.shell-v2 .config-editor-page .editor-grid.dense-grid,
+.shell-v2 .config-editor-page .dense-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 12px;
+}
+.shell-v2 .config-editor-page .field,
+.shell-v2 .config-editor-page .field-wide {
+  min-width: 0;
 }
 
 /* Form fields: inputs/selects/textareas share one quiet surface so
-   they read as flat rows, not pills on a dark card. */
+   they read as one compact glass system. */
 .shell-v2 .config-editor-page .field > span,
 .shell-v2 .config-editor-page label.field > span {
-  font-size: 0.7rem;
-  font-weight: 500;
+  font-size: 0.68rem;
+  font-weight: 560;
   color: var(--s2-muted);
-  letter-spacing: -0.005em;
-  margin-bottom: 5px;
+  letter-spacing: 0.01em;
+  margin-bottom: 6px;
 }
 
 .shell-v2 .config-editor-page .field input[type="text"],
@@ -20535,22 +20969,39 @@ body {
 .shell-v2 .config-editor-page .config-number-row input,
 .shell-v2 .config-editor-page .select-wrap select {
   width: 100%;
-  height: 36px;
-  padding: 0 12px;
-  font-size: 0.78rem;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 0.76rem;
   color: var(--s2-text);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  box-shadow: none;
-  transition: border-color 140ms ease, background 140ms ease;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
 }
 .shell-v2 .config-editor-page .field textarea {
   height: auto;
-  min-height: 72px;
-  padding: 8px 12px;
-  line-height: 1.5;
+  min-height: 80px;
+  padding: 9px 11px;
+  line-height: 1.45;
   resize: vertical;
+}
+.shell-v2 .config-editor-page .select-wrap {
+  min-height: 32px;
+  border-radius: 10px !important;
+}
+.shell-v2 .config-editor-page .select-wrap select {
+  padding-right: 32px;
+}
+.shell-v2 .config-editor-page .model-combobox > input {
+  height: 32px;
+  padding-right: 32px;
+}
+.shell-v2 .config-editor-page .model-combobox-toggle {
+  right: 3px;
+  width: 22px;
+  height: 22px !important;
+  border-radius: 8px !important;
 }
 [data-theme="light"] .shell-v2 .config-editor-page .field input[type="text"],
 [data-theme="light"] .shell-v2 .config-editor-page .field input[type="search"],
@@ -20559,8 +21010,9 @@ body {
 [data-theme="light"] .shell-v2 .config-editor-page .field textarea,
 [data-theme="light"] .shell-v2 .config-editor-page .config-number-row input,
 [data-theme="light"] .shell-v2 .config-editor-page .select-wrap select {
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.82);
   border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 .shell-v2 .config-editor-page .field input:hover,
 .shell-v2 .config-editor-page .field textarea:hover,
@@ -20574,8 +21026,24 @@ body {
 .shell-v2 .config-editor-page .select-wrap select:focus {
   outline: none;
   border-color: var(--s2-accent);
-  background: rgba(107, 158, 255, 0.04);
+  background: rgba(107, 158, 255, 0.08);
   box-shadow: 0 0 0 3px var(--s2-accent-glow);
+}
+.shell-v2 .config-editor-page .config-number-control {
+  gap: 6px;
+}
+.shell-v2 .config-editor-page .config-number-row,
+.shell-v2 .config-editor-page .path-input-group {
+  gap: 6px;
+}
+.shell-v2 .config-editor-page .config-number-row .tiny-btn,
+.shell-v2 .config-editor-page .path-actions-row .tiny-btn {
+  height: 32px;
+  border-radius: 10px !important;
+}
+.shell-v2 .config-editor-page .path-actions-row {
+  gap: 6px;
+  margin-top: 6px;
 }
 
 /* Custom select wrap: its existing ::after chevron stays; just let
@@ -20612,32 +21080,75 @@ body {
 
 /* Field hint: was a floating tooltip — simplify to inline muted text. */
 .shell-v2 .config-editor-page .config-field-hint {
-  font-size: 0.66rem;
+  font-size: 0.64rem;
   color: var(--s2-faint);
-  margin-top: 6px;
-  line-height: 1.5;
+  margin-top: 5px;
+  line-height: 1.45;
 }
 
 /* Form section headline + description (e.g. "表单配置 / 常用 Codex 配置…") */
 .shell-v2 .config-editor-page .config-main-section-head {
-  padding: 4px 4px 14px;
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
-  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02)),
+    radial-gradient(110% 130% at 0% 0%, rgba(107, 158, 255, 0.1) 0%, transparent 55%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 14px 32px rgba(0, 0, 0, 0.12);
+  margin-bottom: 2px;
 }
 [data-theme="light"] .shell-v2 .config-editor-page .config-main-section-head {
-  border-bottom-color: rgba(15, 23, 42, 0.06);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.82)),
+    radial-gradient(110% 130% at 0% 0%, rgba(59, 130, 246, 0.08) 0%, transparent 55%);
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 8px 18px rgba(15, 23, 42, 0.05);
 }
 .shell-v2 .config-editor-page .config-main-title {
-  font-size: 1.1rem;
-  font-weight: 650;
+  font-size: 1rem;
+  font-weight: 670;
   color: var(--s2-text);
   letter-spacing: -0.01em;
 }
 .shell-v2 .config-editor-page .config-main-desc {
-  margin-top: 4px;
-  font-size: 0.72rem;
+  margin-top: 0;
+  font-size: 0.7rem;
   color: var(--s2-muted);
-  line-height: 1.5;
+  line-height: 1.45;
+}
+.shell-v2 .config-editor-page .toggle-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+.shell-v2 .config-editor-page .toggle-item {
+  gap: 9px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.shell-v2 .config-editor-page .toggle-item span {
+  font-size: 0.74rem;
+  color: var(--s2-muted);
+}
+.shell-v2 .config-editor-page .toggle-item:hover {
+  background: rgba(107, 158, 255, 0.08);
+  border-color: rgba(107, 158, 255, 0.16);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .toggle-item {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .toggle-item:hover {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.14);
 }
 
 /* Raw code side panel: glass, same treatment the console hero uses. */
@@ -20653,36 +21164,48 @@ body {
 }
 
 /* ============================================================
-   Config Editor v3 — hero chips + drawer + simplified topbar
+   Config Editor v3 — drawer + simplified topbar
    ============================================================ */
 
 /* Topbar action buttons: one primary, three icon-only secondary. */
-.shell-v2 #configEditorActions .cfg3-icon-btn {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+.shell-v2 .config-editor-page #configEditorActions .cfg3-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   border: 0;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.04);
   color: var(--s2-muted);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 140ms ease, color 140ms ease;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
-.shell-v2 #configEditorActions .cfg3-icon-btn:hover {
+.shell-v2 .config-editor-page #configEditorActions .cfg3-icon-btn:hover {
   background: rgba(107, 158, 255, 0.12);
   color: var(--s2-accent);
+  box-shadow: inset 0 0 0 1px rgba(107, 158, 255, 0.24);
 }
-[data-theme="light"] .shell-v2 #configEditorActions .cfg3-icon-btn:hover {
+.shell-v2 .config-editor-page .cfg-editor-search-toggle {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+}
+[data-theme="light"] .shell-v2 .config-editor-page #configEditorActions .cfg3-icon-btn {
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+[data-theme="light"] .shell-v2 .config-editor-page #configEditorActions .cfg3-icon-btn:hover {
   background: rgba(59, 130, 246, 0.1);
   color: #2563eb;
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.16);
 }
-.shell-v2 #configEditorActions .cfg3-primary-btn {
-  height: 34px;
-  padding: 0 18px;
+.shell-v2 .config-editor-page #configEditorActions .cfg3-primary-btn {
+  height: 36px;
+  padding: 0 16px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   background: linear-gradient(180deg, #4f86ff, #3d6dff);
   color: #fff;
   font-size: 0.8rem;
@@ -20691,129 +21214,41 @@ body {
   box-shadow: 0 2px 10px rgba(60, 110, 255, 0.28);
   transition: transform 140ms ease, box-shadow 140ms ease;
 }
-.shell-v2 #configEditorActions .cfg3-primary-btn:hover {
+.shell-v2 .config-editor-page #configEditorActions .cfg3-primary-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 14px rgba(60, 110, 255, 0.4);
 }
-
-/* Hero: 5 chips in a glass card on top of the form. */
-.shell-v2 .cfg3-hero {
-  padding: 16px 18px 14px;
-  border-radius: 16px;
-  background:
-    radial-gradient(120% 140% at 0% 0%, rgba(107, 158, 255, 0.09) 0%, transparent 55%),
-    linear-gradient(160deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01));
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 8px 20px rgba(0, 0, 0, 0.12);
-  margin-bottom: 16px;
-}
-[data-theme="light"] .shell-v2 .cfg3-hero {
-  background:
-    radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.08) 0%, transparent 55%),
-    linear-gradient(160deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6));
-  box-shadow:
-    inset 0 0 0 1px rgba(15, 23, 42, 0.05),
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    0 4px 14px rgba(15, 23, 42, 0.05);
-}
-.shell-v2 .cfg3-hero-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-.shell-v2 .cfg3-hero-title {
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--s2-faint);
-}
-.shell-v2 .cfg3-hero-drawer-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: transparent;
-  color: var(--s2-muted);
-  border-radius: 7px;
-  font-size: 0.68rem;
-  cursor: pointer;
-  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
-}
-.shell-v2 .cfg3-hero-drawer-btn:hover {
-  background: rgba(107, 158, 255, 0.1);
-  color: var(--s2-accent);
-  border-color: rgba(107, 158, 255, 0.3);
-}
-[data-theme="light"] .shell-v2 .cfg3-hero-drawer-btn {
-  border-color: rgba(15, 23, 42, 0.08);
-}
-[data-theme="light"] .shell-v2 .cfg3-hero-drawer-btn:hover {
-  background: rgba(59, 130, 246, 0.08);
-  color: #2563eb;
-}
-.shell-v2 .cfg3-hero-chips {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 10px;
-}
-.shell-v2 .cfg3-chip {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 9px 14px;
+.shell-v2 .config-editor-page .config-store-btn {
+  height: 34px;
+  padding: 0 12px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  text-align: left;
-  cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
-  min-width: 0;
-}
-.shell-v2 .cfg3-chip:hover {
-  transform: translateY(-1px);
-  border-color: rgba(107, 158, 255, 0.28);
-  background: rgba(107, 158, 255, 0.06);
-}
-[data-theme="light"] .shell-v2 .cfg3-chip {
-  background: rgba(255, 255, 255, 0.7);
-  border-color: rgba(15, 23, 42, 0.06);
-}
-.shell-v2 .cfg3-chip-value {
-  font-size: 0.92rem;
-  font-weight: 650;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
   color: var(--s2-text);
-  letter-spacing: -0.005em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
-.shell-v2 .cfg3-chip-label {
-  font-size: 0.6rem;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.shell-v2 .config-editor-page .config-store-btn::before {
+  display: none;
+}
+.shell-v2 .config-editor-page .config-store-btn:hover {
+  background: rgba(107, 158, 255, 0.1);
+  border-color: rgba(107, 158, 255, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(107, 158, 255, 0.08);
+  transform: none;
+}
+.shell-v2 .config-editor-page .config-store-hint {
+  margin-left: 0;
   color: var(--s2-faint);
 }
-.shell-v2 .cfg3-chip-accent .cfg3-chip-value { color: var(--s2-accent); }
-.shell-v2 .cfg3-chip-warn { border-color: rgba(234, 167, 51, 0.35); }
-.shell-v2 .cfg3-chip-warn .cfg3-chip-value { color: #fbbf24; }
-[data-theme="light"] .shell-v2 .cfg3-chip-warn .cfg3-chip-value { color: #b45309; }
-
-/* Focus pulse — brief highlight when a hero chip click scrolls to a field. */
-.shell-v2 .cfg3-focus-pulse {
-  animation: cfg3-pulse 1.2s ease-out;
+[data-theme="light"] .shell-v2 .config-editor-page .config-store-btn {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
 }
-@keyframes cfg3-pulse {
-  0%   { box-shadow: 0 0 0 0 rgba(107, 158, 255, 0.55); }
-  60%  { box-shadow: 0 0 0 8px rgba(107, 158, 255, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(107, 158, 255, 0); }
+[data-theme="light"] .shell-v2 .config-editor-page .config-store-btn:hover {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.16);
 }
 
 /* Form layout in v3: single column, full width. Drops the old 2-column
@@ -20822,17 +21257,10 @@ body {
   display: block;
   grid-template-columns: none;
 }
-.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="form"] .config-editor-main {
-  max-width: 960px;
-  width: 100%;
-}
 .shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] {
   display: block;
 }
 .shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] .config-editor-main {
-  display: none;
-}
-.shell-v2 .config-editor-page .config-editor-layout[data-view-mode="code"] .cfg3-hero {
   display: none;
 }
 /* In code mode the drawer takes the full editor space. */
@@ -20878,6 +21306,8 @@ body {
     radial-gradient(130% 150% at 100% 0%, rgba(107, 158, 255, 0.1) 0%, transparent 55%),
     linear-gradient(190deg, rgba(28, 32, 48, 0.96), rgba(20, 24, 38, 0.98));
   box-shadow: -12px 0 32px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(26px) saturate(150%);
+  -webkit-backdrop-filter: blur(26px) saturate(150%);
   transform: translateX(100%);
   transition: transform 220ms cubic-bezier(0.22, 0.9, 0.28, 1);
   z-index: 50;
@@ -20897,7 +21327,7 @@ body {
   align-items: center;
   justify-content: space-between;
   padding-bottom: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
 }
 [data-theme="light"] .shell-v2 .cfg3-drawer-head { border-bottom-color: rgba(15, 23, 42, 0.08); }
@@ -20924,6 +21354,70 @@ body {
 .shell-v2 .cfg3-drawer-close:hover {
   background: rgba(239, 82, 82, 0.14);
   color: #ef5252;
+}
+.shell-v2 .config-editor-page .config-side-section {
+  gap: 12px;
+}
+.shell-v2 .config-editor-page .config-side-section .subline {
+  align-items: center;
+  gap: 10px;
+}
+.shell-v2 .config-editor-page .cfg-raw-tabs {
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.shell-v2 .config-editor-page .cfg-raw-tabs::before {
+  background: rgba(107, 158, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(107, 158, 255, 0.1);
+}
+.shell-v2 .config-editor-page .raw-code-editor {
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 16px 36px rgba(0, 0, 0, 0.2);
+}
+[data-theme="light"] .shell-v2 .config-editor-page .raw-code-editor {
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 10px 24px rgba(15, 23, 42, 0.08);
+}
+.shell-v2 .config-editor-page .toml-hint {
+  color: var(--s2-faint);
+}
+
+@media (max-width: 960px) {
+  .shell-v2 .config-editor-page .cfg-editor-header {
+    align-items: stretch;
+  }
+  .shell-v2 .config-editor-page .cfg-editor-header-right {
+    width: 100%;
+  }
+  .shell-v2 .config-editor-page .editor-grid.dense-grid,
+  .shell-v2 .config-editor-page .dense-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .shell-v2 .config-editor-page .cfg-editor-header-right {
+    gap: 8px;
+  }
+  .shell-v2 .config-editor-page .cfg3-secondary-btn span,
+  .shell-v2 .config-editor-page .config-store-hint {
+    display: none;
+  }
+  .shell-v2 .config-editor-page .editor-grid.dense-grid,
+  .shell-v2 .config-editor-page .dense-grid,
+  .shell-v2 .config-editor-page .toggle-grid {
+    grid-template-columns: 1fr;
+  }
+  .shell-v2 .config-editor-page .config-main-section-head,
+  .shell-v2 .config-editor-page .cfg-section-header,
+  .shell-v2 .config-editor-page .cfg-section-body {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
 }
 
 @media (max-width: 720px) {

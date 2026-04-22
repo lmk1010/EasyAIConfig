@@ -650,6 +650,106 @@ function filterToolCatalogItems(items = []) {
   });
 }
 
+function compareToolCatalogSidebarItems(a, b) {
+  const kindOrder = { tool: 0, desktop: 1, ecosystem: 2 };
+  const aOrder = kindOrder[a.kind] ?? 9;
+  const bOrder = kindOrder[b.kind] ?? 9;
+  if (aOrder !== bOrder) return aOrder - bOrder;
+  return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN');
+}
+
+function getToolsSidebarBadge(item) {
+  if (item.installed) return item.kind === 'ecosystem' ? '已就绪' : '已安装';
+  return item.kind === 'ecosystem' ? '待配置' : '待安装';
+}
+
+function renderToolsSidebarEmpty(title, detail) {
+  return `
+    <div class="sec-empty tools-sec-empty">
+      ${escapeHtml(title)}
+      ${detail ? `<span>${escapeHtml(detail)}</span>` : ''}
+    </div>
+  `;
+}
+
+function renderToolsSidebarItem(item) {
+  const active = getToolsCatalogQuery() === normalizeStoreText(item.name || '');
+  const subtitle = [item.typeLabel, item.version].filter(Boolean).join(' · ');
+  const badge = getToolsSidebarBadge(item);
+  return `
+    <button
+      type="button"
+      class="sec-item tools-sec-item ${active ? 'active' : ''}"
+      data-tools-side-id="${escapeHtml(item.id)}"
+      data-tools-side-query="${escapeHtml(item.name)}"
+      data-tools-side-tag="${item.installed ? 'installed' : 'all'}"
+    >
+      <span class="tools-sec-ico tool-icon tool-icon-${item.iconId}">
+        ${toolIconSvg(item.iconId)}
+      </span>
+      <span class="sec-text">
+        <span class="sec-name">${escapeHtml(item.name)}</span>
+        <span class="sec-subtitle">${escapeHtml(subtitle)}</span>
+      </span>
+      <span class="tools-sec-badge ${item.installed ? 'is-installed' : 'is-pending'}">${escapeHtml(badge)}</span>
+    </button>
+  `;
+}
+
+function bindToolsSecondaryPanel() {
+  const body = el('secondaryBody');
+  if (!body || body._toolsSidebarBound) return;
+  body._toolsSidebarBound = true;
+  body.addEventListener('click', (event) => {
+    const item = event.target.closest('.sec-item[data-tools-side-id]');
+    if (!item || state.activePage !== 'tools') return;
+    state.toolsCatalogQuery = item.dataset.toolsSideQuery || '';
+    state.toolsCatalogTag = item.dataset.toolsSideTag || 'all';
+    state.toolsCatalogPage = 1;
+    const searchInput = el('toolsCatalogSearchInput');
+    if (searchInput) searchInput.value = state.toolsCatalogQuery;
+    renderToolsPage();
+  });
+}
+
+function renderToolsSecondaryPanel() {
+  const installedList = el('toolsInstalledList');
+  const pendingList = el('toolsPendingList');
+  if (!installedList || !pendingList) return;
+  bindToolsSecondaryPanel();
+
+  const installedCount = el('toolsSideInstalledCount');
+  const pendingCount = el('toolsSidePendingCount');
+  const installedMeta = el('toolsInstalledMeta');
+  const pendingMeta = el('toolsPendingMeta');
+
+  if (!state.tools.length) {
+    if (installedCount) installedCount.textContent = '0';
+    if (pendingCount) pendingCount.textContent = '0';
+    if (installedMeta) installedMeta.textContent = '读取中';
+    if (pendingMeta) pendingMeta.textContent = '读取中';
+    installedList.innerHTML = renderToolsSidebarEmpty('正在读取工具状态', '安装状态和扩展集成会显示在这里');
+    pendingList.innerHTML = '';
+    return;
+  }
+
+  const items = getToolCatalogItems().sort(compareToolCatalogSidebarItems);
+  const installedItems = items.filter((item) => item.installed);
+  const pendingItems = items.filter((item) => item.supported && !item.installed);
+
+  if (installedCount) installedCount.textContent = String(installedItems.length);
+  if (pendingCount) pendingCount.textContent = String(pendingItems.length);
+  if (installedMeta) installedMeta.textContent = `${installedItems.length} 项`;
+  if (pendingMeta) pendingMeta.textContent = `${pendingItems.length} 项`;
+
+  installedList.innerHTML = installedItems.length
+    ? installedItems.slice(0, 6).map((item) => renderToolsSidebarItem(item)).join('')
+    : renderToolsSidebarEmpty('还没有已安装项', '先从右侧列表安装 CLI、桌面版或扩展');
+  pendingList.innerHTML = pendingItems.length
+    ? pendingItems.slice(0, 5).map((item) => renderToolsSidebarItem(item)).join('')
+    : renderToolsSidebarEmpty('当前已补齐', '没有待处理的安装或配置项');
+}
+
 function renderToolCardActions(item, actionSvgs) {
   if (item.kind === 'tool') {
     const tool = item.tool;
@@ -746,6 +846,7 @@ function bindToolsCatalogControls() {
 
 function renderToolsPage() {
   const grid = document.querySelector('.tools-page .tools-grid');
+  renderToolsSecondaryPanel();
   if (!grid || !state.tools.length) return;
   bindToolsCatalogControls();
 
@@ -8797,6 +8898,8 @@ function switchConfigEditorView(view) {
   });
   // Apply view mode
   layout.dataset.viewMode = view;
+  closeCfg3Drawer();
+  syncConfigEditorShellView(view);
   refreshRawCodeEditors();
 }
 
@@ -10093,6 +10196,7 @@ function setPage(page = 'quick') {
   document.querySelectorAll('[data-page]').forEach((node) => {
     node.classList.toggle('active', node.dataset.page === page);
   });
+  if (page !== 'configEditor') closeCfg3Drawer();
   if (el('pageEyebrow')) el('pageEyebrow').textContent = meta.eyebrow;
   if (el('pageTitle')) el('pageTitle').textContent = meta.title;
   if (el('pageSubtitle')) el('pageSubtitle').textContent = meta.subtitle;
@@ -10127,9 +10231,7 @@ function setPage(page = 'quick') {
   }
   if (page === 'configEditor') {
     applyConfigEditorSearch();
-    // Populate hero chips on page entry — populateConfigEditor isn't
-    // always called on setPage (it re-runs only after state reloads).
-    try { renderCfg3Hero(getConfigEditorTool()); } catch (_) {}
+    renderConfigEditorShell(getConfigEditorTool());
   }
   if (page === 'systemSettings') {
     renderSystemSettingsPage();
@@ -10481,6 +10583,65 @@ function normalizeConfigEditorTool(toolId = '') {
   return 'codex';
 }
 
+function getConfigEditorShellMeta(toolId = '') {
+  const tool = normalizeConfigEditorTool(toolId);
+  const table = {
+    codex: {
+      label: 'Codex',
+      title: 'Codex 配置编辑',
+      subtitle: '优先用表单调整模型、审批和上下文，复杂项再展开原始 config.toml 与 auth.json。',
+      files: 'config.toml / auth.json',
+      drawerTitle: '原始文件 · config.toml / auth.json',
+    },
+    claudecode: {
+      label: 'Claude Code',
+      title: 'Claude Code 配置编辑',
+      subtitle: '整理模型、登录方式与 Provider，必要时直接修改 settings.json。',
+      files: 'settings.json',
+      drawerTitle: '原始文件 · settings.json',
+    },
+    opencode: {
+      label: 'OpenCode',
+      title: 'OpenCode 配置编辑',
+      subtitle: '集中维护默认模型、Provider 与实验配置，原始 opencode.json 仍可随时打开。',
+      files: 'opencode.json',
+      drawerTitle: '原始文件 · opencode.json',
+    },
+    openclaw: {
+      label: 'OpenClaw',
+      title: 'OpenClaw 配置编辑',
+      subtitle: '把常用运行项和高级 JSON 分层整理，先调主路径，再补充完整运行配置。',
+      files: 'openclaw.json',
+      drawerTitle: '原始文件 · openclaw.json',
+    },
+  };
+  return table[tool] || table.codex;
+}
+
+function syncConfigEditorShellView(view = '') {
+  const modeEl = el('configEditorShellMode');
+  if (modeEl) modeEl.textContent = view === 'code' ? '原始文件全屏' : '表单编辑';
+  const drawerBtn = el('cfg3OpenDrawerBtn');
+  if (drawerBtn) drawerBtn.classList.toggle('hide', view === 'code');
+}
+
+function renderConfigEditorShell(toolId = '') {
+  const meta = getConfigEditorShellMeta(toolId || getConfigEditorTool());
+  const toolEl = el('configEditorShellTool');
+  const titleEl = el('configEditorShellTitle');
+  const subtitleEl = el('configEditorShellSubtitle');
+  const fileEl = el('configEditorShellFile');
+  const drawerTitleEl = el('cfg3DrawerTitle');
+  const drawerBtn = el('cfg3OpenDrawerBtn');
+  if (toolEl) toolEl.textContent = meta.label;
+  if (titleEl) titleEl.textContent = meta.title;
+  if (subtitleEl) subtitleEl.textContent = meta.subtitle;
+  if (fileEl) fileEl.textContent = meta.files;
+  if (drawerTitleEl) drawerTitleEl.textContent = meta.drawerTitle;
+  if (drawerBtn) drawerBtn.title = `查看 ${meta.files}`;
+  syncConfigEditorShellView(el('configEditorLayout')?.dataset.viewMode || 'form');
+}
+
 function getConfigEditorTool() {
   return normalizeConfigEditorTool(state.configEditorTool);
 }
@@ -10735,79 +10896,6 @@ async function pickDirectoryPath(targetInputId, { title = '选择目录' } = {})
   target.value = json.data.path || '';
 }
 
-// ─── Config editor v3 hero chips ────────────────────────────────
-// Shows 5 at-a-glance chips (model / provider / sandbox / approval /
-// reasoning) so users immediately see "what's set right now" without
-// hunting through the form. Each chip is clickable and scrolls +
-// highlights the corresponding input.
-function renderCfg3Hero(tool) {
-  const host = document.getElementById('cfg3HeroChips');
-  if (!host) return;
-  tool = tool || (typeof getConfigEditorTool === 'function' ? getConfigEditorTool() : 'codex');
-  const esc = typeof escapeHtml === 'function' ? escapeHtml : ((s) => String(s ?? ''));
-
-  const chipsFor = {
-    codex: () => {
-      const cfg = state.current?.config || {};
-      const summary = state.current?.summary || {};
-      return [
-        { label: '模型',    value: summary.model || cfg.model || '—', target: 'cfgModelInput', tone: 'accent' },
-        { label: 'Provider', value: summary.modelProvider || cfg.model_provider || '—', target: 'cfgProviderInput' },
-        { label: '沙箱',    value: summary.sandboxMode || cfg.sandbox_mode || 'read-only', target: 'cfgSandboxSelect',
-          tone: /danger/i.test(summary.sandboxMode || cfg.sandbox_mode || '') ? 'warn' : '' },
-        { label: '审批',    value: summary.approvalPolicy || cfg.approval_policy || '默认', target: 'cfgApprovalSelect' },
-        { label: '推理',    value: summary.reasoningEffort || cfg.model_reasoning_effort || '默认', target: 'cfgReasoningSelect' },
-      ];
-    },
-    claudecode: () => {
-      const cc = state.claudeCodeState || {};
-      const login = cc.login || {};
-      return [
-        { label: '账号',    value: login.email || login.orgName || (login.loggedIn ? 'OAuth' : '未登录'), tone: 'accent' },
-        { label: '认证',    value: login.loggedIn ? (login.method === 'oauth' ? 'OAuth' : 'API Key') : '未认证' },
-        { label: '模型',    value: cc.model || '由 Claude 决定' },
-        { label: 'Think',   value: cc.alwaysThinkingEnabled ? '开启' : '关闭' },
-        { label: '危险权限', value: cc.skipDangerousModePermissionPrompt ? '已跳过' : '保持提示',
-          tone: cc.skipDangerousModePermissionPrompt ? 'warn' : '' },
-      ];
-    },
-    opencode: () => {
-      const oc = state.opencodeState || {};
-      const active = oc.activeProvider || null;
-      return [
-        { label: '模型',    value: oc.model || '—', tone: 'accent' },
-        { label: 'Small',   value: oc.smallModel || '—' },
-        { label: 'Provider', value: active?.key || '—' },
-        { label: 'auth',    value: oc.activeAuth?.key || '—' },
-        { label: '作用域',  value: oc.scope === 'project' ? '项目级' : '全局' },
-      ];
-    },
-    openclaw: () => {
-      const ow = state.openclawState || {};
-      const gatewayUp = Boolean(ow.gatewayStatus?.ok || ow.gatewayRunning);
-      return [
-        { label: 'Gateway', value: gatewayUp ? '运行中' : '未运行', tone: gatewayUp ? 'accent' : 'warn' },
-        { label: '端口',    value: String(ow.gatewayPort || '—') },
-        { label: '端口监听', value: ow.gatewayPortListening ? '活跃' : '—' },
-        { label: '版本',    value: ow.binary?.version || '未知' },
-        { label: '安装',    value: ow.binary?.installed ? '已安装' : '未安装' },
-      ];
-    },
-  };
-
-  const getChips = chipsFor[tool] || chipsFor.codex;
-  const chips = getChips();
-  host.innerHTML = chips.map((c) => {
-    const targetAttr = c.target ? `data-cfg3-focus="${esc(c.target)}"` : '';
-    const toneCls = c.tone ? ` cfg3-chip-${esc(c.tone)}` : '';
-    return `
-      <button type="button" class="cfg3-chip${toneCls}" ${targetAttr}>
-        <span class="cfg3-chip-value">${esc(String(c.value))}</span>
-        <span class="cfg3-chip-label">${esc(c.label)}</span>
-      </button>`;
-  }).join('');
-}
-
 function openCfg3Drawer() {
   const drawer = document.getElementById('cfg3Drawer');
   const scrim = document.getElementById('cfg3DrawerScrim');
@@ -10831,10 +10919,6 @@ function populateConfigEditor() {
   syncConfigEditorForTool();
 
   const tool = getConfigEditorTool();
-
-  // Refresh the v3 hero chips (top-of-page snapshot) every time the form
-  // is re-populated so they stay in sync with the underlying config.
-  try { renderCfg3Hero(tool); } catch (_) { /* hero is optional chrome */ }
 
   if (tool === 'openclaw') {
     populateOpenClawConfigEditor();
@@ -11235,6 +11319,7 @@ function applyConfigEditorSearch() {
 /** Show/hide the correct editor panel and sidebar based on active tool. */
 function syncConfigEditorForTool() {
   const tool = getConfigEditorTool();
+  renderConfigEditorShell(tool);
   const tabs = document.getElementById('configEditorTabs');
   if (tabs) tabs.dataset.activeTool = tool;
   document.querySelectorAll('[data-tool-editor]').forEach(section => {
@@ -18360,27 +18445,6 @@ function bindEvents() {
       populateConfigEditor();
 
       if (window.refreshCustomSelects) window.refreshCustomSelects();
-    });
-  }
-
-  // Config Editor v3: hero chip click → scroll to + focus target input.
-  const cfgHeroChipsHost = document.getElementById('cfg3HeroChips');
-  if (cfgHeroChipsHost) {
-    cfgHeroChipsHost.addEventListener('click', (e) => {
-      const chip = e.target instanceof Element ? e.target.closest('[data-cfg3-focus]') : null;
-      if (!chip) return;
-      const targetId = chip.getAttribute('data-cfg3-focus');
-      if (!targetId) return;
-      const target = document.getElementById(targetId);
-      if (!target) return;
-      // Ensure the <details> ancestor is open so the field is visible.
-      let ancestor = target.closest('details.cfg-section');
-      if (ancestor && !ancestor.open) ancestor.open = true;
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // Brief highlight so user sees where we landed.
-      target.classList.add('cfg3-focus-pulse');
-      setTimeout(() => target.classList.remove('cfg3-focus-pulse'), 1400);
-      if (typeof target.focus === 'function') setTimeout(() => target.focus({ preventScroll: true }), 260);
     });
   }
 
