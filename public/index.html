@@ -278,6 +278,19 @@
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
+              <button type="button" class="sec-item" data-dashboard-rail-tool="opencode" style="--accent-a:#cbd7ff;--accent-b:#6b86ff">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 7l8-4 8 4v10l-8 4-8-4z" opacity="0.5" />
+                    <path d="M12 3v18M4 7l8 4 8-4" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">OpenCode</span>
+                  <span class="sec-subtitle">本地 sqlite 用量</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
               <button type="button" class="sec-item" data-dashboard-rail-tool="openclaw" style="--accent-a:#d5c5ff;--accent-b:#8162d6">
                 <span class="sec-ico">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1445,7 +1458,7 @@
                         <label class="field"><span>Provider 名称</span><input id="opCfgProviderNameInput" placeholder="如 My Gateway" /></label>
                         <label class="field"><span>Base URL</span><input id="opCfgBaseUrlInput" placeholder="https://your-provider.com/v1" /></label>
                         <label class="field"><span>API Key</span><input id="opCfgApiKeyInput" type="password" placeholder="留空表示保持当前" /></label>
-                        <label class="field"><span>Provider 包</span><input id="opCfgProviderPackageInput" placeholder="默认 @ai-sdk/openai-compatible" /></label>
+                        <label class="field"><span>Provider 包</span><input id="opCfgProviderPackageInput" placeholder="留空按 Provider 类型自动处理" /></label>
                       </div>
                     </div>
                   </details>
@@ -1461,6 +1474,34 @@
                         <label class="field field-wide"><span>认证文件路径</span><input id="opCfgAuthPath" readonly placeholder="~/.local/share/opencode/auth.json" /></label>
                         <label class="field field-wide"><span>已配置 Provider</span><textarea id="opCfgProvidersSummary" rows="3" readonly placeholder="暂无"></textarea></label>
                       </div>
+                    </div>
+                  </details>
+                  <details class="cfg-section" open>
+                    <summary class="cfg-section-header">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10"/><path d="M8 3v10"/><circle cx="8" cy="8" r="5.5"/></svg>
+                      <span>实际能力</span>
+                      <svg class="cfg-section-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                    </summary>
+                    <div class="cfg-section-body">
+                      <div class="editor-grid dense-grid">
+                        <div class="field field-wide">
+                          <span>配置加载顺序</span>
+                          <div id="opCfgLoadOrder" class="feature-list"></div>
+                        </div>
+                        <div class="field field-wide">
+                          <span>内置 Providers</span>
+                          <div id="opCfgBuiltinProviders" class="chips"></div>
+                        </div>
+                        <div class="field">
+                          <span>认证能力</span>
+                          <div id="opCfgAuthCapabilities" class="chips"></div>
+                        </div>
+                        <div class="field">
+                          <span>目录能力</span>
+                          <div id="opCfgDirectoryCapabilities" class="chips"></div>
+                        </div>
+                      </div>
+                      <div id="opCfgCapabilityMeta" class="inline-meta">当前页会对照 OpenCode 实际 schema 展示 Provider、auth 与目录能力。</div>
                     </div>
                   </details>
                   <details class="cfg-section">
@@ -1488,7 +1529,7 @@
                           <label class="field"><span>Provider 名称</span><input id="opProviderFormName" placeholder="例如 公司网关" /></label>
                           <label class="field"><span>Base URL</span><input id="opProviderFormBaseUrl" placeholder="https://your-provider.com/v1" /></label>
                           <label class="field"><span>默认模型 ID</span><input id="opProviderFormModelId" placeholder="例如 gpt-5 / claude-sonnet-4-5" /></label>
-                          <label class="field"><span>Provider 包</span><input id="opProviderFormPackage" placeholder="默认 @ai-sdk/openai-compatible" /></label>
+                          <label class="field"><span>Provider 包</span><input id="opProviderFormPackage" placeholder="留空按 Provider 类型自动处理" /></label>
                           <div class="field field-wide op-provider-model-field">
                             <span>模型列表</span>
                             <div class="cc-provider-toolbar op-provider-model-toolbar">
@@ -1558,8 +1599,14 @@
                         <label class="field"><span>General 模型</span><input id="opCfgAgentGeneralModelInput" placeholder="如 anthropic/claude-sonnet-4-5" /></label>
                         <label class="field"><span>General 步数</span><input id="opCfgAgentGeneralStepsInput" inputmode="numeric" placeholder="如 8" /></label>
                         <label class="field"><span>General 温度</span><input id="opCfgAgentGeneralTemperatureInput" inputmode="decimal" placeholder="如 0.3" /></label>
+                        <label class="field"><span>Explore 模型</span><input id="opCfgAgentExploreModelInput" placeholder="如 openai/gpt-5-mini" /></label>
+                        <label class="field"><span>Explore 步数</span><input id="opCfgAgentExploreStepsInput" inputmode="numeric" placeholder="如 6" /></label>
+                        <label class="field"><span>Title 模型</span><input id="opCfgAgentTitleModelInput" placeholder="如 openai/gpt-5-nano" /></label>
+                        <label class="field"><span>Summary 模型</span><input id="opCfgAgentSummaryModelInput" placeholder="如 openai/gpt-5-mini" /></label>
+                        <label class="field"><span>Compaction 模型</span><input id="opCfgAgentCompactionModelInput" placeholder="如 anthropic/claude-sonnet-4-5" /></label>
+                        <label class="field"><span>Compaction 步数</span><input id="opCfgAgentCompactionStepsInput" inputmode="numeric" placeholder="如 4" /></label>
                       </div>
-                      <div class="inline-meta">这里先做最常用的 3 个 Agent；更多字段继续放在下面的 JSON 分片里。</div>
+                      <div class="inline-meta">已补齐 OpenCode 内置 Agent 名称；颜色、权限、prompt、options 等高级项继续放在下面的 JSON 分片里。</div>
                     </div>
                   </details>
                   <details class="cfg-section">
@@ -1580,8 +1627,13 @@
                         <label class="field"><span>List</span><div class="select-wrap"><select id="opCfgPermissionListSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
                         <label class="field"><span>WebFetch</span><div class="select-wrap"><select id="opCfgPermissionWebFetchSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
                         <label class="field"><span>WebSearch</span><div class="select-wrap"><select id="opCfgPermissionWebSearchSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
+                        <label class="field"><span>CodeSearch</span><div class="select-wrap"><select id="opCfgPermissionCodeSearchSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
                         <label class="field"><span>Skill</span><div class="select-wrap"><select id="opCfgPermissionSkillSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
                         <label class="field"><span>LSP</span><div class="select-wrap"><select id="opCfgPermissionLspSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
+                        <label class="field"><span>ExternalDir</span><div class="select-wrap"><select id="opCfgPermissionExternalDirectorySelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
+                        <label class="field"><span>TodoRead</span><div class="select-wrap"><select id="opCfgPermissionTodoReadSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
+                        <label class="field"><span>TodoWrite</span><div class="select-wrap"><select id="opCfgPermissionTodoWriteSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
+                        <label class="field"><span>DoomLoop</span><div class="select-wrap"><select id="opCfgPermissionDoomLoopSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
                         <label class="field"><span>提问</span><div class="select-wrap"><select id="opCfgPermissionQuestionSelect"><option value="">默认</option><option value="ask">ask</option><option value="allow">allow</option><option value="deny">deny</option></select></div></label>
                       </div>
                       <div class="inline-meta">更复杂的路径规则 / 对象规则，继续放在 Permission JSON 里。</div>

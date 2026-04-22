@@ -372,12 +372,34 @@ function createCodexUsageTotals() {
   };
 }
 
+function createOpenCodeUsageTotals() {
+  return {
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cacheRead: 0,
+    cacheCreation: 0,
+    total: 0,
+    cost: 0,
+  };
+}
+
 function addCodexUsageTotals(target, usage = {}) {
   target.input += Number(usage.input_tokens || 0);
   target.cachedInput += Number(usage.cached_input_tokens || 0);
   target.output += Number(usage.output_tokens || 0);
   target.reasoning += Number(usage.reasoning_output_tokens || 0);
   target.total += Number(usage.total_tokens || 0);
+}
+
+function addOpenCodeUsageTotals(target, usage = {}) {
+  target.input += Number(usage.input || 0);
+  target.output += Number(usage.output || 0);
+  target.reasoning += Number(usage.reasoning || 0);
+  target.cacheRead += Number(usage.cacheRead || 0);
+  target.cacheCreation += Number(usage.cacheCreation || 0);
+  target.total += Number(usage.total || 0);
+  target.cost += Number(usage.cost || 0);
 }
 
 function normalizeCodexUsageSnapshot(usage = {}) {
@@ -961,6 +983,152 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
   // Save to cache for future fast loads
   await saveCodexUsageToDashboardCacheSqlite(normalizedCodexHome, dayCount, metrics);
   return metrics;
+}
+
+export async function getOpenCodeUsageMetrics({ days = 30 } = {}) {
+  const dayCount = Math.max(1, Math.min(90, Number(days) || 30));
+  const dbPath = path.join(openCodeGlobalDataDir(), 'opencode.db');
+  const emptyMetrics = () => ({
+    ok: true,
+    days: dayCount,
+    source: dbPath,
+    sourceType: 'sqlite',
+    generatedAt: new Date().toISOString(),
+    totals: createOpenCodeUsageTotals(),
+    daily: [],
+    providers: [],
+    models: [],
+    sessions: [],
+  });
+
+  if (!existsSync(dbPath)) return emptyMetrics();
+
+  const sqlite3Path = commandExists('sqlite3');
+  if (!sqlite3Path) {
+    return {
+      ...emptyMetrics(),
+      sourceType: 'sqlite3-unavailable',
+    };
+  }
+
+  const sql = `
+    SELECT
+      m.id,
+      m.session_id,
+      m.time_created,
+      s.time_updated AS session_time_updated,
+      s.title,
+      s.directory,
+      COALESCE(json_extract(m.data, '$.providerID'), '') AS provider_id,
+      COALESCE(json_extract(m.data, '$.modelID'), '') AS model_id,
+      COALESCE(json_extract(m.data, '$.cost'), 0) AS cost,
+      COALESCE(json_extract(m.data, '$.tokens.input'), 0) AS input,
+      COALESCE(json_extract(m.data, '$.tokens.output'), 0) AS output,
+      COALESCE(json_extract(m.data, '$.tokens.reasoning'), 0) AS reasoning,
+      COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0) AS cache_read,
+      COALESCE(json_extract(m.data, '$.tokens.cache.write'), 0) AS cache_write,
+      COALESCE(
+        json_extract(m.data, '$.tokens.total'),
+        COALESCE(json_extract(m.data, '$.tokens.input'), 0)
+          + COALESCE(json_extract(m.data, '$.tokens.output'), 0)
+          + COALESCE(json_extract(m.data, '$.tokens.reasoning'), 0)
+          + COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0)
+          + COALESCE(json_extract(m.data, '$.tokens.cache.write'), 0)
+      ) AS total
+    FROM message m
+    JOIN session s ON s.id = m.session_id
+    WHERE m.time_created >= (strftime('%s', 'now', '-${dayCount} days') * 1000)
+      AND json_extract(m.data, '$.role') = 'assistant'
+    ORDER BY m.time_created DESC
+  `.replace(/\s+/g, ' ').trim();
+
+  const result = await runCommand(sqlite3Path, ['-json', dbPath, sql]);
+  if (!result.ok) {
+    throw new Error((result.stderr || result.stdout || '读取 OpenCode 用量失败').trim());
+  }
+
+  let rows = [];
+  try {
+    rows = JSON.parse(String(result.stdout || '[]'));
+  } catch {
+    rows = [];
+  }
+  if (!Array.isArray(rows) || !rows.length) return emptyMetrics();
+
+  const totals = createOpenCodeUsageTotals();
+  const byDay = new Map();
+  const byProvider = new Map();
+  const byModel = new Map();
+  const bySession = new Map();
+
+  for (const row of rows) {
+    const usage = {
+      input: Math.max(0, Number(row?.input || 0)),
+      output: Math.max(0, Number(row?.output || 0)),
+      reasoning: Math.max(0, Number(row?.reasoning || 0)),
+      cacheRead: Math.max(0, Number(row?.cache_read || 0)),
+      cacheCreation: Math.max(0, Number(row?.cache_write || 0)),
+      total: Math.max(0, Number(row?.total || 0)),
+      cost: Math.max(0, Number(row?.cost || 0)),
+    };
+    if (!usage.total && !usage.cost) continue;
+
+    const createdAt = normalizeUnixTimestampMs(row?.time_created || row?.session_time_updated || 0);
+    if (!createdAt) continue;
+    const date = new Date(createdAt).toISOString().slice(0, 10);
+    const provider = String(row?.provider_id || '').trim() || 'unknown';
+    const model = String(row?.model_id || '').trim() || 'unknown';
+    const sessionId = String(row?.session_id || row?.id || '').trim();
+
+    addOpenCodeUsageTotals(totals, usage);
+
+    if (!byDay.has(date)) byDay.set(date, createOpenCodeUsageTotals());
+    addOpenCodeUsageTotals(byDay.get(date), usage);
+
+    if (!byProvider.has(provider)) byProvider.set(provider, { provider, totals: createOpenCodeUsageTotals(), events: 0 });
+    addOpenCodeUsageTotals(byProvider.get(provider).totals, usage);
+    byProvider.get(provider).events += 1;
+
+    if (!byModel.has(model)) byModel.set(model, { model, totals: createOpenCodeUsageTotals(), events: 0 });
+    addOpenCodeUsageTotals(byModel.get(model).totals, usage);
+    byModel.get(model).events += 1;
+
+    if (!bySession.has(sessionId)) {
+      bySession.set(sessionId, {
+        sessionId,
+        title: String(row?.title || '').trim(),
+        cwd: String(row?.directory || '').trim(),
+        provider,
+        model,
+        updatedAt: createdAt,
+        ...createOpenCodeUsageTotals(),
+      });
+    }
+    const session = bySession.get(sessionId);
+    session.updatedAt = Math.max(Number(session.updatedAt || 0), createdAt);
+    if (session.provider === 'unknown' && provider !== 'unknown') session.provider = provider;
+    if (session.model === 'unknown' && model !== 'unknown') session.model = model;
+    addOpenCodeUsageTotals(session, usage);
+  }
+
+  return {
+    ok: true,
+    days: dayCount,
+    source: dbPath,
+    sourceType: 'sqlite',
+    generatedAt: new Date().toISOString(),
+    totals,
+    daily: [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, sum]) => ({ date, ...sum })),
+    providers: [...byProvider.values()].sort((a, b) => b.totals.total - a.totals.total),
+    models: [...byModel.values()].sort((a, b) => b.totals.total - a.totals.total),
+    sessions: [...bySession.values()]
+      .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+      .slice(0, 12)
+      .map((item) => ({
+        ...item,
+        updatedAt: new Date(Number(item.updatedAt || Date.now())).toISOString(),
+      })),
+  };
 }
 
 function appHome() {
@@ -1924,6 +2092,39 @@ function firstExistingPath(paths = [], fallbackPath = '') {
   return fallbackPath || paths.find(Boolean) || '';
 }
 
+const OPENCODE_BUILTIN_PROVIDER_CATALOG = [
+  { key: 'opencode', name: 'OpenCode', recommendedPackage: '', defaultBaseUrl: '' },
+  { key: 'anthropic', name: 'Anthropic', recommendedPackage: '@ai-sdk/anthropic', defaultBaseUrl: 'https://api.anthropic.com' },
+  { key: 'openai', name: 'OpenAI', recommendedPackage: '@ai-sdk/openai', defaultBaseUrl: 'https://api.openai.com/v1' },
+  { key: 'google', name: 'Google', recommendedPackage: '@ai-sdk/google', defaultBaseUrl: '' },
+  { key: 'google-vertex', name: 'Google Vertex', recommendedPackage: '@ai-sdk/google-vertex', defaultBaseUrl: '' },
+  { key: 'github-copilot', name: 'GitHub Copilot', recommendedPackage: '@ai-sdk/github-copilot', defaultBaseUrl: '' },
+  { key: 'amazon-bedrock', name: 'Amazon Bedrock', recommendedPackage: '@ai-sdk/amazon-bedrock', defaultBaseUrl: '' },
+  { key: 'azure', name: 'Azure OpenAI', recommendedPackage: '@ai-sdk/azure', defaultBaseUrl: '' },
+  { key: 'openrouter', name: 'OpenRouter', recommendedPackage: '@openrouter/ai-sdk-provider', defaultBaseUrl: 'https://openrouter.ai/api/v1' },
+  { key: 'mistral', name: 'Mistral', recommendedPackage: '@ai-sdk/mistral', defaultBaseUrl: 'https://api.mistral.ai/v1' },
+  { key: 'gitlab', name: 'GitLab', recommendedPackage: '', defaultBaseUrl: '' },
+];
+
+const OPENCODE_LOAD_ORDER = [
+  'Remote .well-known/opencode 组织默认',
+  '全局 ~/.config/opencode/opencode.json(c)',
+  'OPENCODE_CONFIG 自定义路径',
+  '项目 opencode.json(c)',
+  '.opencode 目录与其下 agents / commands / plugins / modes',
+  'OPENCODE_CONFIG_CONTENT 内联配置',
+  '账号远程配置',
+  '企业 managed config',
+];
+
+const OPENCODE_DIRECTORY_FEATURES = [
+  '.opencode/opencode.json(c)',
+  '.opencode/agents/**/*.md',
+  '.opencode/commands/**/*.md',
+  '.opencode/plugins/*.{js,ts}',
+  '.opencode/modes/*.md',
+];
+
 function resolveOpenCodePaths({ scope = 'global', projectPath = '' } = {}) {
   if (scope === 'project') {
     if (!projectPath || !projectPath.trim()) throw new Error('Project path is required for project scope');
@@ -2019,6 +2220,16 @@ function findOpenCodeAuthEntry(authEntries = [], providerKey = '', baseUrl = '')
       || (normalizedBaseUrl && authKey === normalizedBaseUrl)
     );
   }) || null;
+}
+
+function getOpenCodeBuiltinProviderMeta(key = '') {
+  const normalizedKey = normalizeOpenCodeProviderKey(key);
+  return OPENCODE_BUILTIN_PROVIDER_CATALOG.find((item) => item.key === normalizedKey) || null;
+}
+
+function isLikelyOpenCodeProviderKey(key = '') {
+  const text = String(key || '').trim();
+  return Boolean(text) && !/^https?:\/\//i.test(text) && !text.includes('/');
 }
 
 function applyPatch(target, patch) {
@@ -4791,14 +5002,31 @@ export async function loadOpenCodeState(options = {}) {
   const authJson = parseOpenCodeAuthJson(rawAuth);
   const authEntries = summarizeOpenCodeAuthEntries(authJson);
   const binary = findToolBinary('opencode');
-  const providers = Object.entries(config.provider || {}).map(([key, value]) => {
+  const providerMap = config.provider && typeof config.provider === 'object' ? config.provider : {};
+  const model = String(config.model || '').trim();
+  const smallModel = String(config.small_model || '').trim();
+  const providerKeys = new Set(Object.keys(providerMap || {}));
+  const modelProviderKey = openCodeProviderFromModel(model);
+  const smallModelProviderKey = openCodeProviderFromModel(smallModel);
+  if (modelProviderKey) providerKeys.add(modelProviderKey);
+  if (smallModelProviderKey) providerKeys.add(smallModelProviderKey);
+  authEntries.forEach((entry) => {
+    if (!isLikelyOpenCodeProviderKey(entry?.key)) return;
+    providerKeys.add(normalizeOpenCodeProviderKey(entry.key));
+  });
+  const providers = [...providerKeys].map((key) => {
+    const value = providerMap[key] || {};
+    const builtin = getOpenCodeBuiltinProviderMeta(key);
     const matchedAuth = findOpenCodeAuthEntry(authEntries, key, value?.options?.baseURL || '');
     const hasApiKey = Boolean(String(value?.options?.apiKey || '').trim());
     return {
       key,
-      name: value?.name || key,
+      name: value?.name || builtin?.name || key,
       npm: value?.npm || '',
-      baseUrl: value?.options?.baseURL || '',
+      recommendedPackage: builtin?.recommendedPackage || '',
+      builtin: Boolean(builtin),
+      configured: Boolean(providerMap[key]),
+      baseUrl: value?.options?.baseURL || builtin?.defaultBaseUrl || '',
       hasApiKey,
       hasAuth: Boolean(matchedAuth),
       hasCredential: hasApiKey || Boolean(matchedAuth),
@@ -4807,8 +5035,6 @@ export async function loadOpenCodeState(options = {}) {
       modelIds: Object.keys(value?.models || {}),
     };
   });
-  const model = String(config.model || '').trim();
-  const smallModel = String(config.small_model || '').trim();
   const activeProviderKey = openCodeProviderFromModel(model) || providers[0]?.key || '';
   const activeProvider = providers.find((item) => item.key === activeProviderKey) || null;
   const activeAuth = findOpenCodeAuthEntry(authEntries, activeProviderKey, activeProvider?.baseUrl || '');
@@ -4830,6 +5056,9 @@ export async function loadOpenCodeState(options = {}) {
     activeAuth,
     authEntries,
     providers,
+    builtinProviders: OPENCODE_BUILTIN_PROVIDER_CATALOG,
+    loadOrder: OPENCODE_LOAD_ORDER,
+    directoryFeatures: OPENCODE_DIRECTORY_FEATURES,
   };
 }
 

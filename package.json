@@ -1,6 +1,6 @@
 {
   "name": "easyaiconfig",
-  "version": "1.0.46",
+  "version": "1.0.47",
   "description": "EasyAIConfig desktop and local UI for configuring Codex providers, models, and common settings.",
   "type": "module",
   "bin": {

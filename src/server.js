@@ -16,6 +16,7 @@ import {
   getProviderSecret,
   getCodexReleaseInfo,
   getCodexUsageMetrics,
+  getOpenCodeUsageMetrics,
   listCodexSessions,
   getSystemStorageState,
   installClaudeCode,
@@ -1087,6 +1088,16 @@ app.get('/api/dashboard/codex-usage', async (req, res) => {
     }
   });
 
+app.get('/api/dashboard/opencode-usage', async (req, res) => {
+    try {
+      ok(res, { data: await getOpenCodeUsageMetrics({
+        days: req.query.days || undefined,
+      }) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
   app.get('/api/codex-app/state', async (_req, res) => {
     try {
       ok(res, { data: getCodexAppState() });
@@ -1549,4 +1560,3 @@ app.get('/api/opencode/ecosystem/state', async (req, res) => {
 
   return { app, server, url, localApiToken };
 }
-

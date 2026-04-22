@@ -74,7 +74,7 @@ const state = {
   consoleTool: 'codex',
   dashboardTool: 'codex',
   dashboardDays: Number(localStorage.getItem('easyaiconfig_dashboard_days') || 30) || 30,
-  dashboardMetrics: { codex: null },
+  dashboardMetrics: { codex: null, opencode: null },
   dashboardLoading: false,
   dashboardRefreshing: false,
   dashboardMetricsFetchedAt: 0,
@@ -2552,6 +2552,89 @@ function openCodeProviderKeyFromModel(model = '') {
   return text.includes('/') ? text.split('/')[0] : '';
 }
 
+const OPENCODE_BUILTIN_PROVIDER_CATALOG = [
+  { key: 'opencode', name: 'OpenCode', recommendedPackage: '', defaultBaseUrl: '' },
+  { key: 'anthropic', name: 'Anthropic', recommendedPackage: '@ai-sdk/anthropic', defaultBaseUrl: 'https://api.anthropic.com' },
+  { key: 'openai', name: 'OpenAI', recommendedPackage: '@ai-sdk/openai', defaultBaseUrl: 'https://api.openai.com/v1' },
+  { key: 'google', name: 'Google', recommendedPackage: '@ai-sdk/google', defaultBaseUrl: '' },
+  { key: 'google-vertex', name: 'Google Vertex', recommendedPackage: '@ai-sdk/google-vertex', defaultBaseUrl: '' },
+  { key: 'github-copilot', name: 'GitHub Copilot', recommendedPackage: '@ai-sdk/github-copilot', defaultBaseUrl: '' },
+  { key: 'amazon-bedrock', name: 'Amazon Bedrock', recommendedPackage: '@ai-sdk/amazon-bedrock', defaultBaseUrl: '' },
+  { key: 'azure', name: 'Azure OpenAI', recommendedPackage: '@ai-sdk/azure', defaultBaseUrl: '' },
+  { key: 'openrouter', name: 'OpenRouter', recommendedPackage: '@openrouter/ai-sdk-provider', defaultBaseUrl: 'https://openrouter.ai/api/v1' },
+  { key: 'mistral', name: 'Mistral', recommendedPackage: '@ai-sdk/mistral', defaultBaseUrl: 'https://api.mistral.ai/v1' },
+  { key: 'gitlab', name: 'GitLab', recommendedPackage: '', defaultBaseUrl: '' },
+];
+
+function getOpenCodeBuiltinProviderMeta(key = '') {
+  const normalizedKey = String(key || '').trim();
+  if (!normalizedKey) return null;
+  return OPENCODE_BUILTIN_PROVIDER_CATALOG.find((item) => item.key === normalizeOpenCodeProviderKey(normalizedKey)) || null;
+}
+
+function getOpenCodeProviderHintKey({ providerKey = '', baseUrl = '' } = {}) {
+  const rawKey = String(providerKey || '').trim();
+  if (rawKey) return normalizeOpenCodeProviderKey(rawKey);
+  const inferred = inferProviderKey(normalizeBaseUrl(baseUrl));
+  return inferred ? normalizeOpenCodeProviderKey(inferred) : '';
+}
+
+function getOpenCodeProviderPackagePlaceholder(providerKey = '') {
+  const builtin = getOpenCodeBuiltinProviderMeta(providerKey);
+  if (!builtin) return '留空走默认 @ai-sdk/openai-compatible';
+  if (builtin.recommendedPackage) return `内置推荐 ${builtin.recommendedPackage}`;
+  return '内置 Provider，一般无需额外 npm 包';
+}
+
+function setOpenCodeProviderPackageField(inputId, { providerKey = '', npm = '' } = {}) {
+  const input = el(inputId);
+  if (!input) return;
+  input.value = npm || '';
+  input.placeholder = getOpenCodeProviderPackagePlaceholder(providerKey);
+}
+
+function buildOpenCodeProviderFromRuntimeMeta(runtime = {}) {
+  const provider = {};
+  if (runtime?.name && runtime.name !== runtime.key) provider.name = runtime.name;
+  if (runtime?.npm) provider.npm = runtime.npm;
+  if (runtime?.baseUrl) provider.options = { baseURL: runtime.baseUrl };
+  const modelIds = normalizeOpenCodeProviderModelIds(runtime?.modelIds || []);
+  if (modelIds.length) {
+    provider.models = {};
+    modelIds.forEach((modelId) => {
+      provider.models[modelId] = {};
+    });
+  }
+  return provider;
+}
+
+function getOpenCodeProviderEditorMap() {
+  const configMap = cloneJson(getOpenCodeConfigEditorProviderMap() || {});
+  const merged = cloneJson(configMap || {});
+  (state.opencodeState?.providers || []).forEach((runtime) => {
+    const providerKey = String(runtime?.key || '').trim();
+    if (!providerKey) return;
+    const runtimeProvider = buildOpenCodeProviderFromRuntimeMeta(runtime);
+    const currentProvider = cloneJson(merged[providerKey] || {});
+    const nextProvider = { ...runtimeProvider, ...currentProvider };
+    const options = { ...(runtimeProvider.options || {}), ...(currentProvider.options || {}) };
+    const models = { ...(runtimeProvider.models || {}), ...(currentProvider.models || {}) };
+    if (isEmptyConfigValue(options)) delete nextProvider.options;
+    else nextProvider.options = options;
+    if (isEmptyConfigValue(models)) delete nextProvider.models;
+    else nextProvider.models = models;
+    merged[providerKey] = nextProvider;
+  });
+  return merged;
+}
+
+function getOpenCodeEditorProviderByKey(providerKey = '') {
+  const key = String(providerKey || '').trim();
+  if (!key) return null;
+  const providerMap = getOpenCodeProviderEditorMap();
+  return providerMap[key] ? cloneJson(providerMap[key]) : null;
+}
+
 function getOpenCodeConfiguredModels(data = {}) {
   const models = new Set();
   if (data.model) models.add(data.model);
@@ -2579,6 +2662,76 @@ function formatOpenCodeAuthExpiry(value = '') {
   if (!value) return '';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function renderOpenCodeCapabilitySummary(data = {}, { currentProviderKey = '' } = {}) {
+  const loadOrderEl = el('opCfgLoadOrder');
+  const builtinProvidersEl = el('opCfgBuiltinProviders');
+  const authCapabilitiesEl = el('opCfgAuthCapabilities');
+  const directoryCapabilitiesEl = el('opCfgDirectoryCapabilities');
+  const metaEl = el('opCfgCapabilityMeta');
+  const loadOrder = Array.isArray(data.loadOrder) && data.loadOrder.length ? data.loadOrder : [];
+  const builtinProviders = Array.isArray(data.builtinProviders) && data.builtinProviders.length
+    ? data.builtinProviders
+    : OPENCODE_BUILTIN_PROVIDER_CATALOG;
+  const authEntries = Array.isArray(data.authEntries) ? data.authEntries : [];
+  const directoryFeatures = Array.isArray(data.directoryFeatures) ? data.directoryFeatures : [];
+  const configuredKeys = new Set(Object.keys(getOpenCodeConfigEditorProviderMap() || {}).map((key) => normalizeOpenCodeProviderKey(key)));
+  const runtimeKeys = new Set((data.providers || []).map((provider) => normalizeOpenCodeProviderKey(provider?.key || '')).filter(Boolean));
+  const authKeys = new Set(authEntries.map((entry) => normalizeOpenCodeProviderKey(entry?.key || '')).filter(Boolean));
+  const authTypes = new Set(authEntries.map((entry) => String(entry?.type || '').trim().toLowerCase()).filter(Boolean));
+  const activeBuiltin = getOpenCodeBuiltinProviderMeta(currentProviderKey);
+
+  if (loadOrderEl) {
+    loadOrderEl.innerHTML = loadOrder.length
+      ? loadOrder.map((item, index) => `<div class="feature-row"><span>${index + 1}</span><strong>${escapeHtml(item)}</strong></div>`).join('')
+      : '<div class="inline-meta">暂无加载顺序信息</div>';
+  }
+
+  if (builtinProvidersEl) {
+    builtinProvidersEl.innerHTML = builtinProviders.map((provider) => {
+      const providerKey = normalizeOpenCodeProviderKey(provider?.key || '');
+      const markers = [];
+      if (configuredKeys.has(providerKey)) markers.push('已写入');
+      else if (runtimeKeys.has(providerKey)) markers.push('已识别');
+      if (authKeys.has(providerKey)) markers.push('auth');
+      const label = markers.length ? `${providerKey} · ${markers.join(' · ')}` : providerKey;
+      const tone = providerKey === currentProviderKey ? 'ok' : ((configuredKeys.has(providerKey) || runtimeKeys.has(providerKey) || authKeys.has(providerKey)) ? 'muted' : '');
+      return `<span class="provider-pill ${tone}">${escapeHtml(label)}</span>`;
+    }).join('');
+  }
+
+  if (authCapabilitiesEl) {
+    const authCapabilityChips = [
+      { label: 'oauth 登录', active: authTypes.has('oauth') },
+      { label: 'api key', active: authTypes.has('api') },
+      { label: '.well-known token', active: authTypes.has('wellknown') },
+      ...authEntries.slice(0, 4).map((entry) => ({
+        label: `${entry.key} · ${entry.type}`,
+        active: Boolean(entry?.hasCredential),
+      })),
+    ];
+    authCapabilitiesEl.innerHTML = authCapabilityChips.length
+      ? authCapabilityChips.map((item) => `<span class="provider-pill ${item.active ? 'ok' : 'muted'}">${escapeHtml(item.label)}</span>`).join('')
+      : '<span class="provider-pill muted">暂无 auth.json 记录</span>';
+  }
+
+  if (directoryCapabilitiesEl) {
+    directoryCapabilitiesEl.innerHTML = directoryFeatures.length
+      ? directoryFeatures.map((item) => `<span class="provider-pill muted">${escapeHtml(item)}</span>`).join('')
+      : '<span class="provider-pill muted">暂无目录能力信息</span>';
+  }
+
+  if (metaEl) {
+    metaEl.textContent = [
+      `已识别 ${runtimeKeys.size} 个可用 Provider`,
+      `auth.json ${authEntries.length} 条记录`,
+      `当前默认 ${currentProviderKey || '未设置'}`,
+      activeBuiltin?.recommendedPackage
+        ? `留空可走内置推荐 ${activeBuiltin.recommendedPackage}`
+        : (activeBuiltin ? '留空即可走内置 Provider' : '自定义网关可留空走默认 openai-compatible'),
+    ].join('，');
+  }
 }
 
 function getOpenCodeProviderByKey(key = '') {
@@ -2732,7 +2885,7 @@ function setOpenCodeProviderDraftModelIds(modelIds = [], { syncInput = true } = 
 function buildOpenCodeProviderFromFormPreview() {
   const form = readOpenCodeProviderEditorForm();
   if (!form) return { providerKey: '', provider: null };
-  const providerMap = getOpenCodeConfigEditorProviderMap();
+  const providerMap = getOpenCodeProviderEditorMap();
   const baseProvider = cloneJson(
     providerMap[form.providerKey]
     || ((form.originalKey && form.originalKey !== '__new__') ? providerMap[form.originalKey] : null)
@@ -2862,7 +3015,7 @@ function populateOpenCodeProviderEditorForm(provider = null, providerKey = '') {
   setValue('opProviderFormName', target.name || '');
   setValue('opProviderFormBaseUrl', target.options?.baseURL || runtime?.baseUrl || '');
   setValue('opProviderFormModelId', modelIds[0] || '');
-  setValue('opProviderFormPackage', target.npm || '@ai-sdk/openai-compatible');
+  setOpenCodeProviderPackageField('opProviderFormPackage', { providerKey: key, npm: target.npm || '' });
   setValue('opProviderFormWhitelist', Array.isArray(target.whitelist) ? target.whitelist.join(', ') : '');
   setValue('opProviderFormBlacklist', Array.isArray(target.blacklist) ? target.blacklist.join(', ') : '');
   setValue('opProviderFormEnterpriseUrl', target.options?.enterpriseUrl || '');
@@ -2892,7 +3045,7 @@ function readOpenCodeProviderEditorForm() {
   const providerKey = normalizeOpenCodeProviderKey(keyInput || (originalKey && originalKey !== '__new__' ? originalKey : '') || inferProviderKey(baseUrl) || '');
   const modelId = modelRaw.includes('/') ? modelRaw.split('/').slice(1).join('/') : modelRaw;
   const modelIds = normalizeOpenCodeProviderModelIds(modelId ? [modelId, ...getOpenCodeProviderDraftModelIds({ includeInput: false })] : getOpenCodeProviderDraftModelIds({ includeInput: false }));
-  const providerPackage = getValue('opProviderFormPackage') || '@ai-sdk/openai-compatible';
+  const providerPackage = getValue('opProviderFormPackage');
   const apiKey = getValue('opProviderFormApiKey');
   const whitelist = parseCsv('opProviderFormWhitelist');
   const blacklist = parseCsv('opProviderFormBlacklist');
@@ -2995,7 +3148,7 @@ function applyOpenCodeProviderToMainEditor(providerKey, provider = null, { setDe
   if (el('opCfgProviderKeyInput')) el('opCfgProviderKeyInput').value = providerKey || '';
   if (el('opCfgProviderNameInput')) el('opCfgProviderNameInput').value = target.name || '';
   if (el('opCfgBaseUrlInput')) el('opCfgBaseUrlInput').value = target.options?.baseURL || '';
-  if (el('opCfgProviderPackageInput')) el('opCfgProviderPackageInput').value = target.npm || '@ai-sdk/openai-compatible';
+  setOpenCodeProviderPackageField('opCfgProviderPackageInput', { providerKey, npm: target.npm || '' });
   if (includeApiKey && target.options?.apiKey && el('opCfgApiKeyInput')) el('opCfgApiKeyInput').value = target.options.apiKey;
   if (el('opCfgProviderWhitelistInput')) el('opCfgProviderWhitelistInput').value = Array.isArray(target.whitelist) ? target.whitelist.join(', ') : '';
   if (el('opCfgProviderBlacklistInput')) el('opCfgProviderBlacklistInput').value = Array.isArray(target.blacklist) ? target.blacklist.join(', ') : '';
@@ -3025,12 +3178,18 @@ function deleteOpenCodeProviderFromEditor() {
     return { ok: true, removed: false };
   }
   const providerMap = getOpenCodeConfigEditorProviderMap();
+  if (!Object.prototype.hasOwnProperty.call(providerMap, providerKey)) {
+    state.openCodeProviderDetailKey = '';
+    state.openCodeProviderDraftModels = [];
+    return { ok: true, removed: false, providerKey };
+  }
   delete providerMap[providerKey];
   writeOpenCodeConfigEditorProviderMap(providerMap);
   if ((el('opCfgProviderKeyInput')?.value || '').trim() === providerKey) {
     if (el('opCfgProviderKeyInput')) el('opCfgProviderKeyInput').value = '';
     if (el('opCfgProviderNameInput')) el('opCfgProviderNameInput').value = '';
     if (el('opCfgBaseUrlInput')) el('opCfgBaseUrlInput').value = '';
+    setOpenCodeProviderPackageField('opCfgProviderPackageInput', { providerKey: '', npm: '' });
   }
   delete state.openCodeProviderHealth[providerKey];
   state.openCodeProviderDraftModels = [];
@@ -3039,8 +3198,15 @@ function deleteOpenCodeProviderFromEditor() {
 }
 
 function renderOpenCodeProviderManager(currentProviderKey = '') {
-  const providerMap = getOpenCodeConfigEditorProviderMap();
-  const providers = Object.entries(providerMap).map(([key, value]) => ({ key, ...(cloneJson(value || {})) }));
+  const providerMap = getOpenCodeProviderEditorMap();
+  const configuredProviderCount = Object.keys(getOpenCodeConfigEditorProviderMap() || {}).length;
+  const providers = Object.entries(providerMap)
+    .map(([key, value]) => ({ key, ...(cloneJson(value || {})) }))
+    .sort((left, right) => {
+      if (left.key === currentProviderKey) return -1;
+      if (right.key === currentProviderKey) return 1;
+      return left.key.localeCompare(right.key);
+    });
   if (state.openCodeProviderDetailKey && state.openCodeProviderDetailKey !== '__new__' && !providers.some((provider) => provider.key === state.openCodeProviderDetailKey)) {
     state.openCodeProviderDetailKey = '';
   }
@@ -3064,7 +3230,7 @@ function renderOpenCodeProviderManager(currentProviderKey = '') {
   if (providerMeta) {
     providerMeta.textContent = query
       ? `搜索结果 ${visibleProviders.length} / ${providers.length}`
-      : (providers.length ? `共 ${providers.length} 个 Provider，可切默认模型` : '支持多 Provider 列表管理，可切默认模型');
+      : (providers.length ? `共 ${providers.length} 个 Provider，其中 ${configuredProviderCount} 个已写入配置` : '支持多 Provider 列表管理，可切默认模型');
   }
   if (providerList) {
     providerList.innerHTML = visibleProviders.length ? visibleProviders.map((provider) => {
@@ -3150,10 +3316,20 @@ function populateOpenCodeConfigEditor() {
     apiInput.value = '';
     apiInput.placeholder = active.maskedApiKey || '留空表示保持当前';
   }
-  el('opCfgProviderPackageInput').value = active.npm || currentProviderConfig.npm || '@ai-sdk/openai-compatible';
+  setOpenCodeProviderPackageField('opCfgProviderPackageInput', {
+    providerKey: currentProviderKey,
+    npm: active.npm || currentProviderConfig.npm || '',
+  });
   el('opCfgConfigPath').value = data.configPath || '~/.config/opencode/opencode.json';
   el('opCfgAuthPath').value = data.authPath || '~/.local/share/opencode/auth.json';
-  el('opCfgProvidersSummary').value = (data.providers || []).map((provider) => `${provider.key} · ${provider.baseUrl || '默认'} · ${(provider.modelIds || []).length} models`).join('\n') || '暂无';
+  el('opCfgProvidersSummary').value = (data.providers || []).map((provider) => {
+    const markers = [];
+    if (provider.builtin) markers.push('内置');
+    if (provider.configured) markers.push('已写入');
+    if (provider.hasAuth) markers.push(provider.authType || 'auth');
+    else if (provider.hasApiKey) markers.push('apiKey');
+    return `${provider.key} · ${provider.baseUrl || '默认'} · ${(provider.modelIds || []).length} models${markers.length ? ` · ${markers.join(' · ')}` : ''}`;
+  }).join('\n') || '暂无';
   if (el('opProviderSearchInput')) el('opProviderSearchInput').value = state.openCodeProviderSearch || '';
 
   setCsv('opCfgProviderWhitelistInput', currentProviderConfig.whitelist);
@@ -3173,6 +3349,12 @@ function populateOpenCodeConfigEditor() {
   setValue('opCfgAgentGeneralModelInput', agentConfig.general?.model || '');
   setValue('opCfgAgentGeneralStepsInput', agentConfig.general?.steps || '');
   setValue('opCfgAgentGeneralTemperatureInput', agentConfig.general?.temperature || '');
+  setValue('opCfgAgentExploreModelInput', agentConfig.explore?.model || '');
+  setValue('opCfgAgentExploreStepsInput', agentConfig.explore?.steps || '');
+  setValue('opCfgAgentTitleModelInput', agentConfig.title?.model || '');
+  setValue('opCfgAgentSummaryModelInput', agentConfig.summary?.model || '');
+  setValue('opCfgAgentCompactionModelInput', agentConfig.compaction?.model || '');
+  setValue('opCfgAgentCompactionStepsInput', agentConfig.compaction?.steps || '');
 
   const permissionConfig = config.permission;
   const permissionMap = typeof permissionConfig === 'string' ? { '*': permissionConfig } : (permissionConfig && typeof permissionConfig === 'object' ? permissionConfig : {});
@@ -3186,8 +3368,13 @@ function populateOpenCodeConfigEditor() {
   setPermissionAction('opCfgPermissionListSelect', permissionMap.list);
   setPermissionAction('opCfgPermissionWebFetchSelect', permissionMap.webfetch);
   setPermissionAction('opCfgPermissionWebSearchSelect', permissionMap.websearch);
+  setPermissionAction('opCfgPermissionCodeSearchSelect', permissionMap.codesearch);
   setPermissionAction('opCfgPermissionSkillSelect', permissionMap.skill);
   setPermissionAction('opCfgPermissionLspSelect', permissionMap.lsp);
+  setPermissionAction('opCfgPermissionExternalDirectorySelect', permissionMap.external_directory);
+  setPermissionAction('opCfgPermissionTodoReadSelect', permissionMap.todoread);
+  setPermissionAction('opCfgPermissionTodoWriteSelect', permissionMap.todowrite);
+  setPermissionAction('opCfgPermissionDoomLoopSelect', permissionMap.doom_loop);
   setPermissionAction('opCfgPermissionQuestionSelect', permissionMap.question);
 
   setValue('opCfgLogLevel', config.logLevel || '');
@@ -3228,6 +3415,7 @@ function populateOpenCodeConfigEditor() {
   writeJsonFragmentInput('opCfgMcpJson', config.mcp || {});
   writeJsonFragmentInput('opCfgFormatterJson', config.formatter);
   writeJsonFragmentInput('opCfgLspJson', config.lsp);
+  renderOpenCodeCapabilitySummary(data, { currentProviderKey });
   renderOpenCodeProviderManager(currentProviderKey);
 
   el('opCfgRawJsonTextarea').value = data.configJson || JSON.stringify(config, null, 2);
@@ -3535,16 +3723,23 @@ function buildOpenCodeConfigFromFields() {
   const providerKeyInput = _sv('opCfgProviderKeyInput');
   const desiredProviderKey = (providerKeyInput || openCodeProviderKeyFromModel(model) || current.activeProviderKey || inferProviderKey(baseUrl) || '').trim();
   const providerKey = normalizeOpenCodeProviderKey(desiredProviderKey || 'custom');
-  const providerNameInput = _sv('opCfgProviderNameInput');
-  const providerName = (inConfigEditor ? providerNameInput : (current.activeProvider?.name || existing.provider?.[providerKey]?.name || providerNameInput || inferProviderLabel(baseUrl) || providerKey)).trim();
-  const providerPackageInput = _sv('opCfgProviderPackageInput');
-  const providerPackage = (inConfigEditor ? providerPackageInput : (current.activeProvider?.npm || existing.provider?.[providerKey]?.npm || providerPackageInput || '@ai-sdk/openai-compatible')).trim();
   const editorApiKey = _sv('opCfgApiKeyInput');
   const quickApiKey = _sv('apiKeyInput');
   const apiKey = (inConfigEditor ? (editorApiKey || quickApiKey || '') : (quickApiKey || editorApiKey || '')).trim();
   const modelParts = model.includes('/') ? model.split('/') : [providerKey, model];
   const finalProviderKey = normalizeOpenCodeProviderKey(modelParts[0] || providerKey || 'custom');
   const modelId = (modelParts.slice(1).join('/') || '').trim();
+  const providerNameInput = _sv('opCfgProviderNameInput');
+  const providerPackageInput = _sv('opCfgProviderPackageInput');
+  const existingProviderConfig = cloneJson(existing.provider?.[finalProviderKey] || {});
+  const activeProviderKey = normalizeOpenCodeProviderKey(current.activeProviderKey || current.activeProvider?.key || '');
+  const runtimeProvider = activeProviderKey === finalProviderKey ? cloneJson(current.activeProvider || {}) : {};
+  const providerName = (inConfigEditor
+    ? providerNameInput
+    : (runtimeProvider.name || existingProviderConfig.name || providerNameInput || inferProviderLabel(baseUrl) || finalProviderKey)).trim();
+  const providerPackage = (inConfigEditor
+    ? providerPackageInput
+    : (existingProviderConfig.npm || runtimeProvider.npm || providerPackageInput || '')).trim();
 
   existing.$schema = existing.$schema || 'https://opencode.ai/config.json';
   _setTop('model', modelId ? `${finalProviderKey}/${modelId}` : undefined);
@@ -3649,17 +3844,29 @@ function buildOpenCodeConfigFromFields() {
   if (inConfigEditor) {
     const agentFragment = readJsonFragmentInput('opCfgAgentJson', 'Agent');
     const agentMap = agentFragment === null ? cloneJson(existing.agent || {}) : _ensureObject(agentFragment, 'Agent');
-    [['build', 'Build'], ['plan', 'Plan'], ['general', 'General']].forEach(([agentKey, label]) => {
+    [
+      ['build', 'Build', { steps: true, temperature: true }],
+      ['plan', 'Plan', { steps: true, temperature: true }],
+      ['general', 'General', { steps: true, temperature: true }],
+      ['explore', 'Explore', { steps: true }],
+      ['title', 'Title', {}],
+      ['summary', 'Summary', {}],
+      ['compaction', 'Compaction', { steps: true }],
+    ].forEach(([agentKey, label, fields]) => {
       const nextAgent = cloneJson(agentMap[agentKey] || {});
       const modelValue = _sv(`opCfgAgent${label}ModelInput`) || undefined;
-      const stepsValue = _int(`opCfgAgent${label}StepsInput`, `${label} 步数`, { min: 1 });
-      const temperatureValue = _float(`opCfgAgent${label}TemperatureInput`, `${label} 温度`);
+      const stepsValue = fields.steps ? _int(`opCfgAgent${label}StepsInput`, `${label} 步数`, { min: 1 }) : undefined;
+      const temperatureValue = fields.temperature ? _float(`opCfgAgent${label}TemperatureInput`, `${label} 温度`) : undefined;
       if (modelValue) nextAgent.model = modelValue;
       else delete nextAgent.model;
-      if (stepsValue !== undefined) nextAgent.steps = stepsValue;
-      else delete nextAgent.steps;
-      if (temperatureValue !== undefined) nextAgent.temperature = temperatureValue;
-      else delete nextAgent.temperature;
+      if (fields.steps) {
+        if (stepsValue !== undefined) nextAgent.steps = stepsValue;
+        else delete nextAgent.steps;
+      }
+      if (fields.temperature) {
+        if (temperatureValue !== undefined) nextAgent.temperature = temperatureValue;
+        else delete nextAgent.temperature;
+      }
       if (isEmptyConfigValue(nextAgent)) delete agentMap[agentKey];
       else agentMap[agentKey] = nextAgent;
     });
@@ -3686,8 +3893,13 @@ function buildOpenCodeConfigFromFields() {
       ['list', 'opCfgPermissionListSelect'],
       ['webfetch', 'opCfgPermissionWebFetchSelect'],
       ['websearch', 'opCfgPermissionWebSearchSelect'],
+      ['codesearch', 'opCfgPermissionCodeSearchSelect'],
       ['skill', 'opCfgPermissionSkillSelect'],
       ['lsp', 'opCfgPermissionLspSelect'],
+      ['external_directory', 'opCfgPermissionExternalDirectorySelect'],
+      ['todoread', 'opCfgPermissionTodoReadSelect'],
+      ['todowrite', 'opCfgPermissionTodoWriteSelect'],
+      ['doom_loop', 'opCfgPermissionDoomLoopSelect'],
       ['question', 'opCfgPermissionQuestionSelect'],
     ].forEach(([permissionKey, inputId]) => {
       const action = _sv(inputId);
@@ -6005,11 +6217,14 @@ function startDashboardAutoRefresh() {
   if (!(Number(state.dashboardAutoRefreshMs) > 0)) return;
 state.dashboardAutoRefreshTimer = setInterval(() => {
     if (state.activePage !== 'dashboard' || document.hidden) return;
-    if (state.dashboardTool === 'claudecode') {
+    const tool = state.dashboardTool || 'codex';
+    if (tool === 'claudecode') {
       ensureClaudeDashboardData().then(() => renderDashboardPage()).catch((e) => console.warn('[dashboardAutoRefresh] ensureClaudeDashboardData failed:', e));
       return;
     }
-    refreshDashboardData({ silent: true }).catch((e) => console.warn('[dashboardAutoRefresh] refreshDashboardData failed:', e));
+    if (isApiDashboardTool(tool)) {
+      refreshDashboardData({ silent: true, tool }).catch((e) => console.warn('[dashboardAutoRefresh] refreshDashboardData failed:', e));
+    }
   }, Number(state.dashboardAutoRefreshMs));
 }
 
@@ -6022,6 +6237,14 @@ function renderDashboardAutoRefreshOptions() {
 
 function getDashboardCodexHome() {
   return el('codexHomeInput')?.value?.trim() || state.current?.codexHome || '';
+}
+
+function isApiDashboardTool(tool = '') {
+  return tool === 'codex' || tool === 'opencode';
+}
+
+function getDashboardMetricsForTool(tool = '') {
+  return state.dashboardMetrics?.[tool] || null;
 }
 
 async function loadDashboardSideStates() {
@@ -6284,23 +6507,28 @@ function renderDashboardPage() {
   const claude = state.claudeCodeState || {};
   const openclaw = state.openclawState || {};
   const codexMetrics = state.dashboardMetrics.codex || { totals: { input: 0, cachedInput: 0, output: 0, reasoning: 0, total: 0 }, daily: [], providers: [], sessions: [], models: [] };
+  const opencodeMetrics = state.dashboardMetrics.opencode || { totals: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0 }, daily: [], providers: [], sessions: [], models: [] };
   const openclawChannels = getOpenClawConsoleChannels(openclaw.config || {});
   const openclawProviders = getOpenClawConsoleProviders(openclaw.config || {});
   const dashboardTool = state.dashboardTool || 'codex';
   const isLoading = Boolean(state.dashboardLoading);
   const hasCodexMetrics = Boolean(state.dashboardMetrics.codex);
+  const hasOpenCodeMetrics = Boolean(state.dashboardMetrics.opencode);
   const lastUpdated = formatDashboardUpdatedAt(codexMetrics.generatedAt);
+  const opencodeLastUpdated = formatDashboardUpdatedAt(opencodeMetrics.generatedAt);
   const claudeLastUpdated = formatDashboardUpdatedAt(claude.usage?.generatedAt);
-  const showDashboardRefresh = dashboardTool === 'codex' || dashboardTool === 'claudecode';
-  const autoRefreshLabel = dashboardTool === 'claudecode' ? 'Claude Code 自动刷新' : 'Codex 自动刷新';
+  const showDashboardRefresh = dashboardTool === 'codex' || dashboardTool === 'claudecode' || dashboardTool === 'opencode';
   const daysWindow = state.dashboardDays || 30;
   const dashboardStatusText = dashboardTool === 'claudecode'
     ? (isLoading ? '正在统计本地 Claude Code token…' : (claudeLastUpdated || '统计已完成'))
-    : (isLoading ? '正在统计本地 Codex token…' : (lastUpdated || '统计已完成'));
+    : dashboardTool === 'opencode'
+      ? (isLoading ? '正在统计本地 OpenCode token…' : (opencodeLastUpdated || '统计已完成'))
+      : (isLoading ? '正在统计本地 Codex token…' : (lastUpdated || '统计已完成'));
 
   const tabs = [
     { key: 'codex', label: 'Codex', dot: '#4ade80', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M9 9l3 3-3 3M15 15h3"/></svg>' },
     { key: 'claudecode', label: 'Claude Code', dot: '#4ade80', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>' },
+    { key: 'opencode', label: 'OpenCode', dot: '#60a5fa', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M12 3v18M4 7l8 4 8-4"/></svg>' },
     { key: 'openclaw', label: 'OpenClaw', dot: '#fbbf24', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>' },
   ];
   const toolLabel = (tabs.find((t) => t.key === dashboardTool) || tabs[0]).label;
@@ -6463,6 +6691,106 @@ function renderDashboardPage() {
       </div>
     </div>`;
 
+  const opencodeCutoff = new Date(Date.now() - daysWindow * 86400000).toISOString().slice(0, 10);
+  const opencodeDaily = (opencodeMetrics.daily || []).filter((d) => (d.date || '') >= opencodeCutoff);
+  const opencodeTotal = opencodeDaily.reduce((sum, item) => sum + (item.total || 0), 0);
+  const opencodeInput = opencodeDaily.reduce((sum, item) => sum + (item.input || 0), 0);
+  const opencodeOutput = opencodeDaily.reduce((sum, item) => sum + (item.output || 0), 0);
+  const opencodeReasoning = opencodeDaily.reduce((sum, item) => sum + (item.reasoning || 0), 0);
+  const opencodeCacheRead = opencodeDaily.reduce((sum, item) => sum + (item.cacheRead || 0), 0);
+  const opencodeCacheWrite = opencodeDaily.reduce((sum, item) => sum + (item.cacheCreation || 0), 0);
+  const opencodeCost = opencodeDaily.reduce((sum, item) => sum + (item.cost || 0), 0);
+  const opencodeModels = opencodeMetrics.models || [];
+  const opencodeModelTotal = opencodeModels.reduce((sum, entry) => sum + (entry.totals?.total || 0), 0);
+  const opencodeTopModel = opencodeModels[0]
+    ? (lookupModelPricingEntry(opencodeModels[0].model)?.pricing?.label || opencodeModels[0].model)
+    : '—';
+  const opencodeCacheHitPct = opencodeTotal ? Math.round(opencodeCacheRead / opencodeTotal * 100) : 0;
+  const opencodeHeroStats = [
+    { label: '本期消耗 · USD', value: opencodeCost ? formatDashboardUsd(opencodeCost, { min: 2, max: 4 }) : '$0.00', emphasis: true },
+    { label: '总 Token', value: formatDashboardMetric(opencodeTotal) },
+    { label: opencodeReasoning ? '输出 / 推理' : '输出 Token', value: formatDashboardMetric(opencodeOutput + opencodeReasoning) },
+    { label: '缓存读取率', value: opencodeTotal ? `${opencodeCacheHitPct}%` : '—' },
+  ];
+  const opencodeBreakdownItems = [
+    { label: '输入', value: opencodeTotal ? Math.round(opencodeInput / opencodeTotal * 100) : 0, meta: opencodeInput },
+    { label: '输出', value: opencodeTotal ? Math.round(opencodeOutput / opencodeTotal * 100) : 0, meta: opencodeOutput },
+    { label: '推理', value: opencodeTotal ? Math.round(opencodeReasoning / opencodeTotal * 100) : 0, meta: opencodeReasoning },
+    { label: '缓存读', value: opencodeTotal ? Math.round(opencodeCacheRead / opencodeTotal * 100) : 0, meta: opencodeCacheRead },
+    { label: '缓存写', value: opencodeTotal ? Math.round(opencodeCacheWrite / opencodeTotal * 100) : 0, meta: opencodeCacheWrite },
+  ];
+
+  const opencodeHtml = (!hasOpenCodeMetrics && isLoading) ? renderDashboardLoadingCard() : `
+    <div class="db2-layout">
+      <section class="db3-hero db3-hero--codex">
+        ${heroStatsHtml(opencodeHeroStats)}
+        <div class="db3-hero-chart-wrap">
+          <div class="db3-hero-chart-head">
+            <span class="db3-hero-chart-title">Token 用量趋势</span>
+            <span class="db3-hero-chart-meta">近 ${daysWindow} 天 · ${opencodeModels.length} 个模型 · ${escapeHtml(opencodeTopModel)}</span>
+          </div>
+          ${renderDashboardInteractiveChart(opencodeDaily.map((item) => ({ label: item.date.slice(5), value: item.total || 0, input: item.input || 0, output: (item.output || 0) + (item.reasoning || 0), cached: item.cacheRead || 0 })), { stroke: '#6b86ff' })}
+        </div>
+      </section>
+
+      <div class="db3-dashboard-grid">
+        <section class="db2-section db3-panel">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
+              官方计费标准
+            </div>
+            <div class="db2-card-meta">按已检测模型匹配 OpenAI / Anthropic 官方价目</div>
+          </div>
+          ${renderPricingStandardsCards(opencodeModels, ['gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'])}
+        </section>
+
+        <section class="db2-section db3-panel db3-panel--wide">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
+              模型计费明细
+            </div>
+            <div class="db2-card-meta">本地会话 token 统计 + 官方价目映射</div>
+          </div>
+          ${renderModelCostRows(opencodeModels, opencodeModelTotal)}
+        </section>
+
+        <section class="db2-section db3-panel">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10.5h12M3.5 8.5l2-2 2.5 2 4.5-4"/></svg>
+              Token 构成
+            </div>
+            <div class="db2-card-meta">输入 / 输出 / 推理 / 缓存读写</div>
+          </div>
+          ${miniBars(opencodeBreakdownItems)}
+        </section>
+
+        <section class="db2-section db3-panel">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
+              费用趋势
+            </div>
+            <div class="db2-card-meta">来自 OpenCode 本地会话的实际 cost 字段</div>
+          </div>
+          ${renderCostTrendPanel(opencodeDaily.map((item) => ({ label: (item.date || '').slice(5), value: item.cost || 0 })), `近 ${daysWindow} 天合计`, 'background:linear-gradient(180deg,#d6deff 0%,#6b86ff 56%,#3558ff 100%)')}
+        </section>
+
+        <section class="db2-section db3-panel">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
+              模型分布
+            </div>
+            <div class="db2-card-meta">累计扫描 ${opencodeModels.length} 个模型</div>
+          </div>
+          ${renderDashboardModelDistChart(opencodeModels, opencodeModelTotal)}
+        </section>
+      </div>
+    </div>`;
+
   // ── Claude Code HTML ──
   const claudeAllTotal = claude.usage?.totals?.total || 0;
   const claudeAllInput = claude.usage?.totals?.input || 0;
@@ -6547,44 +6875,39 @@ function renderDashboardPage() {
         </div>
       </section>
 
-      <!-- 下方 2 列 · flat -->
-      <div class="db2-main-grid">
-        <div class="db2-col">
-          <div class="db2-section">
-            <div class="db2-card-head">
-              <div class="db2-card-title">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
-                费用趋势
-              </div>
-              <div class="db2-card-meta">按 Anthropic 官方定价估算</div>
+      <div class="db3-dashboard-grid db3-dashboard-grid--claude">
+        <section class="db2-section db3-panel db3-panel--chart">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
+              费用趋势
             </div>
-            ${renderClaudeCostTrendChart(claudeDailySliced, daysWindow)}
+            <div class="db2-card-meta">按 Anthropic 官方定价估算</div>
           </div>
+          ${renderClaudeCostTrendChart(claudeDailySliced, daysWindow)}
+        </section>
 
-          <div class="db2-section">
-            <div class="db2-card-head">
-              <div class="db2-card-title">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
-                模型消耗明细
-              </div>
-              <div class="db2-card-meta">按 Anthropic 定价估算</div>
+        <section class="db2-section db3-panel">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
+              模型分布
             </div>
-            ${renderModelCostRows(claudeModels, claudeModelTotal)}
+            <div class="db2-card-meta">近 ${daysWindow} 天 · ${claudeModels.length} 个模型</div>
           </div>
-        </div>
+          ${renderDashboardModelDistChart(claudeModels, claudeModelTotal)}
+        </section>
 
-        <div class="db2-col">
-          <div class="db2-section">
-            <div class="db2-card-head">
-              <div class="db2-card-title">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
-                模型分布
-              </div>
-              <div class="db2-card-meta">近 ${daysWindow} 天 · ${claudeModels.length} 个模型</div>
+        <section class="db2-section db3-panel db3-panel--wide db3-panel--pricing">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
+              模型消耗明细
             </div>
-            ${renderDashboardModelDistChart(claudeModels, claudeModelTotal)}
+            <div class="db2-card-meta">按 Anthropic 定价估算</div>
           </div>
-        </div>
+          ${renderModelCostRows(claudeModels, claudeModelTotal)}
+        </section>
       </div>
     </div>`;
 
@@ -6645,6 +6968,8 @@ function renderDashboardPage() {
     ? codexHtml
     : dashboardTool === 'claudecode'
       ? claudeHtml
+      : dashboardTool === 'opencode'
+        ? opencodeHtml
       : dashboardTool === 'openclaw'
         ? openclawHtml
         : codexHtml;
@@ -7048,21 +7373,23 @@ function renderDashboardStackChart(items = []) {
     </div>`;
 }
 
-async function refreshDashboardData({ force = false, silent = false } = {}) {
+async function refreshDashboardData({ force = false, silent = false, tool = state.dashboardTool || 'codex' } = {}) {
+  if (!isApiDashboardTool(tool)) return;
   if (state.dashboardRefreshing) return;
   state.dashboardRefreshing = true;
-  state.dashboardLoading = !silent || !state.dashboardMetrics.codex;
+  state.dashboardLoading = !silent || !getDashboardMetricsForTool(tool);
   if (state.activePage === 'dashboard') renderDashboardPage();
 
   try {
-    const params = new URLSearchParams({
-      codexHome: getDashboardCodexHome(),
-      days: '30',
-    });
+    const params = new URLSearchParams({ days: '30' });
+    if (tool === 'codex') {
+      params.set('codexHome', getDashboardCodexHome());
+    }
     if (force) params.set('force', '1');
-    const json = await api(`/api/dashboard/codex-usage?${params.toString()}`, { timeoutMs: force ? 120000 : 20000 });
+    const route = tool === 'opencode' ? '/api/dashboard/opencode-usage' : '/api/dashboard/codex-usage';
+    const json = await api(`${route}?${params.toString()}`, { timeoutMs: force ? 120000 : 20000 });
     if (json.ok && json.data && json.data.totals && typeof json.data.totals === 'object') {
-      state.dashboardMetrics.codex = json.data;
+      state.dashboardMetrics[tool] = json.data;
       state.dashboardMetricsFetchedAt = Date.now();
     }
   } catch { /* ignore */ } finally {
@@ -10334,17 +10661,19 @@ function setPage(page = 'quick') {
     if (!state.consoleRefreshing) void refreshToolConsoleData();
   }
   if (page === 'dashboard') {
-    const hasCachedMetrics = Boolean(state.dashboardMetrics.codex);
-    const isClaudeDashboard = state.dashboardTool === 'claudecode';
-    if (!hasCachedMetrics && !isClaudeDashboard) state.dashboardLoading = true;
+    const dashboardTool = state.dashboardTool || 'codex';
+    const hasCachedMetrics = Boolean(getDashboardMetricsForTool(dashboardTool));
+    const isClaudeDashboard = dashboardTool === 'claudecode';
+    const isApiDashboard = isApiDashboardTool(dashboardTool);
+    if (!hasCachedMetrics && isApiDashboard) state.dashboardLoading = true;
     renderDashboardPage();
     startDashboardAutoRefresh();
     const sideP = loadDashboardSideStates();
     sideP.then(() => {
       if (state.activePage === 'dashboard') renderDashboardPage();
     });
-    if (!isClaudeDashboard) {
-      void refreshDashboardData({ silent: hasCachedMetrics });
+    if (isApiDashboard) {
+      void refreshDashboardData({ silent: hasCachedMetrics, tool: dashboardTool });
     }
   }
   if (page === 'configEditor') {
@@ -18177,9 +18506,8 @@ function bindEvents() {
       event.preventDefault();
       event.stopPropagation();
       const providerKey = actionBtn.dataset.opProviderKey || '';
-      const providerMap = getOpenCodeConfigEditorProviderMap();
-      const provider = cloneJson(providerMap[providerKey] || {});
-      if (!providerKey || isEmptyConfigValue(provider)) return;
+      const provider = getOpenCodeEditorProviderByKey(providerKey);
+      if (!providerKey || !provider) return;
       state.openCodeProviderDetailKey = providerKey;
       if (actionBtn.dataset.opProviderAction === 'check') {
         const checked = await testOpenCodeProviderConnectivity(provider, { providerKey, delayMs: 420 });
@@ -18304,6 +18632,10 @@ function bindEvents() {
   });
   el('opProviderFormKey')?.addEventListener('blur', (event) => {
     event.target.value = normalizeOpenCodeProviderKey(event.target.value || '');
+    setOpenCodeProviderPackageField('opProviderFormPackage', {
+      providerKey: event.target.value || '',
+      npm: el('opProviderFormPackage')?.value || '',
+    });
   });
   el('opProviderFormModelId')?.addEventListener('blur', (event) => {
     const modelId = String(event.target.value || '').trim();
@@ -18320,6 +18652,27 @@ function bindEvents() {
     if (nameInput && !nameInput.value.trim()) {
       nameInput.value = inferProviderLabel(normalized || '');
     }
+    setOpenCodeProviderPackageField('opProviderFormPackage', {
+      providerKey: getOpenCodeProviderHintKey({
+        providerKey: keyInput?.value || '',
+        baseUrl: normalized || '',
+      }),
+      npm: el('opProviderFormPackage')?.value || '',
+    });
+  });
+  const syncOpenCodeMainProviderPackage = () => {
+    setOpenCodeProviderPackageField('opCfgProviderPackageInput', {
+      providerKey: getOpenCodeProviderHintKey({
+        providerKey: el('opCfgProviderKeyInput')?.value || '',
+        baseUrl: el('opCfgBaseUrlInput')?.value || '',
+      }),
+      npm: el('opCfgProviderPackageInput')?.value || '',
+    });
+  };
+  el('opCfgProviderKeyInput')?.addEventListener('input', syncOpenCodeMainProviderPackage);
+  el('opCfgBaseUrlInput')?.addEventListener('blur', (event) => {
+    event.target.value = normalizeBaseUrl(event.target.value || '');
+    syncOpenCodeMainProviderPackage();
   });
   document.querySelectorAll('[data-page-target]').forEach((node) => {
     if (node.dataset.pageTarget === '__wizard__') return; // handled separately
@@ -18602,14 +18955,20 @@ function bindEvents() {
       if (!btn) return;
       const tool = btn.getAttribute('data-dashboard-rail-tool') || 'codex';
       state.dashboardTool = tool;
-      // Mirror the old inline-tab lazy-load: Claude data isn't prefetched
-      // until the user flips to it.
       if (tool === 'claudecode') {
         const hasCachedData = state.claudeCodeState?.usage?.daily?.length > 0;
         if (!hasCachedData) {
           state.dashboardLoading = true;
           renderDashboardPage();
           try { await ensureClaudeDashboardData(); } catch (_) {}
+          state.dashboardLoading = false;
+        }
+      } else if (isApiDashboardTool(tool)) {
+        const hasCachedData = Boolean(getDashboardMetricsForTool(tool));
+        if (!hasCachedData) {
+          state.dashboardLoading = true;
+          renderDashboardPage();
+          try { await refreshDashboardData({ tool }); } catch (_) {}
           state.dashboardLoading = false;
         }
       }
@@ -18742,6 +19101,15 @@ function bindEvents() {
           state.dashboardLoading = false;
         }
         renderDashboardPage();
+      } else if (isApiDashboardTool(state.dashboardTool)) {
+        const hasCachedData = Boolean(getDashboardMetricsForTool(state.dashboardTool));
+        if (!hasCachedData) {
+          state.dashboardLoading = true;
+          renderDashboardPage();
+          await refreshDashboardData({ tool: state.dashboardTool });
+          state.dashboardLoading = false;
+        }
+        renderDashboardPage();
       } else {
         renderDashboardPage();
       }
@@ -18777,7 +19145,7 @@ function bindEvents() {
         renderDashboardPage();
         return;
       }
-      await refreshDashboardData({ force: true });
+      await refreshDashboardData({ force: true, tool: state.dashboardTool });
     }
   });
 
@@ -19174,7 +19542,11 @@ window.addEventListener('resize', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (state.activePage === 'dashboard') {
-    void refreshDashboardData({ silent: true });
+    if (state.dashboardTool === 'claudecode') {
+      void ensureClaudeDashboardData();
+    } else if (isApiDashboardTool(state.dashboardTool)) {
+      void refreshDashboardData({ silent: true, tool: state.dashboardTool });
+    }
     return;
   }
   void resyncToolRuntimeState();

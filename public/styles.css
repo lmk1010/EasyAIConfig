@@ -22881,6 +22881,48 @@ body {
   justify-self: end;
 }
 
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude {
+  grid-template-columns: minmax(0, 1.62fr) minmax(280px, 0.9fr);
+  gap: 12px 24px;
+}
+
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude > .db2-section {
+  min-width: 0;
+}
+
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude .db3-panel--pricing {
+  padding-top: 2px !important;
+}
+
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude .db3-price-grid {
+  min-width: 960px;
+}
+
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude .db3-price-row {
+  grid-template-columns: minmax(220px, 1.25fr) repeat(3, minmax(88px, 104px)) minmax(228px, 250px) minmax(108px, 126px);
+  gap: 10px 12px;
+  padding: 10px 0;
+}
+
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude .db3-price-row--head {
+  padding: 0 0 7px;
+}
+
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude .db3-price-model-cell {
+  padding-right: 4px;
+}
+
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude .db3-price-rate {
+  min-height: 26px;
+  padding: 0 8px;
+}
+
+.shell-v2 .dashboard-page .db3-dashboard-grid--claude .db2-mdist-hdr {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto;
+  gap: 6px 10px;
+}
+
 .shell-v2 .dashboard-page .db3-price-rates--matrix {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -22919,6 +22961,12 @@ body {
 [data-theme="light"] .shell-v2 .dashboard-page .db3-price-rate {
   border-color: rgba(59, 130, 246, 0.08);
   background: rgba(59, 130, 246, 0.06);
+}
+
+@media (max-width: 1180px) {
+  .shell-v2 .dashboard-page .db3-dashboard-grid--claude {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Config editor flat finish v4 */
