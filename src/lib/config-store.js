@@ -2181,6 +2181,82 @@ async function readAuthJson(codexHome) {
   }
 }
 
+function isEnvStyleAuthKey(key) {
+  const text = String(key || '').trim();
+  return Boolean(text)
+    && /^[_A-Z][_A-Z0-9]*$/.test(text);
+}
+
+function shouldPreserveAuthEntry(key, value) {
+  const text = String(value || '').trim();
+  if (!text || !isEnvStyleAuthKey(key)) {
+    return false;
+  }
+  const upper = String(key).trim().toUpperCase();
+  return upper.includes('KEY')
+    || upper.includes('TOKEN')
+    || upper.includes('SECRET')
+    || upper.includes('BASE_URL')
+    || upper.endsWith('_URL')
+    || upper.endsWith('_ENDPOINT');
+}
+
+async function preserveCodexAuthJsonEntriesToEnv({ codexHome = defaultCodexHome(), authRaw = '' } = {}) {
+  const raw = String(authRaw || '');
+  if (!raw.trim()) {
+    return [];
+  }
+  let authJson = {};
+  try {
+    authJson = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!authJson || typeof authJson !== 'object' || Array.isArray(authJson)) {
+    return [];
+  }
+
+  const envPath = path.join(codexHome, '.env');
+  const env = parseEnv(await readText(envPath));
+  const migrated = [];
+
+  for (const [key, value] of Object.entries(authJson)) {
+    if (typeof value !== 'string' || !shouldPreserveAuthEntry(key, value)) {
+      continue;
+    }
+    if (String(env[key] || '').trim()) {
+      continue;
+    }
+    env[key] = value.trim();
+    migrated.push(key);
+  }
+
+  if (migrated.length) {
+    await writeText(envPath, stringifyEnv(env));
+  }
+  return migrated;
+}
+
+async function backupCodexAuthJson(authRaw = '') {
+  const raw = String(authRaw || '');
+  if (!raw.trim()) {
+    return '';
+  }
+  const dir = path.join(appHome(), 'codex-oauth-profiles', '_switch_backups');
+  await ensureDir(dir);
+  const backupPath = path.join(dir, `auth-${timestamp()}.json`);
+  await writeText(backupPath, raw);
+
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const files = entries
+    .filter((entry) => entry.isFile() && /^auth-.*\.json$/i.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  const stale = files.slice(0, Math.max(0, files.length - 5));
+  await Promise.all(stale.map((name) => fs.unlink(path.join(dir, name)).catch(() => {})));
+  return backupPath;
+}
+
 function decodeJwtPayload(token) {
   const input = String(token || '').trim();
   if (!input.includes('.')) return {};
@@ -3604,6 +3680,13 @@ export async function launchCodex({ cwd, terminalProfile = 'auto' } = {}) {
 
 export async function loginCodex({ cwd, terminalProfile = 'auto' } = {}) {
   const targetCwd = path.resolve(cwd || process.cwd());
+  const codexHome = defaultCodexHome();
+  const authPath = path.join(codexHome, 'auth.json');
+  const authRaw = await readText(authPath);
+  if (authRaw.trim()) {
+    await preserveCodexAuthJsonEntriesToEnv({ codexHome, authRaw });
+    await backupCodexAuthJson(authRaw);
+  }
   const codexBinary = findCodexBinary();
   if (!codexBinary.installed) {
     throw new Error('Codex 尚未安装，请先点击安装');

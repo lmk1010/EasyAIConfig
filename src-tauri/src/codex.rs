@@ -2421,6 +2421,12 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
     if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
   };
   let terminal_profile = get_string(&object, "terminalProfile");
+  let codex_home = default_codex_home()?;
+  let live_auth_raw = read_text(&codex_home.join("auth.json")).unwrap_or_default();
+  if !live_auth_raw.trim().is_empty() {
+    migrate_auth_json_env_to_codex_env(&codex_home, &live_auth_raw)?;
+    let _ = write_switch_backup(&live_auth_raw);
+  }
   let codex_binary = find_codex_binary();
   if !codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
     return Err("Codex 尚未安装，请先点击安装".to_string());
@@ -3705,6 +3711,7 @@ use crate::{
   claude_code_home, openclaw_home, opencode_config_home, opencode_data_home, write_text, ensure_dir, backups_root, CLAUDE_CODE_PACKAGE,
   OPENCODE_PACKAGE, OPENCLAW_PACKAGE,
 };
+use crate::oauth_profiles::{migrate_auth_json_env_to_codex_env, write_switch_backup};
 use crate::provider::get_string;
 
 /* ═══════════════  Multi-tool support  ═══════════════ */

@@ -136,9 +136,6 @@ pub(crate) fn parse_env(content: &str) -> BTreeMap<String, String> {
 pub(crate) fn stringify_env(entries: &BTreeMap<String, String>) -> String {
   let mut lines = Vec::new();
   for (key, value) in entries {
-    if key.to_uppercase().starts_with("CODEX_") {
-      continue;
-    }
     lines.push(format!("{key}={value}"));
   }
   if lines.is_empty() {

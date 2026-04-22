@@ -20,7 +20,10 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::provider::get_string;
-use crate::{app_home, default_codex_home, ensure_dir, parse_json_object, read_text, write_text};
+use crate::{
+  app_home, default_codex_home, ensure_dir, parse_env, parse_json_object, read_text,
+  stringify_env, write_text,
+};
 
 const PROFILES_DIRNAME: &str = "codex-oauth-profiles";
 const PROFILES_INDEX: &str = "profiles.json";
@@ -249,9 +252,75 @@ fn sync_live_to_active_archive(live_auth_raw: &str, active_id: &str) -> Result<(
   write_text(&archive, live_auth_raw)
 }
 
+fn is_env_style_key(key: &str) -> bool {
+  let trimmed = key.trim();
+  !trimmed.is_empty()
+    && trimmed
+      .bytes()
+      .next()
+      .map(|byte| byte == b'_' || byte.is_ascii_uppercase())
+      .unwrap_or(false)
+    && trimmed
+      .bytes()
+      .all(|byte| byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit())
+}
+
+fn should_preserve_auth_entry(key: &str) -> bool {
+  if !is_env_style_key(key) {
+    return false;
+  }
+  let upper = key.trim().to_ascii_uppercase();
+  upper.contains("KEY")
+    || upper.contains("TOKEN")
+    || upper.contains("SECRET")
+    || upper.contains("BASE_URL")
+    || upper.ends_with("_URL")
+    || upper.ends_with("_ENDPOINT")
+}
+
+pub(crate) fn migrate_auth_json_env_to_codex_env(codex_home: &Path, auth_raw: &str) -> Result<Vec<String>, String> {
+  if auth_raw.trim().is_empty() {
+    return Ok(Vec::new());
+  }
+
+  let auth_json: Value = serde_json::from_str(auth_raw).unwrap_or_else(|_| json!({}));
+  let Some(auth_object) = auth_json.as_object() else {
+    return Ok(Vec::new());
+  };
+
+  let env_path = codex_home.join(".env");
+  let env_raw = read_text(&env_path)?;
+  let mut env = parse_env(&env_raw);
+  let mut migrated = Vec::new();
+
+  for (key, value) in auth_object {
+    let Some(text) = value.as_str() else {
+      continue;
+    };
+    let clean = text.trim();
+    if clean.is_empty() || !should_preserve_auth_entry(key) {
+      continue;
+    }
+
+    let existing = env.get(key).map(|item| item.trim()).unwrap_or("");
+    if !existing.is_empty() {
+      continue;
+    }
+
+    env.insert(key.clone(), clean.to_string());
+    migrated.push(key.clone());
+  }
+
+  if !migrated.is_empty() {
+    write_text(&env_path, &stringify_env(&env))?;
+  }
+
+  Ok(migrated)
+}
+
 // ---- Switch-time safety backup ----
 
-fn write_switch_backup(live_auth_raw: &str) -> Result<PathBuf, String> {
+pub(crate) fn write_switch_backup(live_auth_raw: &str) -> Result<PathBuf, String> {
   let dir = profiles_root()?.join("_switch_backups");
   ensure_dir(&dir)?;
   let ts = Utc::now().format("%Y%m%dT%H%M%S").to_string();
@@ -449,6 +518,7 @@ pub(crate) fn switch_oauth_profile(body: &Value) -> Result<Value, String> {
   // Before overwriting: if live is a known profile, sync its archive; always
   // drop a timestamped backup too.
   if !live_raw.trim().is_empty() {
+    migrate_auth_json_env_to_codex_env(&codex_home, &live_raw)?;
     let live_json: Value = serde_json::from_str(&live_raw).unwrap_or_else(|_| json!({}));
     let live_meta = extract_oauth_meta(&live_json);
     let live_account = live_meta.get("accountId").and_then(Value::as_str).unwrap_or("").to_string();
@@ -458,6 +528,7 @@ pub(crate) fn switch_oauth_profile(body: &Value) -> Result<Value, String> {
     let _ = write_switch_backup(&live_raw);
   }
 
+  migrate_auth_json_env_to_codex_env(&codex_home, &archive_raw)?;
   write_text(&live_path, &archive_raw)?;
 
   // Update active pointer.
