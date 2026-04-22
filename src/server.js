@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import open from 'open';
 import fs from 'node:fs/promises';
-import { createWriteStream, existsSync } from 'node:fs';
+import { createWriteStream, existsSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -679,17 +679,47 @@ function listCommandOutputLines(text = '') {
 }
 
 function resolveGitRepoRootLocal(cwd = '') {
-  const targetCwd = path.resolve(cwd || process.cwd());
-  const result = runCommandLocal('git', ['rev-parse', '--show-toplevel'], { cwd: targetCwd });
-  if (!result.ok) return '';
-  return listCommandOutputLines(result.stdout)[0] || '';
+  let current = path.resolve(cwd || process.cwd());
+  while (current) {
+    if (existsSync(path.join(current, '.git'))) return current;
+    const parent = path.dirname(current);
+    if (!parent || parent === current) break;
+    current = parent;
+  }
+  return '';
+}
+
+function resolveGitDirLocal(repoRoot = '') {
+  if (!repoRoot) return '';
+  const gitEntry = path.join(repoRoot, '.git');
+  if (!existsSync(gitEntry)) return '';
+  try {
+    const raw = readFileSync(gitEntry, 'utf8');
+    const match = raw.match(/^gitdir:\s*(.+)\s*$/im);
+    if (match) return path.resolve(repoRoot, match[1].trim());
+  } catch { /* .git is a directory */ }
+  return gitEntry;
+}
+
+function readGitOriginUrlLocal(repoRoot = '') {
+  const gitDir = resolveGitDirLocal(repoRoot);
+  if (!gitDir) return '';
+  const configPath = path.join(gitDir, 'config');
+  if (!existsSync(configPath)) return '';
+  try {
+    const raw = readFileSync(configPath, 'utf8');
+    const block = raw.match(/\[remote\s+"origin"\]([\s\S]*?)(?:\n\[|$)/i);
+    const url = block?.[1]?.match(/^\s*url\s*=\s*(.+)\s*$/im)?.[1] || '';
+    return String(url || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 function detectGitHosting(cwd = '') {
   const repoRoot = resolveGitRepoRootLocal(cwd);
   if (!repoRoot) return { repoRoot: '', provider: '' };
-  const remote = runCommandLocal('git', ['remote', 'get-url', 'origin'], { cwd: repoRoot });
-  const remoteUrl = `${remote.stdout || ''} ${remote.stderr || ''}`.toLowerCase();
+  const remoteUrl = readGitOriginUrlLocal(repoRoot).toLowerCase();
   const provider = remoteUrl.includes('github') ? 'github' : remoteUrl.includes('gitlab') ? 'gitlab' : '';
   return { repoRoot, provider };
 }
@@ -725,25 +755,110 @@ function getZedExtensionsInstalledPath() {
   return path.join(dataHome, 'zed', 'extensions', 'installed');
 }
 
-function getVSCodeLikeExtensionState(commandName) {
-  const commandPath = commandExistsLocal(commandName);
+function getVSCodeLikeExtensionDirs(commandName) {
+  const home = os.homedir();
+  const mapping = {
+    code: [path.join(home, '.vscode', 'extensions')],
+    cursor: [path.join(home, '.cursor', 'extensions')],
+    windsurf: [path.join(home, '.windsurf', 'extensions')],
+    codium: [path.join(home, '.vscode-oss', 'extensions'), path.join(home, '.vscodium', 'extensions')],
+  };
+  return mapping[commandName] || [];
+}
+
+function getVSCodeLikeCommandCandidates(commandName) {
+  if (process.platform !== 'win32') return [];
+  const localAppData = process.env.LOCALAPPDATA?.trim() || path.join(os.homedir(), 'AppData', 'Local');
+  const programFiles = process.env.ProgramFiles?.trim() || 'C:\\Program Files';
+  const programFilesX86 = process.env['ProgramFiles(x86)']?.trim() || 'C:\\Program Files (x86)';
+  const mapping = {
+    code: [
+      path.join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+      path.join(programFiles, 'Microsoft VS Code', 'bin', 'code.cmd'),
+      path.join(programFilesX86, 'Microsoft VS Code', 'bin', 'code.cmd'),
+    ],
+    cursor: [
+      path.join(localAppData, 'Programs', 'Cursor', 'resources', 'app', 'bin', 'cursor.cmd'),
+      path.join(localAppData, 'Programs', 'Cursor', 'bin', 'cursor.cmd'),
+    ],
+    windsurf: [
+      path.join(localAppData, 'Programs', 'Windsurf', 'resources', 'app', 'bin', 'windsurf.cmd'),
+      path.join(localAppData, 'Programs', 'Windsurf', 'bin', 'windsurf.cmd'),
+    ],
+    codium: [
+      path.join(localAppData, 'Programs', 'VSCodium', 'bin', 'codium.cmd'),
+      path.join(programFiles, 'VSCodium', 'bin', 'codium.cmd'),
+      path.join(programFilesX86, 'VSCodium', 'bin', 'codium.cmd'),
+    ],
+  };
+  return mapping[commandName] || [];
+}
+
+function hasOpenCodeExtensionInstalled(dirPaths = []) {
+  const prefix = `${OPENCODE_VSCODE_EXTENSION_ID.toLowerCase()}-`;
+  for (const dirPath of dirPaths) {
+    if (!dirPath || !existsSync(dirPath)) continue;
+    try {
+      const entries = readdirSync(dirPath);
+      if (entries.some((entry) => {
+        const lower = String(entry || '').toLowerCase();
+        return lower === OPENCODE_VSCODE_EXTENSION_ID || lower.startsWith(prefix);
+      })) {
+        return true;
+      }
+    } catch { /* ignore */ }
+  }
+  return false;
+}
+
+function findKnownCommandPath(commandName) {
+  return getVSCodeLikeCommandCandidates(commandName).find((candidate) => existsSync(candidate)) || '';
+}
+
+function getVSCodeLikeExtensionState(commandName, { passive = false } = {}) {
+  const extensionDirs = getVSCodeLikeExtensionDirs(commandName);
+  const installedFromDisk = hasOpenCodeExtensionInstalled(extensionDirs);
+  const knownCommandPath = findKnownCommandPath(commandName);
+  if (passive && process.platform === 'win32') {
+    return {
+      available: Boolean(knownCommandPath || extensionDirs.some((dirPath) => existsSync(dirPath))),
+      commandPath: knownCommandPath,
+      installed: installedFromDisk,
+    };
+  }
+  const commandPath = knownCommandPath || commandExistsLocal(commandName);
   if (!commandPath) {
-    return { available: false, commandPath: '', installed: false };
+    return { available: installedFromDisk, commandPath: '', installed: installedFromDisk };
+  }
+  if (installedFromDisk) {
+    return { available: true, commandPath, installed: true };
   }
   const result = runCommandLocal(commandName, ['--list-extensions']);
   const installed = result.ok && listCommandOutputLines(result.stdout).some((item) => item.toLowerCase() === OPENCODE_VSCODE_EXTENSION_ID);
   return { available: true, commandPath, installed };
 }
 
-async function getZedExtensionState() {
+function findKnownZedCommandPath() {
+  if (process.platform !== 'win32') return '';
+  const localAppData = process.env.LOCALAPPDATA?.trim() || path.join(os.homedir(), 'AppData', 'Local');
+  const programFiles = process.env.ProgramFiles?.trim() || 'C:\\Program Files';
+  return [
+    path.join(localAppData, 'Programs', 'Zed', 'Zed.exe'),
+    path.join(programFiles, 'Zed', 'Zed.exe'),
+  ].find((candidate) => existsSync(candidate)) || '';
+}
+
+async function getZedExtensionState({ passive = false } = {}) {
   const settingsPath = getZedSettingsPath();
   const settings = await readJsonFileSafe(settingsPath);
   const autoInstall = Boolean(settings?.auto_install_extensions?.opencode === true);
   const extensionsDir = getZedExtensionsInstalledPath();
   const installedDir = path.join(extensionsDir, 'opencode');
+  const knownCommandPath = findKnownZedCommandPath();
+  const commandPath = passive && process.platform === 'win32' ? knownCommandPath : (knownCommandPath || commandExistsLocal('zed'));
   return {
-    available: Boolean(commandExistsLocal('zed') || existsSync(settingsPath) || existsSync(extensionsDir)),
-    commandPath: commandExistsLocal('zed'),
+    available: Boolean(commandPath || existsSync(settingsPath) || existsSync(extensionsDir)),
+    commandPath,
     settingsPath,
     installed: autoInstall || existsSync(installedDir),
     autoInstallEnabled: autoInstall,
@@ -751,11 +866,12 @@ async function getZedExtensionState() {
 }
 
 async function getOpenCodeEcosystemState({ cwd = '' } = {}) {
-  const vscode = getVSCodeLikeExtensionState('code');
-  const cursor = getVSCodeLikeExtensionState('cursor');
-  const windsurf = getVSCodeLikeExtensionState('windsurf');
-  const vscodium = getVSCodeLikeExtensionState('codium');
-  const zed = await getZedExtensionState();
+  const passiveWindows = process.platform === 'win32';
+  const vscode = getVSCodeLikeExtensionState('code', { passive: passiveWindows });
+  const cursor = getVSCodeLikeExtensionState('cursor', { passive: passiveWindows });
+  const windsurf = getVSCodeLikeExtensionState('windsurf', { passive: passiveWindows });
+  const vscodium = getVSCodeLikeExtensionState('codium', { passive: passiveWindows });
+  const zed = await getZedExtensionState({ passive: passiveWindows });
   const repo = detectGitHosting(cwd);
   const githubWorkflowPath = repo.repoRoot ? path.join(repo.repoRoot, '.github', 'workflows', 'opencode.yml') : '';
   const gitlabCiPath = repo.repoRoot ? path.join(repo.repoRoot, '.gitlab-ci.yml') : '';
@@ -901,7 +1017,7 @@ export async function startServer() {
 
   app.get('/api/tools', async (_req, res) => {
     try {
-      ok(res, { data: listTools() });
+      ok(res, { data: listTools({ passive: process.platform === 'win32' }) });
     } catch (error) {
       fail(res, error);
     }

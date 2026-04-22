@@ -320,28 +320,40 @@ fn read_binary_version_output(candidate_path: &Path) -> Option<String> {
   )
 }
 
-fn collect_detected_binary_candidates(candidate_paths: Vec<PathBuf>, fallback_command: &str) -> Value {
+fn read_binary_version_output_with_options(candidate_path: &Path, passive: bool) -> Option<Option<String>> {
+  if !candidate_path.exists() {
+    return None;
+  }
+  if cfg!(target_os = "windows") && passive {
+    return Some(None);
+  }
+  read_binary_version_output(candidate_path).map(Some)
+}
+
+fn collect_detected_binary_candidates(candidate_paths: Vec<PathBuf>, fallback_command: &str, passive: bool) -> Value {
   let mut seen = HashSet::new();
   let mut candidates = candidate_paths
     .into_iter()
     .filter(|path| seen.insert(path.to_string_lossy().to_ascii_lowercase()))
     .filter_map(|candidate_path| {
-      let version = read_binary_version_output(&candidate_path)?;
+      let version = read_binary_version_output_with_options(&candidate_path, passive)?;
       let path_text = candidate_path.to_string_lossy().to_string();
       Some(json!({
         "installed": true,
-        "version": version,
+        "version": version.map(Value::String).unwrap_or(Value::Null),
         "path": path_text,
       }))
     })
     .collect::<Vec<_>>();
 
   candidates.sort_by(|left, right| {
-    let left_version = left.get("version").and_then(Value::as_str).unwrap_or_default();
-    let right_version = right.get("version").and_then(Value::as_str).unwrap_or_default();
-    let version_order = compare_versions(right_version, left_version);
-    if version_order != Ordering::Equal {
-      return version_order;
+    if !passive {
+      let left_version = left.get("version").and_then(Value::as_str).unwrap_or_default();
+      let right_version = right.get("version").and_then(Value::as_str).unwrap_or_default();
+      let version_order = compare_versions(right_version, left_version);
+      if version_order != Ordering::Equal {
+        return version_order;
+      }
     }
     let left_rank = left
       .get("path")
@@ -363,7 +375,7 @@ fn collect_detected_binary_candidates(candidate_paths: Vec<PathBuf>, fallback_co
     "path": selected
       .as_ref()
       .and_then(|item| item.get("path").and_then(Value::as_str).map(|text| text.to_string()))
-      .or_else(|| command_exists(fallback_command))
+      .or_else(|| if passive { None } else { command_exists(fallback_command) })
       .unwrap_or_default(),
     "candidates": candidates,
   })
@@ -375,10 +387,10 @@ fn windows_registry_path_entries() -> Vec<String> {
   CACHED
     .get_or_init(|| {
       let script = "$user=[Environment]::GetEnvironmentVariable('Path','User');$machine=[Environment]::GetEnvironmentVariable('Path','Machine');Write-Output $user;Write-Output $machine";
-      let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
-        .output()
-        .ok();
+      let mut command = Command::new("powershell.exe");
+      command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]);
+      command.creation_flags(CREATE_NO_WINDOW);
+      let output = command.output().ok();
       let mut parts = Vec::new();
       if let Some(out) = output.filter(|out| out.status.success()) {
         for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -395,7 +407,7 @@ fn windows_registry_path_entries() -> Vec<String> {
     .clone()
 }
 
-fn build_windows_full_path_env() -> String {
+fn build_windows_path_env(include_registry_entries: bool) -> String {
   let current = std::env::var("PATH").unwrap_or_default();
   let mut parts: Vec<String> = Vec::new();
   parts.extend(windows_portable_node_dirs());
@@ -404,8 +416,10 @@ fn build_windows_full_path_env() -> String {
   }
   parts.extend(windows_user_extra_bin_dirs());
   parts.extend(windows_mingit_cmd_dirs());
-  #[cfg(target_os = "windows")]
-  parts.extend(windows_registry_path_entries());
+  if include_registry_entries {
+    #[cfg(target_os = "windows")]
+    parts.extend(windows_registry_path_entries());
+  }
   for p in current.split(';') {
     let item = p.trim();
     if !item.is_empty() {
@@ -415,6 +429,27 @@ fn build_windows_full_path_env() -> String {
   let mut seen = HashSet::new();
   parts.retain(|p| seen.insert(p.to_ascii_lowercase()));
   parts.join(";")
+}
+
+fn build_windows_full_path_env() -> String {
+  build_windows_path_env(true)
+}
+
+fn build_windows_passive_path_env() -> String {
+  build_windows_path_env(false)
+}
+
+fn apply_discovery_path_env(passive: bool) {
+  if cfg!(target_os = "windows") {
+    let path_value = if passive {
+      build_windows_passive_path_env()
+    } else {
+      build_windows_full_path_env()
+    };
+    std::env::set_var("PATH", path_value);
+    return;
+  }
+  std::env::set_var("PATH", full_path_env());
 }
 
 /// Resolve the user's full shell PATH.
@@ -2059,10 +2094,13 @@ fn apply_windows_openclaw_npm_env(command: &mut Command, use_cn_registry: bool) 
   }
 }
 
-fn command_exists(command: &str) -> Option<String> {
-  // Set PATH before using which
-  std::env::set_var("PATH", full_path_env());
+fn command_exists_with_options(command: &str, passive: bool) -> Option<String> {
+  apply_discovery_path_env(passive);
   which::which(command).ok().map(|path| path.to_string_lossy().to_string())
+}
+
+fn command_exists(command: &str) -> Option<String> {
+  command_exists_with_options(command, false)
 }
 
 /// Try to install Git automatically. Returns true if Git becomes available after the attempt.
@@ -2159,8 +2197,8 @@ fn try_auto_install_git(task_id: &str) -> bool {
   false
 }
 
-fn codex_candidates() -> Vec<PathBuf> {
-  std::env::set_var("PATH", full_path_env());
+fn codex_candidates(passive: bool) -> Vec<PathBuf> {
+  apply_discovery_path_env(passive);
   let mut paths = which::which_all("codex")
     .map(|items| items.collect::<Vec<_>>())
     .unwrap_or_default();
@@ -2188,8 +2226,11 @@ fn codex_candidates() -> Vec<PathBuf> {
 }
 
 pub(crate) fn find_codex_binary() -> Value {
-  std::env::set_var("PATH", full_path_env());
-  let mut detected = collect_detected_binary_candidates(codex_candidates(), "codex");
+  find_codex_binary_with_options(false)
+}
+
+pub(crate) fn find_codex_binary_with_options(passive: bool) -> Value {
+  let mut detected = collect_detected_binary_candidates(codex_candidates(passive), "codex", passive);
   if let Some(object) = detected.as_object_mut() {
     object.insert(
       "installCommand".to_string(),
@@ -3624,7 +3665,7 @@ pub(crate) fn check_setup_environment(query: &Value) -> Result<Value, String> {
   };
 
   // 3. Check codex binary
-  let codex_binary = find_codex_binary();
+  let codex_binary = find_codex_binary_with_options(cfg!(target_os = "windows"));
   let codex_installed = codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false);
 
   // 4. Check config files
@@ -3717,8 +3758,11 @@ use crate::provider::get_string;
 /* ═══════════════  Multi-tool support  ═══════════════ */
 
 fn find_tool_binary(binary_name: &str) -> Value {
-  std::env::set_var("PATH", full_path_env());
+  find_tool_binary_with_options(binary_name, false)
+}
 
+fn find_tool_binary_with_options(binary_name: &str, passive: bool) -> Value {
+  apply_discovery_path_env(passive);
   let mut candidate_paths: Vec<PathBuf> = which::which_all(binary_name)
     .map(|items| items.collect::<Vec<_>>())
     .unwrap_or_default();
@@ -3757,14 +3801,15 @@ fn find_tool_binary(binary_name: &str) -> Value {
     }
   }
 
-  collect_detected_binary_candidates(candidate_paths, binary_name)
+  collect_detected_binary_candidates(candidate_paths, binary_name, passive)
 }
 
 pub(crate) fn list_tools() -> Result<Value, String> {
-  let codex_binary = find_codex_binary();
-  let claude_binary = find_tool_binary("claude");
-  let opencode_binary = find_tool_binary("opencode");
-  let openclaw_binary = find_tool_binary("openclaw");
+  let passive_windows = cfg!(target_os = "windows");
+  let codex_binary = find_codex_binary_with_options(passive_windows);
+  let claude_binary = find_tool_binary_with_options("claude", passive_windows);
+  let opencode_binary = find_tool_binary_with_options("opencode", passive_windows);
+  let openclaw_binary = find_tool_binary_with_options("openclaw", passive_windows);
 
   Ok(json!([
     {
@@ -4304,7 +4349,7 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
   let home = claude_code_home()?;
   let settings_path = home.join("settings.json");
   let settings = read_json_file(&settings_path)?;
-  let binary = find_tool_binary("claude");
+  let binary = find_tool_binary_with_options("claude", cfg!(target_os = "windows"));
 
   let model = settings.get("model").and_then(Value::as_str).unwrap_or("").to_string();
   let always_thinking = settings.get("alwaysThinkingEnabled").and_then(Value::as_bool).unwrap_or(false);
@@ -5409,7 +5454,7 @@ pub(crate) fn load_opencode_state(query: &Value) -> Result<Value, String> {
   let config = parse_jsonc_content(&raw_config)?;
   let auth_json = parse_opencode_auth_json(&raw_auth)?;
   let auth_entries = summarize_opencode_auth_entries(&auth_json);
-  let binary = find_tool_binary("opencode");
+  let binary = find_tool_binary_with_options("opencode", cfg!(target_os = "windows"));
 
   let mut providers = config.get("provider")
     .and_then(Value::as_object)
@@ -5639,7 +5684,7 @@ pub(crate) fn remove_opencode_auth(body: &Value) -> Result<Value, String> {
 pub(crate) fn load_openclaw_state() -> Result<Value, String> {
   let home = openclaw_home()?;
   let config_path = home.join("openclaw.json");
-  let binary = find_tool_binary("openclaw");
+  let binary = find_tool_binary_with_options("openclaw", cfg!(target_os = "windows"));
 
   let mut config = if config_path.exists() {
     read_json_file(&config_path).unwrap_or(json!({}))
@@ -5670,7 +5715,11 @@ pub(crate) fn load_openclaw_state() -> Result<Value, String> {
 
   let gateway_url = format!("http://127.0.0.1:{}/", gateway_port);
   let (gateway_http_ready, gateway_port_listening) = probe_openclaw_gateway(&gateway_url);
-  let gateway_port_occupants = inspect_openclaw_port_occupants(&gateway_port);
+  let gateway_port_occupants = if cfg!(target_os = "windows") {
+    Vec::new()
+  } else {
+    inspect_openclaw_port_occupants(&gateway_port)
+  };
   let needs_onboarding = binary.get("installed").and_then(Value::as_bool).unwrap_or(false) && !config_exists;
   let dashboard_url = build_openclaw_dashboard_url(&gateway_url, &config, &gateway_token);
 

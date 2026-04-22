@@ -200,6 +200,16 @@ function binaryCandidatesFromDir(binaryName, dirPath) {
   return [path.join(dirPath, binaryName)];
 }
 
+function envPathBinDirs() {
+  const dirs = new Set();
+  const rawPath = process.env.PATH || process.env.Path || '';
+  for (const entry of String(rawPath || '').split(path.delimiter)) {
+    const resolved = safeResolveDir(entry);
+    if (resolved) dirs.add(resolved);
+  }
+  return [...dirs];
+}
+
 function readManagerBinDir(command, args = []) {
   const result = runSpawnSync(command, args, { encoding: 'utf8', timeout: 1500 });
   if (result.status !== 0) return '';
@@ -237,21 +247,27 @@ function voltaWhichBinary(binaryName) {
   return resolved && existsSync(resolved) ? resolved : '';
 }
 
-function toolBinaryCandidates(toolId) {
+function toolBinaryCandidates(toolId, { passive = false } = {}) {
   const tool = getToolDef(toolId);
   const binaryName = tool.binaryName;
   const candidates = new Set();
+  const passiveWindows = Boolean(passive && process.platform === 'win32');
   const addCandidate = (candidate) => {
     if (candidate) candidates.add(candidate);
   };
 
   if (process.platform === 'win32') {
-    const preferredPrefix = toolId === 'openclaw' ? openClawNpmPrefix() : npmGlobalPrefix();
+    const preferredPrefix = toolId === 'openclaw'
+      ? openClawNpmPrefix()
+      : passiveWindows
+        ? ''
+        : npmGlobalPrefix();
     const appData = process.env.APPDATA?.trim();
     const home = os.homedir();
     const winCandidates = [
       ...binaryCandidatesFromDir(binaryName, preferredPrefix),
       ...binaryCandidatesFromDir(binaryName, appData ? path.join(appData, 'npm') : ''),
+      ...envPathBinDirs().flatMap((dirPath) => binaryCandidatesFromDir(binaryName, dirPath)),
       ...(toolId === 'openclaw' ? binaryCandidatesFromDir(binaryName, path.join(home, '.local', 'bin')) : []),
       ...(toolId === 'opencode' ? binaryCandidatesFromDir(binaryName, path.join(home, 'scoop', 'shims')) : []),
       ...(toolId === 'opencode' ? binaryCandidatesFromDir(binaryName, path.join(process.env.ProgramData || 'C:\ProgramData', 'chocolatey', 'bin')) : []),
@@ -280,25 +296,27 @@ function toolBinaryCandidates(toolId) {
     }
   }
 
-  for (const dirPath of [...managerGlobalBinDirs(), ...managerReportedBinDirs()]) {
-    for (const candidate of binaryCandidatesFromDir(binaryName, dirPath)) {
-      if (candidate && existsSync(candidate)) addCandidate(candidate);
+  if (!passiveWindows) {
+    for (const dirPath of [...managerGlobalBinDirs(), ...managerReportedBinDirs()]) {
+      for (const candidate of binaryCandidatesFromDir(binaryName, dirPath)) {
+        if (candidate && existsSync(candidate)) addCandidate(candidate);
+      }
     }
-  }
 
-  const voltaCandidate = voltaWhichBinary(binaryName);
-  if (voltaCandidate) addCandidate(voltaCandidate);
+    const voltaCandidate = voltaWhichBinary(binaryName);
+    if (voltaCandidate) addCandidate(voltaCandidate);
 
-  const lookupResult = runSpawnSync(
-    process.platform === 'win32' ? 'where' : 'which',
-    [binaryName],
-    { encoding: 'utf8' }
-  );
+    const lookupResult = runSpawnSync(
+      process.platform === 'win32' ? 'where' : 'which',
+      [binaryName],
+      { encoding: 'utf8' }
+    );
 
-  if (lookupResult.status === 0) {
-    for (const line of String(lookupResult.stdout || '').split(/\r?\n/)) {
-      const candidate = line.trim();
-      if (candidate) addCandidate(candidate);
+    if (lookupResult.status === 0) {
+      for (const line of String(lookupResult.stdout || '').split(/\r?\n/)) {
+        const candidate = line.trim();
+        if (candidate) addCandidate(candidate);
+      }
     }
   }
 
@@ -314,9 +332,23 @@ function windowsBinaryCandidateRank(binPath = '') {
   return 3;
 }
 
-function readBinaryVersion(binPath) {
+function readBinaryVersion(binPath, { passive = false } = {}) {
   if (!binPath) return { installed: false, version: null, path: null };
   const lower = String(binPath || '').toLowerCase();
+  if (process.platform === 'win32' && passive) {
+    return {
+      installed: existsSync(binPath),
+      version: null,
+      path: binPath,
+    };
+  }
+  if (process.platform === 'win32' && (lower.endsWith('.cmd') || lower.endsWith('.bat') || lower.endsWith('.ps1'))) {
+    return {
+      installed: existsSync(binPath),
+      version: null,
+      path: binPath,
+    };
+  }
   const result = process.platform === 'win32' && lower.endsWith('.ps1')
     ? runSpawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', binPath, '--version'], { encoding: 'utf8' })
     : runSpawnSync(binPath, ['--version'], { encoding: 'utf8' });
@@ -327,11 +359,13 @@ function readBinaryVersion(binPath) {
   };
 }
 
-function findToolBinary(toolId) {
-  const candidates = toolBinaryCandidates(toolId).map((candidatePath) => readBinaryVersion(candidatePath)).filter((item) => item.installed);
+function findToolBinary(toolId, options = {}) {
+  const candidates = toolBinaryCandidates(toolId, options).map((candidatePath) => readBinaryVersion(candidatePath, options)).filter((item) => item.installed);
   candidates.sort((left, right) => {
-    const versionOrder = compareVersions(right.version || '', left.version || '');
-    if (versionOrder !== 0) return versionOrder;
+    if (!options.passive) {
+      const versionOrder = compareVersions(right.version || '', left.version || '');
+      if (versionOrder !== 0) return versionOrder;
+    }
     return windowsBinaryCandidateRank(left.path) - windowsBinaryCandidateRank(right.path);
   });
   const selected = candidates[0];
@@ -343,7 +377,7 @@ function findToolBinary(toolId) {
   };
 }
 
-export function listTools() {
+export function listTools(options = {}) {
   return Object.values(TOOL_REGISTRY).map(tool => ({
     id: tool.id,
     name: tool.name,
@@ -352,7 +386,7 @@ export function listTools() {
     configFormat: tool.configFormat,
     installMethod: tool.installMethod,
     npmPackage: tool.npmPackage,
-    binary: findToolBinary(tool.id),
+    binary: findToolBinary(tool.id, options),
   }));
 }
 
@@ -1928,11 +1962,11 @@ function codexCandidates() {
   return toolBinaryCandidates('codex');
 }
 
-function findCodexBinary() {
-  const detected = findToolBinary('codex');
+function findCodexBinary(options = {}) {
+  const detected = findToolBinary('codex', options);
   return {
     ...detected,
-    path: detected.path || commandExists('codex'),
+    path: detected.path || (options.passive ? null : commandExists('codex')),
     installCommand: `${npmCommand()} install -g ${OPENAI_CODEX_PACKAGE}`,
   };
 }
@@ -2934,24 +2968,49 @@ function launchDarwinTerminal(cwd, commandText, { toolLabel = 'Codex', terminalP
   return `${toolLabel} 已在 ${profile.label} 中启动`;
 }
 
-export function listWindowsTerminalProfiles() {
+export function listWindowsTerminalProfiles({ passive = false } = {}) {
   if (process.platform !== 'win32') return [];
 
   const localAppData = process.env.LOCALAPPDATA?.trim() || path.join(os.homedir(), 'AppData', 'Local');
   const programFiles = process.env.ProgramFiles?.trim() || 'C:\\Program Files';
   const programFilesX86 = process.env['ProgramFiles(x86)']?.trim() || 'C:\\Program Files (x86)';
-
-  const profiles = [
-    { id: 'auto', label: '自动选择（推荐）', command: '', available: true },
-    { id: 'windows-terminal', label: 'Windows Terminal', command: firstWindowsCommand(['wt.exe', 'wt']) || firstWindowsExistingPath([path.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe')]), available: false },
-    { id: 'powershell-7', label: 'PowerShell 7', command: firstWindowsCommand(['pwsh.exe', 'pwsh']), available: false },
-    { id: 'powershell', label: 'Windows PowerShell', command: firstWindowsCommand(['powershell.exe', 'powershell']), available: false },
-    { id: 'cmd', label: '命令提示符 CMD', command: firstWindowsCommand(['cmd.exe', 'cmd']) || 'cmd.exe', available: true },
-    { id: 'wezterm', label: 'WezTerm', command: firstWindowsCommand(['wezterm.exe', 'wezterm']) || firstWindowsExistingPath([
+  const systemRoot = process.env.SystemRoot?.trim() || 'C:\\Windows';
+  const windowsTerminalCommand = passive
+    ? firstWindowsExistingPath([path.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe')])
+    : firstWindowsCommand(['wt.exe', 'wt']) || firstWindowsExistingPath([path.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe')]);
+  const powerShell7Command = passive
+    ? firstWindowsExistingPath([
+      path.join(programFiles, 'PowerShell', '7', 'pwsh.exe'),
+      path.join(programFilesX86, 'PowerShell', '7', 'pwsh.exe'),
+      path.join(programFiles, 'PowerShell', '7-preview', 'pwsh.exe'),
+      path.join(programFilesX86, 'PowerShell', '7-preview', 'pwsh.exe'),
+    ])
+    : firstWindowsCommand(['pwsh.exe', 'pwsh']);
+  const windowsPowerShellCommand = passive
+    ? firstWindowsExistingPath([path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')])
+    : firstWindowsCommand(['powershell.exe', 'powershell']);
+  const cmdCommand = passive
+    ? firstWindowsExistingPath([path.join(systemRoot, 'System32', 'cmd.exe')]) || 'cmd.exe'
+    : firstWindowsCommand(['cmd.exe', 'cmd']) || 'cmd.exe';
+  const weztermCommand = passive
+    ? firstWindowsExistingPath([
       path.join(localAppData, 'Programs', 'WezTerm', 'wezterm-gui.exe'),
       path.join(programFiles, 'WezTerm', 'wezterm-gui.exe'),
       path.join(programFilesX86, 'WezTerm', 'wezterm-gui.exe'),
-    ]), available: false },
+    ])
+    : firstWindowsCommand(['wezterm.exe', 'wezterm']) || firstWindowsExistingPath([
+      path.join(localAppData, 'Programs', 'WezTerm', 'wezterm-gui.exe'),
+      path.join(programFiles, 'WezTerm', 'wezterm-gui.exe'),
+      path.join(programFilesX86, 'WezTerm', 'wezterm-gui.exe'),
+    ]);
+
+  const profiles = [
+    { id: 'auto', label: '自动选择（推荐）', command: '', available: true },
+    { id: 'windows-terminal', label: 'Windows Terminal', command: windowsTerminalCommand, available: false },
+    { id: 'powershell-7', label: 'PowerShell 7', command: powerShell7Command, available: false },
+    { id: 'powershell', label: 'Windows PowerShell', command: windowsPowerShellCommand, available: false },
+    { id: 'cmd', label: '命令提示符 CMD', command: cmdCommand, available: true },
+    { id: 'wezterm', label: 'WezTerm', command: weztermCommand, available: false },
   ];
 
   return profiles
@@ -3205,6 +3264,17 @@ function readOpenClawDaemonState(binaryPath) {
       detail: '',
     };
   }
+  if (process.platform === 'win32') {
+    return {
+      supported: false,
+      installed: false,
+      loaded: false,
+      running: false,
+      status: 'unsupported',
+      label: '不支持',
+      detail: 'Windows 当前不支持 OpenClaw daemon 状态检测',
+    };
+  }
 
   const result = runSpawnSync(binaryPath, ['daemon', 'status'], {
     cwd: openclawHome(),
@@ -3252,7 +3322,7 @@ export async function checkSetupEnvironment({ codexHome = defaultCodexHome() } =
   const npmVersion = npmInstalled ? (npmResult.stdout || '').trim() : null;
 
   // 3. Check codex binary
-  const codexBinary = findCodexBinary();
+  const codexBinary = findCodexBinary({ passive: process.platform === 'win32' });
 
   // 4. Check config files
   const globalConfigPath = path.join(normalizedCodexHome, 'config.toml');
@@ -3320,7 +3390,7 @@ export async function loadState({ scope = 'global', projectPath = '', codexHome 
   if (implicitProvider) providers.push(implicitProvider);
   const activeProvider = providers.find((provider) => provider.isActive) || providers[0] || null;
   const login = summarizeCodexLogin(authJson);
-  const codexBinary = findCodexBinary();
+  const codexBinary = findCodexBinary({ passive: process.platform === 'win32' });
 
   return {
     appHome: appHome(),
@@ -3353,7 +3423,7 @@ export async function loadState({ scope = 'global', projectPath = '', codexHome 
       ready: codexBinary.installed,
       platform: process.platform,
       terminalProfiles: process.platform === 'win32'
-        ? listWindowsTerminalProfiles()
+        ? listWindowsTerminalProfiles({ passive: true })
         : process.platform === 'darwin'
           ? listDarwinTerminalProfiles()
           : [],
@@ -4147,7 +4217,7 @@ export async function loadClaudeCodeState(options = {}) {
   const home = claudeCodeHome();
   const settingsPath = path.join(home, 'settings.json');
   const settings = await readJsonFile(settingsPath);
-  const binary = findToolBinary('claudecode');
+  const binary = findToolBinary('claudecode', { passive: process.platform === 'win32' });
   const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY);
 
   // Read ~/.claude.json for login and model history
@@ -4631,7 +4701,7 @@ function buildOpenCodeCommandPlan(action, method) {
     return { mode: 'shell', command: 'powershell.exe', args: openClawWindowsPowerShellArgs(script), displayCommand: script };
   }
 
-  const binary = findToolBinary('opencode');
+  const binary = findToolBinary('opencode', { passive: process.platform === 'win32' });
   const removeScript = binary.installed && binary.path
     ? `rm -f "${String(binary.path).replace(/"/g, '\\"')}"`
     : 'rm -f <opencode-binary>';
@@ -5001,7 +5071,7 @@ export async function loadOpenCodeState(options = {}) {
   }
   const authJson = parseOpenCodeAuthJson(rawAuth);
   const authEntries = summarizeOpenCodeAuthEntries(authJson);
-  const binary = findToolBinary('opencode');
+  const binary = findToolBinary('opencode', { passive: process.platform === 'win32' });
   const providerMap = config.provider && typeof config.provider === 'object' ? config.provider : {};
   const model = String(config.model || '').trim();
   const smallModel = String(config.small_model || '').trim();
@@ -5276,7 +5346,7 @@ export async function installOpenClawRemote({
 export async function loadOpenClawState() {
   const home = openclawHome();
   const configPath = path.join(home, 'openclaw.json');
-  const binary = findToolBinary('openclaw');
+  const binary = findToolBinary('openclaw', { passive: process.platform === 'win32' });
 
   let config = {};
   const raw = await readText(configPath);
@@ -5291,7 +5361,7 @@ export async function loadOpenClawState() {
   const gatewayPort = process.env.OPENCLAW_GATEWAY_PORT || String(config.gateway?.port || '18789');
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
   const gatewayProbe = await probeOpenClawGateway(gatewayUrl);
-  const gatewayPortOccupants = await inspectOpenClawPortOccupants(gatewayPort);
+  const gatewayPortOccupants = process.platform === 'win32' ? [] : await inspectOpenClawPortOccupants(gatewayPort);
   const daemon = binary.installed ? readOpenClawDaemonState(binary.path || 'openclaw') : {
     supported: process.platform !== 'win32',
     installed: false,

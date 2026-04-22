@@ -432,14 +432,16 @@ async function loadOpenCodeEcosystemState({ render = true } = {}) {
 async function loadTools() {
   try {
     const json = await api('/api/tools');
-if (json.ok && json.data) {
+    if (json.ok && json.data) {
       state.tools = ensureKnownTools(json.data);
       renderStatus();
-      renderToolsPage();
       updateToolSelector();
-      await loadCodexAppState({ render: false }).catch((e) => console.warn('[loadTools] loadCodexAppState failed:', e));
-      await loadOpenCodeDesktopState({ render: false }).catch((e) => console.warn('[loadTools] loadOpenCodeDesktopState failed:', e));
-      await loadOpenCodeEcosystemState({ render: false }).catch((e) => console.warn('[loadTools] loadOpenCodeEcosystemState failed:', e));
+      if (state.activePage === 'tools') {
+        renderToolsPage();
+        await loadCodexAppState({ render: false }).catch((e) => console.warn('[loadTools] loadCodexAppState failed:', e));
+        await loadOpenCodeDesktopState({ render: false }).catch((e) => console.warn('[loadTools] loadOpenCodeDesktopState failed:', e));
+        await loadOpenCodeEcosystemState({ render: false }).catch((e) => console.warn('[loadTools] loadOpenCodeEcosystemState failed:', e));
+      }
       renderCurrentConfig();
       renderToolConsole();
       if (state.activePage === 'tools') renderToolsPage();
@@ -3971,6 +3973,14 @@ async function launchOpenCodeOnly() {
   if (!launched.ok) return flash(launched.error || '启动失败', 'error');
   flash('OpenCode 已启动', 'success');
   return true;
+}
+
+async function launchActiveTool(terminalProfile = '') {
+  const tool = state.activeTool || 'codex';
+  if (tool === 'opencode') return launchOpenCodeOnly();
+  if (tool === 'claudecode') return launchClaudeCodeOnly();
+  if (tool === 'openclaw') return launchOpenClawOnly();
+  return launchCodex('launchBtn', 'Codex 已启动', terminalProfile || 'auto');
 }
 
 
@@ -10688,6 +10698,7 @@ function setPage(page = 'quick') {
   }
   if (page === 'tools') {
     renderToolsPage();
+    void loadCodexAppState({ render: true });
     void loadOpenCodeDesktopState({ render: true });
     void loadOpenCodeEcosystemState({ render: true });
   }
@@ -18096,7 +18107,7 @@ function bindEvents() {
         return false;
       }
     }
-    await launchCodexOnly();
+    await launchActiveTool();
     return false;
   });
   // OpenClaw dashboard quick button
@@ -18200,7 +18211,7 @@ function bindEvents() {
     state.codexTerminalProfile = selectedProfile;
     renderCodexTerminalPicker();
     closeCodexTerminalMenu();
-    await launchCodexOnly(selectedProfile);
+    await launchActiveTool(selectedProfile);
   });
 
   el('codexResumeSessions')?.addEventListener('click', async (event) => {
@@ -19517,7 +19528,7 @@ function bindEvents() {
     if (state.wizardSelectedTool && state.wizardSelectedTool !== state.activeTool) {
       setActiveTool(state.wizardSelectedTool);
     }
-    await launchCodexOnly();
+    await launchActiveTool();
   });
   el('setupWizard').querySelector('.wizard-backdrop').addEventListener('click', closeSetupWizard);
 

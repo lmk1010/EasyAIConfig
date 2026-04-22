@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
-use crate::codex::find_codex_binary;
+use crate::codex::find_codex_binary_with_options;
 use crate::provider::{
   detect_saved_provider, flatten_auth_json, get_string, infer_env_key, infer_provider_label,
   infer_provider_seed, normalize_base_url, reveal_provider_api_key, slugify_provider_key,
@@ -184,7 +184,7 @@ pub(crate) fn load_state(query: &Value) -> Result<Value, String> {
     .cloned()
     .unwrap_or(Value::Null);
   let config_object = parse_json_object(&config);
-  let codex_binary = find_codex_binary();
+  let codex_binary = find_codex_binary_with_options(cfg!(target_os = "windows"));
   let provider_base_url = active_provider.get("baseUrl").and_then(Value::as_str).unwrap_or_default();
   let env_key = active_provider
     .get("resolvedKeyName")
@@ -717,4 +717,3 @@ pub(crate) fn restore_backup(body: &Value) -> Result<Value, String> {
     }
   }))
 }
-
