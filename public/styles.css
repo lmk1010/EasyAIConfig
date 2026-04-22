@@ -22183,41 +22183,38 @@ body {
 .shell-v2 .dashboard-page .db3-dashboard-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(300px, 1fr);
-  gap: 16px;
+  gap: 12px 26px;
   align-items: start;
 }
 
 .shell-v2 .dashboard-page .db2-section.db3-panel {
-  padding: 18px 18px 16px;
-  border-radius: 18px;
-  background:
-    radial-gradient(120% 140% at 0% 0%, rgba(107, 158, 255, 0.08) 0%, transparent 56%),
-    linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012));
-  backdrop-filter: blur(20px) saturate(135%);
-  -webkit-backdrop-filter: blur(20px) saturate(135%);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 12px 28px rgba(0, 0, 0, 0.14);
-  gap: 14px;
+  padding: 12px 0 6px;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 12px;
 }
 
 [data-theme="light"] .shell-v2 .dashboard-page .db2-section.db3-panel {
-  background:
-    radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.08) 0%, transparent 56%),
-    linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.7));
-  box-shadow:
-    inset 0 0 0 1px rgba(15, 23, 42, 0.05),
-    inset 0 1px 0 rgba(255, 255, 255, 0.8),
-    0 8px 22px rgba(15, 23, 42, 0.06);
+  border-top-color: rgba(15, 23, 42, 0.08);
 }
 
 .shell-v2 .dashboard-page .db3-panel--wide {
   grid-column: 1 / -1;
 }
 
+.shell-v2 .dashboard-page .db3-dashboard-grid > .db2-section.db3-panel:nth-child(-n+2) {
+  border-top: 0;
+  padding-top: 0;
+}
+
 .shell-v2 .dashboard-page .db3-panel--chart .db2-ichart-wrap {
   min-height: 240px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent);
+  border-radius: 0;
 }
 
 .shell-v2 .dashboard-page .db3-panel--chart .db2-ichart-canvas {
@@ -22232,26 +22229,25 @@ body {
 
 .shell-v2 .dashboard-page .db3-standards-list {
   display: grid;
-  gap: 10px;
+  gap: 0;
 }
 
 .shell-v2 .dashboard-page .db3-standard-card {
   display: grid;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 8px;
+  padding: 14px 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .shell-v2 .dashboard-page .db3-standard-card.is-detected {
-  border-color: rgba(91, 140, 255, 0.22);
-  box-shadow: inset 0 0 0 1px rgba(91, 140, 255, 0.08);
+  box-shadow: none;
 }
 
 [data-theme="light"] .shell-v2 .dashboard-page .db3-standard-card {
-  background: rgba(15, 23, 42, 0.02);
-  border-color: rgba(15, 23, 42, 0.06);
+  border-bottom-color: rgba(15, 23, 42, 0.07);
 }
 
 .shell-v2 .dashboard-page .db3-standard-head {
@@ -22292,14 +22288,14 @@ body {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--s2-faint);
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .shell-v2 .dashboard-page .db3-standard-chip.is-live {
   color: #4ade80;
-  border-color: rgba(74, 222, 128, 0.18);
-  background: rgba(74, 222, 128, 0.08);
+  border-color: rgba(74, 222, 128, 0.28);
+  background: rgba(74, 222, 128, 0.04);
 }
 
 .shell-v2 .dashboard-page .db3-standard-rates {
@@ -22313,10 +22309,11 @@ body {
   display: inline-flex;
   align-items: center;
   min-height: 24px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 0 0 0 10px;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 0.64rem;
   font-weight: 650;
   color: var(--s2-text);
@@ -22330,6 +22327,11 @@ body {
   border-color: rgba(15, 23, 42, 0.07) !important;
 }
 
+[data-theme="light"] .shell-v2 .dashboard-page .db3-standard-rates span,
+[data-theme="light"] .shell-v2 .dashboard-page .db3-price-rates span {
+  background: transparent !important;
+}
+
 .shell-v2 .dashboard-page .db3-price-table {
   overflow-x: auto;
   padding-bottom: 2px;
@@ -22338,7 +22340,7 @@ body {
 .shell-v2 .dashboard-page .db3-price-grid {
   min-width: 920px;
   display: grid;
-  gap: 8px;
+  gap: 0;
 }
 
 .shell-v2 .dashboard-page .db3-price-row {
@@ -22346,19 +22348,19 @@ body {
   grid-template-columns: minmax(180px, 1.35fr) repeat(3, minmax(86px, 0.56fr)) minmax(190px, 1.05fr) minmax(110px, 0.72fr);
   gap: 10px;
   align-items: center;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 11px 8px;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 [data-theme="light"] .shell-v2 .dashboard-page .db3-price-row {
-  background: rgba(15, 23, 42, 0.02);
-  border-color: rgba(15, 23, 42, 0.06);
+  border-bottom-color: rgba(15, 23, 42, 0.07);
 }
 
 .shell-v2 .dashboard-page .db3-price-row--head {
-  padding: 0 12px;
+  padding: 0 8px 8px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -22370,13 +22372,14 @@ body {
 }
 
 .shell-v2 .dashboard-page .db3-price-row--total {
-  border-color: rgba(91, 140, 255, 0.16);
-  background: rgba(91, 140, 255, 0.06);
+  padding-top: 14px;
+  border-bottom: 0;
+  border-top: 1px solid rgba(91, 140, 255, 0.16);
+  background: transparent;
 }
 
 [data-theme="light"] .shell-v2 .dashboard-page .db3-price-row--total {
-  background: rgba(59, 130, 246, 0.06);
-  border-color: rgba(59, 130, 246, 0.14);
+  border-top-color: rgba(59, 130, 246, 0.14);
 }
 
 .shell-v2 .dashboard-page .db3-price-model-cell {
@@ -22458,6 +22461,44 @@ body {
   justify-content: flex-end;
 }
 
+.shell-v2 .dashboard-page .db3-panel .db2-card-head {
+  padding: 0 0 6px;
+  margin-bottom: 0;
+}
+
+.shell-v2 .dashboard-page .db3-panel .db2-card-title {
+  color: var(--s2-text);
+}
+
+.shell-v2 .dashboard-page .db3-panel .db2-card-title svg {
+  opacity: 0.65;
+}
+
+.shell-v2 .dashboard-page .db3-panel .db2-card-meta {
+  color: var(--s2-faint);
+}
+
+.shell-v2 .dashboard-page .db3-panel .db2-mdist-item {
+  padding: 10px 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  transform: none !important;
+}
+
+.shell-v2 .dashboard-page .db3-panel .db2-mdist-item:hover {
+  background: transparent;
+}
+
+[data-theme="light"] .shell-v2 .dashboard-page .db3-panel .db2-mdist-item {
+  border-bottom-color: rgba(15, 23, 42, 0.07);
+}
+
+.shell-v2 .dashboard-page .db3-panel .db2-cost-trend-summary {
+  padding-top: 10px;
+}
+
 @media (max-width: 1180px) {
   .shell-v2 .dashboard-page .db3-dashboard-grid {
     grid-template-columns: 1fr;
@@ -22483,6 +22524,6 @@ body {
   }
 
   .shell-v2 .dashboard-page .db2-section.db3-panel {
-    padding: 16px;
+    padding: 12px 0 6px;
   }
 }
