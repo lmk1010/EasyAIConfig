@@ -6092,17 +6092,28 @@ const CODEX_MODEL_PRICING = {
   'claude-haiku-4':            { input: 0.80,  output: 4.00,  cached: 0.08,  label: 'Claude Haiku 4' },
 };
 
-function lookupModelPricing(modelName) {
+function lookupModelPricingEntry(modelName) {
   const name = String(modelName || '').trim().toLowerCase();
   if (!name || name === 'unknown') return null;
-  // Exact match first
-  if (CODEX_MODEL_PRICING[name]) return CODEX_MODEL_PRICING[name];
-  // Prefix match (e.g. 'gpt-5.1-codex-2025-04-14' → 'gpt-5.1-codex')
+  if (CODEX_MODEL_PRICING[name]) return { key: name, pricing: CODEX_MODEL_PRICING[name] };
   const keys = Object.keys(CODEX_MODEL_PRICING).sort((a, b) => b.length - a.length);
   for (const key of keys) {
-    if (name.startsWith(key)) return CODEX_MODEL_PRICING[key];
+    if (name.startsWith(key)) return { key, pricing: CODEX_MODEL_PRICING[key] };
   }
   return null;
+}
+
+function lookupModelPricing(modelName) {
+  return lookupModelPricingEntry(modelName)?.pricing || null;
+}
+
+function formatDashboardUsd(value, { min = 2, max = 4 } = {}) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return '–';
+  return '$' + num.toLocaleString('en-US', {
+    minimumFractionDigits: min,
+    maximumFractionDigits: max,
+  });
 }
 
 function calcModelCost(modelEntry) {
@@ -6121,48 +6132,148 @@ function calcModelCost(modelEntry) {
   return { inputCost, outputCost, cachedReadCost, cacheWriteCost, totalCost, pricing };
 }
 
+function renderPricingStandardsCards(models = [], preferredKeys = []) {
+  const detectedKeys = new Set(
+    (models || [])
+      .map((entry) => lookupModelPricingEntry(entry.model)?.key)
+      .filter(Boolean)
+  );
+  const keys = [...new Set([...(preferredKeys || []), ...detectedKeys])].filter((key) => CODEX_MODEL_PRICING[key]).slice(0, 6);
+  if (!keys.length) return '<div class="db2-empty">暂无可识别的官方计费标准。</div>';
+  return `
+    <div class="db3-standards-note">单位：USD / 1M tokens。缓存写入按输入单价 1.25x 估算。</div>
+    <div class="db3-standards-list">
+      ${keys.map((key) => {
+        const pricing = CODEX_MODEL_PRICING[key];
+        const detected = detectedKeys.has(key);
+        return `<article class="db3-standard-card ${detected ? 'is-detected' : ''}">
+          <div class="db3-standard-head">
+            <div class="db3-standard-copy">
+              <div class="db3-standard-name">${escapeHtml(pricing.label)}</div>
+              <div class="db3-standard-key">${escapeHtml(key)}</div>
+            </div>
+            <span class="db3-standard-chip ${detected ? 'is-live' : ''}">${detected ? '已检测' : '未检测'}</span>
+          </div>
+          <div class="db3-standard-rates">
+            <span>输入 ${escapeHtml(formatDashboardUsd(pricing.input, { min: pricing.input < 1 ? 3 : 2, max: 3 }))}</span>
+            <span>输出 ${escapeHtml(formatDashboardUsd(pricing.output, { min: pricing.output < 1 ? 3 : 2, max: 3 }))}</span>
+            <span>缓存 ${escapeHtml(formatDashboardUsd(pricing.cached, { min: pricing.cached < 1 ? 3 : 2, max: 3 }))}</span>
+          </div>
+        </article>`;
+      }).join('')}
+    </div>`;
+}
+
 function renderModelCostRows(models = [], totalTokens = 0) {
-  if (!models.length) return '<div class="db2-empty">暂无模型消耗数据。</div>';
+  if (!models.length) return '<div class="db2-empty">暂无模型计费数据。</div>';
+  const totals = {
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cachedRead: 0,
+    cacheWrite: 0,
+    totalCost: 0,
+    matched: 0,
+  };
   const rows = models.map((entry) => {
     const cost = calcModelCost(entry);
+    const pricingEntry = lookupModelPricingEntry(entry.model);
     const tokens = entry.totals?.total || 0;
+    const input = entry.totals?.input || 0;
+    const output = entry.totals?.output || 0;
+    const reasoning = entry.totals?.reasoning || 0;
+    const cachedRead = entry.totals?.cachedInput || entry.totals?.cacheRead || 0;
+    const cacheWrite = entry.totals?.cacheCreation || 0;
     const pct = totalTokens ? Math.round(tokens / totalTokens * 100) : 0;
-    const barWidth = totalTokens ? Math.max(3, Math.round(tokens / totalTokens * 100)) : 3;
-    const modelLabel = cost?.pricing?.label || entry.model;
-    const costStr = cost ? '$' + cost.totalCost.toFixed(4) : '–';
-    const inputCostStr = cost ? '$' + cost.inputCost.toFixed(4) : '–';
-    const outputCostStr = cost ? '$' + cost.outputCost.toFixed(4) : '–';
-    const cachedReadCostStr = cost ? '$' + cost.cachedReadCost.toFixed(4) : '–';
-    const cacheWriteCostStr = cost ? '$' + cost.cacheWriteCost.toFixed(4) : '–';
-    return `<div class="db2-model-row">
-      <div class="db2-model-name" title="${escapeHtml(entry.model)}">${escapeHtml(modelLabel)}</div>
-      <div class="db2-model-bar-cell"><div class="db2-model-bar" style="width:${barWidth}%"></div></div>
-      <div class="db2-model-tokens">${escapeHtml(formatDashboardMetric(tokens))}</div>
-      <div class="db2-model-pct">${pct}%</div>
-      <div class="db2-model-cost ${cost ? '' : 'db2-model-cost--na'}" title="输入 ${escapeHtml(inputCostStr)} · 输出 ${escapeHtml(outputCostStr)} · 缓存读 ${escapeHtml(cachedReadCostStr)} · 缓存写 ${escapeHtml(cacheWriteCostStr)}">${escapeHtml(costStr)}</div>
+    const modelLabel = cost?.pricing?.label || pricingEntry?.pricing?.label || entry.model;
+
+    totals.input += input;
+    totals.output += output;
+    totals.reasoning += reasoning;
+    totals.cachedRead += cachedRead;
+    totals.cacheWrite += cacheWrite;
+    if (cost) {
+      totals.totalCost += cost.totalCost;
+      totals.matched += 1;
+    }
+
+    const rateChips = pricingEntry
+      ? `<div class="db3-price-rates">
+          <span>IN ${escapeHtml(formatDashboardUsd(pricingEntry.pricing.input, { min: pricingEntry.pricing.input < 1 ? 3 : 2, max: 3 }))}</span>
+          <span>OUT ${escapeHtml(formatDashboardUsd(pricingEntry.pricing.output, { min: pricingEntry.pricing.output < 1 ? 3 : 2, max: 3 }))}</span>
+          <span>CACHE ${escapeHtml(formatDashboardUsd(pricingEntry.pricing.cached, { min: pricingEntry.pricing.cached < 1 ? 3 : 2, max: 3 }))}</span>
+        </div>`
+      : '<div class="db3-price-rates db3-price-rates--na"><span>未匹配官方定价</span></div>';
+
+    return `<div class="db3-price-row">
+      <div class="db3-price-model-cell">
+        <div class="db3-price-model-main">${escapeHtml(modelLabel)}</div>
+        <div class="db3-price-model-meta">
+          <span>${pct}% 占比</span>
+          <span>${cost ? '已估算' : '待补齐映射'}</span>
+        </div>
+        ${modelLabel !== entry.model ? `<div class="db3-price-model-raw" title="${escapeHtml(entry.model)}">${escapeHtml(entry.model)}</div>` : ''}
+      </div>
+      <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(input))}">
+        <strong>${escapeHtml(formatDashboardMetric(input))}</strong>
+        <span>输入</span>
+      </div>
+      <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(output + reasoning))}">
+        <strong>${escapeHtml(formatDashboardMetric(output + reasoning))}</strong>
+        <span>${reasoning ? `推理 ${escapeHtml(formatDashboardMetric(reasoning))}` : '输出'}</span>
+      </div>
+      <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(cachedRead))}">
+        <strong>${escapeHtml(formatDashboardMetric(cachedRead))}</strong>
+        <span>${cacheWrite ? `写 ${escapeHtml(formatDashboardMetric(cacheWrite))}` : '缓存读'}</span>
+      </div>
+      <div class="db3-price-rate-cell">${rateChips}</div>
+      <div class="db3-price-total ${cost ? '' : 'db3-price-total--na'}">
+        <strong>${escapeHtml(cost ? formatDashboardUsd(cost.totalCost, { min: 4, max: 4 }) : '–')}</strong>
+        <span>${escapeHtml(cost ? `写入 ${formatDashboardUsd(cost.cacheWriteCost, { min: 4, max: 4 })}` : '无可用估算')}</span>
+      </div>
     </div>`;
   });
-  // Total row
-  const totalCost = models.reduce((sum, entry) => {
-    const cost = calcModelCost(entry);
-    return sum + (cost ? cost.totalCost : 0);
-  }, 0);
-  rows.push(`<div class="db2-model-row db2-model-row--total">
-    <div class="db2-model-name">合计</div>
-    <div class="db2-model-bar-cell"></div>
-    <div class="db2-model-tokens">${escapeHtml(formatDashboardMetric(totalTokens))}</div>
-    <div class="db2-model-pct">100%</div>
-    <div class="db2-model-cost">${totalCost ? '$' + totalCost.toFixed(4) : '–'}</div>
-  </div>`);
-  return `<div class="db2-model-table">
-    <div class="db2-model-row db2-model-row--head">
-      <div class="db2-model-name">模型</div>
-      <div class="db2-model-bar-cell">占比</div>
-      <div class="db2-model-tokens">Token</div>
-      <div class="db2-model-pct">%</div>
-      <div class="db2-model-cost">费用估算</div>
+  rows.push(`<div class="db3-price-row db3-price-row--total">
+    <div class="db3-price-model-cell">
+      <div class="db3-price-model-main">合计</div>
+      <div class="db3-price-model-meta">
+        <span>${totals.matched}/${models.length} 个模型已匹配定价</span>
+      </div>
     </div>
-    ${rows.join('')}
+    <div class="db3-price-metric">
+      <strong>${escapeHtml(formatDashboardMetric(totals.input))}</strong>
+      <span>输入</span>
+    </div>
+    <div class="db3-price-metric">
+      <strong>${escapeHtml(formatDashboardMetric(totals.output + totals.reasoning))}</strong>
+      <span>${totals.reasoning ? `推理 ${escapeHtml(formatDashboardMetric(totals.reasoning))}` : '输出'}</span>
+    </div>
+    <div class="db3-price-metric">
+      <strong>${escapeHtml(formatDashboardMetric(totals.cachedRead))}</strong>
+      <span>${totals.cacheWrite ? `写 ${escapeHtml(formatDashboardMetric(totals.cacheWrite))}` : '缓存读'}</span>
+    </div>
+    <div class="db3-price-rate-cell">
+      <div class="db3-price-rates db3-price-rates--summary">
+        <span>${escapeHtml(formatDashboardMetric(totalTokens))} total</span>
+      </div>
+    </div>
+    <div class="db3-price-total">
+      <strong>${escapeHtml(totals.totalCost ? formatDashboardUsd(totals.totalCost, { min: 4, max: 4 }) : '–')}</strong>
+      <span>累计估算</span>
+    </div>
+  </div>`);
+  return `<div class="db3-price-table">
+    <div class="db3-price-grid">
+      <div class="db3-price-row db3-price-row--head">
+        <div>模型</div>
+        <div>输入</div>
+        <div>输出 / 推理</div>
+        <div>缓存</div>
+        <div>计费标准</div>
+        <div>预估费用</div>
+      </div>
+      ${rows.join('')}
+    </div>
   </div>`;
 }
 
@@ -6183,6 +6294,7 @@ function renderDashboardPage() {
   const claudeLastUpdated = formatDashboardUpdatedAt(claude.usage?.generatedAt);
   const showDashboardRefresh = dashboardTool === 'codex' || dashboardTool === 'claudecode';
   const autoRefreshLabel = dashboardTool === 'claudecode' ? 'Claude Code 自动刷新' : 'Codex 自动刷新';
+  const daysWindow = state.dashboardDays || 30;
   const dashboardStatusText = dashboardTool === 'claudecode'
     ? (isLoading ? '正在统计本地 Claude Code token…' : (claudeLastUpdated || '统计已完成'))
     : (isLoading ? '正在统计本地 Codex token…' : (lastUpdated || '统计已完成'));
@@ -6192,6 +6304,13 @@ function renderDashboardPage() {
     { key: 'claudecode', label: 'Claude Code', dot: '#4ade80', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>' },
     { key: 'openclaw', label: 'OpenClaw', dot: '#fbbf24', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>' },
   ];
+  const toolLabel = (tabs.find((t) => t.key === dashboardTool) || tabs[0]).label;
+  if (el('pageTitle')) el('pageTitle').textContent = `${toolLabel} · 数据看板`;
+  if (el('pageSubtitle')) {
+    el('pageSubtitle').textContent = dashboardTool === 'openclaw'
+      ? '集中查看 OpenClaw Gateway、渠道与 Provider 状态。'
+      : `${dashboardStatusText} · 最近 ${daysWindow} 天窗口`;
+  }
 
   // ── Stat strip ──
   const statStrip = (items = []) => `
@@ -6203,6 +6322,14 @@ function renderDashboardPage() {
           ${sub ? `<div class="db2-sc-sub">${escapeHtml(String(sub))}</div>` : ''}
         </div>
       `).join('')}
+    </div>`;
+  const heroStatsHtml = (stats) => `
+    <div class="db3-hero-stats">
+      ${stats.map((s) => `
+        <div class="db3-hero-stat ${s.emphasis ? 'db3-hero-stat-emph' : ''}">
+          <div class="db3-hero-value">${escapeHtml(String(s.value))}</div>
+          <div class="db3-hero-label">${escapeHtml(s.label)}</div>
+        </div>`).join('')}
     </div>`;
 
   // ── Mini bar list ──
@@ -6229,7 +6356,6 @@ function renderDashboardPage() {
 
   // ── Codex Token percentage bar ──
   // ── Filter daily data by calendar date cutoff ──
-  const daysWindow = state.dashboardDays || 30;
   const codexCutoff = new Date(Date.now() - daysWindow * 86400000).toISOString().slice(0, 10);
   const codexDaily = (codexMetrics.daily || []).filter(d => (d.date || '') >= codexCutoff);
 
@@ -6240,6 +6366,7 @@ function renderDashboardPage() {
   const codexCached = codexDaily.reduce((s, d) => s + (d.cachedInput || 0), 0);
   const codexReasoning = codexDaily.reduce((s, d) => s + (d.reasoning || 0), 0);
   const codexModels = codexMetrics.models || [];
+  const codexModelTotal = codexModels.reduce((sum, entry) => sum + (entry.totals?.total || 0), 0);
   
   const codexTotalCost = codexModels.reduce((sum, entry) => {
     const cost = calcModelCost(entry);
@@ -6249,102 +6376,75 @@ function renderDashboardPage() {
     return sum + (cost ? cost.totalCost * windowShare : 0);
   }, 0);
 
-  // ── Codex HTML ──
-  // ── New Hero (Codex) ─────────────────────────────────────────
-  // Four headline metrics on one row + a full-width trend chart inside
-  // the same glass card. The cost cell is the visual anchor (biggest
-  // number, green accent) because that's what the user actually wants
-  // to know when they land on this page.
   const codexCacheHitPct = codexTotal ? Math.round(codexCached / codexTotal * 100) : 0;
+  const codexInputPct = codexTotal ? Math.round(codexInput / codexTotal * 100) : 0;
+  const codexTopModel = codexModels[0] ? (lookupModelPricingEntry(codexModels[0].model)?.pricing?.label || codexModels[0].model) : '—';
   const codexHeroStats = [
-    { key: 'cost',   label: '本期消耗 · USD', value: codexTotalCost ? '$' + codexTotalCost.toFixed(2) : '$0.00', emphasis: true },
-    { key: 'total',  label: '总 TOKEN',        value: formatDashboardMetric(codexTotal) },
-    { key: 'output', label: '输出',             value: formatDashboardMetric(codexOutput) },
-    { key: 'cache',  label: '缓存命中率',       value: codexTotal ? codexCacheHitPct + '%' : '—' },
+    { label: '本期预估', value: codexTotalCost ? formatDashboardUsd(codexTotalCost, { min: 2, max: 2 }) : '$0.00', sub: `OpenAI / ${daysWindow} 天`, isCost: true },
+    { label: '输入 Token', value: formatDashboardMetric(codexInput), sub: `${codexInputPct}% 占比` },
+    { label: '输出 Token', value: formatDashboardMetric(codexOutput), sub: codexReasoning ? `推理 ${formatDashboardMetric(codexReasoning)}` : '无推理分摊' },
+    { label: '缓存读取', value: formatDashboardMetric(codexCached), sub: codexTotal ? `${codexCacheHitPct}% 命中` : '无缓存命中' },
+    { label: '活跃模型', value: String(codexModels.length), sub: codexTopModel, accent: true },
   ];
-  const heroStatsHtml = (stats) => `
-    <div class="db3-hero-stats">
-      ${stats.map((s) => `
-        <div class="db3-hero-stat ${s.emphasis ? 'db3-hero-stat-emph' : ''}">
-          <div class="db3-hero-value">${escapeHtml(String(s.value))}</div>
-          <div class="db3-hero-label">${escapeHtml(s.label)}</div>
-        </div>`).join('')}
-    </div>`;
 
   const codexHtml = (!hasCodexMetrics && isLoading) ? renderDashboardLoadingCard() : `
-    <div class="db2-layout">
-
-      <!-- HERO · 4 指标 + 占主体的折线图 -->
-      <section class="db3-hero">
-        ${heroStatsHtml(codexHeroStats)}
-        <div class="db3-hero-chart-wrap">
-          <div class="db3-hero-chart-head">
-            <span class="db3-hero-chart-title">Token 用量趋势</span>
-            <span class="db3-hero-chart-meta">近 ${daysWindow} 天 · 悬停看当日详情</span>
+    <div class="db2-layout db2-layout--dashboard">
+      ${statStrip(codexHeroStats)}
+      <div class="db3-dashboard-grid">
+        <section class="db2-section db3-panel db3-panel--chart">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12.5h12M3.5 11l3-3 2.5 2 4-5"/></svg>
+              Token 用量趋势
+            </div>
+            <div class="db2-card-meta">近 ${daysWindow} 天 · 悬停查看日明细</div>
           </div>
           ${renderDashboardInteractiveChart(codexDaily.map((item) => ({ label: item.date.slice(5), value: item.total || 0, input: item.input || 0, output: item.output || 0, cached: item.cachedInput || 0 })), { stroke: '#5b8cff', showCost: true, models: codexModels })}
-        </div>
-      </section>
+        </section>
 
-      <!-- 下方 2 列 · flat 无卡 -->
-      <div class="db2-main-grid">
-        <div class="db2-col">
-          <div class="db2-section">
-            <div class="db2-card-head">
-              <div class="db2-card-title">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
-                费用趋势
-              </div>
-              <div class="db2-card-meta">每日预估消耗</div>
+        <section class="db2-section db3-panel">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
+              GPT 计费标准
             </div>
-            ${renderDashboardCostTrendChart(codexDaily, codexModels)}
+            <div class="db2-card-meta">GPT-5.4 / GPT-5.3 Codex 检测结果</div>
           </div>
+          ${renderPricingStandardsCards(codexModels, ['gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex', 'o3'])}
+        </section>
 
-          <div class="db2-section">
-            <div class="db2-card-head">
-              <div class="db2-card-title">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
-                模型消耗明细
-              </div>
-              <div class="db2-card-meta">按 OpenAI 官方定价估算</div>
+        <section class="db2-section db3-panel db3-panel--wide">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
+              模型计费明细
             </div>
-            ${renderModelCostRows(codexModels, codexTotal)}
+            <div class="db2-card-meta">按 OpenAI 官方定价估算 · 单位 USD / 1M tokens</div>
           </div>
-        </div>
+          ${renderModelCostRows(codexModels, codexModelTotal)}
+        </section>
 
-        <div class="db2-col">
-          <div class="db2-section">
-            <div class="db2-card-head">
-              <div class="db2-card-title">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
-                GPT 模型分布
-              </div>
-              <div class="db2-card-meta">${codexModels.length} 个模型</div>
+        <section class="db2-section db3-panel">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
+              费用趋势
             </div>
-            ${renderDashboardModelDistChart(codexModels, codexTotal)}
+            <div class="db2-card-meta">每日预估消耗</div>
           </div>
+          ${renderDashboardCostTrendChart(codexDaily, codexModels)}
+        </section>
 
-          <div class="db2-section">
-            <div class="db2-card-head">
-              <div class="db2-card-title">Top Provider</div>
-              <div class="db2-card-meta">按 Token 占比排行</div>
+        <section class="db2-section db3-panel">
+          <div class="db2-card-head">
+            <div class="db2-card-title">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
+              模型分布
             </div>
-            <div class="db2-leaderboard">
-              ${(codexMetrics.providers || []).slice(0, 10).map((item, i) => {
-                const pct = codexTotal ? (item.totals.total / codexTotal) * 100 : 0;
-                return `
-                <div class="db2-leader-item">
-                  <div class="db2-leader-rank rank-${i+1}">${i+1}</div>
-                  <div class="db2-leader-main">
-                    <div class="db2-leader-name">${escapeHtml(item.provider)}</div>
-                    <div class="db2-leader-track"><div class="db2-leader-fill" style="width:${pct}%"></div></div>
-                  </div>
-                  <div class="db2-leader-val">${formatDashboardMetric(item.totals.total)}</div>
-                </div>`;
-              }).join('')}
-            </div>
+            <div class="db2-card-meta">累计扫描 ${codexModels.length} 个模型</div>
           </div>
-        </div>
+          ${renderDashboardModelDistChart(codexModels, codexModelTotal)}
+        </section>
       </div>
     </div>`;
 
@@ -6539,18 +6639,13 @@ function renderDashboardPage() {
     btn.classList.toggle('active', btn.getAttribute('data-dashboard-rail-tool') === dashboardTool);
   });
 
-  // Tool name (used by the header "Codex · 数据看板").
-  const toolLabel = (tabs.find((t) => t.key === dashboardTool) || tabs[0]).label;
-
   root.innerHTML = `
     <div class="dashboard-shell ${isLoading ? 'is-loading' : ''}">
-      <header class="db3-head">
-        <div class="db3-title">
-          <span class="db3-title-tool">${escapeHtml(toolLabel)}</span>
-          <span class="db3-title-sep">·</span>
-          <span class="db3-title-main">数据看板</span>
+      <div class="db3-toolbar db3-toolbar--page">
+        <div class="db3-toolbar-status">
+          ${showDashboardRefresh ? `<span class="dashboard-fetch-state ${isLoading ? 'loading' : ''}">${escapeHtml(dashboardStatusText)}</span>` : ''}
         </div>
-        <div class="db3-toolbar">
+        <div class="db3-toolbar-actions">
           <span class="db2-period-wrap">
             <div class="db2-period-dropdown" data-period-dropdown>
               <button type="button" class="db2-period-trigger" data-period-trigger>${state.dashboardDays} 天 <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
@@ -6559,10 +6654,9 @@ function renderDashboardPage() {
               </div>
             </div>
           </span>
-          ${showDashboardRefresh ? `<span class="dashboard-fetch-state ${isLoading ? 'loading' : ''}">${escapeHtml(dashboardStatusText)}</span>
-          <button type="button" class="dashboard-refresh-btn ${state.dashboardRefreshing ? 'is-busy' : ''}" data-dashboard-refresh ${state.dashboardRefreshing ? 'disabled' : ''}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${escapeHtml(state.dashboardRefreshing ? '刷新中' : '刷新')}</button>` : ''}
+          ${showDashboardRefresh ? `<button type="button" class="dashboard-refresh-btn ${state.dashboardRefreshing ? 'is-busy' : ''}" data-dashboard-refresh ${state.dashboardRefreshing ? 'disabled' : ''}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${escapeHtml(state.dashboardRefreshing ? '刷新中' : '刷新')}</button>` : ''}
         </div>
-      </header>
+      </div>
       ${content}
     </div>
   `;
