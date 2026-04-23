@@ -8264,6 +8264,14 @@ async function primeConsoleV3(tool) {
   if (tool === 'claudecode' && !window.__consoleV3.claudeUsage) loadConsoleClaudeUsage();
 }
 
+function invalidateConsoleV3Tool(tool, { usage = true, procs = true } = {}) {
+  if (!window.__consoleV3) return;
+  if (procs) window.__consoleV3.procsByTool[tool] = null;
+  if (!usage) return;
+  if (tool === 'codex') window.__consoleV3.codexStats = null;
+  if (tool === 'claudecode') window.__consoleV3.claudeUsage = null;
+}
+
 function formatRelativeTime(iso) {
   if (!iso) return '';
   const then = new Date(iso).getTime();
@@ -8483,12 +8491,16 @@ function renderConsoleV3Procs(tool, toolLabel) {
     const cpu = (typeof p.cpu === 'number') ? `${p.cpu.toFixed(1)}%` : '—';
     // Trim the most common shell boilerplate for a cleaner command preview.
     const cmdClean = (p.command || '').replace(/^\S*\/node\s+/, 'node ').trim();
+    const accountBadge = p.accountLabel
+      ? `<span class="cv3-proc-account" title="${esc(p.accountHome ? `${p.accountLabel} · ${p.accountHome}` : p.accountLabel)}">${esc(p.accountLabel)}</span>`
+      : '';
     const cwd = p.cwd ? `<span class="cv3-proc-cwd" title="${esc(p.cwd)}">${esc(p.cwd)}</span>` : '';
     return `
       <div class="cv3-proc-row">
         <div class="cv3-proc-head">
           <span class="cv3-proc-dot"></span>
           <span class="cv3-proc-pid">PID ${esc(String(p.pid))}</span>
+          ${accountBadge}
           <span class="cv3-proc-elapsed" title="已运行">${esc(p.elapsed || '—')}</span>
           <span class="cv3-proc-cpu" title="CPU 占用">CPU ${esc(cpu)}</span>
           <span class="cv3-proc-mem" title="内存占用">MEM ${esc(mem)}</span>
@@ -8701,12 +8713,18 @@ function buildConsoleV2Model(tool) {
   if (tool === 'claudecode') {
     const data = state.claudeCodeState || {};
     const login = data.login || {};
+    const activeProfile = data.activeProfile || {};
     const installed = Boolean(data.binary?.installed);
 
     const issues = [];
     if (!installed) issues.push({ tone: 'error', title: 'Claude Code 未安装', copy: '还没检测到 claude 命令，请先完成安装。' });
     if (!login.loggedIn && !data.hasApiKey) issues.push({ tone: 'error', title: '未认证', copy: '当前既没有 OAuth 登录，也没有检测到 ANTHROPIC_API_KEY。' });
     if (!data.model) issues.push({ tone: 'warn', title: '未显式指定模型', copy: '未设置默认模型时 Claude Code 会回退到内置默认值。' });
+    const heroName = activeProfile.email || activeProfile.organizationName || login.email || login.orgName || (login.loggedIn ? activeProfile.label || '官方登录' : (installed ? '未登录' : '未安装'));
+    const homePath = data.configHome || activeProfile.configDir || '';
+    const scopeHint = activeProfile.kind === 'profile'
+      ? '当前使用独立 Claude profile'
+      : '当前使用默认 ~/.claude';
 
     // Hero already shows account + plan + model. Meta should be the
     // behavior-affecting switches only.
@@ -8724,11 +8742,12 @@ function buildConsoleV2Model(tool) {
       tool,
       toolLabel: 'Claude Code',
       hero: {
-        name: login.email || login.orgName || (login.loggedIn ? '官方登录' : (installed ? '未登录' : '未安装')),
-        baseUrl: login.loggedIn ? 'ChatGPT / Anthropic 官方' : 'https://api.anthropic.com',
+        name: heroName,
+        baseUrl: scopeHint,
+        home: homePath,
         mode: login.method === 'oauth' ? 'oauth' : 'apikey',
         model: data.model || '',
-        plan: login.plan || '',
+        plan: login.plan || activeProfile.plan || '',
         healthTxt: login.loggedIn ? '已登录' : (data.hasApiKey ? 'Key 就绪' : '未认证'),
         healthCls: login.loggedIn ? 'ok' : (data.hasApiKey ? 'ok' : 'muted'),
       },
@@ -8845,6 +8864,7 @@ function renderConsoleV2(tool) {
           ${h.model ? `<span class="ch-hero-model">${esc(h.model)}</span>` : ''}
         </div>
         ${h.baseUrl ? `<div class="console-v2-hero-url">${esc(h.baseUrl)}</div>` : ''}
+        ${h.home ? `<div class="console-v2-hero-url">${esc(`CLAUDE_CONFIG_DIR · ${h.home}`)}</div>` : ''}
         ${renderHeroIpStripHTML()}
       </div>
       <div class="console-v2-hero-actions">
@@ -9024,6 +9044,7 @@ async function refreshToolConsoleData({ manual = false } = {}) {
     await loadClaudeCodeQuickState();
     await loadOpenCodeQuickState();
     await loadOpenClawQuickState();
+    invalidateConsoleV3Tool(state.consoleTool || 'codex');
     renderToolConsole();
     if (manual) flash(`${getToolConsoleLabel(state.consoleTool)} 控制台已刷新`, 'success');
   } finally {
@@ -20064,6 +20085,8 @@ loadTools();
       const savedProfiles = Array.isArray(ccData.profiles) ? ccData.profiles : [];
       const activeId = ccData.active || '';
       const ccLogin = cc.login || {};
+      const availableScopes = Array.isArray(cc.availableScopes) ? cc.availableScopes : [];
+      const defaultScope = availableScopes.find((scope) => scope.scopeId === 'default') || null;
       const cliLoggedIn = typeof isClaudeOauthLoggedIn === 'function' && isClaudeOauthLoggedIn(cc);
 
       // "默认" row — represents ~/.claude/ (Claude Code's default CONFIG_DIR).
@@ -20077,7 +20100,8 @@ loadTools();
       // As long as any one is set, the row is stable across renders.
       const defaultPlanObj = ccData.defaultPlan || {};
       const defaultPlan = defaultPlanObj.plan || '';
-      const defaultHasTokens = Boolean(defaultPlanObj.subscriptionType) || cliLoggedIn;
+      const defaultHasTokens = Boolean(defaultPlanObj.subscriptionType || defaultPlanObj.email || defaultPlanObj.organizationName)
+        || (activeId === '' && cliLoggedIn);
 
       if (defaultHasTokens) {
         // Name prefers our own backend's defaultPlan.email (read directly from
@@ -20085,8 +20109,8 @@ loadTools();
         // (populated by the slower load_claudecode_state path). This way the
         // hero shows the right identity on the very first paint instead of
         // flashing "默认账号" until cc.login arrives.
-        const defaultEmail = defaultPlanObj.email || ccLogin.email || '';
-        const defaultOrg = defaultPlanObj.organizationName || ccLogin.orgName || '';
+        const defaultEmail = defaultPlanObj.email || defaultScope?.email || (activeId === '' ? ccLogin.email : '') || '';
+        const defaultOrg = defaultPlanObj.organizationName || defaultScope?.organizationName || (activeId === '' ? ccLogin.orgName : '') || '';
         rows.push({
           key: '__claudecode_oauth_default__',
           name: defaultEmail || defaultOrg || '默认账号',
@@ -20100,6 +20124,8 @@ loadTools();
           ref: null,
           plan: defaultPlan,
           email: defaultEmail,
+          homePath: defaultScope?.configDir || (activeId === '' ? cc.configHome || '' : ''),
+          homeLabel: 'CLAUDE_CONFIG_DIR',
           tool,
         });
       }
@@ -20126,6 +20152,8 @@ loadTools();
           email: prof.email || '',
           profileId: id,
           profileConfigDir: prof.configDir || '',
+          homePath: prof.configDir || '',
+          homeLabel: 'CLAUDE_CONFIG_DIR',
           tool,
         });
       }
@@ -21031,6 +21059,10 @@ loadTools();
         if (state.activePage === 'dashboard') renderDashboardPage();
       }
     } catch (e) { console.warn('[ch] post-switch ensureClaudeDashboardData failed', e); }
+    invalidateConsoleV3Tool('claudecode');
+    if (state.activePage === 'console' && (state.consoleTool || 'codex') === 'claudecode') {
+      renderToolConsole();
+    }
     // Shell 集成 banner 里显示的 activeProfileDir 变了,刷新状态让文案跟上
     // (e.g. "无选中账号" ↔ "✓ 新开终端自动使用 UI 选中的账号")
     try { await loadShellIntegrationStatus(); } catch (_) {}

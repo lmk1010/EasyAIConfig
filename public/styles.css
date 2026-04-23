@@ -20519,7 +20519,7 @@ body {
    Two-part flex: info on the left grows/ellipses, actions pinned right. */
 .shell-v2 .cv3-ipstrip {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   margin-top: 10px;
   padding: 6px 0 0;
@@ -20535,8 +20535,10 @@ body {
   min-width: 0;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 4px;
   gap: 8px;
-  overflow: hidden;
+  overflow: visible;
 }
 .shell-v2 .cv3-ipstrip-right {
   display: inline-flex;
@@ -21651,9 +21653,10 @@ body {
 .shell-v2 .cv3-ipstrip-geo {
   color: var(--s2-muted);
   font-size: 0.7rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
   min-width: 0;
 }
 .shell-v2 .cv3-ipstrip-msg,
@@ -21936,6 +21939,7 @@ body {
 .shell-v2 .cv3-proc-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
   font-size: 0.7rem;
@@ -21949,6 +21953,22 @@ body {
 .shell-v2 .cv3-proc-pid {
   color: var(--s2-text);
   font-weight: 600;
+}
+.shell-v2 .cv3-proc-account {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(280px, 100%);
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(107, 158, 255, 0.12);
+  color: var(--s2-accent);
+  font-size: 0.64rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-theme="light"] .shell-v2 .cv3-proc-account {
+  background: rgba(59, 130, 246, 0.1);
 }
 .shell-v2 .cv3-proc-elapsed,
 .shell-v2 .cv3-proc-cpu,

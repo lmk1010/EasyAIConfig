@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-use crate::{claude_code_home, default_codex_home};
+use crate::{default_codex_home, effective_claude_code_home};
 
 fn walk_latest_mtime_and_count(dir: &Path, ext: &str) -> (u64, u64) {
   let mut count: u64 = 0;
@@ -267,7 +267,7 @@ fn count_recent_in(dir: &Path, since_epoch: u64) -> (u64, u64) {
 }
 
 pub(crate) fn claudecode_local_usage(_query: &Value) -> Result<Value, String> {
-  let projects = claude_code_home()?.join("projects");
+  let projects = effective_claude_code_home()?.join("projects");
   let now = Utc::now();
   let window_start = now - ChronoDuration::hours(5);
   let window_start_iso = window_start.to_rfc3339();

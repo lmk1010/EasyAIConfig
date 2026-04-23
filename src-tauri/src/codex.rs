@@ -3776,7 +3776,7 @@ pub(crate) fn check_setup_environment(query: &Value) -> Result<Value, String> {
 use crate::{
   app_home, compare_versions, default_codex_home, extract_version, home_dir, npm_command,
   parse_json_object, parse_toml_config, read_text, OPENAI_CODEX_PACKAGE,
-  claude_code_home, openclaw_home, opencode_config_home, opencode_data_home, write_text, ensure_dir, backups_root, CLAUDE_CODE_PACKAGE,
+  claude_code_home, effective_claude_code_home, openclaw_home, opencode_config_home, opencode_data_home, write_text, ensure_dir, backups_root, CLAUDE_CODE_PACKAGE,
   OPENCODE_PACKAGE, OPENCLAW_PACKAGE,
 };
 use crate::oauth_profiles::{migrate_auth_json_env_to_codex_env, write_switch_backup};
@@ -4568,7 +4568,8 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
   let query_object = parse_json_object(query);
   let force_usage_refresh = matches!(get_string(&query_object, "forceUsageRefresh").as_str(), "1" | "true" | "yes");
   let cache_only = matches!(get_string(&query_object, "cacheOnly").as_str(), "1" | "true" | "yes");
-  let home = claude_code_home()?;
+  let default_home = claude_code_home()?;
+  let home = effective_claude_code_home()?;
   let settings_path = home.join("settings.json");
   let settings = read_json_file(&settings_path)?;
   let binary = find_tool_binary_with_options("claude", cfg!(target_os = "windows"));
@@ -4644,10 +4645,13 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
   };
 
   // ── Read ~/.claude.json for login status and used models ──
-  let claude_json_path = dirs::home_dir()
-    .ok_or("cannot find home")?
-    .join(".claude.json");
+  let claude_json_path = claude_json_path_for_home(&home);
   let claude_json = read_json_file(&claude_json_path).unwrap_or(json!({}));
+  let default_claude_json = if home == default_home {
+    claude_json.clone()
+  } else {
+    read_json_file(&claude_json_path_for_home(&default_home)).unwrap_or(json!({}))
+  };
 
   let has_completed_onboarding = claude_json.get("hasCompletedOnboarding")
     .and_then(Value::as_bool)
@@ -4655,12 +4659,12 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
 
   // Login status — only expose oauth / api_key to UI
   let oauth = claude_json.get("oauthAccount");
-  let login_info = if let Some(account) = oauth.and_then(Value::as_object) {
+  let mut login_info = if let Some(account) = oauth.and_then(Value::as_object) {
     json!({
       "loggedIn": true,
       "method": "oauth",
-      "email": account.get("emailAddress").and_then(Value::as_str).unwrap_or(""),
-      "orgName": account.get("orgName").and_then(Value::as_str).unwrap_or(""),
+      "email": account.get("emailAddress").and_then(Value::as_str).or_else(|| account.get("email").and_then(Value::as_str)).unwrap_or(""),
+      "orgName": account.get("orgName").and_then(Value::as_str).or_else(|| account.get("organizationName").and_then(Value::as_str)).unwrap_or(""),
       "plan": account.get("accountPlan").and_then(Value::as_str).unwrap_or(""),
     })
   } else if has_api_key {
@@ -4711,10 +4715,10 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
       format!("{} · {}", base, default_plan_label)
     }
   };
-  let default_scope_visible = matches!(login_info.get("method").and_then(Value::as_str), Some("oauth"))
+  let default_scope_visible = default_claude_json.get("oauthAccount").and_then(Value::as_object).is_some()
     || !default_email.is_empty()
     || !default_plan_label.is_empty()
-    || has_claude_usage_artifacts(&home)
+    || has_claude_usage_artifacts(&default_home)
     || active_profile_id.is_empty();
 
   let mut available_scopes = Vec::new();
@@ -4724,7 +4728,7 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
       "id": "",
       "kind": "default",
       "label": default_scope_label,
-      "configDir": home.to_string_lossy().to_string(),
+      "configDir": default_home.to_string_lossy().to_string(),
       "email": default_email,
       "organizationName": default_org,
       "plan": default_plan_label,
@@ -4736,7 +4740,7 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
     "id": "",
     "kind": "default",
     "label": default_scope_label,
-    "configDir": home.to_string_lossy().to_string(),
+    "configDir": default_home.to_string_lossy().to_string(),
     "email": default_email,
     "organizationName": default_org,
     "plan": default_plan_label,
@@ -4789,6 +4793,20 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
     }
   }
 
+  if matches!(login_info.get("method").and_then(Value::as_str), Some("oauth")) {
+    if let Some(obj) = login_info.as_object_mut() {
+      if obj.get("email").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+        obj.insert("email".to_string(), active_profile.get("email").cloned().unwrap_or_else(|| json!("")));
+      }
+      if obj.get("orgName").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+        obj.insert("orgName".to_string(), active_profile.get("organizationName").cloned().unwrap_or_else(|| json!("")));
+      }
+      if obj.get("plan").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+        obj.insert("plan".to_string(), active_profile.get("plan").cloned().unwrap_or_else(|| json!("")));
+      }
+    }
+  }
+
   let scope_exists = |scope_id: &str| {
     available_scopes.iter().any(|scope| scope.get("scopeId").and_then(Value::as_str).unwrap_or("") == scope_id)
   };
@@ -4835,7 +4853,7 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
       .collect::<Vec<_>>();
     merge_claude_usage_payloads(30, payloads, "all")
   } else if effective_scope_id == "default" {
-    read_claude_telemetry_usage_for_home(&home, 30, force_usage_refresh, cache_only)
+    read_claude_telemetry_usage_for_home(&default_home, 30, force_usage_refresh, cache_only)
   } else {
     let scope_home = available_scopes.iter()
       .find(|scope| scope.get("scopeId").and_then(Value::as_str).unwrap_or("") == effective_scope_id)
@@ -4876,7 +4894,7 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
 }
 
 pub(crate) fn save_claudecode_config(body: &Value) -> Result<Value, String> {
-  let home = claude_code_home()?;
+  let home = effective_claude_code_home()?;
   let settings_path = home.join("settings.json");
   let mut settings = read_json_file(&settings_path)?;
   let obj = parse_json_object(body);
@@ -4921,7 +4939,7 @@ pub(crate) fn delete_claudecode_provider(body: &Value) -> Result<Value, String> 
     return Err("providerKey is required".to_string());
   }
 
-  let home = claude_code_home()?;
+  let home = effective_claude_code_home()?;
   let settings_path = home.join("settings.json");
   let mut settings = read_json_file(&settings_path)?;
 
@@ -4966,7 +4984,7 @@ pub(crate) fn delete_claudecode_provider(body: &Value) -> Result<Value, String> 
 }
 
 pub(crate) fn save_claudecode_raw_config(body: &Value) -> Result<Value, String> {
-  let home = claude_code_home()?;
+  let home = effective_claude_code_home()?;
   let settings_path = home.join("settings.json");
   let obj = parse_json_object(body);
   let raw = get_string(&obj, "settingsJson");

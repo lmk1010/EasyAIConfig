@@ -79,6 +79,13 @@ pub(crate) fn claude_code_home() -> Result<PathBuf, String> {
   Ok(home_dir()?.join(".claude"))
 }
 
+pub(crate) fn effective_claude_code_home() -> Result<PathBuf, String> {
+  if let Some(dir) = crate::claudecode_oauth_profiles::active_profile_config_dir() {
+    return Ok(dir);
+  }
+  claude_code_home()
+}
+
 pub(crate) fn app_home() -> Result<PathBuf, String> {
   Ok(home_dir()?.join(APP_HOME_DIRNAME))
 }

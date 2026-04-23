@@ -11,6 +11,8 @@
 //   best-effort extraction there; %CPU will read as blank.
 
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::parse_json_object;
 use crate::provider::get_string;
@@ -74,6 +76,132 @@ fn filter_matches(line: &str, needle: &str, self_pid: u32) -> bool {
   // when it's a parent-path collision (e.g. "node_modules/foo/bar/codex-..." —
   // we've already exited through Case 2 if it's node-wrapped).
   basename.starts_with(&needle_l)
+}
+
+fn normalize_home_key(path: &Path) -> String {
+  let mut text = path.to_string_lossy().to_string();
+  while text.len() > 1 && text.ends_with('/') {
+    text.pop();
+  }
+  text
+}
+
+fn claude_account_label(profile: &Value, fallback: &str) -> String {
+  let name = profile.get("name").and_then(Value::as_str).unwrap_or("").trim();
+  let email = profile.get("email").and_then(Value::as_str).unwrap_or("").trim();
+  let org = profile.get("organizationName").and_then(Value::as_str).unwrap_or("").trim();
+  if !name.is_empty() { return name.to_string(); }
+  if !email.is_empty() { return email.to_string(); }
+  if !org.is_empty() { return org.to_string(); }
+  fallback.to_string()
+}
+
+fn build_claude_account_lookup() -> Option<(PathBuf, Vec<PathBuf>, HashMap<String, String>)> {
+  let default_home = crate::claude_code_home().ok()?;
+  let mut homes = vec![default_home.clone()];
+  let mut labels = HashMap::new();
+  let profiles_state = crate::claudecode_oauth_profiles::list_claudecode_oauth_profiles(&json!({}))
+    .unwrap_or_else(|_| json!({ "profiles": [], "defaultPlan": {} }));
+
+  let default_plan = profiles_state.get("defaultPlan").cloned().unwrap_or_else(|| json!({}));
+  labels.insert(
+    normalize_home_key(&default_home),
+    claude_account_label(&default_plan, "默认账号"),
+  );
+
+  if let Some(profiles) = profiles_state.get("profiles").and_then(Value::as_array) {
+    for profile in profiles {
+      let config_dir = profile.get("configDir").and_then(Value::as_str).unwrap_or("").trim();
+      if config_dir.is_empty() { continue; }
+      let home = PathBuf::from(config_dir);
+      let key = normalize_home_key(&home);
+      if !labels.contains_key(&key) {
+        homes.push(home.clone());
+      }
+      labels.insert(key, claude_account_label(profile, "Claude 账号"));
+    }
+  }
+
+  Some((default_home, homes, labels))
+}
+
+#[cfg(target_os = "macos")]
+fn detect_claude_process_home(pid: u64, homes: &[PathBuf], default_home: &Path) -> Option<String> {
+  use std::process::Command;
+
+  let out = Command::new("lsof")
+    .args(["-Fn", "-p", &pid.to_string()])
+    .output()
+    .ok()?;
+  if !out.status.success() { return None; }
+
+  let default_key = normalize_home_key(default_home);
+  for line in String::from_utf8_lossy(&out.stdout).lines() {
+    let Some(raw) = line.strip_prefix('n') else { continue; };
+    let path = PathBuf::from(raw);
+    for home in homes {
+      if path == *home || path.starts_with(home) {
+        return Some(normalize_home_key(home));
+      }
+    }
+    if path == default_home || path.starts_with(default_home) {
+      return Some(default_key.clone());
+    }
+  }
+  None
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn detect_claude_process_home(pid: u64, _homes: &[PathBuf], default_home: &Path) -> Option<String> {
+  use std::fs;
+
+  if let Ok(raw) = fs::read(format!("/proc/{}/environ", pid)) {
+    for item in raw.split(|byte| *byte == 0) {
+      let Ok(entry) = std::str::from_utf8(item) else { continue; };
+      let Some(value) = entry.strip_prefix("CLAUDE_CONFIG_DIR=") else { continue; };
+      let value = value.trim().trim_matches('"').trim_matches('\'');
+      if !value.is_empty() {
+        return Some(normalize_home_key(Path::new(value)));
+      }
+    }
+  }
+  Some(normalize_home_key(default_home))
+}
+
+#[cfg(target_os = "windows")]
+fn detect_claude_process_home(_pid: u64, _homes: &[PathBuf], _default_home: &Path) -> Option<String> { None }
+
+fn enrich_claude_process_rows(rows: Vec<Value>) -> Vec<Value> {
+  let Some((default_home, homes, labels)) = build_claude_account_lookup() else {
+    return rows;
+  };
+  let default_key = normalize_home_key(&default_home);
+
+  rows.into_iter().map(|mut row| {
+    let pid = row.get("pid").and_then(Value::as_u64).unwrap_or(0);
+    if pid == 0 { return row; }
+
+    let Some(home) = detect_claude_process_home(pid, &homes, &default_home) else {
+      return row;
+    };
+    let label = labels.get(&home).cloned().unwrap_or_else(|| {
+      if home == default_key {
+        "默认账号".to_string()
+      } else {
+        PathBuf::from(&home)
+          .file_name()
+          .and_then(|value| value.to_str())
+          .unwrap_or("Claude 账号")
+          .to_string()
+      }
+    });
+
+    if let Some(obj) = row.as_object_mut() {
+      obj.insert("accountHome".to_string(), json!(home));
+      obj.insert("accountLabel".to_string(), json!(label));
+    }
+    row
+  }).collect()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -328,6 +456,11 @@ pub(crate) fn list_processes(query: &Value) -> Result<Value, String> {
     { Vec::new() }
   } else {
     list_posix(&effective_needle)
+  };
+  let rows = if matches!(tool.as_str(), "claudecode" | "claude") {
+    enrich_claude_process_rows(rows)
+  } else {
+    rows
   };
 
   Ok(json!({
