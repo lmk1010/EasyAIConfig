@@ -8852,35 +8852,40 @@ function renderConsoleV2(tool) {
     const h = model.hero;
     const modeTxt = h.mode === 'oauth' ? 'OAUTH' : h.mode === 'apikey' ? 'API KEY' : '';
     heroEl.innerHTML = `
-      <div class="console-v2-hero-info">
-        <div class="console-v2-hero-eyebrow">
-          <span>${esc(model.toolLabel.toUpperCase())} · SESSION</span>
-          <span class="ch-status ${esc(h.healthCls)}">${esc(h.healthTxt)}</span>
+      <div class="console-v2-hero-top">
+        <div class="console-v2-hero-info">
+          <div class="console-v2-hero-eyebrow">
+            <span>${esc(model.toolLabel.toUpperCase())} · SESSION</span>
+            <span class="ch-status ${esc(h.healthCls)}">${esc(h.healthTxt)}</span>
+          </div>
+          <h2 class="console-v2-hero-name">${esc(h.name)}</h2>
+          <div class="console-v2-hero-badges">
+            ${modeTxt ? `<span class="ch-mode ${esc(h.mode)}">${modeTxt}</span>` : ''}
+            ${h.plan ? `<span class="ch-row-plan" data-plan="${esc(String(h.plan).toLowerCase())}">${esc(String(h.plan).toUpperCase())}</span>` : ''}
+            ${h.model ? `<span class="ch-hero-model">${esc(h.model)}</span>` : ''}
+          </div>
         </div>
-        <h2 class="console-v2-hero-name">${esc(h.name)}</h2>
-        <div class="console-v2-hero-badges">
-          ${modeTxt ? `<span class="ch-mode ${esc(h.mode)}">${modeTxt}</span>` : ''}
-          ${h.plan ? `<span class="ch-row-plan" data-plan="${esc(String(h.plan).toLowerCase())}">${esc(String(h.plan).toUpperCase())}</span>` : ''}
-          ${h.model ? `<span class="ch-hero-model">${esc(h.model)}</span>` : ''}
+        <div class="console-v2-hero-actions">
+          <button type="button" class="ch-hero-ghost" data-console-v2-refresh>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
+            重新检测
+          </button>
+          <button type="button" class="ch-hero-ghost" data-console-v2-goto-quick>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M4 6h16M4 18h10"/></svg>
+            快速配置
+          </button>
+          <button type="button" class="ch-hero-ghost" data-console-v2-goto-editor>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
+            配置编辑
+          </button>
         </div>
+      </div>
+      <div class="console-v2-hero-details">
         ${h.baseUrl ? `<div class="console-v2-hero-url">${esc(h.baseUrl)}</div>` : ''}
         ${h.home ? `<div class="console-v2-hero-url">${esc(`CLAUDE_CONFIG_DIR · ${h.home}`)}</div>` : ''}
         ${renderHeroIpStripHTML()}
       </div>
-      <div class="console-v2-hero-actions">
-        <button type="button" class="ch-hero-ghost" data-console-v2-refresh>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
-          重新检测
-        </button>
-        <button type="button" class="ch-hero-ghost" data-console-v2-goto-quick>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M4 6h16M4 18h10"/></svg>
-          快速配置
-        </button>
-        <button type="button" class="ch-hero-ghost" data-console-v2-goto-editor>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
-          配置编辑
-        </button>
-      </div>`;
+      `;
   }
 
   const metaEl = document.getElementById('consoleV2Meta');
