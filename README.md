@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <strong>当前版本 Windows 暂不支持，整体更适合 macOS 用户使用。</strong>
+</p>
+
+<p align="center">
   <a href="https://github.com/lmk1010/EasyAIConfig/releases/latest"><img src="https://img.shields.io/github/v/release/lmk1010/EasyAIConfig?style=flat-square&color=8b5cf6" alt="Release" /></a>
   <a href="https://github.com/lmk1010/EasyAIConfig/blob/main/LICENSE"><img src="https://img.shields.io/github/license/lmk1010/EasyAIConfig?style=flat-square&color=3b82f6" alt="License" /></a>
   <a href="https://github.com/lmk1010/EasyAIConfig/actions"><img src="https://img.shields.io/github/actions/workflow/status/lmk1010/EasyAIConfig/release.yml?style=flat-square&label=build" alt="Build" /></a>
@@ -37,7 +41,7 @@
 | 已支持 | **配置编辑器** | 可视化编辑 + 原始配置编辑（TOML / JSON） |
 | 已支持 | **备份与恢复** | 保存前自动备份，支持一键回滚 |
 | 已支持 | **数据看板** | Codex / Claude 用量与费用估算，OpenClaw 运行状态监控 |
-| 已支持 | **跨平台客户端** | Web + Tauri 桌面端（macOS / Windows / Linux） |
+| 已支持 | **桌面客户端** | Web + Tauri 桌面端当前更适合 macOS 用户，Windows 暂不支持 |
 | 已支持 | **自动更新（桌面版）** | Tauri 桌面端支持 GitHub Releases 自动检查与安装更新 |
 
 ### 工具支持矩阵
@@ -81,9 +85,10 @@
 最新版本下载统一在 Releases：
 [https://github.com/lmk1010/EasyAIConfig/releases/latest](https://github.com/lmk1010/EasyAIConfig/releases/latest)
 
+> 当前版本 Windows 暂不支持，推荐 macOS 用户优先使用桌面版。
+
 | 平台 | 推荐安装包 | 下载链接 |
 |------|------------|----------|
-| Windows | `.msi`（推荐） / `.exe` | [下载 Windows 版本](https://github.com/lmk1010/EasyAIConfig/releases/latest) |
 | macOS (Apple Silicon) | `.dmg`（`aarch64`） | [下载 macOS 版本](https://github.com/lmk1010/EasyAIConfig/releases/latest) |
 | macOS (Intel) | `.dmg`（`x64`） | [下载 macOS 版本](https://github.com/lmk1010/EasyAIConfig/releases/latest) |
 | Linux | `.AppImage` / `.deb` | [下载 Linux 版本](https://github.com/lmk1010/EasyAIConfig/releases/latest) |

@@ -26,6 +26,11 @@ fn default_settings() -> Value {
     // When true, launching Codex / Claude Code from this app will refuse to
     // proceed if the current IP is verdict=block. Default off — user opts in.
     "ipGateBlock": false,
+    // Mirror flag for the Shell 集成 (Claude Code account follower) feature.
+    // Source of truth is still the presence of our marker block inside the
+    // shell rc files — this flag just lets the UI render instantly without
+    // scanning three files. Set by shell_integration::{enable,disable}.
+    "claudeShellIntegrationEnabled": false,
   })
 }
 
@@ -54,11 +59,9 @@ fn write_settings_raw(value: &Value) -> Result<(), String> {
   write_text(&path, &text)
 }
 
-// Public helper: read a specific setting. Kept for future backend call sites
-// (e.g. hardening launch_codex to check ipGateBlock server-side). Not called
-// yet — gate enforcement currently happens in the frontend before the launch
-// API is invoked.
-#[allow(dead_code)]
+// Public helper: read a specific setting. Used by shell_integration to
+// surface the last-known "enabled" flag without rescanning rc files, and
+// reserved for future server-side gate enforcement (ipGateBlock).
 pub(crate) fn get_bool(key: &str, default_value: bool) -> bool {
   read_settings_raw()
     .ok()

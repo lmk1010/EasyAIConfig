@@ -33,6 +33,9 @@ use crate::claudecode_oauth_profiles::{
   rename_claudecode_oauth_profile, switch_claudecode_oauth_profile,
 };
 use crate::app_settings::{load_app_settings, save_app_settings};
+use crate::shell_integration::{
+  disable_shell_integration, enable_shell_integration, shell_integration_status,
+};
 use crate::network::{
   get_network_latency, get_network_status, list_network_ip_history, refresh_network_status,
 };
@@ -162,6 +165,9 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/network/ip-history", "GET") => list_network_ip_history(query),
     ("/api/app-settings", "GET") => load_app_settings(query),
     ("/api/app-settings", "POST") => save_app_settings(body),
+    ("/api/shell-integration/status", "GET") => shell_integration_status(query),
+    ("/api/shell-integration/enable", "POST") => enable_shell_integration(body),
+    ("/api/shell-integration/disable", "POST") => disable_shell_integration(body),
     ("/api/system/processes", "GET") => list_processes(query),
     ("/api/system/process-kill", "POST") => kill_process(body),
     ("/api/codex/session-stats", "GET") => codex_session_stats(query),

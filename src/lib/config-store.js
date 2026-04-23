@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -3985,9 +3985,56 @@ export async function loginCodex({ cwd, terminalProfile = 'auto' } = {}) {
 
 /* ═══════════════  Claude Code  ═══════════════ */
 const CLAUDE_CODE_PACKAGE = '@anthropic-ai/claude-code';
+const CLAUDECODE_PROFILES_DIRNAME = 'claudecode-oauth-profiles';
+const CLAUDECODE_PROFILES_INDEX = 'profiles.json';
 
+// Tauri 后端写的 profiles 索引,Web 端只读跟随。
+// 路径: ~/.codex-config-ui/claudecode-oauth-profiles/profiles.json
+// 结构: { version, active, lastSwitchAt, profiles: [{id,...}] }
+function claudecodeProfilesRoot() {
+  return path.join(os.homedir(), APP_HOME_DIRNAME, CLAUDECODE_PROFILES_DIRNAME);
+}
+
+function readActiveClaudeProfileDir() {
+  try {
+    const indexPath = path.join(claudecodeProfilesRoot(), CLAUDECODE_PROFILES_INDEX);
+    if (!existsSync(indexPath)) return null;
+    const raw = readFileSync(indexPath, 'utf8');
+    if (!raw.trim()) return null;
+    const parsed = JSON.parse(raw);
+    const active = String(parsed?.active || '').trim();
+    if (!active) return null;
+    // 路径注入防御:active 是 UI 给定的 id,应当是纯 prof_xxx,
+    // 不允许路径分隔符或 .. 之类的片段。
+    if (active.includes('/') || active.includes('\\') || active.includes('..')) return null;
+    const dir = path.join(claudecodeProfilesRoot(), active);
+    // 目录不存在时(用户 rm -rf 了 / 从另一台机迁移过来没同步) fallthrough
+    // 回默认,避免 Dashboard/settings 写到一个悬空路径。Rust 侧 active_profile_config_dir
+    // 行为一致。
+    if (!existsSync(dir)) return null;
+    return dir;
+  } catch {
+    return null;
+  }
+}
+
+// 当激活了某个 CLAUDE_CONFIG_DIR profile,Claude Code 会把所有 home 文件
+// (settings.json / projects/ / .claude.json 等)写到那个 profile dir 下,
+// 把它当 ~/.claude 用。没激活时退回默认 ~/.claude。
 function claudeCodeHome() {
+  const profileHome = readActiveClaudeProfileDir();
+  if (profileHome) return profileHome;
   return path.join(os.homedir(), '.claude');
+}
+
+// 全局 config 文件 (.claude.json) 在 Claude Code 源码里:
+//   join(process.env.CLAUDE_CONFIG_DIR || homedir(), '.claude.json')
+// - 默认模式: ~/.claude.json (注意是 homedir 下,不是 ~/.claude/ 里)
+// - profile 模式: <profile_dir>/.claude.json
+function claudeGlobalConfigPath() {
+  const profileHome = readActiveClaudeProfileDir();
+  if (profileHome) return path.join(profileHome, '.claude.json');
+  return path.join(os.homedir(), '.claude.json');
 }
 
 function readJsonFile(filePath) {
@@ -4004,8 +4051,104 @@ async function writeJsonFile(filePath, data) {
 }
 
 
-async function readClaudeTelemetryUsage({ days = 30 } = {}) {
-  const home = claudeCodeHome();
+// 列出所有可扫描的 Claude 账号目录(含默认 ~/.claude 和所有 profile 目录),
+// 给 Dashboard 聚合视图用。返回 [{ scopeId, label, home, claudeJsonPath }]。
+// - scopeId: 'default' 或 'prof_xxx',前端标识用
+// - home: 扫 projects/*.jsonl 的 root
+// - claudeJsonPath: 读 officialCost 的路径
+function listClaudeScopes() {
+  const scopes = [];
+  const defaultHome = path.join(os.homedir(), '.claude');
+  scopes.push({
+    scopeId: 'default',
+    label: '默认账号',
+    home: defaultHome,
+    claudeJsonPath: path.join(os.homedir(), '.claude.json'),
+  });
+  try {
+    const root = claudecodeProfilesRoot();
+    const indexPath = path.join(root, CLAUDECODE_PROFILES_INDEX);
+    if (existsSync(indexPath)) {
+      const parsed = JSON.parse(readFileSync(indexPath, 'utf8') || '{}');
+      for (const p of (parsed.profiles || [])) {
+        const id = String(p?.id || '').trim();
+        if (!id || id.includes('/') || id.includes('\\') || id.includes('..')) continue;
+        const dir = path.join(root, id);
+        if (!existsSync(dir)) continue;
+        scopes.push({
+          scopeId: id,
+          label: String(p?.name || id),
+          home: dir,
+          claudeJsonPath: path.join(dir, '.claude.json'),
+        });
+      }
+    }
+  } catch { /* fallthrough: just default */ }
+  return scopes;
+}
+
+// 根据 scope 参数决定读哪个/哪些账号:
+// - undefined / 'active':读当前激活的(原行为)
+// - 'all':扫所有账号并聚合
+// - 'default':只读 ~/.claude
+// - 'prof_xxx':只读指定 profile
+// 返回要传给 readClaudeTelemetryUsage 的 { home, claudeJsonPath } 数组。
+function resolveClaudeScopeHomes(scope) {
+  const all = listClaudeScopes();
+  const s = String(scope || 'active');
+  if (s === 'all') return all;
+  if (s === 'default') {
+    return [all.find(x => x.scopeId === 'default')].filter(Boolean);
+  }
+  if (s === 'active') {
+    // 当前激活:readActiveClaudeProfileDir() 返回 profile dir 或 null(=默认)
+    const profileDir = readActiveClaudeProfileDir();
+    if (profileDir) {
+      const id = path.basename(profileDir);
+      const hit = all.find(x => x.scopeId === id);
+      if (hit) return [hit];
+    }
+    return [all.find(x => x.scopeId === 'default')].filter(Boolean);
+  }
+  // 指定 profile id
+  const hit = all.find(x => x.scopeId === s);
+  return hit ? [hit] : [];
+}
+
+async function readClaudeTelemetryUsage({ days = 30, scope = 'active' } = {}) {
+  const homes = resolveClaudeScopeHomes(scope);
+  if (homes.length === 0) {
+    // scope 指向了一个不存在的 profile —— 回退到空数据,不崩
+    return readClaudeTelemetryUsageForHome({
+      days,
+      home: path.join(os.homedir(), '.claude'),
+      claudeJsonPath: path.join(os.homedir(), '.claude.json'),
+      scopeLabel: '(未找到)',
+    });
+  }
+  if (homes.length === 1) {
+    return readClaudeTelemetryUsageForHome({
+      days,
+      home: homes[0].home,
+      claudeJsonPath: homes[0].claudeJsonPath,
+      scopeLabel: homes[0].label,
+    });
+  }
+  // 多账号聚合
+  const perScope = [];
+  for (const h of homes) {
+    const u = await readClaudeTelemetryUsageForHome({
+      days,
+      home: h.home,
+      claudeJsonPath: h.claudeJsonPath,
+      scopeLabel: h.label,
+    });
+    perScope.push({ scopeId: h.scopeId, label: h.label, usage: u });
+  }
+  return mergeClaudeUsages(perScope, days);
+}
+
+async function readClaudeTelemetryUsageForHome({ days = 30, home, claudeJsonPath, scopeLabel = '' } = {}) {
   const projectsRoot = path.join(home, 'projects');
   const cutoffMs = Date.now() - Math.max(1, Math.min(90, Number(days) || 30)) * 24 * 60 * 60 * 1000;
   const sessions = new Map();
@@ -4173,11 +4316,12 @@ async function readClaudeTelemetryUsage({ days = 30 } = {}) {
     .map(([model, t]) => ({ model, totals: t }))
     .sort((a, b) => b.totals.total - a.totals.total);
 
-  // Read official cumulative cost from ~/.claude.json (Claude Code's own tracking)
+  // Read official cumulative cost from the scope's own .claude.json.
+  // 单账号模式下由上层传入 claudeJsonPath,聚合模式在 mergeClaudeUsages 里按每个
+  // 账号单独读再累加。
   let officialCost = 0;
   let officialModels = [];
   try {
-    const claudeJsonPath = path.join(os.homedir(), '.claude.json');
     const claudeJson = await readJsonFile(claudeJsonPath);
     if (claudeJson.projects && typeof claudeJson.projects === 'object') {
       for (const proj of Object.values(claudeJson.projects)) {
@@ -4202,6 +4346,8 @@ async function readClaudeTelemetryUsage({ days = 30 } = {}) {
   return {
     days: Math.max(1, Math.min(90, Number(days) || 30)),
     source: projectsRoot,
+    scopeLabel,
+    aggregated: false,
     generatedAt: new Date().toISOString(),
     totals,
     officialCost,
@@ -4213,6 +4359,76 @@ async function readClaudeTelemetryUsage({ days = 30 } = {}) {
   };
 }
 
+// 把多账号 usage 合并成一份视图。对用户场景"两个号扩容"特别有用:
+// 合并后 totals / daily / models / officialCost 是两个号相加的真实消耗。
+// sessions 合并按 updatedAt 倒序取前 12,并在每条里带 scopeLabel 供 UI 打标。
+function mergeClaudeUsages(perScope, days) {
+  const totals = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, total: 0, cost: 0 };
+  const dailyMap = new Map();           // date -> { date, ...sums }
+  const modelsMap = new Map();          // model -> { input, output, cacheRead, cacheCreation, total }
+  const dailyModelMap = new Map();      // date -> { date, tokensByModel: {model: total} }
+  const sessions = [];
+  let officialCost = 0;
+  let officialModels = [];
+
+  for (const { label, usage } of perScope) {
+    if (!usage) continue;
+    const u = usage;
+    // totals
+    for (const k of Object.keys(totals)) totals[k] += Number(u.totals?.[k] || 0);
+    officialCost += Number(u.officialCost || 0);
+    if (Array.isArray(u.officialModels)) officialModels.push(...u.officialModels);
+    // daily
+    for (const d of (u.daily || [])) {
+      const cur = dailyMap.get(d.date) || { date: d.date, input: 0, output: 0, cacheCreation: 0, cacheRead: 0, total: 0, cost: 0 };
+      for (const k of ['input', 'output', 'cacheCreation', 'cacheRead', 'total', 'cost']) {
+        cur[k] = Number(cur[k] || 0) + Number(d[k] || 0);
+      }
+      dailyMap.set(d.date, cur);
+    }
+    // models
+    for (const m of (u.models || [])) {
+      const cur = modelsMap.get(m.model) || { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, total: 0 };
+      for (const k of Object.keys(cur)) cur[k] += Number(m.totals?.[k] || 0);
+      modelsMap.set(m.model, cur);
+    }
+    // dailyModelTokens
+    for (const d of (u.dailyModelTokens || [])) {
+      const cur = dailyModelMap.get(d.date) || { date: d.date, tokensByModel: {} };
+      for (const [mk, mv] of Object.entries(d.tokensByModel || {})) {
+        cur.tokensByModel[mk] = Number(cur.tokensByModel[mk] || 0) + Number(mv || 0);
+      }
+      dailyModelMap.set(d.date, cur);
+    }
+    // sessions:带上来源 label,让前端能标"哪个账号"的
+    for (const s of (u.sessions || [])) sessions.push({ ...s, scopeLabel: label });
+  }
+
+  const models = [...modelsMap.entries()]
+    .map(([model, t]) => ({ model, totals: t }))
+    .sort((a, b) => b.totals.total - a.totals.total);
+
+  return {
+    days: Math.max(1, Math.min(90, Number(days) || 30)),
+    source: `聚合(${perScope.length} 个账号)`,
+    scopeLabel: perScope.map(p => p.label).join(' + '),
+    aggregated: true,
+    perScope: perScope.map(({ scopeId, label, usage }) => ({
+      scopeId, label,
+      totals: usage?.totals || null,
+      officialCost: usage?.officialCost || 0,
+    })),
+    generatedAt: new Date().toISOString(),
+    totals,
+    officialCost,
+    officialModels,
+    daily: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    sessions: sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 12),
+    models,
+    dailyModelTokens: [...dailyModelMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
 export async function loadClaudeCodeState(options = {}) {
   const home = claudeCodeHome();
   const settingsPath = path.join(home, 'settings.json');
@@ -4220,9 +4436,12 @@ export async function loadClaudeCodeState(options = {}) {
   const binary = findToolBinary('claudecode', { passive: process.platform === 'win32' });
   const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY);
 
-  // Read ~/.claude.json for login and model history
-  const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+  // 读 .claude.json 拿登录态/projects/userID。
+  // Claude Code 源码把它放在 (CLAUDE_CONFIG_DIR || homedir())/.claude.json,
+  // 所以激活 profile 时要跟着走到 profile 目录下。
+  const claudeJsonPath = claudeGlobalConfigPath();
   const claudeJson = await readJsonFile(claudeJsonPath);
+  const activeProfileDir = readActiveClaudeProfileDir();
 
   // Login info
   const oauth = claudeJson.oauthAccount;
@@ -4246,7 +4465,18 @@ export async function loadClaudeCodeState(options = {}) {
 
   const forceUsageRefresh = ['1', 'true', 'yes'].includes(String(options.forceUsageRefresh || '').toLowerCase());
   const cacheOnly = ['1', 'true', 'yes'].includes(String(options.cacheOnly || '').toLowerCase());
-  const usage = cacheOnly ? await readClaudeTelemetryUsage({ days: 30 }) : await readClaudeTelemetryUsage({ days: 30 });
+  // scope:'active' / 'all' / 'default' / 'prof_xxx' —— 决定 Dashboard 在看哪个账号
+  const usageScope = (() => {
+    const raw = String(options.usageScope || 'active').trim();
+    if (!raw) return 'active';
+    if (/^(all|active|default)$/i.test(raw)) return raw.toLowerCase();
+    // 其它只允许 prof_xxx 白名单,避免路径注入
+    if (/^prof_[A-Za-z0-9_-]+$/.test(raw)) return raw;
+    return 'active';
+  })();
+  const usage = cacheOnly
+    ? await readClaudeTelemetryUsage({ days: 30, scope: usageScope })
+    : await readClaudeTelemetryUsage({ days: 30, scope: usageScope });
 
   return {
     toolId: 'claudecode',
@@ -4263,6 +4493,13 @@ export async function loadClaudeCodeState(options = {}) {
     login,
     usedModels: [...usedModels].sort(),
     usage,
+    activeProfile: activeProfileDir
+      ? { dir: activeProfileDir, id: path.basename(activeProfileDir) }
+      : null,
+    usageScope,
+    // 可用账号列表供 Dashboard 下拉渲染(前端不再单独调 /api/claudecode/oauth/profiles
+    // 就能知道有哪些账号)。不含 hasTokens 等敏感元数据,只含 scopeId + label。
+    availableScopes: listClaudeScopes().map(s => ({ scopeId: s.scopeId, label: s.label })),
   };
 }
 

@@ -2407,12 +2407,15 @@ function renderClaudeModelPresetList() {
   }
 }
 
-async function loadClaudeCodeQuickState({ force = false, cacheOnly = false } = {}) {
+async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usageScope } = {}) {
   try {
     renderClaudeModelPresetList();
     const params = new URLSearchParams();
     if (force) params.set('forceUsageRefresh', '1');
     if (cacheOnly) params.set('cacheOnly', '1');
+    // 用 localStorage 持久化 Dashboard 账号筛选偏好(切号后仍保留用户选择)
+    const scope = usageScope || localStorage.getItem('easyaiconfig_claude_usage_scope') || 'active';
+    if (scope && scope !== 'active') params.set('usageScope', scope);
     const json = await api(`/api/claudecode/state${params.toString() ? `?${params.toString()}` : ''}`);
     if (!json.ok || !json.data) return { ok: false, error: json.error || '读取失败' };
     const data = json.data;
@@ -6996,6 +6999,7 @@ function renderDashboardPage() {
           ${showDashboardRefresh ? `<span class="dashboard-fetch-state ${isLoading ? 'loading' : ''}">${escapeHtml(dashboardStatusText)}</span>` : ''}
         </div>
         <div class="db3-toolbar-actions">
+          ${dashboardTool === 'claudecode' ? renderClaudeScopeDropdown() : ''}
           <span class="db2-period-wrap">
             <div class="db2-period-dropdown" data-period-dropdown>
               <button type="button" class="db2-period-trigger" data-period-trigger>${state.dashboardDays} 天 <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
@@ -7010,6 +7014,39 @@ function renderDashboardPage() {
       ${content}
     </div>
   `;
+}
+
+// 账号筛选下拉:当 claudecode state 里有 availableScopes(>=2 个账号)时渲染,
+// 否则返回空(只有默认账号时没必要给下拉)。选项顺序:当前 · 全部聚合 · 每个具体账号。
+function renderClaudeScopeDropdown() {
+  const st = state.claudeCodeState;
+  const scopes = Array.isArray(st?.availableScopes) ? st.availableScopes : [];
+  if (scopes.length < 2) return '';
+  const current = st?.usageScope || 'active';
+  const currentLabel = (() => {
+    if (current === 'all') return '全部聚合';
+    if (current === 'active') return `当前 · ${escapeHtml(st?.activeProfile?.id || '默认')}`;
+    const hit = scopes.find(s => s.scopeId === current);
+    return hit ? escapeHtml(hit.label) : '当前';
+  })();
+  const items = [
+    { id: 'active', label: '当前激活账号' },
+    { id: 'all', label: `全部聚合(${scopes.length})` },
+    ...scopes.map(s => ({ id: s.scopeId, label: s.label })),
+  ];
+  return `
+    <span class="db2-period-wrap">
+      <div class="db2-period-dropdown" data-claude-scope-dropdown>
+        <button type="button" class="db2-period-trigger" data-claude-scope-trigger>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="5" r="2.5"/><path d="M3.5 14c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5"/></svg>
+          ${currentLabel}
+          <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg>
+        </button>
+        <div class="db2-period-menu">
+          ${items.map(it => `<div class="db2-period-option ${current === it.id ? 'active' : ''}" data-claude-scope="${escapeHtml(it.id)}">${escapeHtml(it.label)}</div>`).join('')}
+        </div>
+      </div>
+    </span>`;
 }
 
 function renderDashboardStatCard(label, value, sub = '') {
@@ -17086,6 +17123,44 @@ await loadClaudeCodeQuickState({ force: false, cacheOnly: false }).catch((e) => 
   }
 }
 
+// macOS only — lets the user pick which browser opens the OAuth URL so a
+// previously-logged-in account in the default browser doesn't silently
+// authorize the new profile. Returns one of the choice IDs recognised by the
+// backend wrapper, `'default'` for system default, or `null` if cancelled.
+// On non-macOS we skip the dialog and return `'default'` (backend no-ops).
+async function pickClaudeLoginBrowser({ title = '选择登录用的浏览器' } = {}) {
+  const platform = String(navigator.platform || '').toLowerCase();
+  const isMac = platform.includes('mac');
+  if (!isMac) return 'default';
+  const options = [
+    { id: 'chrome-incognito', label: 'Chrome 无痕窗口', desc: '全新会话，推荐用于新账号授权' },
+    { id: 'edge-inprivate',   label: 'Edge InPrivate',  desc: '全新会话（需已安装 Microsoft Edge）' },
+    { id: 'firefox-private',  label: 'Firefox 隐私窗口', desc: '全新会话（需已安装 Firefox）' },
+    { id: 'chrome-normal',    label: 'Chrome 正常窗口',  desc: '使用 Chrome 当前登录的账号' },
+    { id: 'default',          label: '系统默认浏览器',   desc: '使用系统默认浏览器的当前会话' },
+  ];
+  const bodyHtml = `<div class="claude-browser-picker">` +
+    options.map((opt, idx) => `
+      <label class="claude-browser-picker__row">
+        <input type="radio" name="claude-oauth-browser-choice" value="${opt.id}"${idx === 0 ? ' checked' : ''} />
+        <span class="claude-browser-picker__text">
+          <span class="claude-browser-picker__title">${escapeHtml(opt.label)}</span>
+          <span class="claude-browser-picker__desc">${escapeHtml(opt.desc)}</span>
+        </span>
+      </label>
+    `).join('') + `</div>`;
+  const ok = await openUpdateDialog({
+    eyebrow: 'Claude Code',
+    title,
+    body: bodyHtml,
+    confirmText: '打开登录',
+    cancelText: '取消',
+  });
+  if (!ok) return null;
+  const checked = document.querySelector('input[name="claude-oauth-browser-choice"]:checked');
+  return checked?.value || 'default';
+}
+
 async function launchClaudeCodeOAuthLogin(buttonId = 'claudeOauthLoginBtn') {
   const button = el(buttonId);
   const originalText = button?.textContent || 'OAuth 登录';
@@ -19126,6 +19201,30 @@ function bindEvents() {
       }
       return;
     }
+    // Claude 账号筛选下拉:打开菜单
+    const scopeTrigger = e.target.closest('[data-claude-scope-trigger]');
+    if (scopeTrigger) {
+      const dropdown = scopeTrigger.closest('[data-claude-scope-dropdown]');
+      if (dropdown) dropdown.classList.toggle('open');
+      return;
+    }
+    // Claude 账号筛选下拉:选项点击 → 持久化 + 强制 refetch
+    const scopeOpt = e.target.closest('[data-claude-scope]');
+    if (scopeOpt) {
+      const next = scopeOpt.dataset.claudeScope || 'active';
+      localStorage.setItem('easyaiconfig_claude_usage_scope', next);
+      scopeOpt.closest('[data-claude-scope-dropdown]')?.classList.remove('open');
+      state.dashboardLoading = true;
+      state.dashboardRefreshing = true;
+      renderDashboardPage();
+      try {
+        await loadClaudeCodeQuickState({ force: true, cacheOnly: false, usageScope: next });
+      } catch (err) { console.warn('[dashboard] scope switch failed', err); }
+      state.dashboardLoading = false;
+      state.dashboardRefreshing = false;
+      renderDashboardPage();
+      return;
+    }
     // Custom period dropdown trigger
     const periodTrigger = e.target.closest('[data-period-trigger]');
     if (periodTrigger) {
@@ -20130,6 +20229,9 @@ loadTools();
           </button>`;
     } else if (r.kind === 'claudecode-oauth-profile') {
       actions = `
+          <button type="button" class="ch-row-icon-btn" data-ch-cc-oauth-copy-export="${safeEscape(r.profileId || '')}" title="复制 export 命令（粘贴到任意终端即可让该会话使用该账号）" aria-label="复制 export 命令">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          </button>
           <button type="button" class="ch-row-icon-btn" data-ch-cc-oauth-rename="${safeEscape(r.profileId || '')}" title="重命名" aria-label="重命名 ${safeEscape(r.name)}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
           </button>
@@ -20140,7 +20242,12 @@ loadTools();
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
           </button>`;
     } else if (r.kind === 'claudecode-oauth-default') {
-      actions = '';
+      // 默认行的 "copy export" 实际上是 unset —— 贴到终端后那个会话会回到
+      // 读取 ~/.claude/ 的默认路径。profileId 传空字符串作为标记。
+      actions = `
+          <button type="button" class="ch-row-icon-btn" data-ch-cc-oauth-copy-export="" title="复制 unset 命令（粘贴到终端可切回默认 ~/.claude/）" aria-label="复制 unset 命令">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          </button>`;
     } else {
       // API-key provider rows — edit / detect / delete. Delete for Codex
       // and Claude Code only (OpenCode uses a different flow).
@@ -20240,6 +20347,10 @@ loadTools();
 
     const tool = s.activeTool || 'codex';
     if (toolTitleEl) toolTitleEl.textContent = TOOL_LABELS[tool] || tool;
+
+    // Shell 集成 banner is self-hiding on non-claudecode tabs / non-unix
+    // platforms; safe to call unconditionally before the loading short-circuit.
+    renderShellIntegrationPanel();
 
     // Loading sentinel: if the OAuth profile fetch for this tool hasn't
     // resolved yet, render an explicit loading state instead of either (a)
@@ -20564,6 +20675,177 @@ loadTools();
     }, 2500);
   }
 
+  // ── Shell 集成 · Claude Code account follower ─────────────────
+  // Backend owns the truth (scans ~/.zshrc / ~/.bash_profile / ~/.bashrc for
+  // our marker block). Frontend holds a lazy-loaded cache so the banner can
+  // render synchronously on tab switch; first render kicks off the fetch.
+  //
+  // Why here (inside the CH closure): renderShellIntegrationPanel is called
+  // from renderConnectionHub, so it must be in the same scope. The toggle
+  // wiring lives here too — no module-level exports needed, no extra globals.
+  window.__chShellIntegration = window.__chShellIntegration || { loaded: false, pending: false, data: null };
+
+  async function loadShellIntegrationStatus() {
+    try {
+      const res = await api('/api/shell-integration/status', { method: 'GET' });
+      window.__chShellIntegration = {
+        loaded: true,
+        pending: false,
+        data: res?.ok ? (res.data || null) : null,
+      };
+    } catch (err) {
+      console.warn('[ch] load shell-integration status failed', err);
+      window.__chShellIntegration = { loaded: true, pending: false, data: null };
+    }
+    renderShellIntegrationPanel();
+  }
+
+  async function setShellIntegrationEnabled(enabled) {
+    const path = enabled ? '/api/shell-integration/enable' : '/api/shell-integration/disable';
+    const res = await api(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!res || !res.ok) {
+      if (typeof flash === 'function') flash(res?.error || (enabled ? '启用 Shell 集成失败' : '关闭 Shell 集成失败'), 'error');
+      // Reload to sync UI back to reality on failure.
+      await loadShellIntegrationStatus();
+      return false;
+    }
+    const nextStatus = res.data?.status || null;
+    window.__chShellIntegration = { loaded: true, pending: false, data: nextStatus };
+
+    if (enabled) {
+      const applied = Array.isArray(res.data?.applied) ? res.data.applied : [];
+      const envPath = nextStatus?.envScriptPath || '~/.codex-config-ui/shell-env.sh';
+      if (applied.length) {
+        if (typeof flash === 'function') {
+          flash(
+            `已启用 Shell 集成 · 写入 ${applied.join(', ')}\n新开终端立即生效；当前终端请执行一次：source ${envPath}`,
+            'success'
+          );
+        }
+      } else if (typeof flash === 'function') {
+        flash('已启用但未找到可写入的 rc 文件（.zshrc / .bash_profile / .bashrc 都不存在）', 'warning');
+      }
+    } else if (typeof flash === 'function') {
+      flash('已关闭 Shell 集成（新开终端的 claude 恢复到默认 ~/.claude/）', 'info');
+    }
+    renderShellIntegrationPanel();
+    return true;
+  }
+
+  function renderShellIntegrationPanel() {
+    const el = document.getElementById('chShellIntegration');
+    if (!el) return;
+    const s = hubState();
+    const tool = s?.activeTool || 'codex';
+    if (tool !== 'claudecode') {
+      el.classList.add('hide');
+      el.innerHTML = '';
+      return;
+    }
+
+    // Lazy-load on first ever render (per session).
+    const cache = window.__chShellIntegration;
+    if (!cache.loaded && !cache.pending) {
+      cache.pending = true;
+      // Intentionally not awaited — first paint shows "检测中…", subsequent
+      // paint triggered by loadShellIntegrationStatus() shows real state.
+      loadShellIntegrationStatus();
+    }
+
+    if (!cache.loaded) {
+      el.classList.remove('hide');
+      el.innerHTML = `
+        <span class="ch-shellint-icon">⚡</span>
+        <div class="ch-shellint-body">
+          <div class="ch-shellint-title">Shell 集成 · 让所有终端里的 claude 跟随本 UI 账号</div>
+          <div class="ch-shellint-sub muted">检测中…</div>
+        </div>
+        <label class="ch-shellint-toggle" aria-disabled="true">
+          <input type="checkbox" disabled>
+          <span class="ch-shellint-toggle-track" aria-hidden="true"></span>
+        </label>`;
+      return;
+    }
+
+    const data = cache.data || {};
+    if (data.platform !== 'unix') {
+      // Windows / unsupported — hide entirely; feature isn't implemented.
+      el.classList.add('hide');
+      el.innerHTML = '';
+      return;
+    }
+
+    el.classList.remove('hide');
+    const enabled = Boolean(data.enabled);
+    const shells = Array.isArray(data.shells) ? data.shells : [];
+    const injectedNames = shells.filter((x) => x.injected).map((x) => x.name);
+    const hasActive = Boolean(data.activeProfileDir);
+    const envPath = data.envScriptPath || '~/.codex-config-ui/shell-env.sh';
+
+    let subHtml;
+    if (enabled) {
+      const writtenInto = injectedNames.length
+        ? injectedNames.map((n) => `<code>${n}</code>`).join(' · ')
+        : '<span class="muted">无注入的 rc</span>';
+      const account = hasActive
+        ? '<span class="ok">✓ 新开终端自动使用 UI 选中的账号</span>'
+        : '<span class="muted">当前未选中账号，新终端走默认 ~/.claude/</span>';
+      subHtml = `已启用 · ${writtenInto}<br>${account}`;
+    } else {
+      const availableToInject = shells.filter((x) => x.rcExists).length;
+      if (availableToInject === 0) {
+        subHtml = '未检测到 <code>.zshrc</code> / <code>.bash_profile</code> / <code>.bashrc</code>，无法启用。';
+      } else {
+        subHtml = `关闭中 · 其他终端里的 <code>claude</code> 只会使用默认账号 <code>~/.claude/</code>。<br><span class="muted">开启后将在 rc 文件里注入带标记的引导代码（可随时一键移除）。</span>`;
+      }
+    }
+
+    el.innerHTML = `
+      <span class="ch-shellint-icon">⚡</span>
+      <div class="ch-shellint-body">
+        <div class="ch-shellint-title">Shell 集成 · 让所有终端里的 claude 跟随本 UI 账号</div>
+        <div class="ch-shellint-sub">${subHtml}</div>
+      </div>
+      <label class="ch-shellint-toggle" title="${enabled ? '关闭' : '启用'} Shell 集成">
+        <input type="checkbox" id="chShellIntToggle" ${enabled ? 'checked' : ''}>
+        <span class="ch-shellint-toggle-track" aria-hidden="true"></span>
+      </label>`;
+
+    const toggle = el.querySelector('#chShellIntToggle');
+    if (!toggle) return;
+    toggle.addEventListener('change', async (e) => {
+      const target = Boolean(e.target.checked);
+      // Block double-fire while the request is in flight.
+      toggle.disabled = true;
+      try {
+        if (target && !enabled) {
+          const msg = [
+            '启用 Shell 集成会做两件事：',
+            '',
+            '1) 在 ~/.codex-config-ui/shell-env.sh 写入一个"读取当前选中账号并 export CLAUDE_CONFIG_DIR"的小脚本',
+            '2) 在你的 .zshrc / .bash_profile / .bashrc（已存在的那几个）末尾追加一段带 BEGIN/END 标记的 source 引导',
+            '',
+            '修改前会自动备份到 ~/.codex-config-ui/rc-backups/',
+            '任何时候关闭开关都会干净移除这些改动。',
+            '',
+            '继续？',
+          ].join('\n');
+          if (!window.confirm(msg)) {
+            toggle.checked = false;
+            return;
+          }
+        }
+        await setShellIntegrationEnabled(target);
+      } finally {
+        toggle.disabled = false;
+      }
+    });
+  }
+
   // ── Claude Code OAuth profile store ─────────────────────────────
   // Single source of truth: the backend reads
   //   ~/.codex-config-ui/claudecode-oauth-profiles/profiles.json
@@ -20586,25 +20868,117 @@ loadTools();
       console.warn('[ch] load claudecode oauth profiles failed', err);
       window.__chClaudeOauthProfiles = { loaded: true, data: { active: '', profiles: [], lastSwitchAt: 0 } };
     }
+    // 陈年孤儿清理:后端标 isStale=true 的 profile(15 分钟前建的还没拿到 token),
+    // 静默批量删除 —— 让跨 UI session 的脏数据能收敛,不依赖"同一次 poll 的
+    // setInterval 存活"。加 __stale_sweep_running 哨兵防止首次 list 刚回来又
+    // 触发 render 引发的重复 sweep。
+    const data = window.__chClaudeOauthProfiles?.data;
+    const staleIds = (data?.profiles || []).filter((p) => p.isStale).map((p) => p.id);
+    if (staleIds.length && !window.__chStaleSweepRunning) {
+      window.__chStaleSweepRunning = true;
+      try {
+        for (const id of staleIds) {
+          await deleteClaudeCodeOauthProfile(id, { force: true, silent: true });
+        }
+        if (typeof flash === 'function') {
+          flash(`已清理 ${staleIds.length} 个未完成登录的 profile`, 'info');
+        }
+        // 清完再拉一次列表,避免 UI 上残留 stale 行
+        const res2 = await api('/api/claudecode/oauth/profiles', { method: 'GET' });
+        if (res2 && res2.ok) window.__chClaudeOauthProfiles = { loaded: true, data: res2.data || {} };
+      } finally {
+        window.__chStaleSweepRunning = false;
+      }
+    }
     renderConnectionHub();
   }
 
   // Switch active Claude Code OAuth identity. Empty id = back to default
-  // (~/.claude/). Backend enforces a 60s throttle.
-  async function switchClaudeCodeOauthProfile(id) {
+  // (~/.claude/). Backend enforces a 60s throttle and refuses when a live
+  // `claude` process is detected (unless force=true).
+  async function switchClaudeCodeOauthProfile(id, { force = false } = {}) {
     const res = await api('/api/claudecode/oauth/profiles/switch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: id || '' }),
+      body: JSON.stringify({ id: id || '', force }),
     });
     if (!res || !res.ok) {
-      if (typeof flash === 'function') flash(res?.error || '切换 Claude 账号失败', 'error');
+      // 后端用 "CLAUDE_RUNNING:<count>:<msg>" 前缀标记"有活跃进程需确认"的风险,
+      // 前端识别后弹 confirm 让用户决定是否强切。
+      const errMsg = String(res?.error || '');
+      const running = errMsg.match(/^CLAUDE_RUNNING:(\d+):([\s\S]*)$/);
+      if (running) {
+        const confirmed = window.confirm(`${running[2]}\n\n点击"确定"强制切换,"取消"放弃。`);
+        if (!confirmed) return;
+        return switchClaudeCodeOauthProfile(id, { force: true });
+      }
+      if (typeof flash === 'function') flash(errMsg || '切换 Claude 账号失败', 'error');
       return;
     }
     if (typeof flash === 'function') {
-      flash(id ? '已切换 Claude 账号（下次启动 Claude Code 会使用该账号）' : '已切回默认 Claude 账号 (~/.claude/)', 'success');
+      const suffix = force ? '(已忽略运行中进程)' : '';
+      flash(id
+        ? `已切换 Claude 账号${suffix}(下次启动 Claude Code 会使用该账号)`
+        : `已切回默认 Claude 账号 (~/.claude/)${suffix}`,
+        'success');
     }
     await loadClaudeCodeOauthProfiles();
+    // 切换后 Dashboard 统计源头(projects/*.jsonl)变了,Connection Hub 里的
+    // 登录邮箱/模型列表也变了,强制拉一次最新状态,否则 UI 还停在旧号数据。
+    // 注意:Claude Code 不走 refreshDashboardData(只认 codex/opencode),走
+    // ensureClaudeDashboardData → loadClaudeCodeQuickState 这条线。
+    try {
+      if (typeof loadClaudeCodeState === 'function') await loadClaudeCodeState();
+    } catch (e) { console.warn('[ch] post-switch loadClaudeCodeState failed', e); }
+    try {
+      if (typeof ensureClaudeDashboardData === 'function') {
+        await ensureClaudeDashboardData({ force: true });
+        if (state.activePage === 'dashboard') renderDashboardPage();
+      }
+    } catch (e) { console.warn('[ch] post-switch ensureClaudeDashboardData failed', e); }
+    // Shell 集成 banner 里显示的 activeProfileDir 变了,刷新状态让文案跟上
+    // (e.g. "无选中账号" ↔ "✓ 新开终端自动使用 UI 选中的账号")
+    try { await loadShellIntegrationStatus(); } catch (_) {}
+  }
+
+  // Copy a ready-to-paste shell command that flips this one terminal session
+  // to the given profile — the lightweight alternative to enabling the full
+  // Shell 集成 toggle. `profileId` is the empty string for "switch back to
+  // default ~/.claude/" (emits `unset CLAUDE_CONFIG_DIR`).
+  //
+  // Clipboard API is gated behind a secure context + user activation; the
+  // icon click is a user activation, and Tauri webview runs as https://tauri.
+  // localhost / app:// so it counts as secure. If clipboard fails for any
+  // reason (sandboxed browser preview, permissions denied), fall back to
+  // `prompt()` so the user can still Ctrl/Cmd-C it out.
+  async function copyClaudeExportCommand(profileId) {
+    let cmd;
+    if (!profileId) {
+      cmd = 'unset CLAUDE_CONFIG_DIR';
+    } else {
+      const prof = (window.__chClaudeOauthProfiles?.data?.profiles || [])
+        .find((p) => p.id === profileId);
+      const dir = prof?.configDir || '';
+      if (!dir) {
+        if (typeof flash === 'function') flash('未找到该 profile 的配置目录', 'error');
+        return;
+      }
+      // 双引号包住路径,容纳包含空格/特殊字符的 $HOME。用户直接粘贴即可执行。
+      cmd = `export CLAUDE_CONFIG_DIR="${dir}"`;
+    }
+    try {
+      await navigator.clipboard.writeText(cmd);
+      if (typeof flash === 'function') {
+        flash(profileId
+          ? `已复制:\n${cmd}\n\n粘贴到任意终端后,该会话的 claude 会使用该账号`
+          : `已复制:\n${cmd}\n\n粘贴到终端后,该会话会切回默认 ~/.claude/`,
+          'success');
+      }
+    } catch (err) {
+      console.warn('[ch] clipboard.writeText failed, falling back to prompt', err);
+      // 回退:用 prompt 让用户手动 Cmd-C。字段自动全选,一键复制即可。
+      window.prompt('自动复制失败 —— 请手动选中下方命令并复制(Cmd-C):', cmd);
+    }
   }
 
   async function renameClaudeCodeOauthProfile(id) {
@@ -20626,26 +21000,40 @@ loadTools();
     await loadClaudeCodeOauthProfiles();
   }
 
-  async function deleteClaudeCodeOauthProfile(id) {
+  async function deleteClaudeCodeOauthProfile(id, { force = false, silent = false } = {}) {
     if (!id) return;
-    const confirmed = window.confirm('删除这个 Claude 账号 profile？\n只会删除我们保存的副本（目录 + Keychain 会留作残留，手动用 Keychain Access 清理）。\n你在 anthropic 的账号本身不受影响。');
-    if (!confirmed) return;
+    if (!force && !silent) {
+      const confirmed = window.confirm('删除这个 Claude 账号 profile？\n只会删除我们保存的副本（目录 + Keychain 会留作残留，手动用 Keychain Access 清理）。\n你在 anthropic 的账号本身不受影响。');
+      if (!confirmed) return;
+    }
     const res = await api('/api/claudecode/oauth/profiles/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ id, force }),
     });
     if (!res || !res.ok) {
-      if (typeof flash === 'function') flash(res?.error || '删除失败', 'error');
+      const errMsg = String(res?.error || '');
+      const running = errMsg.match(/^CLAUDE_RUNNING:(\d+):([\s\S]*)$/);
+      if (running && !silent) {
+        const confirmed = window.confirm(`${running[2]}\n\n点击"确定"强制删除,"取消"放弃。`);
+        if (!confirmed) return;
+        return deleteClaudeCodeOauthProfile(id, { force: true });
+      }
+      if (typeof flash === 'function' && !silent) flash(errMsg || '删除失败', 'error');
       return;
     }
-    if (typeof flash === 'function') flash('已删除该 profile', 'success');
+    if (typeof flash === 'function' && !silent) flash('已删除该 profile', 'success');
     await loadClaudeCodeOauthProfiles();
   }
 
   async function addNewClaudeCodeOauthProfile() {
     const ok = window.confirm('接下来会：\n1) 创建一个独立的 Claude 配置目录（profile）\n2) 在终端里用该目录跑 claude auth login\n3) 你在浏览器完成授权后，token 会存到该 profile 独立的 Keychain 条目里\n\n整个过程不影响你现有的 ~/.claude/ 登录。继续？');
     if (!ok) return;
+
+    // Pick the browser BEFORE creating the profile — if user cancels here we
+    // don't leave an orphan profile dir behind.
+    const browserChoice = await pickClaudeLoginBrowser({ title: '新账号登录 · 选择浏览器' });
+    if (browserChoice === null) return;
 
     const createRes = await api('/api/claudecode/oauth/profiles/create', {
       method: 'POST',
@@ -20663,7 +21051,7 @@ loadTools();
     const loginRes = await api('/api/claudecode/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profileId: newId }),
+      body: JSON.stringify({ profileId: newId, browserChoice }),
     });
     if (!loginRes || !loginRes.ok) {
       if (typeof flash === 'function') flash(loginRes?.error || '启动 claude login 失败', 'error');
@@ -20672,7 +21060,8 @@ loadTools();
     if (typeof flash === 'function') flash('已在终端打开登录窗口。完成浏览器授权后回到这里。', 'info');
 
     // Poll the profiles list — once the target profile picks up an accountUuid
-    // from its .claude.json, auto-activate it.
+    // from its .claude.json, auto-activate it. 超过 3 分钟仍无 token 视为登录
+    // 放弃,静默删除这个空 profile 避免列表累积"登录到一半"的孤儿。
     let tries = 0;
     const pollId = setInterval(async () => {
       tries += 1;
@@ -20683,6 +21072,11 @@ loadTools();
         await switchClaudeCodeOauthProfile(newId);
       } else if (tries >= 72) {
         clearInterval(pollId);
+        // 走 silent 路径:不弹确认,也不 flash;用户根本没登上,就当这次新增不存在
+        try {
+          await deleteClaudeCodeOauthProfile(newId, { force: true, silent: true });
+          if (typeof flash === 'function') flash('登录超时未完成,已清理这个未激活的 profile。', 'info');
+        } catch (e) { console.warn('[ch] orphan cleanup failed', e); }
       }
     }, 2500);
   }
@@ -20691,10 +21085,12 @@ loadTools();
     if (!id) return;
     const ok = window.confirm('重新登录会覆盖这个 profile 的 token。原账号状态保留在服务端，只是本机这份凭证换成新的。继续？');
     if (!ok) return;
+    const browserChoice = await pickClaudeLoginBrowser({ title: '重新登录 · 选择浏览器' });
+    if (browserChoice === null) return;
     const res = await api('/api/claudecode/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profileId: id }),
+      body: JSON.stringify({ profileId: id, browserChoice }),
     });
     if (!res || !res.ok) {
       if (typeof flash === 'function') flash(res?.error || '启动 claude login 失败', 'error');
@@ -20953,6 +21349,12 @@ loadTools();
       // Claude Code OAuth profile actions
       const ccAddOauth = target.closest('[data-ch-cc-oauth-add]');
       if (ccAddOauth) { e.stopPropagation(); addNewClaudeCodeOauthProfile(); return; }
+      const ccCopyExport = target.closest('[data-ch-cc-oauth-copy-export]');
+      if (ccCopyExport) {
+        e.stopPropagation();
+        copyClaudeExportCommand(ccCopyExport.getAttribute('data-ch-cc-oauth-copy-export') || '');
+        return;
+      }
       const ccRename = target.closest('[data-ch-cc-oauth-rename]');
       if (ccRename) { e.stopPropagation(); renameClaudeCodeOauthProfile(ccRename.getAttribute('data-ch-cc-oauth-rename')); return; }
       const ccRelogin = target.closest('[data-ch-cc-oauth-relogin]');

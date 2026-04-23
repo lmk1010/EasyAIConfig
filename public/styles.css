@@ -12975,6 +12975,71 @@ button.about-link-card {
   width: min(640px, calc(100vw - 24px)) !important;
 }
 
+/* Claude Code OAuth browser picker — used inside openUpdateDialog */
+.update-dialog-panel:has(.claude-browser-picker) {
+  width: min(400px, calc(100vw - 24px)) !important;
+}
+.claude-browser-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 0;
+}
+.claude-browser-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+  text-align: left;
+}
+.claude-browser-picker__row:hover {
+  border-color: var(--line-soft);
+  background: rgba(255, 255, 255, 0.02);
+}
+[data-theme="light"] .claude-browser-picker__row:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+.claude-browser-picker__row:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-glow);
+}
+.claude-browser-picker__row input[type="radio"] {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  box-shadow: none;
+  border-radius: 50%;
+  accent-color: var(--accent);
+  cursor: pointer;
+  appearance: auto;
+  -webkit-appearance: radio;
+}
+.claude-browser-picker__text {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.claude-browser-picker__title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+}
+.claude-browser-picker__desc {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
 .install-scope-switch {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -18984,6 +19049,116 @@ body {
   font-size: 0.78rem;
   color: var(--s2-muted);
   line-height: 1.5;
+}
+
+/* ───────── Shell 集成 banner (Claude Code account follower) ───────── */
+.shell-v2 .ch-shellint {
+  margin: 12px 0 2px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background:
+    linear-gradient(135deg,
+      rgba(168, 197, 255, 0.045) 0%,
+      rgba(196, 210, 255, 0.028) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+}
+[data-theme="light"] .shell-v2 .ch-shellint {
+  background:
+    linear-gradient(135deg,
+      rgba(255, 255, 255, 0.78) 0%,
+      rgba(236, 244, 255, 0.55) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.shell-v2 .ch-shellint-icon {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.9;
+}
+.shell-v2 .ch-shellint-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.shell-v2 .ch-shellint-title {
+  font-size: 0.82rem;
+  font-weight: 620;
+  color: var(--s2-text);
+  letter-spacing: -0.005em;
+}
+.shell-v2 .ch-shellint-sub {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--s2-muted);
+}
+.shell-v2 .ch-shellint-sub code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(127, 127, 127, 0.14);
+  color: var(--s2-text);
+}
+.shell-v2 .ch-shellint-sub .ok { color: #5ecf97; font-weight: 600; }
+.shell-v2 .ch-shellint-sub .muted { opacity: 0.75; }
+[data-theme="light"] .shell-v2 .ch-shellint-sub .ok { color: #0f8a54; }
+
+.shell-v2 .ch-shellint-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+  user-select: none;
+}
+.shell-v2 .ch-shellint-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.shell-v2 .ch-shellint-toggle-track {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+  transition: background 0.18s ease;
+  position: relative;
+}
+.shell-v2 .ch-shellint-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.shell-v2 .ch-shellint-toggle input:checked + .ch-shellint-toggle-track {
+  background: #2a58c2;
+}
+.shell-v2 .ch-shellint-toggle input:checked + .ch-shellint-toggle-track::after {
+  transform: translateX(16px);
+}
+.shell-v2 .ch-shellint-toggle input:disabled + .ch-shellint-toggle-track {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ───────── Status pills & mode badges ───────── */

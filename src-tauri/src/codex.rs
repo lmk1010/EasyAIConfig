@@ -4884,6 +4884,92 @@ fn normalize_openclaw_dashboard_bootstrap_url(raw_url: &str, gateway_token: &str
   url.to_string()
 }
 
+// macOS-only: wrapper invoked by Claude CLI's openBrowser when BROWSER is set.
+// Claude CLI calls it as `execa(browser, [url])` with no shell, so BROWSER must
+// point at a single executable. This script dispatches to the right `open`
+// invocation based on CLAUDE_OAUTH_BROWSER_CHOICE, falling back to the system
+// default when the chosen browser isn't installed.
+#[cfg(target_os = "macos")]
+const CLAUDE_OAUTH_BROWSER_SH: &str = r#"#!/bin/sh
+URL="$1"
+CHOICE="${CLAUDE_OAUTH_BROWSER_CHOICE:-default}"
+
+case "$CHOICE" in
+  chrome-incognito)
+    open -na "Google Chrome" --args --incognito --new-window "$URL" && exit 0
+    ;;
+  edge-inprivate)
+    open -na "Microsoft Edge" --args --inprivate --new-window "$URL" && exit 0
+    ;;
+  firefox-private)
+    open -na "Firefox" --args -private-window "$URL" && exit 0
+    ;;
+  chrome-normal)
+    open -a "Google Chrome" "$URL" && exit 0
+    ;;
+esac
+
+open "$URL"
+"#;
+
+#[cfg(target_os = "macos")]
+fn ensure_claude_oauth_browser_wrapper() -> Result<PathBuf, String> {
+  use std::os::unix::fs::PermissionsExt;
+  let path = crate::app_home()?.join("claude-oauth-browser.sh");
+  if let Some(parent) = path.parent() {
+    let _ = std::fs::create_dir_all(parent);
+  }
+  let needs_write = match std::fs::read_to_string(&path) {
+    Ok(existing) => existing != CLAUDE_OAUTH_BROWSER_SH,
+    Err(_) => true,
+  };
+  if needs_write {
+    std::fs::write(&path, CLAUDE_OAUTH_BROWSER_SH)
+      .map_err(|error| format!("写入 browser wrapper 失败：{}", error))?;
+  }
+  let mut perms = std::fs::metadata(&path)
+    .map_err(|error| error.to_string())?
+    .permissions();
+  if perms.mode() & 0o777 != 0o755 {
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).map_err(|error| error.to_string())?;
+  }
+  Ok(path)
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_oauth_browser_choice(value: &str) -> Option<&'static str> {
+  match value.trim() {
+    "chrome-incognito" => Some("chrome-incognito"),
+    "edge-inprivate" => Some("edge-inprivate"),
+    "firefox-private" => Some("firefox-private"),
+    "chrome-normal" => Some("chrome-normal"),
+    _ => None,
+  }
+}
+
+#[cfg(target_os = "macos")]
+fn with_oauth_browser_env(command_text: &str, choice: &str) -> String {
+  let Some(choice) = normalize_oauth_browser_choice(choice) else {
+    return command_text.to_string();
+  };
+  let wrapper = match ensure_claude_oauth_browser_wrapper() {
+    Ok(path) => path,
+    Err(_) => return command_text.to_string(),
+  };
+  format!(
+    "BROWSER={} CLAUDE_OAUTH_BROWSER_CHOICE={} {}",
+    shell_single_quote(&wrapper.to_string_lossy()),
+    shell_single_quote(choice),
+    command_text,
+  )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn with_oauth_browser_env(command_text: &str, _choice: &str) -> String {
+  command_text.to_string()
+}
+
 // Build a platform-correct shell command prefix that exports CLAUDE_CONFIG_DIR
 // just for the following command (so it doesn't bleed into the user's shell).
 //   - Unix (bash/zsh): CLAUDE_CONFIG_DIR="path" <cmd>
@@ -5000,6 +5086,8 @@ pub(crate) fn login_claudecode(body: &Value) -> Result<Value, String> {
     format!("\"{}\" auth login", binary_path.replace('"', "\\\""))
   };
   let command = with_claude_config_dir(&base_command, config_dir.as_deref());
+  let browser_choice = get_string(&object, "browserChoice");
+  let command = with_oauth_browser_env(&command, &browser_choice);
   let label = if config_dir.is_some() {
     "Claude Code 多账号登录"
   } else {

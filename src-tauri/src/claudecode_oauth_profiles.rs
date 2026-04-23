@@ -36,7 +36,74 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::provider::get_string;
-use crate::{app_home, ensure_dir, parse_json_object, read_text, write_text};
+use crate::{app_home, ensure_dir, parse_json_object, read_text};
+
+// 探测当前系统里是否有活跃的 claude 进程。切换/删除 profile 前调用一次:
+// 已启动的 claude 进程继承的是启动时的 CLAUDE_CONFIG_DIR env,后续更改
+// profile 指针不影响它 —— 用户会以为切到新号了,但那个进程还在吃旧号的额度,
+// 最坏情况下 session 文件写到旧目录还删到一半。所以切换前要告诉用户。
+//
+// 识别策略(故意保守,偏漏报而非误报):
+//   1. 命令行精确命中 "@anthropic-ai/claude-code" 或 "claude/cli.js"
+//      —— Claude Code 的 Node 入口,不会误伤
+//   2. 命令行以 "claude" 为 argv[0] 的 basename 开头(Unix)/ claude.exe (Windows)
+//      —— 兜底覆盖本地 bun/pnpm 安装的快捷入口
+// 过滤:跳过包含 "config-ui"/"easyaiconfig" 的进程(我们自己),否则我们 UI
+// 在跑就会自己误判。
+//
+// 返回的是命中的进程数(0 = 没有)。未知平台直接返回 0,不挡用户操作。
+fn count_running_claude_processes() -> usize {
+  #[cfg(unix)]
+  {
+    // `ps -axo command=` 在 macOS / Linux 都可用(BSD 写法)
+    let output = std::process::Command::new("ps")
+      .args(["-axo", "command="])
+      .output();
+    let Ok(out) = output else { return 0; };
+    if !out.status.success() { return 0; }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    return stdout
+      .lines()
+      .filter(|line| {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("config-ui") || lower.contains("easyaiconfig") { return false; }
+        if lower.contains("@anthropic-ai/claude-code") { return true; }
+        if lower.contains("claude/cli.js") { return true; }
+        // argv[0] basename == "claude" — 取第一个 token 的最后一段
+        let first = line.split_ascii_whitespace().next().unwrap_or("");
+        let base = first.rsplit('/').next().unwrap_or(first);
+        base == "claude"
+      })
+      .count();
+  }
+  #[cfg(windows)]
+  {
+    // tasklist /V /FO CSV 会给每行 CSV,字段含进程名但不含完整命令行;
+    // 改用 PowerShell Get-CimInstance 拿 CommandLine 字段,覆盖 claude.exe
+    // 和 node.exe + claude-code 两种场景。
+    let output = std::process::Command::new("powershell")
+      .args([
+        "-NoProfile","-NonInteractive","-Command",
+        "Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine",
+      ])
+      .output();
+    let Ok(out) = output else { return 0; };
+    if !out.status.success() { return 0; }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    return stdout
+      .lines()
+      .filter(|line| {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("config-ui") || lower.contains("easyaiconfig") { return false; }
+        if lower.contains("@anthropic-ai\\claude-code") || lower.contains("@anthropic-ai/claude-code") { return true; }
+        if lower.contains("claude\\cli.js") || lower.contains("claude/cli.js") { return true; }
+        lower.contains("\\claude.exe") || lower.ends_with("claude.exe")
+      })
+      .count();
+  }
+  #[allow(unreachable_code)]
+  0
+}
 
 // In-memory cache for Keychain plan/tier lookups, keyed by the Keychain
 // service name. Every `security find-generic-password` spawns a subprocess
@@ -100,11 +167,22 @@ fn read_profiles_index() -> Result<Value, String> {
   Ok(parsed)
 }
 
+// 原子写 profiles.json:先写 <path>.tmp 再 rename,避免写到一半崩溃/并发
+// 操作导致 JSON 损坏(switch + delete 同时发生会互相覆盖)。
+// rename 在同一 FS 内是原子操作,读者永远看到的是"完整旧版本"或"完整新版本"。
 fn write_profiles_index(index: &Value) -> Result<(), String> {
   ensure_dir(&profiles_root()?)?;
   let path = profiles_index_path()?;
   let text = serde_json::to_string_pretty(index).map_err(|e| e.to_string())?;
-  write_text(&path, &text)
+
+  let tmp_path = path.with_extension("json.tmp");
+  fs::write(&tmp_path, &text).map_err(|e| format!("写临时文件失败: {}", e))?;
+  fs::rename(&tmp_path, &path).map_err(|e| {
+    // rename 失败时保底清理临时文件,不留脏文件
+    let _ = fs::remove_file(&tmp_path);
+    format!("提交 profiles.json 失败: {}", e)
+  })?;
+  Ok(())
 }
 
 fn get_str_obj(obj: &Map<String, Value>, key: &str) -> String {
@@ -306,6 +384,129 @@ fn read_profile_metadata(dir: &std::path::Path) -> Value {
   out
 }
 
+// Write onboarding-bypass fields into a profile's .claude.json so Claude
+// Code skips its first-run welcome wizard the first time the profile is
+// opened in a plain terminal.
+//
+// Why this exists: Claude Code gates the "Select login method" / theme /
+// permission-mode wizard on `hasCompletedOnboarding` in .claude.json, NOT
+// on whether a Keychain token exists. So a profile that just finished
+// OAuth through this UI still shows the wizard when the user pastes our
+// `export CLAUDE_CONFIG_DIR=<dir>` command into a fresh terminal and runs
+// `claude` — even though auth is already set up. The wizard's login step
+// detects the existing Keychain token and doesn't actually re-auth, but
+// the user has to click through theme/permission screens before reaching
+// the REPL. We preempt it by writing the flag ourselves.
+//
+// Called from list() for every profile whose oauthAccount is populated.
+// Idempotent: no-ops when the flag is already true, so steady-state list
+// renders don't rewrite the file on every Hub paint.
+//
+// We do NOT patch before oauthAccount lands — doing so would mark a
+// not-yet-logged-in profile as "onboarded" and leave it in that state
+// forever if login is later abandoned. Once oauth lands we patch exactly
+// once.
+//
+// Atomic write (tmp + rename) — a crash mid-write on this file would
+// brick the profile (Claude Code won't start if .claude.json is corrupt),
+// so the write has to be all-or-nothing.
+fn ensure_onboarding_bypass(dir: &std::path::Path) -> Result<bool, String> {
+  let path = dir.join(".claude.json");
+  let text = match fs::read_to_string(&path) {
+    Ok(t) => t,
+    Err(_) => return Ok(false),
+  };
+  if text.trim().is_empty() {
+    return Ok(false);
+  }
+  let mut parsed: Value = match serde_json::from_str(&text) {
+    Ok(v) => v,
+    Err(_) => return Ok(false),
+  };
+  let obj = match parsed.as_object_mut() {
+    Some(o) => o,
+    None => return Ok(false),
+  };
+  // Gate on oauthAccount — login hasn't finished yet otherwise.
+  if obj.get("oauthAccount").and_then(Value::as_object).is_none() {
+    return Ok(false);
+  }
+  if obj
+    .get("hasCompletedOnboarding")
+    .and_then(Value::as_bool)
+    .unwrap_or(false)
+  {
+    return Ok(false);
+  }
+
+  let (version, theme) = read_default_onboarding_hints();
+  obj.insert("hasCompletedOnboarding".to_string(), json!(true));
+  obj.insert("lastOnboardingVersion".to_string(), json!(version));
+  // Only set theme if the profile doesn't already carry one — respects a
+  // user who manually picked a theme inside the profile before we got
+  // here.
+  if !obj.contains_key("theme") {
+    obj.insert("theme".to_string(), json!(theme));
+  }
+
+  let out = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
+  let tmp = path.with_extension("json.tmp");
+  fs::write(&tmp, &out).map_err(|e| format!("写临时文件失败: {}", e))?;
+  // Match the 0600 perms set elsewhere for OAuth-adjacent files (tightened
+  // in 7f8487c). `.claude.json` only carries account metadata (email, org,
+  // accountUuid — no token), but the existing posture is to keep anything
+  // auth-adjacent user-readable only, and we shouldn't regress it.
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+  }
+  fs::rename(&tmp, &path).map_err(|e| {
+    let _ = fs::remove_file(&tmp);
+    format!("提交 .claude.json 失败: {}", e)
+  })?;
+  Ok(true)
+}
+
+// Pull onboarding-version and theme from the user's default ~/.claude.json
+// so a patched profile pins to the version / theme the user has already
+// accepted. Prevents Claude Code from deciding the profile is on a stale
+// onboarding version and re-running the wizard after an upgrade.
+//
+// Falls back to "1.0.0" / "dark" if the default config is missing — new
+// users who've never run claude at all still get a sane bypass.
+fn read_default_onboarding_hints() -> (String, String) {
+  let fallback_version = "1.0.0".to_string();
+  let fallback_theme = "dark".to_string();
+
+  let Ok(home) = crate::home_dir() else {
+    return (fallback_version, fallback_theme);
+  };
+  let text = match fs::read_to_string(home.join(".claude.json")) {
+    Ok(t) => t,
+    Err(_) => return (fallback_version, fallback_theme),
+  };
+  let v: Value = match serde_json::from_str(&text) {
+    Ok(v) => v,
+    Err(_) => return (fallback_version, fallback_theme),
+  };
+  let obj = match v.as_object() {
+    Some(o) => o,
+    None => return (fallback_version, fallback_theme),
+  };
+  let version = obj
+    .get("lastOnboardingVersion")
+    .and_then(Value::as_str)
+    .map(String::from)
+    .unwrap_or(fallback_version);
+  let theme = obj
+    .get("theme")
+    .and_then(Value::as_str)
+    .map(String::from)
+    .unwrap_or(fallback_theme);
+  (version, theme)
+}
+
 // Public: expose the active profile's CONFIG_DIR so the launcher can inject
 // CLAUDE_CONFIG_DIR. Returns None when no profile is active (i.e. default
 // ~/.claude/ should be used — unchanged from previous behavior).
@@ -372,6 +573,12 @@ pub(crate) fn list_claudecode_oauth_profiles(_query: &Value) -> Result<Value, St
       .map(|input| {
         scope.spawn(move || {
           let meta = read_profile_metadata(&input.dir);
+          // Opportunistically patch in onboarding-bypass fields once the
+          // profile has an oauthAccount. Idempotent — only writes on the
+          // first list() after login completes. Errors swallowed: if we
+          // can't write the flag, the user just gets the wizard once,
+          // which is the status-quo behavior.
+          let _ = ensure_onboarding_bypass(&input.dir);
           (input, meta)
         })
       })
@@ -379,9 +586,21 @@ pub(crate) fn list_claudecode_oauth_profiles(_query: &Value) -> Result<Value, St
     handles.into_iter().filter_map(|h| h.join().ok()).collect()
   });
 
+  // 孤儿判据:无 token 且 15 分钟前就存在。用户创建 profile 后正常流程 10~30
+  // 秒就能拿到 token(等同一次浏览器 OAuth 授权),超过 15 分钟还没有 token
+  // 说明登录被放弃/中断/关闭浏览器。这个标记给前端用,前端收到 isStale=true 的
+  // profile 会静默调 delete(force, silent) 清理,之后重开 UI 也不会留着脏数据。
+  // 后端 list 只打标记不改状态,避免 GET 接口带副作用。
+  const STALE_THRESHOLD_SECS: i64 = 15 * 60;
+  let now_secs = Utc::now().timestamp();
+
   let mut enriched = Vec::new();
   for (input, meta) in metas {
     let ProfileInput { id, name, created_at, updated_at, dir } = input;
+    let has_tokens = meta.get("hasTokens").and_then(Value::as_bool).unwrap_or(false);
+    let is_stale = !has_tokens
+      && created_at > 0
+      && (now_secs - created_at) > STALE_THRESHOLD_SECS;
     enriched.push(json!({
       "id": id,
       "name": name,
@@ -398,6 +617,7 @@ pub(crate) fn list_claudecode_oauth_profiles(_query: &Value) -> Result<Value, St
       "rateLimitTier": meta.get("rateLimitTier").cloned().unwrap_or(json!("")),
       "plan": meta.get("plan").cloned().unwrap_or(json!("")),
       "hasTokens": meta.get("hasTokens").cloned().unwrap_or(json!(false)),
+      "isStale": is_stale,
     }));
   }
 
@@ -519,14 +739,20 @@ pub(crate) fn create_claudecode_oauth_profile(body: &Value) -> Result<Value, Str
 pub(crate) fn switch_claudecode_oauth_profile(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let id = get_string(&object, "id"); // empty string = back to default
+  let force = object.get("force").and_then(Value::as_bool).unwrap_or(false);
 
   let mut index = read_profiles_index()?;
   let now = Utc::now().timestamp();
   let last = index.get("lastSwitchAt").and_then(Value::as_i64).unwrap_or(0);
+  let current_active = index.get("active").and_then(Value::as_str).unwrap_or("").to_string();
 
-  // Defensive server-side throttle: 60s hard floor so buggy/malicious callers
-  // can't hammer switches. UI enforces the same.
-  if last > 0 && now - last < 60 && id != index.get("active").and_then(Value::as_str).unwrap_or("") {
+  // 切换到"自己"是 no-op,直接返回成功避免节流误阻塞
+  if id == current_active {
+    return Ok(json!({ "active": id, "noop": true }));
+  }
+
+  // 60s 节流:防止脚本/恶意调用者快速切换(Anthropic 后端看频繁切账号会怀疑)
+  if last > 0 && now - last < 60 {
     return Err(format!(
       "切换太频繁，请在 {} 秒后再试（防风控）",
       60 - (now - last)
@@ -540,13 +766,25 @@ pub(crate) fn switch_claudecode_oauth_profile(body: &Value) -> Result<Value, Str
     }
   }
 
+  // 活跃进程探测:有 claude 进程在跑时,已启动进程不会感知到切换,会继续吃旧号。
+  // 非强制模式返回一个结构化错误,UI 展示"确认后强切"选项。
+  if !force {
+    let running = count_running_claude_processes();
+    if running > 0 {
+      return Err(format!(
+        "CLAUDE_RUNNING:{}:检测到 {} 个正在运行的 Claude 进程。这些进程会继续使用当前账号直到关闭。\n\n建议先关闭后再切,否则:\n- Dashboard 显示会与运行中进程脱节\n- 运行中进程的用量仍计入旧账号\n\n如已确认要继续,点击再次切换时会强制执行。",
+        running, running
+      ));
+    }
+  }
+
   if let Some(obj) = index.as_object_mut() {
     obj.insert("active".to_string(), json!(id));
     obj.insert("lastSwitchAt".to_string(), json!(now));
   }
   write_profiles_index(&index)?;
 
-  Ok(json!({ "active": id }))
+  Ok(json!({ "active": id, "forced": force }))
 }
 
 pub(crate) fn rename_claudecode_oauth_profile(body: &Value) -> Result<Value, String> {
@@ -584,9 +822,23 @@ pub(crate) fn rename_claudecode_oauth_profile(body: &Value) -> Result<Value, Str
 pub(crate) fn delete_claudecode_oauth_profile(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let id = get_string(&object, "id");
+  let force = object.get("force").and_then(Value::as_bool).unwrap_or(false);
   if id.is_empty() { return Err("id is required".to_string()); }
 
   let dir = profile_dir(&id)?;
+
+  // 删 profile 比切换更危险:目录 rm -rf 掉之后,正在使用这个目录的 claude
+  // 进程会在写 session/.claude.json 时 I/O 出错直接崩。所以同样做进程探测。
+  // 这里不精确到哪个进程在用哪个 dir,保守起见:有任何 claude 进程就警告。
+  if !force {
+    let running = count_running_claude_processes();
+    if running > 0 {
+      return Err(format!(
+        "CLAUDE_RUNNING:{}:检测到 {} 个正在运行的 Claude 进程。删除 profile 目录可能导致正在使用该目录的进程崩溃(session 写入失败)。\n\n建议先关闭所有 Claude 进程再删。确认无误可强制删除。",
+        running, running
+      ));
+    }
+  }
 
   let mut index = read_profiles_index()?;
   let mut removed = false;
