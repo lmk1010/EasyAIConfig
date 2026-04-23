@@ -127,6 +127,31 @@ const state = {
 const el = (id) => document.getElementById(id);
 const tauriInvoke = window.__TAURI__?.core?.invoke || null;
 const rawCodeEditors = new Map();
+const TEMPORARILY_DISABLED_TOOLS = {
+  opencode: {
+    name: 'OpenCode',
+    message: 'OpenCode 还在适配中，当前先保留展示，入口暂不开放。',
+  },
+  openclaw: {
+    name: 'OpenClaw',
+    message: 'OpenClaw 还在适配中，当前先保留展示，入口暂不开放。',
+  },
+};
+
+function getTemporarilyDisabledToolMeta(toolId) {
+  return TEMPORARILY_DISABLED_TOOLS[String(toolId || '').trim()] || null;
+}
+
+function isTemporarilyDisabledTool(toolId) {
+  return Boolean(getTemporarilyDisabledToolMeta(toolId));
+}
+
+function flashTemporarilyDisabledTool(toolId) {
+  const meta = getTemporarilyDisabledToolMeta(toolId);
+  if (!meta) return false;
+  flash(meta.message, 'info');
+  return true;
+}
 
 function renderQuickRailSupportPanel() {
   const titleEl = el('configTipsTitle');
@@ -2080,19 +2105,23 @@ function toolIconSvg(toolId) {
 function updateToolSelector() {
   document.querySelectorAll('.tool-tab').forEach(tab => {
     const tid = tab.dataset.tool;
+    const temporarilyDisabled = getTemporarilyDisabledToolMeta(tid);
     // Always toggle active class based on activeTool
     tab.classList.toggle('active', tid === state.activeTool);
     // Update disabled state from tools data if available
     const tool = state.tools.find(t => t.id === tid);
     if (tool) {
-      tab.disabled = !tool.supported;
+      tab.disabled = !tool.supported && !temporarilyDisabled;
     }
+    tab.title = temporarilyDisabled?.message || '';
   });
   document.querySelectorAll('.sec-item[data-sec-tool]').forEach(item => {
     const tid = item.dataset.secTool;
+    const temporarilyDisabled = getTemporarilyDisabledToolMeta(tid);
     item.classList.toggle('active', tid === state.activeTool);
     const tool = state.tools.find(t => t.id === tid);
-    if (tool) item.disabled = !tool.supported;
+    if (tool) item.disabled = !tool.supported && !temporarilyDisabled;
+    item.title = temporarilyDisabled?.message || '';
   });
 }
 
@@ -2151,9 +2180,13 @@ function _restoreToolForm(toolId) {
 }
 
 function setActiveTool(toolId) {
+  if (isTemporarilyDisabledTool(toolId)) {
+    flashTemporarilyDisabledTool(toolId);
+    return false;
+  }
   const tool = state.tools.find(t => t.id === toolId);
-  if (tool && !tool.supported) return;
-  if (toolId === state.activeTool) return;
+  if (tool && !tool.supported) return false;
+  if (toolId === state.activeTool) return true;
 
   _saveCurrentToolForm();
 
@@ -2223,7 +2256,7 @@ function setActiveTool(toolId) {
     applyClaudeCodeQuickInstallState(state.claudeCodeState || {});
     loadClaudeCodeQuickState();
     renderCurrentConfig();
-    return;
+    return true;
   }
 
   if (toolId === 'opencode') {
@@ -2248,7 +2281,7 @@ function setActiveTool(toolId) {
     applyOpenCodeQuickInstallState(state.opencodeState || {});
     loadOpenCodeQuickState();
     renderCurrentConfig();
-    return;
+    return true;
   }
 
   if (toolId !== 'openclaw') {
@@ -2275,7 +2308,7 @@ function setActiveTool(toolId) {
     }
     syncCodexAuthView();
     renderCurrentConfig();
-    return;
+    return true;
   }
 
   if (baseUrlField) baseUrlField.style.display = '';
@@ -2290,6 +2323,7 @@ function setActiveTool(toolId) {
   if (detectionMeta) detectionMeta.textContent = '选择协议后会自动适配默认 URL、环境变量名和推荐模型。';
   loadOpenClawQuickState();
   renderCurrentConfig();
+  return true;
 }
 
 // Claude Code model aliases → display names
@@ -9077,7 +9111,7 @@ async function handleToolConsoleAction(button) {
   }
 
   if (action === 'goto-quick-tool') {
-    if (targetTool) setActiveTool(targetTool);
+    if (targetTool && !setActiveTool(targetTool)) return;
     if (targetTool === 'codex') {
       const login = state.current?.login || {};
       if (login.loggedIn && String(login.method || '').toLowerCase() === 'chatgpt') {
@@ -9090,6 +9124,7 @@ async function handleToolConsoleAction(button) {
   }
 
   if (action === 'goto-config-editor-tool') {
+    if (flashTemporarilyDisabledTool(targetTool)) return;
     if (targetTool === 'openclaw' && !state.openclawState) {
       await loadOpenClawQuickState();
     }
@@ -9219,11 +9254,17 @@ function parseApiRequest(url, options = {}) {
   const target = new URL(url, window.location.origin);
   const query = Object.fromEntries(target.searchParams.entries());
   let body = undefined;
-  if (options.body) {
-    try {
-      body = JSON.parse(options.body);
-    } catch {
-      body = undefined;
+  if (options.body !== undefined) {
+    if (typeof options.body === 'string') {
+      try {
+        body = JSON.parse(options.body);
+      } catch {
+        body = options.body;
+      }
+    } else if (typeof options.body === 'object') {
+      body = options.body;
+    } else {
+      body = options.body;
     }
   }
   return {
@@ -11189,7 +11230,12 @@ function getConfigEditorTool() {
 async function setConfigEditorOpen(open) {
   state.configEditorOpen = open;
   if (open) {
-    state.configEditorTool = normalizeConfigEditorTool(state.activeTool || state.configEditorTool);
+    const nextTool = normalizeConfigEditorTool(state.activeTool || state.configEditorTool);
+    if (flashTemporarilyDisabledTool(nextTool)) {
+      state.configEditorOpen = false;
+      return false;
+    }
+    state.configEditorTool = nextTool;
     if (getConfigEditorTool() === 'openclaw' && !state.openclawState) {
       await loadOpenClawQuickState();
     }
@@ -11206,8 +11252,10 @@ async function setConfigEditorOpen(open) {
     setPage('configEditor');
     if (window.refreshCustomSelects) window.refreshCustomSelects();
     refreshRawCodeEditors();
+    return true;
   } else {
     setPage('quick');
+    return true;
   }
 }
 
@@ -17158,7 +17206,8 @@ await loadClaudeCodeQuickState({ force: false, cacheOnly: false }).catch((e) => 
   try {
     const json = await api('/api/claudecode/launch', {
       method: 'POST',
-      body: { cwd: state.current?.launch?.cwd || '' },
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: state.current?.launch?.cwd || '' }),
     });
     if (json.ok) {
       flash(json.data?.message || 'Claude Code 已启动', 'success');
@@ -17220,7 +17269,8 @@ async function launchClaudeCodeOAuthLogin(buttonId = 'claudeOauthLoginBtn') {
   try {
     const json = await api('/api/claudecode/login', {
       method: 'POST',
-      body: { cwd: state.current?.launch?.cwd || '' },
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: state.current?.launch?.cwd || '' }),
     });
     if (!json.ok) {
       flash(json.error || '启动 OAuth 登录失败', 'error');
@@ -17671,6 +17721,7 @@ function renderWizardInstallMethods() {
 }
 
 function selectWizardTool(toolId) {
+  if (flashTemporarilyDisabledTool(toolId)) return;
   state.wizardSelectedTool = toolId;
   const meta = WIZARD_TOOL_META[toolId];
   // Default to first method
@@ -18294,8 +18345,8 @@ function bindEvents() {
     const item = e.target.closest('.sec-item[data-sec-tool]');
     if (!item || item.disabled) return;
     const targetTool = item.dataset.secTool;
+    if (!setActiveTool(targetTool)) return;
     if (state.activePage !== 'quick') setPage('quick');
-    setActiveTool(targetTool);
   });
   el('appUpdateBtn').addEventListener('click', async () => {
     const info = await loadAppUpdateState({ manual: true });
@@ -19001,20 +19052,23 @@ function bindEvents() {
   // Config Editor tab switcher (legacy in-page tabs + new left-rail buttons)
   async function cfgEditorSwitchTool(tool) {
     tool = normalizeConfigEditorTool(tool || 'codex');
+    if (flashTemporarilyDisabledTool(tool)) return false;
     if (tool === getConfigEditorTool()) return;
     state.configEditorTool = tool;
     syncConfigEditorForTool();
     if (tool === 'openclaw' && !state.openclawState) await loadOpenClawQuickState();
     if (tool === 'claudecode' && !state.claudeCodeState) await loadClaudeCodeQuickState();
     populateConfigEditor();
+    return true;
   }
 
   const cfgRailList = document.getElementById('configEditorToolList');
   if (cfgRailList) {
-    cfgRailList.addEventListener('click', (e) => {
+    cfgRailList.addEventListener('click', async (e) => {
       const btn = e.target instanceof Element ? e.target.closest('[data-cfg-rail-tool]') : null;
       if (!btn) return;
-      cfgEditorSwitchTool(btn.getAttribute('data-cfg-rail-tool') || 'codex');
+      const changed = await cfgEditorSwitchTool(btn.getAttribute('data-cfg-rail-tool') || 'codex');
+      if (changed === false) return;
       // Sync rail active state
       cfgRailList.querySelectorAll('[data-cfg-rail-tool]').forEach((b) => {
         b.classList.toggle('active', b === btn);
@@ -19029,6 +19083,7 @@ function bindEvents() {
       if (!tab) return;
       e.preventDefault();
       const tool = normalizeConfigEditorTool(tab.dataset.cfgTool || 'codex');
+      if (flashTemporarilyDisabledTool(tool)) return;
       if (tool === getConfigEditorTool()) return;
 
       state.configEditorTool = tool;
@@ -19066,7 +19121,9 @@ function bindEvents() {
     consoleTabs.addEventListener('click', (e) => {
       const button = e.target.closest('[data-console-tool]');
       if (!button) return;
-      state.consoleTool = button.dataset.consoleTool || 'codex';
+      const tool = button.dataset.consoleTool || 'codex';
+      if (flashTemporarilyDisabledTool(tool)) return;
+      state.consoleTool = tool;
       renderToolConsole();
     });
   }
@@ -19077,7 +19134,9 @@ function bindEvents() {
     consoleRailList.addEventListener('click', (e) => {
       const btn = e.target instanceof Element ? e.target.closest('[data-console-rail-tool]') : null;
       if (!btn) return;
-      state.consoleTool = btn.getAttribute('data-console-rail-tool') || 'codex';
+      const tool = btn.getAttribute('data-console-rail-tool') || 'codex';
+      if (flashTemporarilyDisabledTool(tool)) return;
+      state.consoleTool = tool;
       renderToolConsole();
     });
   }
@@ -19089,6 +19148,7 @@ function bindEvents() {
       const btn = e.target instanceof Element ? e.target.closest('[data-dashboard-rail-tool]') : null;
       if (!btn) return;
       const tool = btn.getAttribute('data-dashboard-rail-tool') || 'codex';
+      if (flashTemporarilyDisabledTool(tool)) return;
       state.dashboardTool = tool;
       if (tool === 'claudecode') {
         const hasCachedData = hasClaudeDashboardData();
@@ -19123,14 +19183,14 @@ function bindEvents() {
       }
       if (t.closest('[data-console-v2-goto-quick]')) {
         const tool = state.consoleTool || 'codex';
+        if (!setActiveTool(tool)) return;
         if (state.toolLastPage) state.toolLastPage[tool] = 'quick';
-        state.activeTool = tool;
         setPage?.('quick');
         return;
       }
       if (t.closest('[data-console-v2-goto-editor]')) {
         const tool = state.consoleTool || 'codex';
-        state.activeTool = tool;
+        if (!setActiveTool(tool)) return;
         setPage?.('configEditor');
         return;
       }
@@ -19226,7 +19286,9 @@ function bindEvents() {
   el('dashboardPage')?.addEventListener('click', async (e) => {
     const tab = e.target.closest('[data-dashboard-tool]');
     if (tab) {
-      state.dashboardTool = tab.dataset.dashboardTool || 'codex';
+      const tool = tab.dataset.dashboardTool || 'codex';
+      if (flashTemporarilyDisabledTool(tool)) return;
+      state.dashboardTool = tool;
       if (state.dashboardTool === 'claudecode') {
         const hasCachedData = hasClaudeDashboardData();
         if (!hasCachedData) {
@@ -19666,7 +19728,7 @@ function bindEvents() {
     closeSetupWizard();
     // Switch to the selected tool
     if (state.wizardSelectedTool && state.wizardSelectedTool !== state.activeTool) {
-      setActiveTool(state.wizardSelectedTool);
+      if (!setActiveTool(state.wizardSelectedTool)) return;
     }
     setPage('quick');
   });
@@ -19674,7 +19736,7 @@ function bindEvents() {
     closeSetupWizard();
     // Switch to the selected tool and launch
     if (state.wizardSelectedTool && state.wizardSelectedTool !== state.activeTool) {
-      setActiveTool(state.wizardSelectedTool);
+      if (!setActiveTool(state.wizardSelectedTool)) return;
     }
     await launchActiveTool();
   });

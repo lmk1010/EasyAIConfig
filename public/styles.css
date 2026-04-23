@@ -24173,3 +24173,156 @@ body {
   position: relative;
   top: 1px;
 }
+
+/* Config editor dropdown layering + menu polish v11 */
+.shell-v2 .config-editor-page .cfg-section:has(.custom-select.open),
+.shell-v2 .config-editor-page .oc-panel:has(.custom-select.open),
+.shell-v2 .config-editor-page .oc-subpanel:has(.custom-select.open),
+.shell-v2 .config-editor-page .cfg-section:has(.model-combobox.open),
+.shell-v2 .config-editor-page .oc-panel:has(.model-combobox.open),
+.shell-v2 .config-editor-page .oc-subpanel:has(.model-combobox.open) {
+  z-index: 34;
+}
+
+.shell-v2 .config-editor-page .field:has(.custom-select.open),
+.shell-v2 .config-editor-page label.field:has(.custom-select.open),
+.shell-v2 .config-editor-page .field-wide:has(.custom-select.open),
+.shell-v2 .config-editor-page .field:has(.model-combobox.open),
+.shell-v2 .config-editor-page label.field:has(.model-combobox.open),
+.shell-v2 .config-editor-page .field-wide:has(.model-combobox.open) {
+  z-index: 35;
+}
+
+.shell-v2 .config-editor-page .custom-select,
+.shell-v2 .config-editor-page .model-combobox {
+  isolation: isolate;
+}
+
+.shell-v2 .config-editor-page .custom-select.open,
+.shell-v2 .config-editor-page .model-combobox.open {
+  z-index: 6800;
+}
+
+.shell-v2 .config-editor-page .custom-select-trigger,
+.shell-v2 .config-editor-page .model-combobox > input {
+  min-width: 0;
+}
+
+.shell-v2 .config-editor-page .custom-select-trigger .cs-value,
+.shell-v2 .config-editor-page .model-combobox-option-value,
+.shell-v2 .config-editor-page .model-combobox-option-label {
+  min-width: 0;
+}
+
+.shell-v2 .config-editor-page .custom-select-dropdown,
+.shell-v2 .config-editor-page .model-combobox-dropdown {
+  top: calc(100% + 6px);
+  z-index: 6801;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(19, 24, 35, 0.98), rgba(13, 18, 29, 0.99)),
+    radial-gradient(120% 160% at 0% 0%, rgba(107, 158, 255, 0.12), transparent 58%);
+  box-shadow:
+    0 20px 46px rgba(4, 10, 20, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px) saturate(145%);
+  -webkit-backdrop-filter: blur(20px) saturate(145%);
+}
+
+.shell-v2 .config-editor-page .model-combobox-group-label {
+  padding: 8px 10px 6px;
+  font-size: 0.62rem;
+  font-weight: 680;
+  letter-spacing: 0.08em;
+  color: rgba(141, 189, 255, 0.62);
+}
+
+.shell-v2 .config-editor-page .model-combobox-group + .model-combobox-group .model-combobox-group-label {
+  margin-top: 4px;
+  padding-top: 10px;
+}
+
+.shell-v2 .config-editor-page .model-combobox-option {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 0.71rem;
+  color: rgba(232, 238, 248, 0.82);
+}
+
+.shell-v2 .config-editor-page .model-combobox-option:hover {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--s2-text);
+}
+
+.shell-v2 .config-editor-page .model-combobox-option.highlighted,
+.shell-v2 .config-editor-page .model-combobox-option.selected {
+  background: rgba(107, 158, 255, 0.14);
+  color: var(--s2-text);
+}
+
+.shell-v2 .config-editor-page .model-combobox-option.selected::after {
+  color: rgba(141, 189, 255, 0.9);
+}
+
+.shell-v2 .config-editor-page .model-combobox-option-label {
+  font-size: 0.68rem;
+  color: var(--s2-muted);
+}
+
+.shell-v2 .config-editor-page .model-combobox-empty,
+.shell-v2 .config-editor-page .model-combobox-hint {
+  padding: 8px 10px;
+}
+
+.shell-v2 .config-editor-page .model-combobox-empty {
+  font-size: 0.69rem;
+  color: var(--s2-muted);
+}
+
+.shell-v2 .config-editor-page .model-combobox-hint {
+  margin-top: 4px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.63rem;
+  color: rgba(141, 189, 255, 0.62);
+}
+
+[data-theme="light"] .shell-v2 .config-editor-page .custom-select-dropdown,
+[data-theme="light"] .shell-v2 .config-editor-page .model-combobox-dropdown {
+  border-color: rgba(15, 23, 42, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(247, 250, 255, 0.99)),
+    radial-gradient(120% 160% at 0% 0%, rgba(59, 130, 246, 0.08), transparent 58%);
+  box-shadow:
+    0 20px 44px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+[data-theme="light"] .shell-v2 .config-editor-page .model-combobox-group-label {
+  color: rgba(59, 130, 246, 0.62);
+}
+
+[data-theme="light"] .shell-v2 .config-editor-page .model-combobox-option {
+  color: rgba(15, 23, 42, 0.82);
+}
+
+[data-theme="light"] .shell-v2 .config-editor-page .model-combobox-option:hover {
+  background: rgba(59, 130, 246, 0.07);
+}
+
+[data-theme="light"] .shell-v2 .config-editor-page .model-combobox-option.highlighted,
+[data-theme="light"] .shell-v2 .config-editor-page .model-combobox-option.selected {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+[data-theme="light"] .shell-v2 .config-editor-page .model-combobox-option.selected::after {
+  color: rgba(59, 130, 246, 0.9);
+}
+
+[data-theme="light"] .shell-v2 .config-editor-page .model-combobox-hint {
+  border-top-color: rgba(15, 23, 42, 0.06);
+  color: rgba(59, 130, 246, 0.62);
+}
