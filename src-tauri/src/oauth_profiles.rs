@@ -1,17 +1,15 @@
-// Codex OAuth profile manager — local file shuffle only.
+// Codex OAuth profile manager.
 //
 // Layout:
 //   ~/.codex-config-ui/codex-oauth-profiles/
 //     profiles.json              — index { active, profiles: [{id, name, plan, ...}] }
-//     <id>/auth.json             — archived copy of a ~/.codex/auth.json
-//     <id>/last-token-preview    — (future) not used yet
+//     <id>/                      — this directory IS CODEX_HOME for the profile
+//       auth.json                — OAuth tokens for this account
+//       .env / config.toml / sessions / history.jsonl / ... managed by Codex
 //
-// The active profile's archived auth.json is kept in sync whenever we detect
-// the live ~/.codex/auth.json has been refreshed (e.g. silent OAuth refresh),
-// so switching back never loses a fresh refresh_token.
-//
-// No token is sent over the network. No HTTP calls to OpenAI are made by this
-// module. Switching is a pure `cp archive/auth.json ~/.codex/auth.json`.
+// Switching only updates which profile/home the UI points to. We no longer
+// copy auth.json back into ~/.codex; each profile keeps its own isolated
+// CODEX_HOME so auth, sessions, history and config stay separated.
 
 use chrono::Utc;
 use serde_json::{json, Map, Value};
@@ -21,8 +19,8 @@ use uuid::Uuid;
 
 use crate::provider::get_string;
 use crate::{
-  app_home, default_codex_home, ensure_dir, parse_env, parse_json_object, parse_toml_config,
-  read_text, stringify_env, stringify_toml_config, write_secret, write_text,
+  app_home, default_codex_home, ensure_dir, parse_env, parse_json_object, read_text,
+  stringify_env, write_secret, write_text,
 };
 
 const PROFILES_DIRNAME: &str = "codex-oauth-profiles";
@@ -47,6 +45,10 @@ fn profile_dir(id: &str) -> Result<PathBuf, String> {
 
 fn profile_auth_path(id: &str) -> Result<PathBuf, String> {
   Ok(profile_dir(id)?.join(AUTH_FILENAME))
+}
+
+fn auth_path_for_codex_home(codex_home: &Path) -> PathBuf {
+  codex_home.join(AUTH_FILENAME)
 }
 
 fn read_profiles_index() -> Result<Value, String> {
@@ -200,10 +202,8 @@ fn extract_oauth_meta(auth_json: &Value) -> Value {
   })
 }
 
-// Public helper so frontend doesn't have to reparse.
-fn meta_for_live_codex_auth() -> Result<Value, String> {
-  let codex_home = default_codex_home()?;
-  let auth_path = codex_home.join("auth.json");
+fn oauth_meta_for_codex_home(codex_home: &Path) -> Result<Value, String> {
+  let auth_path = auth_path_for_codex_home(codex_home);
   let text = read_text(&auth_path)?;
   if text.trim().is_empty() {
     return Ok(json!({
@@ -218,11 +218,16 @@ fn meta_for_live_codex_auth() -> Result<Value, String> {
   Ok(extract_oauth_meta(&auth))
 }
 
-// ---- Active profile tracking ----
+fn resolve_requested_codex_home(object: &Map<String, Value>) -> Result<PathBuf, String> {
+  let input = get_string(object, "codexHome");
+  if input.is_empty() {
+    default_codex_home()
+  } else {
+    Ok(PathBuf::from(input))
+  }
+}
 
-// Determine which saved profile matches the live ~/.codex/auth.json.
-// Matching is by account_id (stable across token refreshes).
-fn detect_active_profile_id(index: &Value, live_account_id: &str) -> String {
+fn detect_profile_id_by_account(index: &Value, live_account_id: &str) -> String {
   if live_account_id.is_empty() {
     return String::new();
   }
@@ -237,19 +242,90 @@ fn detect_active_profile_id(index: &Value, live_account_id: &str) -> String {
   String::new()
 }
 
-// If the live auth.json belongs to a known profile, refresh its archive copy
-// so we don't lose a just-refreshed refresh_token on the next switch.
-fn sync_live_to_active_archive(live_auth_raw: &str, active_id: &str) -> Result<(), String> {
-  if active_id.is_empty() || live_auth_raw.trim().is_empty() {
-    return Ok(());
+fn detect_profile_id_by_home(index: &Value, codex_home: &Path) -> String {
+  let Some(arr) = index.get("profiles").and_then(Value::as_array) else {
+    return String::new();
+  };
+  for p in arr {
+    let id = p.get("id").and_then(Value::as_str).unwrap_or("");
+    if id.is_empty() {
+      continue;
+    }
+    if let Ok(dir) = profile_dir(id) {
+      if dir == codex_home {
+        return id.to_string();
+      }
+    }
   }
-  let archive = profile_auth_path(active_id)?;
-  // Only overwrite if content actually differs.
-  let existing = read_text(&archive).unwrap_or_default();
-  if existing == live_auth_raw {
-    return Ok(());
+  String::new()
+}
+
+fn default_profile_name(requested_name: &str, meta: &Value, id: &str) -> String {
+  if !requested_name.trim().is_empty() {
+    return requested_name.trim().to_string();
   }
-  write_secret(&archive, live_auth_raw)
+  let email = meta.get("email").and_then(Value::as_str).unwrap_or("").trim();
+  if !email.is_empty() {
+    return email.to_string();
+  }
+  let plan = meta.get("plan").and_then(Value::as_str).unwrap_or("").trim();
+  if !plan.is_empty() {
+    return format!("OAuth ({})", plan);
+  }
+  format!("Codex 账号 #{}", &id[..8.min(id.len())])
+}
+
+fn refresh_profile_runtime_meta(profile: &mut Value) -> Result<bool, String> {
+  let Some(obj) = profile.as_object_mut() else {
+    return Ok(false);
+  };
+  let id = obj.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+  if id.is_empty() {
+    return Ok(false);
+  }
+  let dir = profile_dir(&id)?;
+  let meta = oauth_meta_for_codex_home(&dir)?;
+  let has_tokens = meta.get("hasTokens").and_then(Value::as_bool).unwrap_or(false);
+  let mut changed = false;
+
+  let codex_home = dir.to_string_lossy().to_string();
+  if obj.get("codexHome").and_then(Value::as_str).unwrap_or("") != codex_home {
+    obj.insert("codexHome".to_string(), json!(codex_home));
+    changed = true;
+  }
+  if obj.get("hasTokens").and_then(Value::as_bool).unwrap_or(false) != has_tokens {
+    obj.insert("hasTokens".to_string(), json!(has_tokens));
+    changed = true;
+  }
+
+  if has_tokens {
+    for key in ["accountId", "plan", "email", "sub"] {
+      let next = meta.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+      if obj.get(key).and_then(Value::as_str).unwrap_or("") != next {
+        obj.insert(key.to_string(), json!(next));
+        changed = true;
+      }
+    }
+  }
+
+  Ok(changed)
+}
+
+fn refresh_profiles_runtime_meta(index: &mut Value) -> Result<Vec<Value>, String> {
+  let Some(arr) = index.get_mut("profiles").and_then(Value::as_array_mut) else {
+    return Ok(Vec::new());
+  };
+
+  let mut changed = false;
+  for profile in arr.iter_mut() {
+    changed |= refresh_profile_runtime_meta(profile)?;
+  }
+
+  let profiles = arr.clone();
+  if changed {
+    write_profiles_index(index)?;
+  }
+  Ok(profiles)
 }
 
 fn is_env_style_key(key: &str) -> bool {
@@ -354,34 +430,28 @@ fn prune_old_backups(dir: &Path) -> Result<(), String> {
 // ---- Public routes ----
 
 pub(crate) fn list_oauth_profiles(_query: &Value) -> Result<Value, String> {
+  let query_object = parse_json_object(_query);
+  let current_codex_home = resolve_requested_codex_home(&query_object)?;
+
   let mut index = read_profiles_index()?;
-  let live_meta = meta_for_live_codex_auth().unwrap_or_else(|_| {
+  let profiles = refresh_profiles_runtime_meta(&mut index)?;
+  let live_meta = oauth_meta_for_codex_home(&current_codex_home).unwrap_or_else(|_| {
     json!({ "hasTokens": false, "accountId": "", "plan": "", "email": "", "sub": "" })
   });
-  let live_raw = {
-    let codex_home = default_codex_home()?;
-    read_text(&codex_home.join("auth.json")).unwrap_or_default()
-  };
   let live_account = live_meta
     .get("accountId")
     .and_then(Value::as_str)
     .unwrap_or("")
     .to_string();
 
-  let active_id = detect_active_profile_id(&index, &live_account);
-
-  // Silent sync: if live auth matches a profile, keep that archive up-to-date.
-  let _ = sync_live_to_active_archive(&live_raw, &active_id);
-
-  if let Some(obj) = index.as_object_mut() {
-    obj.insert("active".to_string(), json!(active_id));
-  }
-  write_profiles_index(&index)?;
-
-  let profiles = index
-    .get("profiles")
-    .cloned()
-    .unwrap_or_else(|| json!([]));
+  let active_id = {
+    let by_home = detect_profile_id_by_home(&index, &current_codex_home);
+    if !by_home.is_empty() {
+      by_home
+    } else {
+      detect_profile_id_by_account(&index, &live_account)
+    }
+  };
 
   Ok(json!({
     "active": active_id,
@@ -395,14 +465,14 @@ pub(crate) fn save_current_oauth_profile(body: &Value) -> Result<Value, String> 
   let object = parse_json_object(body);
   let requested_name = get_string(&object, "name");
 
-  let codex_home = default_codex_home()?;
-  let live_path = codex_home.join("auth.json");
+  let source_codex_home = resolve_requested_codex_home(&object)?;
+  let live_path = auth_path_for_codex_home(&source_codex_home);
   let live_raw = read_text(&live_path)?;
   if live_raw.trim().is_empty() {
-    return Err("当前 ~/.codex/auth.json 为空，先运行 codex login".to_string());
+    return Err("当前 CODEX_HOME/auth.json 为空，先运行 codex login".to_string());
   }
   let live_json: Value = serde_json::from_str(&live_raw)
-    .map_err(|e| format!("~/.codex/auth.json 解析失败: {}", e))?;
+    .map_err(|e| format!("CODEX_HOME/auth.json 解析失败: {}", e))?;
   let meta = extract_oauth_meta(&live_json);
   if !meta.get("hasTokens").and_then(Value::as_bool).unwrap_or(false) {
     return Err("当前 auth.json 没有 OAuth tokens（只有 API Key），请先运行 codex login".to_string());
@@ -414,11 +484,15 @@ pub(crate) fn save_current_oauth_profile(body: &Value) -> Result<Value, String> 
   let email = meta.get("email").and_then(Value::as_str).unwrap_or("").to_string();
   let sub = meta.get("sub").and_then(Value::as_str).unwrap_or("").to_string();
 
-  // If an existing profile matches this account_id, update it in place.
-  let existing_id = if !account_id.is_empty() {
-    detect_active_profile_id(&index, &account_id)
-  } else {
-    String::new()
+  let existing_id = {
+    let by_home = detect_profile_id_by_home(&index, &source_codex_home);
+    if !by_home.is_empty() {
+      by_home
+    } else if !account_id.is_empty() {
+      detect_profile_id_by_account(&index, &account_id)
+    } else {
+      String::new()
+    }
   };
 
   let now = Utc::now().timestamp();
@@ -427,20 +501,15 @@ pub(crate) fn save_current_oauth_profile(body: &Value) -> Result<Value, String> 
   } else {
     existing_id.clone()
   };
+  let target_codex_home = profile_dir(&id)?;
+  ensure_dir(&target_codex_home)?;
 
-  // Write archive.
   let archive = profile_auth_path(&id)?;
-  write_secret(&archive, &live_raw)?;
+  if source_codex_home != target_codex_home || read_text(&archive).unwrap_or_default() != live_raw {
+    write_secret(&archive, &live_raw)?;
+  }
 
-  // Upsert into index.
-  let default_name = if !email.is_empty() {
-    email.clone()
-  } else if !plan.is_empty() {
-    format!("OAuth ({})", plan)
-  } else {
-    "OAuth 账号".to_string()
-  };
-  let name = if requested_name.is_empty() { default_name } else { requested_name };
+  let name = default_profile_name(&requested_name, &meta, &id);
 
   if let Some(arr) = index.get_mut("profiles").and_then(Value::as_array_mut) {
     let mut updated = false;
@@ -452,6 +521,8 @@ pub(crate) fn save_current_oauth_profile(body: &Value) -> Result<Value, String> 
           obj.insert("plan".to_string(), json!(plan));
           obj.insert("email".to_string(), json!(email));
           obj.insert("sub".to_string(), json!(sub));
+          obj.insert("codexHome".to_string(), json!(target_codex_home.to_string_lossy().to_string()));
+          obj.insert("hasTokens".to_string(), json!(true));
           obj.insert("updatedAt".to_string(), json!(now));
         }
         updated = true;
@@ -466,6 +537,8 @@ pub(crate) fn save_current_oauth_profile(body: &Value) -> Result<Value, String> 
         "plan": plan,
         "email": email,
         "sub": sub,
+        "codexHome": target_codex_home.to_string_lossy().to_string(),
+        "hasTokens": true,
         "createdAt": now,
         "updatedAt": now,
       }));
@@ -480,6 +553,8 @@ pub(crate) fn save_current_oauth_profile(body: &Value) -> Result<Value, String> 
         "plan": plan,
         "email": email,
         "sub": sub,
+        "codexHome": target_codex_home.to_string_lossy().to_string(),
+        "hasTokens": true,
         "createdAt": now,
         "updatedAt": now,
       }]),
@@ -491,7 +566,53 @@ pub(crate) fn save_current_oauth_profile(body: &Value) -> Result<Value, String> 
   }
   write_profiles_index(&index)?;
 
-  Ok(json!({ "id": id, "updated": !existing_id.is_empty() }))
+  Ok(json!({
+    "id": id,
+    "updated": !existing_id.is_empty(),
+    "codexHome": target_codex_home.to_string_lossy().to_string()
+  }))
+}
+
+pub(crate) fn create_oauth_profile(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let requested_name = get_string(&object, "name");
+  let id = format!("prof_{}", Uuid::new_v4().simple());
+  let dir = profile_dir(&id)?;
+  ensure_dir(&dir)?;
+
+  let now = Utc::now().timestamp();
+  let name = default_profile_name(&requested_name, &json!({}), &id);
+
+  let mut index = read_profiles_index()?;
+  if let Some(arr) = index.get_mut("profiles").and_then(Value::as_array_mut) {
+    arr.push(json!({
+      "id": id,
+      "name": name,
+      "codexHome": dir.to_string_lossy().to_string(),
+      "hasTokens": false,
+      "createdAt": now,
+      "updatedAt": now,
+    }));
+  } else if let Some(obj) = index.as_object_mut() {
+    obj.insert(
+      "profiles".to_string(),
+      json!([{
+        "id": id,
+        "name": name,
+        "codexHome": dir.to_string_lossy().to_string(),
+        "hasTokens": false,
+        "createdAt": now,
+        "updatedAt": now,
+      }]),
+    );
+  }
+  write_profiles_index(&index)?;
+
+  Ok(json!({
+    "id": id,
+    "name": name,
+    "codexHome": dir.to_string_lossy().to_string(),
+  }))
 }
 
 pub(crate) fn switch_oauth_profile(body: &Value) -> Result<Value, String> {
@@ -501,53 +622,9 @@ pub(crate) fn switch_oauth_profile(body: &Value) -> Result<Value, String> {
     return Err("id is required".to_string());
   }
 
-  let archive = profile_auth_path(&id)?;
-  if !archive.exists() {
-    return Err("目标 profile 的 auth.json 不存在".to_string());
-  }
-  let archive_raw = read_text(&archive)?;
-  if archive_raw.trim().is_empty() {
-    return Err("目标 profile 的 auth.json 为空".to_string());
-  }
-
-  let codex_home = default_codex_home()?;
-  ensure_dir(&codex_home)?;
-  let live_path = codex_home.join("auth.json");
-  let live_raw = read_text(&live_path).unwrap_or_default();
-
-  // Before overwriting: if live is a known profile, sync its archive; always
-  // drop a timestamped backup too.
-  if !live_raw.trim().is_empty() {
-    migrate_auth_json_env_to_codex_env(&codex_home, &live_raw)?;
-    let live_json: Value = serde_json::from_str(&live_raw).unwrap_or_else(|_| json!({}));
-    let live_meta = extract_oauth_meta(&live_json);
-    let live_account = live_meta.get("accountId").and_then(Value::as_str).unwrap_or("").to_string();
-    let index = read_profiles_index()?;
-    let active_before = detect_active_profile_id(&index, &live_account);
-    let _ = sync_live_to_active_archive(&live_raw, &active_before);
-    let _ = write_switch_backup(&live_raw);
-  }
-
-  migrate_auth_json_env_to_codex_env(&codex_home, &archive_raw)?;
-  write_secret(&live_path, &archive_raw)?;
-
-  // Drop the config.toml `model_provider` override so the hub correctly
-  // resolves this OAuth profile as the active session. Without this, the
-  // previously-chosen API-key provider still appears active (isActive is
-  // derived from config.toml), leaving the CURRENT SESSION card stuck on the
-  // old API-key row even though auth.json now points at OAuth tokens.
-  let config_path = codex_home.join("config.toml");
-  let config_raw = read_text(&config_path).unwrap_or_default();
-  if !config_raw.trim().is_empty() {
-    if let Ok(mut config) = parse_toml_config(&config_raw) {
-      if let Some(obj) = config.as_object_mut() {
-        if obj.remove("model_provider").is_some() {
-          if let Ok(serialized) = stringify_toml_config(&config) {
-            let _ = write_text(&config_path, &serialized);
-          }
-        }
-      }
-    }
+  let target_codex_home = profile_dir(&id)?;
+  if !target_codex_home.exists() {
+    return Err("目标 profile 目录不存在".to_string());
   }
 
   // Update active pointer.
@@ -557,7 +634,10 @@ pub(crate) fn switch_oauth_profile(body: &Value) -> Result<Value, String> {
   }
   write_profiles_index(&index)?;
 
-  Ok(json!({ "id": id, "authPath": live_path.to_string_lossy().to_string() }))
+  Ok(json!({
+    "id": id,
+    "codexHome": target_codex_home.to_string_lossy().to_string()
+  }))
 }
 
 pub(crate) fn rename_oauth_profile(body: &Value) -> Result<Value, String> {

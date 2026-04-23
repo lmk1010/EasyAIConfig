@@ -25,8 +25,8 @@ use crate::config::{
   restore_backup, save_config, save_raw_config, save_settings, test_saved_provider,
 };
 use crate::oauth_profiles::{
-  delete_oauth_profile, list_oauth_profiles, rename_oauth_profile, save_current_oauth_profile,
-  switch_oauth_profile,
+  create_oauth_profile, delete_oauth_profile, list_oauth_profiles, rename_oauth_profile,
+  save_current_oauth_profile, switch_oauth_profile,
 };
 use crate::claudecode_oauth_profiles::{
   create_claudecode_oauth_profile, delete_claudecode_oauth_profile, list_claudecode_oauth_profiles,
@@ -66,6 +66,7 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/codex/launch", "POST") => launch_codex(body),
     ("/api/codex/login", "POST") => login_codex(body),
     ("/api/codex/oauth/profiles", "GET") => list_oauth_profiles(query),
+    ("/api/codex/oauth/profiles/create", "POST") => create_oauth_profile(body),
     ("/api/codex/oauth/profiles/save-current", "POST") => save_current_oauth_profile(body),
     ("/api/codex/oauth/profiles/switch", "POST") => switch_oauth_profile(body),
     ("/api/codex/oauth/profiles/rename", "POST") => rename_oauth_profile(body),

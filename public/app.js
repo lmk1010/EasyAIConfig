@@ -6260,6 +6260,18 @@ function getDashboardMetricsForTool(tool = '') {
   return state.dashboardMetrics?.[tool] || null;
 }
 
+function hasClaudeDashboardData() {
+  const usage = state.claudeCodeState?.usage;
+  return Boolean(
+    usage &&
+    typeof usage === 'object' &&
+    usage.totals &&
+    typeof usage.totals === 'object' &&
+    typeof usage.generatedAt === 'string' &&
+    usage.generatedAt
+  );
+}
+
 async function loadDashboardSideStates() {
   const tasks = [];
   if (!state.current) {
@@ -7025,7 +7037,10 @@ function renderClaudeScopeDropdown() {
   const current = st?.usageScope || 'active';
   const currentLabel = (() => {
     if (current === 'all') return '全部聚合';
-    if (current === 'active') return `当前 · ${escapeHtml(st?.activeProfile?.id || '默认')}`;
+    if (current === 'active') {
+      const activeLabel = st?.activeProfile?.label || st?.activeProfile?.name || st?.activeProfile?.email || st?.activeProfile?.id || '默认';
+      return `当前 · ${escapeHtml(activeLabel)}`;
+    }
     const hit = scopes.find(s => s.scopeId === current);
     return hit ? escapeHtml(hit.label) : '当前';
   })();
@@ -10712,14 +10727,18 @@ function setPage(page = 'quick') {
     const hasCachedMetrics = Boolean(getDashboardMetricsForTool(dashboardTool));
     const isClaudeDashboard = dashboardTool === 'claudecode';
     const isApiDashboard = isApiDashboardTool(dashboardTool);
-    if (!hasCachedMetrics && isApiDashboard) state.dashboardLoading = true;
+    if ((!hasCachedMetrics && isApiDashboard) || (isClaudeDashboard && !hasClaudeDashboardData())) {
+      state.dashboardLoading = true;
+    }
     renderDashboardPage();
     startDashboardAutoRefresh();
     const sideP = loadDashboardSideStates();
     sideP.then(() => {
       if (state.activePage === 'dashboard') renderDashboardPage();
     });
-    if (isApiDashboard) {
+    if (isClaudeDashboard) {
+      void ensureClaudeDashboardData({ force: !hasClaudeDashboardData() });
+    } else if (isApiDashboard) {
       void refreshDashboardData({ silent: hasCachedMetrics, tool: dashboardTool });
     }
   }
@@ -15824,8 +15843,10 @@ async function openCodexSessionDetailByPath(filePath) {
 
 async function triggerCodexResumeAction(action, button, { sessionId = '', last = false } = {}) {
   const endpoint = action === 'fork' ? '/api/codex/fork' : '/api/codex/resume';
+  const context = getCodexResumeContext();
   const payload = {
-    cwd: getCodexResumeContext().cwd,
+    cwd: context.cwd,
+    codexHome: context.codexHome,
     sessionId,
     last,
     terminalProfile: getSelectedCodexTerminalProfile(),
@@ -16611,7 +16632,7 @@ function getCodexLaunchCredentialWarning() {
   return '当前还没有配置 API Key，也没有官方登录态；继续启动后通常无法直接请求模型。';
 }
 
-async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已启动', terminalProfile = '') {
+async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已启动', terminalProfile = '', codexHome = '') {
   const codexInstalled = isCodexInstalled();
   if (!codexInstalled) {
     const installed = await installCodex({ silent: true });
@@ -16628,6 +16649,7 @@ async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已�
     body: JSON.stringify({
       cwd: el('launchCwdInput').value.trim() || state.current?.launch?.cwd || '',
       terminalProfile: terminalProfile || getSelectedCodexTerminalProfile(),
+      codexHome: codexHome || el('codexHomeInput')?.value?.trim() || state.current?.codexHome || '',
     }),
   });
   setBusy(buttonId, false);
@@ -16640,7 +16662,7 @@ async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已�
   return true;
 }
 
-async function launchCodexLogin(buttonId = '', terminalProfile = '') {
+async function launchCodexLogin(buttonId = '', terminalProfile = '', codexHome = '') {
   const codexInstalled = isCodexInstalled();
   if (!codexInstalled) {
     const installed = await installCodex({ silent: true });
@@ -16655,6 +16677,7 @@ async function launchCodexLogin(buttonId = '', terminalProfile = '') {
     body: JSON.stringify({
       cwd: el('launchCwdInput').value.trim() || state.current?.launch?.cwd || '',
       terminalProfile: terminalProfile || getSelectedCodexTerminalProfile(),
+      codexHome: codexHome || el('codexHomeInput')?.value?.trim() || state.current?.codexHome || '',
     }),
   });
   if (buttonId) setBusy(buttonId, false);
@@ -19042,7 +19065,7 @@ function bindEvents() {
       const tool = btn.getAttribute('data-dashboard-rail-tool') || 'codex';
       state.dashboardTool = tool;
       if (tool === 'claudecode') {
-        const hasCachedData = state.claudeCodeState?.usage?.daily?.length > 0;
+        const hasCachedData = hasClaudeDashboardData();
         if (!hasCachedData) {
           state.dashboardLoading = true;
           renderDashboardPage();
@@ -19179,7 +19202,7 @@ function bindEvents() {
     if (tab) {
       state.dashboardTool = tab.dataset.dashboardTool || 'codex';
       if (state.dashboardTool === 'claudecode') {
-        const hasCachedData = state.claudeCodeState?.usage?.daily?.length > 0;
+        const hasCachedData = hasClaudeDashboardData();
         if (!hasCachedData) {
           state.dashboardLoading = true;
           renderDashboardPage();
@@ -19929,22 +19952,25 @@ loadTools();
 
       for (const prof of savedProfiles) {
         const id = prof.id || '';
+        const hasTokens = Boolean(prof.hasTokens);
         const isActiveProfile = Boolean(oauthData.active && oauthData.active === id);
         const isChosen = isActiveProfile && oauthIsChosen;
         rows.push({
           key: `__codex_oauth_profile:${id}`,
           name: prof.name || prof.email || 'OAuth 账号',
-          baseUrl: 'ChatGPT 官方登录',
+          baseUrl: hasTokens ? 'ChatGPT 官方登录' : '未完成登录 · 等待授权',
           model: isChosen ? (login.plan || prof.plan || '') : '',
           mode: 'oauth',
           kind: 'codex-oauth-profile',
           isActive: isChosen,
-          hasCredential: true,
-          health: isActiveProfile ? { ok: true, checked: true } : null,
+          hasCredential: hasTokens,
+          health: isActiveProfile && hasTokens ? { ok: true, checked: true } : null,
           ref: prof,
           plan: prof.plan || '',
           email: prof.email || '',
           profileId: id,
+          homePath: prof.codexHome || '',
+          homeLabel: 'CODEX_HOME',
           tool,
         });
       }
@@ -19964,6 +19990,8 @@ loadTools();
           ref: null,
           plan: (oauthData.live && oauthData.live.plan) || '',
           email: (oauthData.live && oauthData.live.email) || '',
+          homePath: getDashboardCodexHome(),
+          homeLabel: 'CODEX_HOME',
           tool,
         });
       }
@@ -19984,6 +20012,8 @@ loadTools();
           ref: null,
           plan: login.plan || '',
           email: login.email || '',
+          homePath: getDashboardCodexHome(),
+          homeLabel: 'CODEX_HOME',
           tool,
         });
       }
@@ -20170,6 +20200,7 @@ loadTools();
           ${active.model ? `<span class="ch-hero-model">${safeEscape(active.model)}</span>` : ''}
         </div>
         ${active.baseUrl ? `<div class="ch-hero-url">${safeEscape(active.baseUrl)}</div>` : ''}
+        ${active.homePath ? `<div class="ch-hero-url mono">${safeEscape(`${active.homeLabel || 'HOME'}: ${active.homePath}`)}</div>` : ''}
       </div>
       <div class="ch-hero-actions">
         ${isOauth ? '' : `<button type="button" class="ch-hero-ghost" data-ch-detect title="重新检测连接">
@@ -20196,6 +20227,10 @@ loadTools();
       dotCls = 'current';
       statusCls = 'active';
       statusTxt = '当前';
+    } else if (isOauth && !r.hasCredential) {
+      dotCls = 'muted';
+      statusCls = 'warn';
+      statusTxt = '待登录';
     } else if (isOauth) {
       // Official OAuth identities don't get probed — row is pure metadata.
       dotCls = 'ok'; statusCls = ''; statusTxt = '';
@@ -20265,6 +20300,7 @@ loadTools();
     }
 
     const planPill = r.plan ? `<span class="ch-row-plan" data-plan="${safeEscape(String(r.plan).toLowerCase())}">${safeEscape(String(r.plan).toUpperCase())}</span>` : '';
+    const homeMeta = r.homePath ? `<span class="ch-row-url mono">${safeEscape(`${r.homeLabel || 'HOME'}: ${r.homePath}`)}</span>` : '';
 
     return `
       <div class="ch-row ${r.isActive ? 'current' : ''}" role="listitem" data-ch-key="${safeEscape(r.key)}" tabindex="0">
@@ -20278,6 +20314,7 @@ loadTools();
           <span class="ch-row-meta">
             ${r.model ? `<span class="ch-row-model">${safeEscape(r.model)}</span>` : ''}
             ${r.baseUrl ? `<span class="ch-row-url">${safeEscape(r.baseUrl)}</span>` : ''}
+            ${homeMeta}
           </span>
         </span>
         <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}">${safeEscape(statusTxt)}</span>` : ''}</span>
@@ -20476,8 +20513,11 @@ loadTools();
 
   async function loadCodexOauthProfiles(opts) {
     const allowAutoSave = !(opts && opts.skipAutoSave);
+    const params = new URLSearchParams({
+      codexHome: getDashboardCodexHome(),
+    });
     try {
-      const res = await api('/api/codex/oauth/profiles', { method: 'GET' });
+      const res = await api(`/api/codex/oauth/profiles?${params.toString()}`, { method: 'GET' });
       if (!res || !res.ok) {
         window.__chOauthProfiles = { loaded: true, data: { active: '', profiles: [], live: {}, liveHasUnsavedTokens: false } };
         renderConnectionHub();
@@ -20501,7 +20541,10 @@ loadTools();
         const saveRes = await api('/api/codex/oauth/profiles/save-current', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: '' }),
+          body: JSON.stringify({
+            name: '',
+            codexHome: getDashboardCodexHome(),
+          }),
         });
         if (saveRes?.ok) {
           if (typeof flash === 'function') flash('已自动保存官方登录为 OAuth profile', 'success');
@@ -20583,7 +20626,10 @@ loadTools();
     const res = await api('/api/codex/oauth/profiles/save-current', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim() }),
+      body: JSON.stringify({
+        name: name.trim(),
+        codexHome: getDashboardCodexHome(),
+      }),
     });
     if (!res || !res.ok) {
       if (typeof flash === 'function') flash(res?.error || '保存 OAuth profile 失败', 'error');
@@ -20604,8 +20650,22 @@ loadTools();
       if (typeof flash === 'function') flash(res?.error || '切换 OAuth 账号失败', 'error');
       return;
     }
+    const nextCodexHome = res.data?.codexHome || '';
+    if (nextCodexHome && el('codexHomeInput')) {
+      el('codexHomeInput').value = nextCodexHome;
+    }
     if (typeof flash === 'function') flash('已切换 OAuth 账号', 'success');
-    await reloadCodexStateThenHub();
+    try {
+      if (typeof loadState === 'function') await loadState({ preserveForm: false });
+    } catch (err) {
+      console.warn('[ch] post-switch loadState failed', err);
+    }
+    await loadCodexOauthProfiles({ skipAutoSave: true });
+    try {
+      await refreshDashboardData({ force: true, silent: true, tool: 'codex' });
+    } catch (err) {
+      console.warn('[ch] post-switch refreshDashboardData failed', err);
+    }
   }
 
   async function renameOauthProfile(id) {
@@ -20645,18 +20705,36 @@ loadTools();
   }
 
   async function addNewOauthAccount() {
-    const data = window.__chOauthProfiles?.data || {};
-    if (data.liveHasUnsavedTokens) {
-      const saveFirst = window.confirm('检测到当前 ~/.codex/auth.json 里有一个还没保存成 profile 的官方登录。\n新登录会覆盖它 —— 要不要先把当前的存成 profile？\n\n确定 = 先保存；取消 = 直接继续新登录（当前登录会被覆盖）。');
-      if (saveFirst) {
-        await saveCurrentOauthAsProfile();
-      }
-    }
-    const go = window.confirm('接下来会在终端里打开 codex login 进行浏览器授权。\n完成授权后回到这里，再次点击“新增 OAuth 账号”就会自动保存为 profile。');
+    const go = window.confirm('接下来会：\n1) 创建一个独立的 Codex profile 目录（独立 CODEX_HOME）\n2) 在终端里用该目录执行 codex login\n3) 浏览器授权完成后，这里会自动显示并切到新账号\n\n整个过程不会覆盖你当前账号的 auth/history/sessions。继续？');
     if (!go) return;
+
+    const createRes = await api('/api/codex/oauth/profiles/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '' }),
+    });
+    if (!createRes || !createRes.ok) {
+      if (typeof flash === 'function') flash(createRes?.error || '创建 Codex profile 失败', 'error');
+      return;
+    }
+    const newId = createRes.data?.id;
+    const newHome = createRes.data?.codexHome || '';
+    if (!newId || !newHome) {
+      if (typeof flash === 'function') flash('创建 Codex profile 失败', 'error');
+      return;
+    }
+
     try {
       if (typeof launchCodexLogin === 'function') {
-        await launchCodexLogin();
+        const ok = await launchCodexLogin('', '', newHome);
+        if (!ok) {
+          await api('/api/codex/oauth/profiles/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: newId }),
+          });
+          return;
+        }
       } else {
         if (typeof flash === 'function') flash('未找到 codex login 启动器', 'error');
         return;
@@ -20665,13 +20743,30 @@ loadTools();
       console.warn('[ch] launchCodexLogin failed', err);
     }
 
-    // Poll a few times so the "未保存登录" row shows up once the CLI finishes writing auth.json.
+    if (typeof flash === 'function') flash('已在终端打开 codex login。完成浏览器授权后会自动切到新账号。', 'info');
+
     let tries = 0;
     const pollId = setInterval(async () => {
       tries += 1;
-      await reloadCodexStateThenHub();
-      const d = window.__chOauthProfiles?.data;
-      if ((d && d.liveHasUnsavedTokens) || tries >= 60) clearInterval(pollId);
+      await loadCodexOauthProfiles({ skipAutoSave: true });
+      const prof = (window.__chOauthProfiles?.data?.profiles || []).find((p) => p.id === newId);
+      if (prof && prof.hasTokens) {
+        clearInterval(pollId);
+        await switchOauthProfile(newId);
+      } else if (tries >= 72) {
+        clearInterval(pollId);
+        try {
+          await api('/api/codex/oauth/profiles/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: newId }),
+          });
+          if (typeof flash === 'function') flash('登录超时未完成，已清理这个空 profile。', 'info');
+          await loadCodexOauthProfiles({ skipAutoSave: true });
+        } catch (e) {
+          console.warn('[ch] orphan codex oauth profile cleanup failed', e);
+        }
+      }
     }, 2500);
   }
 

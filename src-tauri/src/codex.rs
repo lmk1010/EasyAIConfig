@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -2356,44 +2356,49 @@ fn launch_macos_terminal_with_profile(cwd: &Path, command_text: &str, tool_label
   Ok(format!("{} 已在 {} 中启动", tool_label, app_label))
 }
 
-fn launch_codex_terminal_command(cwd: &Path, terminal_profile: &str) -> Result<String, String> {
+fn requested_codex_home_from_object(object: &Map<String, Value>) -> Result<PathBuf, String> {
+  let input = get_string(object, "codexHome");
+  if input.is_empty() {
+    default_codex_home()
+  } else {
+    Ok(PathBuf::from(input))
+  }
+}
+
+fn with_codex_home_command(command: &str, codex_home: &Path) -> String {
+  if cfg!(target_os = "windows") {
+    return format!(
+      "set \"CODEX_HOME={}\" && {}",
+      normalize_windows_cmd_path(&codex_home.to_string_lossy()),
+      command
+    );
+  }
+  format!(
+    "CODEX_HOME={} {}",
+    quote_posix_shell_arg(&codex_home.to_string_lossy()),
+    command
+  )
+}
+
+fn launch_codex_terminal_command(cwd: &Path, terminal_profile: &str, codex_home: &Path) -> Result<String, String> {
   let codex_binary = find_codex_binary();
   let codex_path = codex_binary
     .get("path")
     .and_then(Value::as_str)
     .filter(|path| !path.is_empty())
     .unwrap_or("codex");
-  let cwd_text = cwd.to_string_lossy().to_string();
+  let command_text = if cfg!(target_os = "windows") {
+    let empty_args: Vec<String> = Vec::new();
+    with_codex_home_command(&build_windows_binary_command(codex_path, &empty_args, "codex"), codex_home)
+  } else {
+    with_codex_home_command(&quote_posix_shell_arg(codex_path), codex_home)
+  };
 
   if cfg!(target_os = "macos") {
-    let command_text = quote_posix_shell_arg(codex_path);
     return launch_macos_terminal_with_profile(cwd, &command_text, "Codex", terminal_profile);
   }
 
-  if cfg!(target_os = "windows") {
-    let empty_args: Vec<String> = Vec::new();
-    let command_text = build_windows_binary_command(codex_path, &empty_args, "codex");
-    return launch_terminal_command(cwd, &command_text, "Codex");
-  }
-
-  let terminals = vec![
-    ("x-terminal-emulator", vec!["-e".to_string(), format!("bash -lc \"cd '{}' && '{}'\"", cwd_text, codex_path)]),
-    ("gnome-terminal", vec!["--".to_string(), "bash".to_string(), "-lc".to_string(), format!("cd '{}' && '{}'", cwd_text, codex_path)]),
-    ("konsole", vec!["-e".to_string(), "bash".to_string(), "-lc".to_string(), format!("cd '{}' && '{}'", cwd_text, codex_path)]),
-  ];
-
-  for (command, args) in terminals {
-    if command_exists(command).is_none() {
-      continue;
-    }
-    create_command(command)
-      .args(args)
-      .spawn()
-      .map_err(|error| error.to_string())?;
-    return Ok("Codex 已在新终端中启动".to_string());
-  }
-
-  Err("没有找到可用终端，请先手动运行 codex".to_string())
+  launch_terminal_command(cwd, &command_text, "Codex")
 }
 
 
@@ -2446,13 +2451,20 @@ pub(crate) fn launch_codex(body: &Value) -> Result<Value, String> {
     let input = get_string(&object, "cwd");
     if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
   };
+  let codex_home = requested_codex_home_from_object(&object)?;
+  ensure_dir(&codex_home)?;
   let terminal_profile = get_string(&object, "terminalProfile");
   let codex_binary = find_codex_binary();
   if !codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
     return Err("Codex 尚未安装，请先点击安装".to_string());
   }
-  let message = launch_codex_terminal_command(&cwd, &terminal_profile)?;
-  Ok(json!({ "ok": true, "cwd": cwd.to_string_lossy().to_string(), "message": message }))
+  let message = launch_codex_terminal_command(&cwd, &terminal_profile, &codex_home)?;
+  Ok(json!({
+    "ok": true,
+    "cwd": cwd.to_string_lossy().to_string(),
+    "codexHome": codex_home.to_string_lossy().to_string(),
+    "message": message
+  }))
 }
 
 pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
@@ -2462,7 +2474,8 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
     if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
   };
   let terminal_profile = get_string(&object, "terminalProfile");
-  let codex_home = default_codex_home()?;
+  let codex_home = requested_codex_home_from_object(&object)?;
+  ensure_dir(&codex_home)?;
   let live_auth_raw = read_text(&codex_home.join("auth.json")).unwrap_or_default();
   if !live_auth_raw.trim().is_empty() {
     migrate_auth_json_env_to_codex_env(&codex_home, &live_auth_raw)?;
@@ -2482,12 +2495,18 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
   } else {
     format!("{} login", quote_posix_shell_arg(binary_path))
   };
+  let command = with_codex_home_command(&command, &codex_home);
   let message = if cfg!(target_os = "macos") {
     launch_macos_terminal_with_profile(&cwd, &command, "Codex 登录", &terminal_profile)?
   } else {
     launch_terminal_command(&cwd, &command, "Codex 登录")?
   };
-  Ok(json!({ "ok": true, "cwd": cwd.to_string_lossy().to_string(), "message": message }))
+  Ok(json!({
+    "ok": true,
+    "cwd": cwd.to_string_lossy().to_string(),
+    "codexHome": codex_home.to_string_lossy().to_string(),
+    "message": message
+  }))
 }
 
 fn normalize_codex_session_preview(text: &str, fallback: &str) -> String {
@@ -2870,6 +2889,8 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
     let input = get_string(&object, "cwd");
     if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
   };
+  let codex_home = requested_codex_home_from_object(&object)?;
+  ensure_dir(&codex_home)?;
   let session_id = normalize_codex_session_id(&get_string(&object, "sessionId"));
   let last = object.get("last").and_then(Value::as_bool).unwrap_or(false);
   let terminal_profile = get_string(&object, "terminalProfile");
@@ -2892,14 +2913,20 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
     .and_then(Value::as_str)
     .filter(|text| !text.trim().is_empty())
     .unwrap_or("codex");
-  let command = build_codex_session_command(binary_path, &args);
+  let command = with_codex_home_command(&build_codex_session_command(binary_path, &args), &codex_home);
   let tool_label = if action == "fork" { "Codex 分叉恢复" } else { "Codex 会话恢复" };
   let message = if cfg!(target_os = "macos") {
     launch_macos_terminal_with_profile(&cwd, &command, tool_label, &terminal_profile)?
   } else {
     launch_terminal_command(&cwd, &command, tool_label)?
   };
-  Ok(json!({ "ok": true, "cwd": cwd.to_string_lossy().to_string(), "sessionId": session_id, "message": message }))
+  Ok(json!({
+    "ok": true,
+    "cwd": cwd.to_string_lossy().to_string(),
+    "codexHome": codex_home.to_string_lossy().to_string(),
+    "sessionId": session_id,
+    "message": message
+  }))
 }
 
 pub(crate) fn resume_codex_session(body: &Value) -> Result<Value, String> {
@@ -4054,24 +4081,36 @@ fn write_json_file(path: &Path, data: &Value) -> Result<(), String> {
 }
 
 
-fn read_claude_telemetry_usage(days: i64, force_refresh: bool, cache_only: bool) -> Value {
-  let home = match claude_code_home() {
-    Ok(path) => path,
-    Err(_) => return json!({"days": days, "generatedAt": chrono::Utc::now().to_rfc3339(), "source": "", "totals": {"input":0,"output":0,"cacheCreation":0,"cacheRead":0,"total":0,"cost":0.0}, "daily": [], "sessions": [], "models": [], "dailyModelTokens": []}),
-  };
-  let telemetry_root = home.join("projects");
-  let empty_payload = || json!({
+fn claude_json_path_for_home(home: &Path) -> PathBuf {
+  let default_home = claude_code_home().ok();
+  if default_home.as_ref().map(|path| path == home).unwrap_or(false) {
+    if let Ok(dir) = crate::home_dir() {
+      return dir.join(".claude.json");
+    }
+  }
+  home.join(".claude.json")
+}
+
+fn empty_claude_usage_payload(days: i64, telemetry_root: &Path) -> Value {
+  json!({
     "days": days.clamp(1, 90),
     "generatedAt": chrono::Utc::now().to_rfc3339(),
     "source": telemetry_root.to_string_lossy().to_string(),
     "totals": {"input":0,"output":0,"cacheCreation":0,"cacheRead":0,"total":0,"cost":0.0},
     "officialCost": 0.0,
     "officialModels": [],
-    "daily": [], "sessions": [], "models": [], "dailyModelTokens": []
-  });
+    "daily": [],
+    "sessions": [],
+    "models": [],
+    "dailyModelTokens": [],
+  })
+}
+
+fn read_claude_telemetry_usage_for_home(home: &Path, days: i64, force_refresh: bool, cache_only: bool) -> Value {
+  let telemetry_root = home.join("projects");
   let cache_path = match codex_usage_cache_path(&home, days) {
     Ok(path) => path,
-    Err(_) => return empty_payload(),
+    Err(_) => return empty_claude_usage_payload(days, &telemetry_root),
   };
   let telemetry_files = match fs::read_dir(&telemetry_root) {
     Ok(entries) => entries
@@ -4303,16 +4342,14 @@ fn read_claude_telemetry_usage(days: i64, force_refresh: bool, cache_only: bool)
 
   let mut official_cost = 0.0;
   let mut official_models: Vec<Value> = Vec::new();
-  if let Some(home_dir) = dirs::home_dir() {
-    if let Ok(claude_json) = read_json_file(&home_dir.join(".claude.json")) {
-      if let Some(projects) = claude_json.get("projects").and_then(Value::as_object) {
-        for project in projects.values() {
-          official_cost += project.get("lastCost").and_then(Value::as_f64).unwrap_or(0.0);
-          if let Some(model_usage) = project.get("lastModelUsage").and_then(Value::as_object) {
-            for (model_name, usage) in model_usage {
-              if model_name.starts_with('<') { continue; }
-              official_models.push(json!({"model": model_name, "costUSD": usage.get("costUSD").and_then(Value::as_f64).unwrap_or(0.0), "inputTokens": usage.get("inputTokens").and_then(Value::as_u64).unwrap_or(0), "outputTokens": usage.get("outputTokens").and_then(Value::as_u64).unwrap_or(0), "cacheReadInputTokens": usage.get("cacheReadInputTokens").and_then(Value::as_u64).unwrap_or(0), "cacheCreationInputTokens": usage.get("cacheCreationInputTokens").and_then(Value::as_u64).unwrap_or(0)}));
-            }
+  if let Ok(claude_json) = read_json_file(&claude_json_path_for_home(home)) {
+    if let Some(projects) = claude_json.get("projects").and_then(Value::as_object) {
+      for project in projects.values() {
+        official_cost += project.get("lastCost").and_then(Value::as_f64).unwrap_or(0.0);
+        if let Some(model_usage) = project.get("lastModelUsage").and_then(Value::as_object) {
+          for (model_name, usage) in model_usage {
+            if model_name.starts_with('<') { continue; }
+            official_models.push(json!({"model": model_name, "costUSD": usage.get("costUSD").and_then(Value::as_f64).unwrap_or(0.0), "inputTokens": usage.get("inputTokens").and_then(Value::as_u64).unwrap_or(0), "outputTokens": usage.get("outputTokens").and_then(Value::as_u64).unwrap_or(0), "cacheReadInputTokens": usage.get("cacheReadInputTokens").and_then(Value::as_u64).unwrap_or(0), "cacheCreationInputTokens": usage.get("cacheCreationInputTokens").and_then(Value::as_u64).unwrap_or(0)}));
           }
         }
       }
@@ -4340,6 +4377,191 @@ fn read_claude_telemetry_usage(days: i64, force_refresh: bool, cache_only: bool)
   });
   write_claude_usage_cache(&cache_path, &telemetry_root, days.clamp(1, 90), file_count, latest_mtime_ms, &payload);
   payload
+}
+
+fn merge_claude_usage_payloads(days: i64, payloads: Vec<Value>, source_label: &str) -> Value {
+  let day_count = days.clamp(1, 90);
+  if payloads.iter().any(|payload| payload.get("cacheMiss").and_then(Value::as_bool).unwrap_or(false)) {
+    return json!({ "cacheMiss": true });
+  }
+
+  let mut total_input: u64 = 0;
+  let mut total_output: u64 = 0;
+  let mut total_cache_creation: u64 = 0;
+  let mut total_cache_read: u64 = 0;
+  let mut total_cost: f64 = 0.0;
+  let mut official_cost: f64 = 0.0;
+  let mut generated_at = String::new();
+
+  let mut daily_map: BTreeMap<String, Value> = BTreeMap::new();
+  let mut sessions: Vec<Value> = Vec::new();
+  let mut model_map: BTreeMap<String, Value> = BTreeMap::new();
+  let mut daily_model_tokens_map: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+  let mut official_model_map: BTreeMap<String, Value> = BTreeMap::new();
+
+  for payload in payloads {
+    let payload_generated = payload.get("generatedAt").and_then(Value::as_str).unwrap_or("");
+    if payload_generated > generated_at.as_str() {
+      generated_at = payload_generated.to_string();
+    }
+
+    let totals = payload.get("totals").cloned().unwrap_or_else(|| json!({}));
+    total_input += totals.get("input").and_then(Value::as_u64).unwrap_or(0);
+    total_output += totals.get("output").and_then(Value::as_u64).unwrap_or(0);
+    total_cache_creation += totals.get("cacheCreation").and_then(Value::as_u64).unwrap_or(0);
+    total_cache_read += totals.get("cacheRead").and_then(Value::as_u64).unwrap_or(0);
+    total_cost += totals.get("cost").and_then(Value::as_f64).unwrap_or(0.0);
+    official_cost += payload.get("officialCost").and_then(Value::as_f64).unwrap_or(0.0);
+
+    if let Some(entries) = payload.get("daily").and_then(Value::as_array) {
+      for entry in entries {
+        let date = entry.get("date").and_then(Value::as_str).unwrap_or("").to_string();
+        if date.is_empty() { continue; }
+        let bucket = daily_map.entry(date.clone()).or_insert_with(|| json!({
+          "date": date,
+          "input": 0_u64,
+          "output": 0_u64,
+          "cacheCreation": 0_u64,
+          "cacheRead": 0_u64,
+          "total": 0_u64,
+          "cost": 0.0_f64,
+        }));
+        bucket["input"] = json!(bucket.get("input").and_then(Value::as_u64).unwrap_or(0) + entry.get("input").and_then(Value::as_u64).unwrap_or(0));
+        bucket["output"] = json!(bucket.get("output").and_then(Value::as_u64).unwrap_or(0) + entry.get("output").and_then(Value::as_u64).unwrap_or(0));
+        bucket["cacheCreation"] = json!(bucket.get("cacheCreation").and_then(Value::as_u64).unwrap_or(0) + entry.get("cacheCreation").and_then(Value::as_u64).unwrap_or(0));
+        bucket["cacheRead"] = json!(bucket.get("cacheRead").and_then(Value::as_u64).unwrap_or(0) + entry.get("cacheRead").and_then(Value::as_u64).unwrap_or(0));
+        bucket["total"] = json!(bucket.get("total").and_then(Value::as_u64).unwrap_or(0) + entry.get("total").and_then(Value::as_u64).unwrap_or(0));
+        bucket["cost"] = json!(bucket.get("cost").and_then(Value::as_f64).unwrap_or(0.0) + entry.get("cost").and_then(Value::as_f64).unwrap_or(0.0));
+      }
+    }
+
+    if let Some(entries) = payload.get("sessions").and_then(Value::as_array) {
+      sessions.extend(entries.iter().cloned());
+    }
+
+    if let Some(entries) = payload.get("models").and_then(Value::as_array) {
+      for entry in entries {
+        let model = entry.get("model").and_then(Value::as_str).unwrap_or("").to_string();
+        if model.is_empty() { continue; }
+        let bucket = model_map.entry(model.clone()).or_insert_with(|| json!({
+          "model": model,
+          "totals": {
+            "input": 0_u64,
+            "output": 0_u64,
+            "cacheCreation": 0_u64,
+            "cacheRead": 0_u64,
+            "total": 0_u64,
+            "cost": 0.0_f64,
+          },
+          "sessionCount": 0_u64,
+          "source": "aggregated",
+        }));
+        let src_totals = entry.get("totals").cloned().unwrap_or_else(|| json!({}));
+        bucket["totals"]["input"] = json!(bucket["totals"].get("input").and_then(Value::as_u64).unwrap_or(0) + src_totals.get("input").and_then(Value::as_u64).unwrap_or(0));
+        bucket["totals"]["output"] = json!(bucket["totals"].get("output").and_then(Value::as_u64).unwrap_or(0) + src_totals.get("output").and_then(Value::as_u64).unwrap_or(0));
+        bucket["totals"]["cacheCreation"] = json!(bucket["totals"].get("cacheCreation").and_then(Value::as_u64).unwrap_or(0) + src_totals.get("cacheCreation").and_then(Value::as_u64).unwrap_or(0));
+        bucket["totals"]["cacheRead"] = json!(bucket["totals"].get("cacheRead").and_then(Value::as_u64).unwrap_or(0) + src_totals.get("cacheRead").and_then(Value::as_u64).unwrap_or(0));
+        bucket["totals"]["total"] = json!(bucket["totals"].get("total").and_then(Value::as_u64).unwrap_or(0) + src_totals.get("total").and_then(Value::as_u64).unwrap_or(0));
+        bucket["totals"]["cost"] = json!(bucket["totals"].get("cost").and_then(Value::as_f64).unwrap_or(0.0) + src_totals.get("cost").and_then(Value::as_f64).unwrap_or(0.0));
+        bucket["sessionCount"] = json!(bucket.get("sessionCount").and_then(Value::as_u64).unwrap_or(0) + entry.get("sessionCount").and_then(Value::as_u64).unwrap_or(0));
+      }
+    }
+
+    if let Some(entries) = payload.get("dailyModelTokens").and_then(Value::as_array) {
+      for entry in entries {
+        let date = entry.get("date").and_then(Value::as_str).unwrap_or("").to_string();
+        if date.is_empty() { continue; }
+        let bucket = daily_model_tokens_map.entry(date).or_default();
+        if let Some(tokens_by_model) = entry.get("tokensByModel").and_then(Value::as_object) {
+          for (model, value) in tokens_by_model {
+            *bucket.entry(model.clone()).or_insert(0) += value.as_u64().unwrap_or(0);
+          }
+        }
+      }
+    }
+
+    if let Some(entries) = payload.get("officialModels").and_then(Value::as_array) {
+      for entry in entries {
+        let model = entry.get("model").and_then(Value::as_str).unwrap_or("").to_string();
+        if model.is_empty() { continue; }
+        let bucket = official_model_map.entry(model.clone()).or_insert_with(|| json!({
+          "model": model,
+          "costUSD": 0.0_f64,
+          "inputTokens": 0_u64,
+          "outputTokens": 0_u64,
+          "cacheReadInputTokens": 0_u64,
+          "cacheCreationInputTokens": 0_u64,
+        }));
+        bucket["costUSD"] = json!(bucket.get("costUSD").and_then(Value::as_f64).unwrap_or(0.0) + entry.get("costUSD").and_then(Value::as_f64).unwrap_or(0.0));
+        bucket["inputTokens"] = json!(bucket.get("inputTokens").and_then(Value::as_u64).unwrap_or(0) + entry.get("inputTokens").and_then(Value::as_u64).unwrap_or(0));
+        bucket["outputTokens"] = json!(bucket.get("outputTokens").and_then(Value::as_u64).unwrap_or(0) + entry.get("outputTokens").and_then(Value::as_u64).unwrap_or(0));
+        bucket["cacheReadInputTokens"] = json!(bucket.get("cacheReadInputTokens").and_then(Value::as_u64).unwrap_or(0) + entry.get("cacheReadInputTokens").and_then(Value::as_u64).unwrap_or(0));
+        bucket["cacheCreationInputTokens"] = json!(bucket.get("cacheCreationInputTokens").and_then(Value::as_u64).unwrap_or(0) + entry.get("cacheCreationInputTokens").and_then(Value::as_u64).unwrap_or(0));
+      }
+    }
+  }
+
+  sessions.sort_by(|left, right| {
+    right.get("updatedAt").and_then(Value::as_str).unwrap_or("")
+      .cmp(left.get("updatedAt").and_then(Value::as_str).unwrap_or(""))
+  });
+  sessions.truncate(12);
+
+  let mut models = model_map.into_values().collect::<Vec<_>>();
+  models.sort_by(|left, right| {
+    let l = left.get("totals").and_then(|totals| totals.get("total")).and_then(Value::as_u64).unwrap_or(0);
+    let r = right.get("totals").and_then(|totals| totals.get("total")).and_then(Value::as_u64).unwrap_or(0);
+    r.cmp(&l)
+  });
+
+  let daily = daily_map.into_values().collect::<Vec<_>>();
+  let daily_model_tokens = daily_model_tokens_map.into_iter()
+    .map(|(date, tokens_by_model)| json!({ "date": date, "tokensByModel": tokens_by_model }))
+    .collect::<Vec<_>>();
+
+  let mut official_models = official_model_map.into_values().collect::<Vec<_>>();
+  official_models.sort_by(|left, right| {
+    let left_total =
+      left.get("inputTokens").and_then(Value::as_u64).unwrap_or(0) +
+      left.get("outputTokens").and_then(Value::as_u64).unwrap_or(0) +
+      left.get("cacheReadInputTokens").and_then(Value::as_u64).unwrap_or(0) +
+      left.get("cacheCreationInputTokens").and_then(Value::as_u64).unwrap_or(0);
+    let right_total =
+      right.get("inputTokens").and_then(Value::as_u64).unwrap_or(0) +
+      right.get("outputTokens").and_then(Value::as_u64).unwrap_or(0) +
+      right.get("cacheReadInputTokens").and_then(Value::as_u64).unwrap_or(0) +
+      right.get("cacheCreationInputTokens").and_then(Value::as_u64).unwrap_or(0);
+    right_total.cmp(&left_total)
+  });
+
+  json!({
+    "days": day_count,
+    "generatedAt": if generated_at.is_empty() { chrono::Utc::now().to_rfc3339() } else { generated_at },
+    "source": source_label,
+    "totals": {
+      "input": total_input,
+      "output": total_output,
+      "cacheCreation": total_cache_creation,
+      "cacheRead": total_cache_read,
+      "total": total_input + total_output + total_cache_read + total_cache_creation,
+      "cost": total_cost,
+    },
+    "officialCost": official_cost,
+    "officialModels": official_models,
+    "daily": daily,
+    "sessions": sessions,
+    "models": models,
+    "dailyModelTokens": daily_model_tokens,
+  })
+}
+
+#[cfg(test)]
+fn read_claude_telemetry_usage(days: i64, force_refresh: bool, cache_only: bool) -> Value {
+  let home = match claude_code_home() {
+    Ok(path) => path,
+    Err(_) => return json!({"days": days, "generatedAt": chrono::Utc::now().to_rfc3339(), "source": "", "totals": {"input":0,"output":0,"cacheCreation":0,"cacheRead":0,"total":0,"cost":0.0}, "daily": [], "sessions": [], "models": [], "dailyModelTokens": []}),
+  };
+  read_claude_telemetry_usage_for_home(&home, days, force_refresh, cache_only)
 }
 
 pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
@@ -4463,6 +4685,134 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
     })
   };
 
+  fn has_claude_usage_artifacts(config_home: &Path) -> bool {
+    config_home.join("projects").exists() || config_home.join("stats-cache.json").exists()
+  }
+
+  let requested_usage_scope = get_string(&query_object, "usageScope");
+  let profiles_state = crate::claudecode_oauth_profiles::list_claudecode_oauth_profiles(&json!({}))
+    .unwrap_or_else(|_| json!({ "active": "", "profiles": [], "defaultPlan": {} }));
+  let active_profile_id = profiles_state.get("active").and_then(Value::as_str).unwrap_or("").to_string();
+  let default_plan = profiles_state.get("defaultPlan").cloned().unwrap_or_else(|| json!({}));
+  let default_email = default_plan.get("email").and_then(Value::as_str).unwrap_or("").trim().to_string();
+  let default_org = default_plan.get("organizationName").and_then(Value::as_str).unwrap_or("").trim().to_string();
+  let default_plan_label = default_plan.get("plan").and_then(Value::as_str).unwrap_or("").trim().to_string();
+  let default_scope_label = {
+    let base = if !default_email.is_empty() {
+      default_email.clone()
+    } else if !default_org.is_empty() {
+      default_org.clone()
+    } else {
+      "默认账号".to_string()
+    };
+    if default_plan_label.is_empty() {
+      base
+    } else {
+      format!("{} · {}", base, default_plan_label)
+    }
+  };
+  let default_scope_visible = matches!(login_info.get("method").and_then(Value::as_str), Some("oauth"))
+    || !default_email.is_empty()
+    || !default_plan_label.is_empty()
+    || has_claude_usage_artifacts(&home)
+    || active_profile_id.is_empty();
+
+  let mut available_scopes = Vec::new();
+  if default_scope_visible {
+    available_scopes.push(json!({
+      "scopeId": "default",
+      "id": "",
+      "kind": "default",
+      "label": default_scope_label,
+      "configDir": home.to_string_lossy().to_string(),
+      "email": default_email,
+      "organizationName": default_org,
+      "plan": default_plan_label,
+    }));
+  }
+
+  let mut active_profile = json!({
+    "scopeId": "default",
+    "id": "",
+    "kind": "default",
+    "label": default_scope_label,
+    "configDir": home.to_string_lossy().to_string(),
+    "email": default_email,
+    "organizationName": default_org,
+    "plan": default_plan_label,
+  });
+
+  if let Some(profiles) = profiles_state.get("profiles").and_then(Value::as_array) {
+    for profile in profiles {
+      let id = profile.get("id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+      if id.is_empty() { continue; }
+      let config_dir = profile.get("configDir").and_then(Value::as_str).unwrap_or("").trim().to_string();
+      if config_dir.is_empty() { continue; }
+      let has_tokens = profile.get("hasTokens").and_then(Value::as_bool).unwrap_or(false);
+      let is_stale = profile.get("isStale").and_then(Value::as_bool).unwrap_or(false);
+      let include = (has_tokens || has_claude_usage_artifacts(&PathBuf::from(&config_dir)) || id == active_profile_id) && !is_stale;
+      if !include { continue; }
+
+      let name = profile.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+      let email = profile.get("email").and_then(Value::as_str).unwrap_or("").trim().to_string();
+      let org_name = profile.get("organizationName").and_then(Value::as_str).unwrap_or("").trim().to_string();
+      let plan = profile.get("plan").and_then(Value::as_str).unwrap_or("").trim().to_string();
+      let short_id = id.trim_start_matches("prof_");
+      let short_id = &short_id[..short_id.len().min(8)];
+      let mut base = if !name.is_empty() {
+        name.clone()
+      } else if !email.is_empty() {
+        email.clone()
+      } else if !org_name.is_empty() {
+        org_name.clone()
+      } else {
+        format!("Claude 账号 #{}", short_id)
+      };
+      if !email.is_empty() && !name.is_empty() && name != email {
+        base = format!("{} · {}", name, email);
+      }
+      let label = if plan.is_empty() { base } else { format!("{} · {}", base, plan) };
+      let scope = json!({
+        "scopeId": id,
+        "id": id,
+        "kind": "profile",
+        "label": label,
+        "configDir": config_dir,
+        "email": email,
+        "organizationName": org_name,
+        "plan": plan,
+      });
+      if scope.get("id").and_then(Value::as_str).unwrap_or("") == active_profile_id {
+        active_profile = scope.clone();
+      }
+      available_scopes.push(scope);
+    }
+  }
+
+  let scope_exists = |scope_id: &str| {
+    available_scopes.iter().any(|scope| scope.get("scopeId").and_then(Value::as_str).unwrap_or("") == scope_id)
+  };
+  let normalized_usage_scope = if requested_usage_scope == "all" {
+    "all".to_string()
+  } else if requested_usage_scope == "default" && scope_exists("default") {
+    "default".to_string()
+  } else if !requested_usage_scope.is_empty() && scope_exists(&requested_usage_scope) {
+    requested_usage_scope.clone()
+  } else {
+    "active".to_string()
+  };
+  let effective_scope_id = match normalized_usage_scope.as_str() {
+    "all" => "all".to_string(),
+    "active" => {
+      if active_profile_id.is_empty() || !scope_exists(&active_profile_id) {
+        "default".to_string()
+      } else {
+        active_profile_id.clone()
+      }
+    }
+    other => other.to_string(),
+  };
+
   // Extract all models from project usage history
   let mut used_models = std::collections::BTreeSet::new();
   if let Some(projects) = claude_json.get("projects").and_then(Value::as_object) {
@@ -4474,6 +4824,26 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
       }
     }
   }
+
+  let usage = if effective_scope_id == "all" {
+    let homes = available_scopes.iter()
+      .filter_map(|scope| scope.get("configDir").and_then(Value::as_str))
+      .map(PathBuf::from)
+      .collect::<Vec<_>>();
+    let payloads = homes.iter()
+      .map(|scope_home| read_claude_telemetry_usage_for_home(scope_home, 30, force_usage_refresh, cache_only))
+      .collect::<Vec<_>>();
+    merge_claude_usage_payloads(30, payloads, "all")
+  } else if effective_scope_id == "default" {
+    read_claude_telemetry_usage_for_home(&home, 30, force_usage_refresh, cache_only)
+  } else {
+    let scope_home = available_scopes.iter()
+      .find(|scope| scope.get("scopeId").and_then(Value::as_str).unwrap_or("") == effective_scope_id)
+      .and_then(|scope| scope.get("configDir").and_then(Value::as_str))
+      .map(PathBuf::from)
+      .unwrap_or_else(|| home.clone());
+    read_claude_telemetry_usage_for_home(&scope_home, 30, force_usage_refresh, cache_only)
+  };
 
   Ok(json!({
     "toolId": "claudecode",
@@ -4497,8 +4867,11 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
     "settingsJson": settings_json,
     "settingsEnv": settings_env,
     "login": login_info,
+    "usageScope": normalized_usage_scope,
+    "availableScopes": available_scopes,
+    "activeProfile": active_profile,
     "usedModels": used_models.into_iter().collect::<Vec<_>>(),
-    "usage": read_claude_telemetry_usage(30, force_usage_refresh, cache_only),
+    "usage": usage,
   }))
 }
 
