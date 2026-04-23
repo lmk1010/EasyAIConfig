@@ -139,11 +139,7 @@ fn launch_platform_id() -> &'static str {
 fn launch_terminal_profiles() -> Value {
   if cfg!(target_os = "windows") {
     return json!([
-      { "id": "auto", "label": "自动选择（推荐）" },
-      { "id": "windows-terminal", "label": "Windows Terminal" },
-      { "id": "powershell-7", "label": "PowerShell 7" },
-      { "id": "powershell", "label": "Windows PowerShell" },
-      { "id": "cmd", "label": "命令提示符 CMD" }
+      { "id": "auto", "label": "应用内终端（推荐）" }
     ]);
   }
   if cfg!(target_os = "macos") {

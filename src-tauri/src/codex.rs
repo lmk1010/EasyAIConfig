@@ -2380,6 +2380,86 @@ fn with_codex_home_command(command: &str, codex_home: &Path) -> String {
   )
 }
 
+fn windows_embedded_terminal_env(extra_env: &[(String, String)]) -> Vec<(String, String)> {
+  let mut envs = vec![
+    ("PATH".to_string(), full_path_env()),
+    ("TERM".to_string(), "xterm-256color".to_string()),
+    ("COLORTERM".to_string(), "truecolor".to_string()),
+  ];
+  for (key, value) in extra_env {
+    if key.trim().is_empty() || value.trim().is_empty() {
+      continue;
+    }
+    envs.push((key.clone(), value.clone()));
+  }
+  envs
+}
+
+fn resolve_windows_embedded_terminal_command(
+  program: &str,
+  args: &[String],
+  fallback_binary: &str,
+) -> (String, Vec<String>, String) {
+  let preview = build_windows_binary_command(program, args, fallback_binary);
+  let normalized = normalize_windows_cmd_path(program);
+  let lower = normalized.to_ascii_lowercase();
+
+  if lower.ends_with(".ps1") {
+    let mut command_args = vec![
+      "-NoProfile".to_string(),
+      "-NonInteractive".to_string(),
+      "-ExecutionPolicy".to_string(),
+      "Bypass".to_string(),
+      "-File".to_string(),
+      normalized,
+    ];
+    command_args.extend(args.iter().cloned());
+    return ("powershell.exe".to_string(), command_args, preview);
+  }
+
+  if normalized.trim().is_empty() || lower.ends_with(".cmd") || lower.ends_with(".bat") {
+    return (
+      "cmd.exe".to_string(),
+      vec![
+        "/d".to_string(),
+        "/s".to_string(),
+        "/c".to_string(),
+        preview.clone(),
+      ],
+      preview,
+    );
+  }
+
+  (normalized, args.to_vec(), preview)
+}
+
+fn spawn_windows_embedded_session(
+  cwd: &Path,
+  title: &str,
+  tool: &str,
+  program: &str,
+  args: &[String],
+  fallback_binary: &str,
+  extra_env: &[(String, String)],
+  command_preview: Option<String>,
+) -> Result<Value, String> {
+  let envs = windows_embedded_terminal_env(extra_env);
+  let (resolved_program, resolved_args, preview) =
+    resolve_windows_embedded_terminal_command(program, args, fallback_binary);
+  let payload = spawn_embedded_terminal(
+    cwd,
+    title,
+    tool,
+    &resolved_program,
+    &resolved_args,
+    &envs,
+    32,
+    120,
+    command_preview.or(Some(preview)),
+  )?;
+  Ok(payload.get("terminalSession").cloned().unwrap_or(Value::Null))
+}
+
 fn launch_codex_terminal_command(cwd: &Path, terminal_profile: &str, codex_home: &Path) -> Result<String, String> {
   let codex_binary = find_codex_binary();
   let codex_path = codex_binary
@@ -2458,6 +2538,32 @@ pub(crate) fn launch_codex(body: &Value) -> Result<Value, String> {
   if !codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
     return Err("Codex 尚未安装，请先点击安装".to_string());
   }
+  let codex_path = codex_binary
+    .get("path")
+    .and_then(Value::as_str)
+    .filter(|text| !text.trim().is_empty())
+    .unwrap_or("codex");
+  if cfg!(target_os = "windows") {
+    let extra_env = vec![("CODEX_HOME".to_string(), codex_home.to_string_lossy().to_string())];
+    let terminal_session = spawn_windows_embedded_session(
+      &cwd,
+      "Codex",
+      "codex",
+      codex_path,
+      &[],
+      "codex",
+      &extra_env,
+      Some("codex".to_string()),
+    )?;
+    return Ok(json!({
+      "ok": true,
+      "cwd": cwd.to_string_lossy().to_string(),
+      "codexHome": codex_home.to_string_lossy().to_string(),
+      "embedded": true,
+      "message": "Codex 已在应用内终端启动",
+      "terminalSession": terminal_session,
+    }));
+  }
   let message = launch_codex_terminal_command(&cwd, &terminal_profile, &codex_home)?;
   Ok(json!({
     "ok": true,
@@ -2490,6 +2596,28 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
     .and_then(Value::as_str)
     .filter(|text| !text.trim().is_empty())
     .unwrap_or("codex");
+  if cfg!(target_os = "windows") {
+    let args = vec!["login".to_string()];
+    let extra_env = vec![("CODEX_HOME".to_string(), codex_home.to_string_lossy().to_string())];
+    let terminal_session = spawn_windows_embedded_session(
+      &cwd,
+      "Codex 登录",
+      "codex",
+      binary_path,
+      &args,
+      "codex",
+      &extra_env,
+      Some("codex login".to_string()),
+    )?;
+    return Ok(json!({
+      "ok": true,
+      "cwd": cwd.to_string_lossy().to_string(),
+      "codexHome": codex_home.to_string_lossy().to_string(),
+      "embedded": true,
+      "message": "已在应用内终端打开 codex login",
+      "terminalSession": terminal_session,
+    }));
+  }
   let command = if cfg!(target_os = "windows") {
     build_windows_binary_command(binary_path, &["login".to_string()], "codex")
   } else {
@@ -2913,8 +3041,30 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
     .and_then(Value::as_str)
     .filter(|text| !text.trim().is_empty())
     .unwrap_or("codex");
-  let command = with_codex_home_command(&build_codex_session_command(binary_path, &args), &codex_home);
   let tool_label = if action == "fork" { "Codex 分叉恢复" } else { "Codex 会话恢复" };
+  if cfg!(target_os = "windows") {
+    let extra_env = vec![("CODEX_HOME".to_string(), codex_home.to_string_lossy().to_string())];
+    let terminal_session = spawn_windows_embedded_session(
+      &cwd,
+      tool_label,
+      "codex",
+      binary_path,
+      &args,
+      "codex",
+      &extra_env,
+      Some(build_codex_session_command(binary_path, &args)),
+    )?;
+    return Ok(json!({
+      "ok": true,
+      "cwd": cwd.to_string_lossy().to_string(),
+      "codexHome": codex_home.to_string_lossy().to_string(),
+      "sessionId": session_id,
+      "embedded": true,
+      "message": format!("{} 已在应用内终端打开", tool_label),
+      "terminalSession": terminal_session,
+    }));
+  }
+  let command = with_codex_home_command(&build_codex_session_command(binary_path, &args), &codex_home);
   let message = if cfg!(target_os = "macos") {
     launch_macos_terminal_with_profile(&cwd, &command, tool_label, &terminal_profile)?
   } else {
@@ -3781,6 +3931,7 @@ use crate::{
 };
 use crate::oauth_profiles::{migrate_auth_json_env_to_codex_env, write_switch_backup};
 use crate::provider::get_string;
+use crate::terminal::spawn_embedded_terminal;
 
 /* ═══════════════  Multi-tool support  ═══════════════ */
 
@@ -5431,6 +5582,31 @@ pub(crate) fn launch_claudecode(body: &Value) -> Result<Value, String> {
     let _ = std::fs::create_dir_all(dir);
   }
 
+  if cfg!(target_os = "windows") {
+    let mut extra_env = Vec::new();
+    if let Some(ref dir) = config_dir {
+      extra_env.push(("CLAUDE_CONFIG_DIR".to_string(), dir.to_string_lossy().to_string()));
+    }
+    let terminal_session = spawn_windows_embedded_session(
+      &cwd,
+      "Claude Code",
+      "claudecode",
+      bin_path,
+      &[],
+      "claude",
+      &extra_env,
+      Some("claude".to_string()),
+    )?;
+    return Ok(json!({
+      "ok": true,
+      "cwd": cwd.to_string_lossy().to_string(),
+      "configDir": config_dir.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+      "embedded": true,
+      "message": "Claude Code 已在应用内终端启动",
+      "terminalSession": terminal_session,
+    }));
+  }
+
   // If no config dir needs injecting, use the existing tool-launcher path so
   // Windows tool resolution (PATH lookup, .cmd/.bat dispatch) still works.
   if config_dir.is_none() {
@@ -5476,14 +5652,39 @@ pub(crate) fn login_claudecode(body: &Value) -> Result<Value, String> {
   } else {
     format!("\"{}\" auth login", binary_path.replace('"', "\\\""))
   };
-  let command = with_claude_config_dir(&base_command, config_dir.as_deref());
-  let browser_choice = get_string(&object, "browserChoice");
-  let command = with_oauth_browser_env(&command, &browser_choice);
   let label = if config_dir.is_some() {
     "Claude Code 多账号登录"
   } else {
     "Claude Code OAuth 登录"
   };
+  if cfg!(target_os = "windows") {
+    let args = vec!["auth".to_string(), "login".to_string()];
+    let mut extra_env = Vec::new();
+    if let Some(ref dir) = config_dir {
+      extra_env.push(("CLAUDE_CONFIG_DIR".to_string(), dir.to_string_lossy().to_string()));
+    }
+    let terminal_session = spawn_windows_embedded_session(
+      &cwd,
+      label,
+      "claudecode",
+      binary_path,
+      &args,
+      "claude",
+      &extra_env,
+      Some("claude auth login".to_string()),
+    )?;
+    return Ok(json!({
+      "ok": true,
+      "cwd": cwd.to_string_lossy().to_string(),
+      "configDir": config_dir.map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+      "embedded": true,
+      "message": "Claude Code OAuth 登录已在应用内终端打开",
+      "terminalSession": terminal_session,
+    }));
+  }
+  let command = with_claude_config_dir(&base_command, config_dir.as_deref());
+  let browser_choice = get_string(&object, "browserChoice");
+  let command = with_oauth_browser_env(&command, &browser_choice);
   let message = launch_terminal_command(&cwd, &command, label)?;
   Ok(json!({
     "ok": true,

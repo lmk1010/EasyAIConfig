@@ -9,6 +9,8 @@ import {
   getAllConfigStoreRecipes,
   getConfigStoreRecipesByTool,
 } from './config-store-recipes.js';
+import { Terminal } from './vendor/xterm/xterm.mjs';
+import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 
 const state = {
   current: null,
@@ -81,6 +83,21 @@ const state = {
   dashboardAutoRefreshTimer: null,
   dashboardAutoRefreshMs: Math.max(0, Number(localStorage.getItem('easyaiconfig_dashboard_auto_refresh_ms') || (30 * 60 * 1000)) || 0),
   consoleRefreshing: false,
+  embeddedTerminal: {
+    sessionId: '',
+    tool: '',
+    info: null,
+    cursor: 0,
+    instance: null,
+    fitAddon: null,
+    host: null,
+    resizeObserver: null,
+    pollTimer: 0,
+    pendingRead: false,
+    listLoading: false,
+    writeQueue: '',
+    writeTimer: 0,
+  },
   // Wizard
   wizardSelectedTool: 'codex',
   wizardSelectedMethod: 'npm',
@@ -8293,6 +8310,7 @@ async function primeConsoleV3(tool) {
   if (!window.__appSettings.loaded) loadAppSettings();
   if (!window.__consoleV3.network) loadConsoleNetworkStatus({ force: false });
   if (!window.__consoleV3.latency) loadConsoleLatency();
+  if (hasEmbeddedTerminalSupport() && !state.embeddedTerminal.sessionId) loadEmbeddedTerminalSessions({ force: false });
   if (!window.__consoleV3.procsByTool[tool]) loadConsoleProcs(tool);
   if (tool === 'codex' && !window.__consoleV3.codexStats) loadConsoleCodexStats();
   if (tool === 'claudecode' && !window.__consoleV3.claudeUsage) loadConsoleClaudeUsage();
@@ -8304,6 +8322,384 @@ function invalidateConsoleV3Tool(tool, { usage = true, procs = true } = {}) {
   if (!usage) return;
   if (tool === 'codex') window.__consoleV3.codexStats = null;
   if (tool === 'claudecode') window.__consoleV3.claudeUsage = null;
+}
+
+function hasEmbeddedTerminalSupport() {
+  return String(state.current?.launch?.platform || '').toLowerCase() === 'win32';
+}
+
+function getEmbeddedTerminalToolLabel(tool) {
+  if (tool === 'claudecode') return 'Claude Code';
+  if (tool === 'codex') return 'Codex';
+  return tool || '终端';
+}
+
+function sortEmbeddedTerminalSessions(rows = []) {
+  return [...rows].sort((left, right) => {
+    const leftTime = Date.parse(left?.createdAt || '');
+    const rightTime = Date.parse(right?.createdAt || '');
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return rightTime - leftTime;
+    }
+    if (Number.isFinite(rightTime) && !Number.isFinite(leftTime)) return 1;
+    if (Number.isFinite(leftTime) && !Number.isFinite(rightTime)) return -1;
+    return String(right?.sessionId || '').localeCompare(String(left?.sessionId || ''));
+  });
+}
+
+function findEmbeddedTerminalSessionForTool(rows, tool, { allowFallback = true } = {}) {
+  const sorted = sortEmbeddedTerminalSessions(rows);
+  return sorted.find((row) => row?.running && row.tool === tool)
+    || sorted.find((row) => row?.tool === tool)
+    || (allowFallback ? (sorted.find((row) => row?.running) || sorted[0] || null) : null);
+}
+
+function isEmbeddedTerminalVisible(info = state.embeddedTerminal.info, tool = state.consoleTool || 'codex') {
+  return state.activePage === 'console'
+    && Boolean(info?.sessionId)
+    && (!info?.tool || info.tool === tool);
+}
+
+async function loadEmbeddedTerminalSessions({ force = false, preferredTool = '' } = {}) {
+  if (!hasEmbeddedTerminalSupport()) return;
+  if (state.embeddedTerminal.listLoading) return;
+  const targetTool = preferredTool || state.consoleTool || state.activeTool || 'codex';
+  const currentTool = state.embeddedTerminal.info?.tool || state.embeddedTerminal.tool || '';
+  if (!force && state.embeddedTerminal.sessionId && currentTool === targetTool) return;
+  state.embeddedTerminal.listLoading = true;
+  try {
+    const res = await api('/api/terminal/list', { method: 'GET', timeoutMs: 10000 });
+    if (!res?.ok) return;
+    const rows = Array.isArray(res.data?.rows) ? res.data.rows : [];
+    const preferred = findEmbeddedTerminalSessionForTool(rows, targetTool, {
+      allowFallback: !state.embeddedTerminal.sessionId,
+    });
+    if (!preferred?.sessionId) return;
+    if (state.embeddedTerminal.sessionId === preferred.sessionId) {
+      state.embeddedTerminal.tool = preferred.tool || targetTool || state.embeddedTerminal.tool;
+      state.embeddedTerminal.info = preferred;
+      if (state.activePage === 'console') {
+        renderConsoleV3Terminal(targetTool, getEmbeddedTerminalToolLabel(targetTool));
+      }
+      return;
+    }
+    if (!state.embeddedTerminal.sessionId || force || currentTool !== targetTool) {
+      setEmbeddedTerminalSession(preferred, preferred.tool || targetTool);
+      if (state.activePage === 'console') renderToolConsole();
+    }
+  } catch (err) {
+    console.warn('[embedded-terminal] list failed', err);
+  } finally {
+    state.embeddedTerminal.listLoading = false;
+  }
+}
+
+function stopEmbeddedTerminalPolling() {
+  if (state.embeddedTerminal.pollTimer) {
+    clearTimeout(state.embeddedTerminal.pollTimer);
+    state.embeddedTerminal.pollTimer = 0;
+  }
+  state.embeddedTerminal.pendingRead = false;
+}
+
+function scheduleEmbeddedTerminalPoll(delay = 120) {
+  if (!state.embeddedTerminal.sessionId || !isEmbeddedTerminalVisible()) return;
+  if (state.embeddedTerminal.pollTimer) clearTimeout(state.embeddedTerminal.pollTimer);
+  state.embeddedTerminal.pollTimer = window.setTimeout(() => {
+    state.embeddedTerminal.pollTimer = 0;
+    pollEmbeddedTerminal();
+  }, Math.max(40, delay));
+}
+
+async function pollEmbeddedTerminal() {
+  const sessionId = state.embeddedTerminal.sessionId;
+  if (!sessionId || state.embeddedTerminal.pendingRead || !isEmbeddedTerminalVisible()) return;
+  state.embeddedTerminal.pendingRead = true;
+  try {
+    const res = await api(`/api/terminal/read?sessionId=${encodeURIComponent(sessionId)}&cursor=${encodeURIComponent(String(state.embeddedTerminal.cursor || 0))}`, {
+      method: 'GET',
+      timeoutMs: 15000,
+    });
+    if (!res?.ok) throw new Error(res?.error || '读取终端输出失败');
+    const data = res.data || {};
+    if (state.embeddedTerminal.sessionId !== sessionId) return;
+    const nextInfo = data.session || state.embeddedTerminal.info;
+    state.embeddedTerminal.info = nextInfo;
+    if (!isEmbeddedTerminalVisible(nextInfo)) return;
+    if (typeof data.cursor === 'number') state.embeddedTerminal.cursor = data.cursor;
+    if (data.data && state.embeddedTerminal.instance) {
+      state.embeddedTerminal.instance.write(String(data.data));
+    }
+    if (state.activePage === 'console') renderConsoleV3Terminal(state.consoleTool || 'codex', getEmbeddedTerminalToolLabel(state.consoleTool || 'codex'));
+    scheduleEmbeddedTerminalPoll((data.session?.running === false && !data.data) ? 900 : 120);
+  } catch (err) {
+    console.warn('[embedded-terminal] poll failed', err);
+    scheduleEmbeddedTerminalPoll(800);
+  } finally {
+    state.embeddedTerminal.pendingRead = false;
+  }
+}
+
+async function flushEmbeddedTerminalWriteQueue() {
+  const sessionId = state.embeddedTerminal.sessionId;
+  const payload = state.embeddedTerminal.writeQueue;
+  state.embeddedTerminal.writeQueue = '';
+  state.embeddedTerminal.writeTimer = 0;
+  if (!sessionId || !payload) return;
+  try {
+    await api('/api/terminal/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, data: payload }),
+      timeoutMs: 10000,
+    });
+  } catch (err) {
+    console.warn('[embedded-terminal] write failed', err);
+  }
+}
+
+function queueEmbeddedTerminalWrite(data) {
+  if (!data || !state.embeddedTerminal.sessionId) return;
+  state.embeddedTerminal.writeQueue += data;
+  if (state.embeddedTerminal.writeTimer) return;
+  state.embeddedTerminal.writeTimer = window.setTimeout(() => {
+    flushEmbeddedTerminalWriteQueue().catch((err) => console.warn('[embedded-terminal] flush failed', err));
+  }, 16);
+}
+
+async function resizeEmbeddedTerminal() {
+  const host = state.embeddedTerminal.host;
+  const fitAddon = state.embeddedTerminal.fitAddon;
+  const terminal = state.embeddedTerminal.instance;
+  const sessionId = state.embeddedTerminal.sessionId;
+  if (!host || !fitAddon || !terminal || !sessionId || host.offsetParent === null) return;
+  try {
+    fitAddon.fit();
+  } catch (err) {
+    console.warn('[embedded-terminal] fit failed', err);
+  }
+  const cols = terminal.cols || 120;
+  const rows = terminal.rows || 32;
+  try {
+    await api('/api/terminal/resize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, cols, rows }),
+      timeoutMs: 10000,
+    });
+  } catch (err) {
+    console.warn('[embedded-terminal] resize failed', err);
+  }
+}
+
+function disposeEmbeddedTerminalInstance() {
+  stopEmbeddedTerminalPolling();
+  if (state.embeddedTerminal.writeTimer) {
+    clearTimeout(state.embeddedTerminal.writeTimer);
+    state.embeddedTerminal.writeTimer = 0;
+  }
+  state.embeddedTerminal.writeQueue = '';
+  if (state.embeddedTerminal.resizeObserver) {
+    state.embeddedTerminal.resizeObserver.disconnect();
+    state.embeddedTerminal.resizeObserver = null;
+  }
+  if (state.embeddedTerminal.instance) {
+    try { state.embeddedTerminal.instance.dispose(); } catch {}
+  }
+  state.embeddedTerminal.instance = null;
+  state.embeddedTerminal.fitAddon = null;
+  state.embeddedTerminal.host = null;
+}
+
+function ensureEmbeddedTerminalMounted() {
+  if (!hasEmbeddedTerminalSupport()) return;
+  const info = state.embeddedTerminal.info;
+  if (!info || !state.embeddedTerminal.sessionId) return;
+  const visibleForTool = !info.tool || info.tool === (state.consoleTool || 'codex');
+  if (!visibleForTool) return;
+  const host = document.getElementById('embeddedTerminalHost');
+  if (!host) return;
+  if (state.embeddedTerminal.host === host && state.embeddedTerminal.instance) {
+    resizeEmbeddedTerminal().catch((err) => console.warn('[embedded-terminal] resize sync failed', err));
+    return;
+  }
+
+  disposeEmbeddedTerminalInstance();
+
+  const terminal = new Terminal({
+    cursorBlink: true,
+    fontFamily: 'SF Mono, Menlo, Consolas, monospace',
+    fontSize: 12,
+    lineHeight: 1.2,
+    scrollback: 5000,
+    convertEol: false,
+    theme: {
+      background: '#091018',
+      foreground: '#eef4ff',
+      cursor: '#8dc0ff',
+      cursorAccent: '#091018',
+      black: '#081018',
+      red: '#ff8f8f',
+      green: '#7be1b2',
+      yellow: '#ffd08a',
+      blue: '#8dc0ff',
+      magenta: '#b8a8ff',
+      cyan: '#6de2ff',
+      white: '#eef4ff',
+      brightBlack: '#6b7280',
+      brightRed: '#ffb2b2',
+      brightGreen: '#b5ffd9',
+      brightYellow: '#ffe1a6',
+      brightBlue: '#c7e0ff',
+      brightMagenta: '#d6cbff',
+      brightCyan: '#b9f5ff',
+      brightWhite: '#ffffff',
+    },
+  });
+  const fitAddon = new FitAddon();
+  terminal.loadAddon(fitAddon);
+  terminal.open(host);
+  terminal.onData((data) => queueEmbeddedTerminalWrite(data));
+
+  state.embeddedTerminal.instance = terminal;
+  state.embeddedTerminal.fitAddon = fitAddon;
+  state.embeddedTerminal.host = host;
+
+  if (window.ResizeObserver) {
+    const observer = new ResizeObserver(() => {
+      resizeEmbeddedTerminal().catch((err) => console.warn('[embedded-terminal] resize observer failed', err));
+    });
+    observer.observe(host);
+    state.embeddedTerminal.resizeObserver = observer;
+  }
+
+  resizeEmbeddedTerminal().catch((err) => console.warn('[embedded-terminal] initial resize failed', err));
+  scheduleEmbeddedTerminalPoll(0);
+  setTimeout(() => terminal.focus(), 30);
+}
+
+function setEmbeddedTerminalSession(session, tool = '') {
+  if (!session?.sessionId) return;
+  const isNewSession = state.embeddedTerminal.sessionId !== session.sessionId;
+  if (state.embeddedTerminal.sessionId && isNewSession) {
+    disposeEmbeddedTerminalInstance();
+  }
+  state.embeddedTerminal.sessionId = session.sessionId;
+  state.embeddedTerminal.tool = tool || session.tool || state.embeddedTerminal.tool || 'codex';
+  state.embeddedTerminal.info = session;
+  if (isNewSession) state.embeddedTerminal.cursor = 0;
+}
+
+async function activateEmbeddedTerminalSession(session, { tool = '', reveal = true } = {}) {
+  if (!session?.sessionId) return false;
+  setEmbeddedTerminalSession(session, tool);
+  if (tool) {
+    state.consoleTool = tool;
+    if (typeof setActiveTool === 'function') setActiveTool(tool);
+  }
+  if (reveal) setPage?.('console');
+  if (state.activePage === 'console') {
+    renderToolConsole();
+    ensureEmbeddedTerminalMounted();
+  }
+  scheduleEmbeddedTerminalPoll(0);
+  return true;
+}
+
+async function closeEmbeddedTerminalSession({ remove = false, silent = false } = {}) {
+  const sessionId = state.embeddedTerminal.sessionId;
+  if (!sessionId) return false;
+  try {
+    const res = await api('/api/terminal/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, remove }),
+      timeoutMs: 10000,
+    });
+    if (!res?.ok) throw new Error(res?.error || '关闭终端失败');
+    state.embeddedTerminal.info = res.data?.session || state.embeddedTerminal.info;
+    if (remove) {
+      disposeEmbeddedTerminalInstance();
+      state.embeddedTerminal.sessionId = '';
+      state.embeddedTerminal.tool = '';
+      state.embeddedTerminal.info = null;
+      state.embeddedTerminal.cursor = 0;
+    } else {
+      scheduleEmbeddedTerminalPoll(0);
+    }
+    if (!silent) flash('应用内终端已关闭', 'success');
+    if (state.activePage === 'console') renderToolConsole();
+    return true;
+  } catch (err) {
+    if (!silent) flash(err instanceof Error ? err.message : '关闭终端失败', 'error');
+    return false;
+  }
+}
+
+function renderConsoleV3Terminal(tool, toolLabel) {
+  const el = document.getElementById('consoleV2Terminal');
+  if (!el) return;
+  if (!hasEmbeddedTerminalSupport()) {
+    el.innerHTML = '';
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+
+  if (!el.dataset.ready) {
+    el.innerHTML = `
+      ${cv3SectionHead(CV3_ICONS.cpu, '应用内终端', { extras: '<button type="button" class="cv3-link-btn" data-console-v3-terminal-close>关闭</button>' })}
+      <div class="ev3-terminal-shell">
+        <div class="ev3-terminal-meta">
+          <div class="ev3-terminal-title" id="embeddedTerminalTitle">等待会话</div>
+          <div class="ev3-terminal-sub" id="embeddedTerminalSub">Windows 会在这里直接显示 CLI 会话，不再弹外部终端窗口。</div>
+        </div>
+        <div class="ev3-terminal-empty" id="embeddedTerminalEmpty"></div>
+        <div class="ev3-terminal-host-wrap" id="embeddedTerminalHostWrap" hidden>
+          <div class="ev3-terminal-host" id="embeddedTerminalHost"></div>
+        </div>
+      </div>`;
+    el.dataset.ready = '1';
+  }
+
+  const info = state.embeddedTerminal.info;
+  const titleEl = document.getElementById('embeddedTerminalTitle');
+  const subEl = document.getElementById('embeddedTerminalSub');
+  const emptyEl = document.getElementById('embeddedTerminalEmpty');
+  const hostWrap = document.getElementById('embeddedTerminalHostWrap');
+  const closeBtn = el.querySelector('[data-console-v3-terminal-close]');
+  const visibleForTool = Boolean(info?.sessionId) && (!info?.tool || info.tool === tool);
+  const activeToolLabel = getEmbeddedTerminalToolLabel(info?.tool || '');
+
+  if (titleEl) {
+    titleEl.textContent = visibleForTool
+      ? `${activeToolLabel} · ${info.title || '终端会话'}`
+      : info?.sessionId
+        ? `${activeToolLabel} 会话运行中`
+        : `${toolLabel} · 应用内终端`;
+  }
+  if (subEl) {
+    const status = info?.running === false
+      ? `已结束${typeof info.exitCode === 'number' ? ` · 退出码 ${info.exitCode}` : ''}`
+      : info?.sessionId
+        ? `会话 ID · ${info.sessionId.slice(0, 8)}`
+        : 'Windows 会在这里直接显示 CLI 会话，不再弹外部终端窗口。';
+    subEl.textContent = status;
+  }
+  if (closeBtn) closeBtn.disabled = !info?.sessionId;
+
+  if (emptyEl) {
+    emptyEl.hidden = visibleForTool;
+    emptyEl.textContent = info?.sessionId
+      ? visibleForTool
+        ? ''
+        : `当前打开的是 ${activeToolLabel} 会话，切到对应工具页就能继续查看。`
+      : `${toolLabel} 还没有打开应用内终端。`;
+  }
+  if (hostWrap) hostWrap.hidden = !visibleForTool;
+
+  if (!visibleForTool) disposeEmbeddedTerminalInstance();
+  if (visibleForTool) ensureEmbeddedTerminalMounted();
 }
 
 function formatRelativeTime(iso) {
@@ -8880,6 +9276,7 @@ function renderConsoleV2(tool) {
   renderConsoleV3Procs(tool, model.toolLabel);
   renderConsoleV3Usage(tool);
   renderConsoleV3Vantages();
+  renderConsoleV3Terminal(tool, model.toolLabel);
 
   const heroEl = document.getElementById('consoleV2Hero');
   if (heroEl) {
@@ -10784,9 +11181,13 @@ function setPage(page = 'quick') {
 
   // Render tasks page on navigate
   if (page !== 'dashboard') stopDashboardAutoRefresh();
+  if (page !== 'console') disposeEmbeddedTerminalInstance();
   if (page === 'tasks') renderTasksPage();
   if (page === 'console') {
     renderToolConsole();
+    loadEmbeddedTerminalSessions({
+      preferredTool: state.consoleTool || state.activeTool || 'codex',
+    }).catch((err) => console.warn('[embedded-terminal] page sync failed', err));
     if (!state.consoleRefreshing) void refreshToolConsoleData();
   }
   if (page === 'dashboard') {
@@ -15600,11 +16001,7 @@ function getCodexTerminalProfiles() {
   }
   if (platform === 'win32') {
     return [
-      { id: 'auto', label: '自动选择（推荐）' },
-      { id: 'windows-terminal', label: 'Windows Terminal' },
-      { id: 'powershell-7', label: 'PowerShell 7' },
-      { id: 'powershell', label: 'Windows PowerShell' },
-      { id: 'cmd', label: '命令提示符 CMD' },
+      { id: 'auto', label: '应用内终端（推荐）' },
     ];
   }
   return [];
@@ -15942,6 +16339,10 @@ async function triggerCodexResumeAction(action, button, { sessionId = '', last =
   if (!json.ok) {
     flash(json.error || (action === 'fork' ? '分叉恢复失败' : '恢复会话失败'), 'error');
     return false;
+  }
+  if (json.data?.terminalSession) {
+    await activateEmbeddedTerminalSession(json.data.terminalSession, { tool: 'codex', reveal: true });
+    refreshToolRuntimeAfterMutation('codex').catch((e) => console.warn('[triggerCodexResumeAction] refresh failed', e));
   }
   flash(json.data?.message || (action === 'fork' ? '已打开 Codex 分叉恢复' : '已打开 Codex 会话恢复'), 'success');
   return true;
@@ -16732,6 +17133,10 @@ async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已�
     return false;
   }
   const launchMessage = launched.data?.message || successMessage;
+  if (launched.data?.terminalSession) {
+    await activateEmbeddedTerminalSession(launched.data.terminalSession, { tool: 'codex', reveal: true });
+    refreshToolRuntimeAfterMutation('codex').catch((e) => console.warn('[launchCodex] refresh failed', e));
+  }
   flash(credentialWarning ? `${launchMessage}；注意：${credentialWarning}` : launchMessage, credentialWarning ? 'warning' : 'success');
   return true;
 }
@@ -16760,6 +17165,10 @@ async function launchCodexLogin(buttonId = '', terminalProfile = '', codexHome =
     return false;
   }
   const launchMessage = launched.data?.message || '已在终端中打开 codex login';
+  if (launched.data?.terminalSession) {
+    await activateEmbeddedTerminalSession(launched.data.terminalSession, { tool: 'codex', reveal: true });
+    refreshToolRuntimeAfterMutation('codex').catch((e) => console.warn('[launchCodexLogin] refresh failed', e));
+  }
   flash(`${launchMessage}，完成浏览器授权后点“重新检测登录状态”`, 'success');
   return true;
 }
@@ -17210,6 +17619,10 @@ await loadClaudeCodeQuickState({ force: false, cacheOnly: false }).catch((e) => 
       body: JSON.stringify({ cwd: state.current?.launch?.cwd || '' }),
     });
     if (json.ok) {
+      if (json.data?.terminalSession) {
+        await activateEmbeddedTerminalSession(json.data.terminalSession, { tool: 'claudecode', reveal: true });
+        refreshToolRuntimeAfterMutation('claudecode').catch((e) => console.warn('[launchClaudeCodeOnly] refresh failed', e));
+      }
       flash(json.data?.message || 'Claude Code 已启动', 'success');
     } else {
       flash(json.error || '启动失败', 'error');
@@ -17276,7 +17689,11 @@ async function launchClaudeCodeOAuthLogin(buttonId = 'claudeOauthLoginBtn') {
       flash(json.error || '启动 OAuth 登录失败', 'error');
       return false;
     }
-    flash('已在终端中打开 Claude Code OAuth 登录，请完成浏览器授权后点击刷新状态', 'success');
+    if (json.data?.terminalSession) {
+      await activateEmbeddedTerminalSession(json.data.terminalSession, { tool: 'claudecode', reveal: true });
+      refreshToolRuntimeAfterMutation('claudecode').catch((e) => console.warn('[launchClaudeCodeOAuthLogin] refresh failed', e));
+    }
+    flash(`${json.data?.message || 'Claude Code OAuth 登录已启动'}，请完成浏览器授权后点击刷新状态`, 'success');
     return true;
   } catch (error) {
     flash(error instanceof Error ? error.message : '启动 OAuth 登录失败', 'error');
@@ -19125,6 +19542,7 @@ function bindEvents() {
       if (flashTemporarilyDisabledTool(tool)) return;
       state.consoleTool = tool;
       renderToolConsole();
+      loadEmbeddedTerminalSessions({ preferredTool: tool }).catch((err) => console.warn('[embedded-terminal] switch failed', err));
     });
   }
 
@@ -19138,6 +19556,7 @@ function bindEvents() {
       if (flashTemporarilyDisabledTool(tool)) return;
       state.consoleTool = tool;
       renderToolConsole();
+      loadEmbeddedTerminalSessions({ preferredTool: tool }).catch((err) => console.warn('[embedded-terminal] rail switch failed', err));
     });
   }
 
@@ -19229,6 +19648,10 @@ function bindEvents() {
         const tool = state.consoleTool || 'codex';
         if (tool === 'claudecode') { window.__consoleV3.claudeUsage = null; loadConsoleClaudeUsage(); }
         else if (tool === 'codex') { window.__consoleV3.codexStats = null; loadConsoleCodexStats(); }
+        return;
+      }
+      if (t.closest('[data-console-v3-terminal-close]')) {
+        closeEmbeddedTerminalSession({ remove: true }).catch((err) => console.warn('[embedded-terminal] close failed', err));
         return;
       }
       const killBtn = t.closest('[data-cv3-proc-kill]');

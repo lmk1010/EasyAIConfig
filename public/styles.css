@@ -20610,6 +20610,7 @@ body {
    same translucent treatment as the hero card so the whole page reads as
    one visual vocabulary, not "hero + plain lists below". */
 .shell-v2 .console-v2-vantages,
+.shell-v2 .console-v2-terminal,
 .shell-v2 .console-v2-procs,
 .shell-v2 .console-v2-usage,
 .shell-v2 .console-v2-meta,
@@ -20627,6 +20628,7 @@ body {
     0 8px 20px rgba(0, 0, 0, 0.14);
 }
 [data-theme="light"] .shell-v2 .console-v2-vantages,
+[data-theme="light"] .shell-v2 .console-v2-terminal,
 [data-theme="light"] .shell-v2 .console-v2-procs,
 [data-theme="light"] .shell-v2 .console-v2-usage,
 [data-theme="light"] .shell-v2 .console-v2-meta,
@@ -20643,12 +20645,70 @@ body {
    itself, so the head just needs a touch above for breathing room, and
    none of the horizontal 6px it used to have. */
 .shell-v2 .console-v2-vantages .console-v2-section-head,
+.shell-v2 .console-v2-terminal .console-v2-section-head,
 .shell-v2 .console-v2-procs .console-v2-section-head,
 .shell-v2 .console-v2-usage .console-v2-section-head,
 .shell-v2 .console-v2-issues .console-v2-section-head,
 .shell-v2 .console-v2-meta .console-v2-section-head,
 .shell-v2 .console-v2-meta .console-v2-meta-head {
   padding: 0 0 10px;
+}
+
+.shell-v2 .console-v2-terminal {
+  padding-bottom: 14px;
+}
+.shell-v2 .ev3-terminal-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.shell-v2 .ev3-terminal-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.shell-v2 .ev3-terminal-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--s2-text);
+}
+.shell-v2 .ev3-terminal-sub {
+  font-size: 0.72rem;
+  color: var(--s2-muted);
+}
+.shell-v2 .ev3-terminal-empty {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--s2-muted);
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+[data-theme="light"] .shell-v2 .ev3-terminal-empty {
+  background: rgba(15, 23, 42, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.05);
+}
+.shell-v2 .ev3-terminal-host-wrap {
+  border-radius: 12px;
+  overflow: hidden;
+  background: #091018;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 12px 24px rgba(0, 0, 0, 0.18);
+}
+.shell-v2 .ev3-terminal-host {
+  width: 100%;
+  min-height: 420px;
+  height: min(58vh, 720px);
+  padding: 10px 12px;
+}
+.shell-v2 .ev3-terminal-host .xterm {
+  height: 100%;
+}
+.shell-v2 .ev3-terminal-host .xterm-viewport {
+  border-radius: 8px;
 }
 
 /* ============================================================

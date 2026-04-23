@@ -43,6 +43,7 @@ use crate::processes::{kill_process, list_processes};
 use crate::provider::detect_provider;
 use crate::usage_stats::{claudecode_local_usage, codex_session_stats};
 use crate::updater::{get_app_update_info, get_app_update_progress, install_app_update};
+use crate::terminal::{terminal_close, terminal_create, terminal_list, terminal_read, terminal_resize, terminal_write};
 use crate::{fail, ok, OPENAI_CODEX_PACKAGE, CLAUDE_CODE_PACKAGE, OPENCLAW_PACKAGE};
 
 async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value, body: &Value) -> Result<Value, String> {
@@ -166,6 +167,12 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/network/ip-history", "GET") => list_network_ip_history(query),
     ("/api/app-settings", "GET") => load_app_settings(query),
     ("/api/app-settings", "POST") => save_app_settings(body),
+    ("/api/terminal/create", "POST") => terminal_create(body),
+    ("/api/terminal/list", "GET") => terminal_list(query),
+    ("/api/terminal/read", "GET") => terminal_read(query),
+    ("/api/terminal/write", "POST") => terminal_write(body),
+    ("/api/terminal/resize", "POST") => terminal_resize(body),
+    ("/api/terminal/close", "POST") => terminal_close(body),
     ("/api/shell-integration/status", "GET") => shell_integration_status(query),
     ("/api/shell-integration/enable", "POST") => enable_shell_integration(body),
     ("/api/shell-integration/disable", "POST") => disable_shell_integration(body),

@@ -325,6 +325,7 @@ mod processes;
 mod usage_stats;
 mod app_settings;
 mod shell_integration;
+mod terminal;
 mod routes;
 
 use routes::backend_request;
