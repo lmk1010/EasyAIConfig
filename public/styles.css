@@ -23050,6 +23050,27 @@ body {
   box-shadow: none !important;
 }
 
+.shell-v2 .dashboard-page .db3-standard-card.is-detected {
+  padding-left: 12px !important;
+}
+
+.shell-v2 .dashboard-page .db3-price-row--total {
+  padding-left: 14px !important;
+}
+
+.shell-v2 .dashboard-page .db3-standard-card.is-detected::before,
+.shell-v2 .dashboard-page .db3-price-row--total::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 999px;
+  background: rgba(141, 189, 255, 0.72);
+  pointer-events: none;
+}
+
 .shell-v2 .dashboard-page .db3-standard-head {
   gap: 16px;
   margin-bottom: 8px;
@@ -23066,6 +23087,16 @@ body {
 
 [data-theme="light"] .shell-v2 .dashboard-page .db3-hero-stats {
   border-bottom-color: rgba(15, 23, 42, 0.07);
+}
+
+[data-theme="light"] .shell-v2 .dashboard-page .db3-standard-card.is-detected,
+[data-theme="light"] .shell-v2 .dashboard-page .db3-price-row--total {
+  box-shadow: none !important;
+}
+
+[data-theme="light"] .shell-v2 .dashboard-page .db3-standard-card.is-detected::before,
+[data-theme="light"] .shell-v2 .dashboard-page .db3-price-row--total::before {
+  background: rgba(59, 130, 246, 0.62);
 }
 
 .shell-v2 .dashboard-page .db3-price-grid {
@@ -23299,7 +23330,23 @@ body {
 .shell-v2 .config-editor-page .provider-pill { min-width: 0; height: 20px; padding: 0 7px; font-size: 0.64rem; }
 .shell-v2 .config-editor-page .cc-provider-inline-actions { gap: 6px; }
 .shell-v2 .config-editor-page .provider-card { padding: 12px 0 !important; }
-.shell-v2 .config-editor-page .provider-card.active { background: transparent !important; box-shadow: inset 2px 0 0 rgba(107, 158, 255, 0.44) !important; }
+.shell-v2 .config-editor-page .provider-card.active {
+  position: relative;
+  padding-left: 12px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.shell-v2 .config-editor-page .provider-card.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 999px;
+  background: rgba(107, 158, 255, 0.44);
+  pointer-events: none;
+}
 .shell-v2 .config-editor-page .cfg3-drawer { box-shadow: -10px 0 28px rgba(0, 0, 0, 0.22); }
 .shell-v2 .config-editor-page .raw-code-editor { border-radius: 10px; box-shadow: none !important; }
 .shell-v2 .config-editor-page .resume-toolbar {
