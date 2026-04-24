@@ -12,10 +12,29 @@
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::parse_json_object;
 use crate::provider::get_string;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn process_command(program: &str) -> Command {
+  #[cfg(target_os = "windows")]
+  {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+  }
+  #[cfg(not(target_os = "windows"))]
+  {
+    Command::new(program)
+  }
+}
 
 // Does this `ps` line really represent the tool we're looking for?
 //
@@ -342,9 +361,8 @@ fn enrich_with_cwd_and_mem(rows: Vec<Value>) -> Vec<Value> { rows }
 
 #[cfg(target_os = "windows")]
 fn list_windows(needle: &str) -> Vec<Value> {
-  use std::process::Command;
   let self_pid = std::process::id();
-  let out = match Command::new("tasklist")
+  let out = match process_command("tasklist")
     .args(["/fo", "csv", "/nh"])
     .output()
   {
@@ -401,8 +419,7 @@ pub(crate) fn kill_process(body: &Value) -> Result<Value, String> {
 
   #[cfg(not(target_os = "windows"))]
   {
-    use std::process::Command;
-    let out = Command::new("kill")
+    let out = process_command("kill")
       .args([&format!("-{}", signal), &pid_u32.to_string()])
       .output()
       .map_err(|e| format!("kill 调用失败: {}", e))?;
@@ -413,11 +430,10 @@ pub(crate) fn kill_process(body: &Value) -> Result<Value, String> {
   }
   #[cfg(target_os = "windows")]
   {
-    use std::process::Command;
     let flag = if signal == "KILL" { "/F" } else { "" };
     let mut args = vec!["/PID".to_string(), pid_u32.to_string()];
     if !flag.is_empty() { args.insert(0, flag.to_string()); }
-    let out = Command::new("taskkill").args(&args).output().map_err(|e| format!("taskkill 调用失败: {}", e))?;
+    let out = process_command("taskkill").args(&args).output().map_err(|e| format!("taskkill 调用失败: {}", e))?;
     if !out.status.success() {
       let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
       return Err(if err.is_empty() { format!("taskkill 退出码 {}", out.status) } else { err });

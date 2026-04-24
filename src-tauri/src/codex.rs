@@ -2395,14 +2395,37 @@ fn windows_embedded_terminal_env(extra_env: &[(String, String)]) -> Vec<(String,
   envs
 }
 
+fn resolve_windows_binary_invocation_path(binary_path: &str, fallback_binary: &str) -> String {
+  let normalized = normalize_windows_cmd_path(binary_path);
+  if !normalized.is_empty() {
+    let lower = normalized.to_ascii_lowercase();
+    let looks_like_path = normalized.contains('\\') || normalized.contains('/') || normalized.contains(':');
+    if looks_like_path || Path::new(&normalized).exists() || lower.ends_with(".exe") || lower.ends_with(".cmd") || lower.ends_with(".bat") || lower.ends_with(".ps1") {
+      return normalized;
+    }
+    if let Some(resolved) = command_exists(&normalized) {
+      return normalize_windows_cmd_path(&resolved);
+    }
+  }
+
+  if !fallback_binary.trim().is_empty() {
+    if let Some(resolved) = command_exists(fallback_binary) {
+      return normalize_windows_cmd_path(&resolved);
+    }
+    return fallback_binary.to_string();
+  }
+
+  normalized
+}
+
 fn resolve_windows_embedded_terminal_command(
   program: &str,
   args: &[String],
   fallback_binary: &str,
 ) -> (String, Vec<String>, String) {
-  let preview = build_windows_binary_command(program, args, fallback_binary);
-  let normalized = normalize_windows_cmd_path(program);
-  let lower = normalized.to_ascii_lowercase();
+  let resolved_program = resolve_windows_binary_invocation_path(program, fallback_binary);
+  let preview = build_windows_binary_command(&resolved_program, args, fallback_binary);
+  let lower = resolved_program.to_ascii_lowercase();
 
   if lower.ends_with(".ps1") {
     let mut command_args = vec![
@@ -2411,13 +2434,17 @@ fn resolve_windows_embedded_terminal_command(
       "-ExecutionPolicy".to_string(),
       "Bypass".to_string(),
       "-File".to_string(),
-      normalized,
+      resolved_program,
     ];
     command_args.extend(args.iter().cloned());
     return ("powershell.exe".to_string(), command_args, preview);
   }
 
-  if normalized.trim().is_empty() || lower.ends_with(".cmd") || lower.ends_with(".bat") {
+  if lower.ends_with(".exe") {
+    return (resolved_program, args.to_vec(), preview);
+  }
+
+  if resolved_program.trim().is_empty() || lower.ends_with(".cmd") || lower.ends_with(".bat") {
     return (
       "cmd.exe".to_string(),
       vec![
@@ -2430,7 +2457,16 @@ fn resolve_windows_embedded_terminal_command(
     );
   }
 
-  (normalized, args.to_vec(), preview)
+  (
+    "cmd.exe".to_string(),
+    vec![
+      "/d".to_string(),
+      "/s".to_string(),
+      "/c".to_string(),
+      preview.clone(),
+    ],
+    preview,
+  )
 }
 
 fn spawn_windows_embedded_session(
@@ -5220,14 +5256,8 @@ fn normalize_windows_cmd_path(raw: &str) -> String {
 }
 
 fn build_windows_binary_command(binary_path: &str, args: &[String], fallback_binary: &str) -> String {
-  let normalized = normalize_windows_cmd_path(binary_path);
+  let normalized = resolve_windows_binary_invocation_path(binary_path, fallback_binary);
   let lower = normalized.to_ascii_lowercase();
-
-  if !fallback_binary.trim().is_empty() && command_exists(fallback_binary).is_some() {
-    let mut parts = vec![fallback_binary.to_string()];
-    parts.extend(args.iter().map(|arg| quote_windows_cmd_arg(arg)));
-    return parts.join(" ");
-  }
 
   if normalized.trim().is_empty() {
     let mut parts = vec![fallback_binary.to_string()];
@@ -7169,11 +7199,11 @@ pub(crate) fn open_url_in_browser(body: &Value) -> Result<Value, String> {
   }
 
   let result = if cfg!(target_os = "macos") {
-    Command::new("open").arg(&url).spawn()
+    create_command("open").arg(&url).spawn()
   } else if cfg!(target_os = "windows") {
-    Command::new("cmd").args(["/c", "start", "", &url]).spawn()
+    create_command("cmd").args(["/c", "start", "", &url]).spawn()
   } else {
-    Command::new("xdg-open").arg(&url).spawn()
+    create_command("xdg-open").arg(&url).spawn()
   };
 
   match result {

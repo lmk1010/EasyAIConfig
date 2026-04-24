@@ -30,13 +30,32 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fs;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::provider::get_string;
 use crate::{app_home, ensure_dir, parse_json_object, read_text};
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn process_command(program: &str) -> Command {
+  #[cfg(target_os = "windows")]
+  {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+  }
+  #[cfg(not(target_os = "windows"))]
+  {
+    Command::new(program)
+  }
+}
 
 // 探测当前系统里是否有活跃的 claude 进程。切换/删除 profile 前调用一次:
 // 已启动的 claude 进程继承的是启动时的 CLAUDE_CONFIG_DIR env,后续更改
@@ -56,7 +75,7 @@ fn count_running_claude_processes() -> usize {
   #[cfg(unix)]
   {
     // `ps -axo command=` 在 macOS / Linux 都可用(BSD 写法)
-    let output = std::process::Command::new("ps")
+    let output = process_command("ps")
       .args(["-axo", "command="])
       .output();
     let Ok(out) = output else { return 0; };
@@ -81,7 +100,7 @@ fn count_running_claude_processes() -> usize {
     // tasklist /V /FO CSV 会给每行 CSV,字段含进程名但不含完整命令行;
     // 改用 PowerShell Get-CimInstance 拿 CommandLine 字段,覆盖 claude.exe
     // 和 node.exe + claude-code 两种场景。
-    let output = std::process::Command::new("powershell")
+    let output = process_command("powershell")
       .args([
         "-NoProfile","-NonInteractive","-Command",
         "Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine",
@@ -262,11 +281,10 @@ fn read_keychain_plan_tier(service: &str) -> Option<(String, String)> {
     }
   }
 
-  use std::process::Command;
   let user = std::env::var("USER").unwrap_or_default();
   if user.is_empty() { return None; }
 
-  let out = Command::new("security")
+  let out = process_command("security")
     .args(["find-generic-password", "-a", &user, "-s", service, "-w"])
     .output()
     .ok()?;
