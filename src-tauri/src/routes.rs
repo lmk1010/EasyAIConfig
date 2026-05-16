@@ -22,8 +22,10 @@ use crate::codex::{
 };
 use crate::config::{
   delete_codex_provider, get_provider_secret, list_backups, load_state, pick_directory,
-  restore_backup, save_config, save_raw_config, save_settings, test_saved_provider,
+  read_config_file, restore_backup, save_config, save_raw_config, save_settings,
+  test_saved_provider, write_config_file,
 };
+
 use crate::oauth_profiles::{
   create_oauth_profile, delete_oauth_profile, list_oauth_profiles, rename_oauth_profile,
   save_current_oauth_profile, switch_oauth_profile,
@@ -54,10 +56,13 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/provider/test", "POST") => detect_provider(body).await,
     ("/api/provider/secret", "POST") => get_provider_secret(body),
     ("/api/provider/test-saved", "POST") => test_saved_provider(body).await,
+    ("/api/config/read-file", "GET") => read_config_file(query),
+    ("/api/config/write-file", "POST") => write_config_file(body),
     ("/api/config/save", "POST") => save_config(body),
     ("/api/config/delete-provider", "POST") => delete_codex_provider(body),
     ("/api/config/raw-save", "POST") => save_raw_config(body),
     ("/api/config/settings-save", "POST") => save_settings(body),
+
     ("/api/tools", "GET") => list_tools(),
     ("/api/codex/install", "POST") => codex_npm_action(&["install", "-g", OPENAI_CODEX_PACKAGE]),
     ("/api/codex/release", "GET") => get_codex_release_info(),

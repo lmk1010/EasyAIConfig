@@ -22644,23 +22644,28 @@ body {
 .shell-v2 .dashboard-page .db3-price-grid {
   min-width: 920px;
   display: grid;
-  gap: 0;
+  gap: 6px;
 }
+
+
 
 .shell-v2 .dashboard-page .db3-price-row {
   display: grid;
   grid-template-columns: minmax(180px, 1.35fr) repeat(3, minmax(86px, 0.56fr)) minmax(190px, 1.05fr) minmax(110px, 0.72fr);
   gap: 10px;
   align-items: center;
-  padding: 11px 8px;
-  border-radius: 0;
-  background: transparent;
-  border: 0;
+  padding: 12px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 [data-theme="light"] .shell-v2 .dashboard-page .db3-price-row {
+  background: rgba(15, 23, 42, 0.015);
+  border-color: rgba(15, 23, 42, 0.06);
   border-bottom-color: rgba(15, 23, 42, 0.07);
+
 }
 
 .shell-v2 .dashboard-page .db3-price-row--head {

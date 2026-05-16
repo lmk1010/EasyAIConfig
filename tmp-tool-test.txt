@@ -1,0 +1,4 @@
+Hello from write_file tool!
+测试时间: 2026-05-11 (edited by edit tool!)
+
+这是一个临时测试文件，可以随时删除。

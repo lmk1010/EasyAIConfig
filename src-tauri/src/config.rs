@@ -713,3 +713,48 @@ pub(crate) fn restore_backup(body: &Value) -> Result<Value, String> {
     }
   }))
 }
+
+pub(crate) fn read_config_file(query: &Value) -> Result<Value, String> {
+  let object = parse_json_object(query);
+  let file_path_str = get_string(&object, "filePath");
+  if file_path_str.trim().is_empty() {
+    return Err("filePath is required".to_string());
+  }
+
+  let file_path = assert_allowed_path(Path::new(&file_path_str), "filePath")?;
+  let content = read_text(&file_path)?;
+  let exists = !content.is_empty() || file_path.is_file();
+
+  Ok(json!({
+    "filePath": file_path.to_string_lossy().to_string(),
+    "exists": exists,
+    "content": content,
+  }))
+}
+
+pub(crate) fn write_config_file(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let file_path_str = get_string(&object, "filePath");
+  if file_path_str.trim().is_empty() {
+    return Err("filePath is required".to_string());
+  }
+  let content = get_string(&object, "content");
+
+  let file_path = assert_allowed_path(Path::new(&file_path_str), "filePath")?;
+  if let Some(parent) = file_path.parent() {
+    ensure_dir(&parent.to_path_buf())?;
+  }
+
+  let previous = read_text(&file_path)?;
+  let changed = previous != content;
+  if changed {
+    write_text(&file_path, &content)?;
+  }
+
+  Ok(json!({
+    "saved": true,
+    "filePath": file_path.to_string_lossy().to_string(),
+    "changed": changed,
+  }))
+}
+

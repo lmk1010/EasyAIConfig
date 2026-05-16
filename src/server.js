@@ -1017,7 +1017,8 @@ export async function startServer() {
 
   app.get('/api/tools', async (_req, res) => {
     try {
-      ok(res, { data: listTools({ passive: process.platform === 'win32' }) });
+      ok(res, { data: listTools({ passive: true }) });
+
     } catch (error) {
       fail(res, error);
     }

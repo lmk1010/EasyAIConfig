@@ -1,0 +1,300 @@
+Line 1: This is a test file with 300 lines
+Line 2: Generated for testing purposes
+Line 3: Each line contains its line number
+Line 4: This helps verify file operations
+Line 5: Testing read, write, and edit capabilities
+Line 6: The file should be exactly 300 lines long
+Line 7: Content is simple and predictable
+Line 8: Making it easy to verify correctness
+Line 9: Line numbers make navigation simple
+Line 10: This is line ten of the test file
+Line 11: Starting the second group of ten
+Line 12: Still in the early portion of the file
+Line 13: Content remains straightforward
+Line 14: No special characters needed here
+Line 15: Just plain text with line numbers
+Line 16: Continuing to build up the file
+Line 17: Each line is unique due to its number
+Line 18: This makes searching easy
+Line 19: Almost at line twenty now
+Line 20: One fifth of the way through ten percent
+Line 21: Moving into the twenties
+Line 22: The file continues to grow
+Line 23: Steady progress toward 300 lines
+Line 24: Each line serves its purpose
+Line 25: Quarter of the first hundred done
+Line 26: Keeping the content simple
+Line 27: No complex formatting needed
+Line 28: Just straightforward text
+Line 29: Approaching line thirty
+Line 30: Ten percent of the file complete
+Line 31: Into the thirties now
+Line 32: The pattern continues
+Line 33: Predictable and verifiable
+Line 34: Good for testing tools
+Line 35: Line thirty-five here
+Line 36: More content follows
+Line 37: Steady and consistent
+Line 38: Building toward the goal
+Line 39: Almost at forty
+Line 40: Getting closer to fifty
+Line 41: Forty-one and counting
+Line 42: The answer to everything
+Line 43: Continuing onward
+Line 44: Forty-four lines done
+Line 45: Halfway to ninety
+Line 46: Still going strong
+Line 47: Forty-seven now
+Line 48: Almost at fifty
+Line 49: One more to go
+Line 50: Fifty lines complete - one sixth done
+Line 51: Into the second fifty
+Line 52: Progress continues
+Line 53: Fifty-three lines
+Line 54: Moving along nicely
+Line 55: Past the halfway of first hundred
+Line 56: Fifty-six and counting
+Line 57: Steady progress
+Line 58: Fifty-eight now
+Line 59: Almost at sixty
+Line 60: Sixty lines - one fifth done
+Line 61: Into the sixties
+Line 62: Continuing the pattern
+Line 63: Sixty-three lines
+Line 64: Two thirds to first hundred
+Line 65: Sixty-five now
+Line 66: Moving right along
+Line 67: Sixty-seven lines
+Line 68: Getting closer
+Line 69: Almost at seventy
+Line 70: Seventy lines complete
+Line 71: Into the seventies
+Line 72: Seventy-two lines
+Line 73: Continuing onward
+Line 74: Seventy-four now
+Line 75: Three quarters of first hundred
+Line 76: Seventy-six lines
+Line 77: Lucky seventy-seven
+Line 78: Almost at eighty
+Line 79: Seventy-nine
+Line 80: Eighty lines done
+Line 81: Into the eighties
+Line 82: Eighty-two lines
+Line 83: Continuing steadily
+Line 84: Eighty-four now
+Line 85: Eighty-five lines
+Line 86: Getting close to ninety
+Line 87: Eighty-seven
+Line 88: Eighty-eight lines
+Line 89: Almost at ninety
+Line 90: Ninety lines - almost there
+Line 91: Into the nineties
+Line 92: Ninety-two lines
+Line 93: Ninety-three now
+Line 94: Ninety-four lines
+Line 95: Ninety-five - almost done with first hundred
+Line 96: Ninety-six lines
+Line 97: Ninety-seven
+Line 98: Ninety-eight
+Line 99: Ninety-nine
+Line 100: First hundred complete!
+Line 101: Starting the second hundred
+Line 102: One hundred and two
+Line 103: Continuing the journey
+Line 104: One hundred four
+Line 105: One hundred five
+Line 106: One hundred six
+Line 107: One hundred seven
+Line 108: One hundred eight
+Line 109: One hundred nine
+Line 110: One hundred ten
+Line 111: Triple ones
+Line 112: One hundred twelve
+Line 113: One hundred thirteen
+Line 114: One hundred fourteen
+Line 115: One hundred fifteen
+Line 116: One hundred sixteen
+Line 117: One hundred seventeen
+Line 118: One hundred eighteen
+Line 119: One hundred nineteen
+Line 120: One hundred twenty
+Line 121: One hundred twenty-one
+Line 122: One hundred twenty-two
+Line 123: One hundred twenty-three
+Line 124: One hundred twenty-four
+Line 125: One hundred twenty-five
+Line 126: One hundred twenty-six
+Line 127: One hundred twenty-seven
+Line 128: One hundred twenty-eight
+Line 129: One hundred twenty-nine
+Line 130: One hundred thirty
+Line 131: One hundred thirty-one
+Line 132: One hundred thirty-two
+Line 133: One hundred thirty-three
+Line 134: One hundred thirty-four
+Line 135: One hundred thirty-five
+Line 136: One hundred thirty-six
+Line 137: One hundred thirty-seven
+Line 138: One hundred thirty-eight
+Line 139: One hundred thirty-nine
+Line 140: One hundred forty
+Line 141: One hundred forty-one
+Line 142: One hundred forty-two
+Line 143: One hundred forty-three
+Line 144: One hundred forty-four
+Line 145: One hundred forty-five
+Line 146: One hundred forty-six
+Line 147: One hundred forty-seven
+Line 148: One hundred forty-eight
+Line 149: One hundred forty-nine
+Line 150: [EDITED] Halfway through the file! - This line was modified by edit tool
+Line 151: One hundred fifty-one
+Line 152: One hundred fifty-two
+Line 153: One hundred fifty-three
+Line 154: One hundred fifty-four
+Line 155: One hundred fifty-five
+Line 156: One hundred fifty-six
+Line 157: One hundred fifty-seven
+Line 158: One hundred fifty-eight
+Line 159: One hundred fifty-nine
+Line 160: One hundred sixty
+Line 161: One hundred sixty-one
+Line 162: One hundred sixty-two
+Line 163: One hundred sixty-three
+Line 164: One hundred sixty-four
+Line 165: One hundred sixty-five
+Line 166: One hundred sixty-six
+Line 167: One hundred sixty-seven
+Line 168: One hundred sixty-eight
+Line 169: One hundred sixty-nine
+Line 170: One hundred seventy
+Line 171: One hundred seventy-one
+Line 172: One hundred seventy-two
+Line 173: One hundred seventy-three
+Line 174: One hundred seventy-four
+Line 175: One hundred seventy-five
+Line 176: One hundred seventy-six
+Line 177: One hundred seventy-seven
+Line 178: One hundred seventy-eight
+Line 179: One hundred seventy-nine
+Line 180: One hundred eighty
+Line 181: One hundred eighty-one
+Line 182: One hundred eighty-two
+Line 183: One hundred eighty-three
+Line 184: One hundred eighty-four
+Line 185: One hundred eighty-five
+Line 186: One hundred eighty-six
+Line 187: One hundred eighty-seven
+Line 188: One hundred eighty-eight
+Line 189: One hundred eighty-nine
+Line 190: One hundred ninety
+Line 191: One hundred ninety-one
+Line 192: One hundred ninety-two
+Line 193: One hundred ninety-three
+Line 194: One hundred ninety-four
+Line 195: One hundred ninety-five
+Line 196: One hundred ninety-six
+Line 197: One hundred ninety-seven
+Line 198: One hundred ninety-eight
+Line 199: One hundred ninety-nine
+Line 200: Two hundred lines complete!
+Line 201: Starting the final hundred
+Line 202: Two hundred two
+Line 203: Two hundred three
+Line 204: Two hundred four
+Line 205: Two hundred five
+Line 206: Two hundred six
+Line 207: Two hundred seven
+Line 208: Two hundred eight
+Line 209: Two hundred nine
+Line 210: Two hundred ten
+Line 211: Two hundred eleven
+Line 212: Two hundred twelve
+Line 213: Two hundred thirteen
+Line 214: Two hundred fourteen
+Line 215: Two hundred fifteen
+Line 216: Two hundred sixteen
+Line 217: Two hundred seventeen
+Line 218: Two hundred eighteen
+Line 219: Two hundred nineteen
+Line 220: Two hundred twenty
+Line 221: Two hundred twenty-one
+Line 222: Two hundred twenty-two
+Line 223: Two hundred twenty-three
+Line 224: Two hundred twenty-four
+Line 225: Two hundred twenty-five
+Line 226: Two hundred twenty-six
+Line 227: Two hundred twenty-seven
+Line 228: Two hundred twenty-eight
+Line 229: Two hundred twenty-nine
+Line 230: Two hundred thirty
+Line 231: Two hundred thirty-one
+Line 232: Two hundred thirty-two
+Line 233: Two hundred thirty-three
+Line 234: Two hundred thirty-four
+Line 235: Two hundred thirty-five
+Line 236: Two hundred thirty-six
+Line 237: Two hundred thirty-seven
+Line 238: Two hundred thirty-eight
+Line 239: Two hundred thirty-nine
+Line 240: Two hundred forty
+Line 241: Two hundred forty-one
+Line 242: Two hundred forty-two
+Line 243: Two hundred forty-three
+Line 244: Two hundred forty-four
+Line 245: Two hundred forty-five
+Line 246: Two hundred forty-six
+Line 247: Two hundred forty-seven
+Line 248: Two hundred forty-eight
+Line 249: Two hundred forty-nine
+Line 250: Two hundred fifty
+Line 251: Two hundred fifty-one
+Line 252: Two hundred fifty-two
+Line 253: Two hundred fifty-three
+Line 254: Two hundred fifty-four
+Line 255: Two hundred fifty-five
+Line 256: Two hundred fifty-six
+Line 257: Two hundred fifty-seven
+Line 258: Two hundred fifty-eight
+Line 259: Two hundred fifty-nine
+Line 260: Two hundred sixty
+Line 261: Two hundred sixty-one
+Line 262: Two hundred sixty-two
+Line 263: Two hundred sixty-three
+Line 264: Two hundred sixty-four
+Line 265: Two hundred sixty-five
+Line 266: Two hundred sixty-six
+Line 267: Two hundred sixty-seven
+Line 268: Two hundred sixty-eight
+Line 269: Two hundred sixty-nine
+Line 270: Two hundred seventy
+Line 271: Two hundred seventy-one
+Line 272: Two hundred seventy-two
+Line 273: Two hundred seventy-three
+Line 274: Two hundred seventy-four
+Line 275: Two hundred seventy-five
+Line 276: Two hundred seventy-six
+Line 277: Two hundred seventy-seven
+Line 278: Two hundred seventy-eight
+Line 279: Two hundred seventy-nine
+Line 280: Two hundred eighty
+Line 281: Two hundred eighty-one
+Line 282: Two hundred eighty-two
+Line 283: Two hundred eighty-three
+Line 284: Two hundred eighty-four
+Line 285: Two hundred eighty-five
+Line 286: Two hundred eighty-six
+Line 287: Two hundred eighty-seven
+Line 288: Two hundred eighty-eight
+Line 289: Two hundred eighty-nine
+Line 290: Two hundred ninety
+Line 291: Two hundred ninety-one
+Line 292: Two hundred ninety-two
+Line 293: Two hundred ninety-three
+Line 294: Two hundred ninety-four
+Line 295: Two hundred ninety-five
+Line 296: Two hundred ninety-six
+Line 297: Two hundred ninety-seven
+Line 298: Two hundred ninety-eight
+Line 299: Two hundred ninety-nine
+Line 300: Three hundred lines - file complete!

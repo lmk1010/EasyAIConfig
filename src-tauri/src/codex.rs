@@ -324,11 +324,12 @@ fn read_binary_version_output_with_options(candidate_path: &Path, passive: bool)
   if !candidate_path.exists() {
     return None;
   }
-  if cfg!(target_os = "windows") && passive {
+  if passive {
     return Some(None);
   }
   read_binary_version_output(candidate_path).map(Some)
 }
+
 
 fn collect_detected_binary_candidates(candidate_paths: Vec<PathBuf>, fallback_command: &str, passive: bool) -> Value {
   let mut seen = HashSet::new();
@@ -2225,9 +2226,12 @@ fn codex_candidates(passive: bool) -> Vec<PathBuf> {
   paths
 }
 
+
 pub(crate) fn find_codex_binary() -> Value {
-  find_codex_binary_with_options(false)
+  find_codex_binary_with_options(true)
 }
+
+
 
 pub(crate) fn find_codex_binary_with_options(passive: bool) -> Value {
   let mut detected = collect_detected_binary_candidates(codex_candidates(passive), "codex", passive);
@@ -3878,8 +3882,9 @@ pub(crate) fn check_setup_environment(query: &Value) -> Result<Value, String> {
   };
 
   // 3. Check codex binary
-  let codex_binary = find_codex_binary_with_options(cfg!(target_os = "windows"));
+  let codex_binary = find_codex_binary_with_options(true); // passive: don't spawn binary just to check version
   let codex_installed = codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false);
+
 
   // 4. Check config files
   let global_config_path = codex_home.join("config.toml");
@@ -3972,8 +3977,9 @@ use crate::terminal::spawn_embedded_terminal;
 /* ═══════════════  Multi-tool support  ═══════════════ */
 
 fn find_tool_binary(binary_name: &str) -> Value {
-  find_tool_binary_with_options(binary_name, false)
+  find_tool_binary_with_options(binary_name, true)
 }
+
 
 fn find_tool_binary_with_options(binary_name: &str, passive: bool) -> Value {
   apply_discovery_path_env(passive);
@@ -4019,11 +4025,12 @@ fn find_tool_binary_with_options(binary_name: &str, passive: bool) -> Value {
 }
 
 pub(crate) fn list_tools() -> Result<Value, String> {
-  let passive_windows = cfg!(target_os = "windows");
-  let codex_binary = find_codex_binary_with_options(passive_windows);
-  let claude_binary = find_tool_binary_with_options("claude", passive_windows);
-  let opencode_binary = find_tool_binary_with_options("opencode", passive_windows);
-  let openclaw_binary = find_tool_binary_with_options("openclaw", passive_windows);
+  let passive = true; // Never spawn binaries just to list tools — avoids macOS Gatekeeper popups for unsigned CLIs
+  let codex_binary = find_codex_binary_with_options(passive);
+  let claude_binary = find_tool_binary_with_options("claude", passive);
+  let opencode_binary = find_tool_binary_with_options("opencode", passive);
+  let openclaw_binary = find_tool_binary_with_options("openclaw", passive);
+
 
   Ok(json!([
     {
@@ -4344,7 +4351,8 @@ fn read_claude_telemetry_usage_for_home(home: &Path, days: i64, force_refresh: b
   }
   let calc_cost = |model: &str, input: u64, output: u64, cache_read: u64, cache_creation: u64| {
     let lower = model.to_lowercase();
-    let (pin, pout, pread, pcreate) = if lower.contains("opus") { (15.0, 75.0, 1.5, 18.75) } else if lower.contains("sonnet") { (3.0, 15.0, 0.3, 3.75) } else if lower.contains("haiku") { (0.8, 4.0, 0.08, 1.0) } else { (15.0, 75.0, 1.5, 18.75) };
+    let (pin, pout, pread, pcreate) = if lower.contains("opus") { (15.0, 75.0, 1.5, 18.75) } else if lower.contains("sonnet") { (3.0, 15.0, 0.3, 3.75) } else if lower.contains("haiku") { (0.8, 4.0, 0.08, 1.0) } else { (3.0, 15.0, 0.3, 3.75) };
+
     (input as f64 * pin + output as f64 * pout + cache_read as f64 * pread + cache_creation as f64 * pcreate) / 1_000_000.0
   };
   let mut model_map: BTreeMap<String, ModelBucket> = BTreeMap::new();
@@ -4381,14 +4389,14 @@ fn read_claude_telemetry_usage_for_home(home: &Path, days: i64, force_refresh: b
 
       let usage_key = msg.get("id").and_then(Value::as_str)
         .or_else(|| record.get("requestId").and_then(Value::as_str))
-        .or_else(|| record.get("uuid").and_then(Value::as_str))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| format!("{}:{}:{}:{}", session_id, ts_utc.timestamp_millis(), model, total));
+        .unwrap_or_else(|| format!("{}:{}:{}:{}:{}", session_id, input, output, cache_read, cache_creation));
       let replace = usage_entries.get(&usage_key).map(|entry| total >= entry.6).unwrap_or(true);
       if replace {
         usage_entries.insert(usage_key, (ts_utc, model, input, output, cache_read, cache_creation, total));
       }
+
     }
 
     if usage_entries.is_empty() { continue; }
@@ -4759,7 +4767,8 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
   let home = effective_claude_code_home()?;
   let settings_path = home.join("settings.json");
   let settings = read_json_file(&settings_path)?;
-  let binary = find_tool_binary_with_options("claude", cfg!(target_os = "windows"));
+  let binary = find_tool_binary_with_options("claude", true);
+
 
   let model = settings.get("model").and_then(Value::as_str).unwrap_or("").to_string();
   let always_thinking = settings.get("alwaysThinkingEnabled").and_then(Value::as_bool).unwrap_or(false);

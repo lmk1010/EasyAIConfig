@@ -1,4 +1,6 @@
+// touched on 2026-05-11
 import fs from 'node:fs/promises';
+
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -332,10 +334,11 @@ function windowsBinaryCandidateRank(binPath = '') {
   return 3;
 }
 
-function readBinaryVersion(binPath, { passive = false } = {}) {
+function readBinaryVersion(binPath, { passive = true } = {}) {
+
   if (!binPath) return { installed: false, version: null, path: null };
   const lower = String(binPath || '').toLowerCase();
-  if (process.platform === 'win32' && passive) {
+  if (passive) {
     return {
       installed: existsSync(binPath),
       version: null,
@@ -358,6 +361,7 @@ function readBinaryVersion(binPath, { passive = false } = {}) {
     path: binPath,
   };
 }
+
 
 function findToolBinary(toolId, options = {}) {
   const candidates = toolBinaryCandidates(toolId, options).map((candidatePath) => readBinaryVersion(candidatePath, options)).filter((item) => item.installed);
@@ -3322,7 +3326,8 @@ export async function checkSetupEnvironment({ codexHome = defaultCodexHome() } =
   const npmVersion = npmInstalled ? (npmResult.stdout || '').trim() : null;
 
   // 3. Check codex binary
-  const codexBinary = findCodexBinary({ passive: process.platform === 'win32' });
+  const codexBinary = findCodexBinary({ passive: true });
+
 
   // 4. Check config files
   const globalConfigPath = path.join(normalizedCodexHome, 'config.toml');
@@ -3390,7 +3395,8 @@ export async function loadState({ scope = 'global', projectPath = '', codexHome 
   if (implicitProvider) providers.push(implicitProvider);
   const activeProvider = providers.find((provider) => provider.isActive) || providers[0] || null;
   const login = summarizeCodexLogin(authJson);
-  const codexBinary = findCodexBinary({ passive: process.platform === 'win32' });
+  const codexBinary = findCodexBinary({ passive: true });
+
 
   return {
     appHome: appHome(),
@@ -4169,8 +4175,9 @@ async function readClaudeTelemetryUsageForHome({ days = 30, home, claudeJsonPath
     if (m.includes('opus'))   return PRICING['claude-opus-4-6'];
     if (m.includes('sonnet')) return PRICING['claude-sonnet-4-6'];
     if (m.includes('haiku'))  return PRICING['claude-haiku-4-5'];
-    return PRICING['claude-opus-4-6']; // default
+    return PRICING['claude-sonnet-4-6'];
   }
+
   function calcCost(u, model) {
     const p = matchPricing(model);
     return (u.input * p.input + u.output * p.output + u.cacheRead * p.cacheRead + u.cacheCreation * p.cacheCreate) / 1_000_000;
@@ -4231,15 +4238,16 @@ async function readClaudeTelemetryUsageForHome({ days = 30, home, claudeJsonPath
         const usageKey = buildUsageRequestKey({
           sessionKey: sessionId,
           sources: [record, msg, usage],
-          idPaths: ['requestId', 'request_id', 'request.id', 'message.requestId', 'message.request_id', 'messageId', 'message_id', 'id', 'uuid'],
+          idPaths: ['requestId', 'request_id', 'request.id', 'message.requestId', 'message.request_id', 'messageId', 'message_id', 'id'],
           parentPaths: ['conversationId', 'conversation_id', 'threadId', 'thread_id'],
-        }) || `${sessionId}:${parsedTs}:${model}:${u.input}:${u.output}:${u.cacheRead}:${u.cacheCreation}`;
+        }) || `${sessionId}:${u.input}:${u.output}:${u.cacheRead}:${u.cacheCreation}`;
         const prev = usageEntries.get(usageKey);
         if (!prev || total > prev.total || (total === prev.total && parsedTs > prev.timestamp)) {
           usageEntries.set(usageKey, { timestamp: parsedTs, model, usage: u, total });
         }
 
       }
+
 
       if (!usageEntries.size) continue;
 
