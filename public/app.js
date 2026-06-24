@@ -8751,6 +8751,89 @@ async function fetchCodexSessionDetail(sessionId, filePath) {
   if (state.activePage === 'console') renderToolConsole();
 }
 
+// 跨 CODEX_HOME 迁移会话历史：让用户挑一个源 home，把 sessions/*.jsonl 拷到当前 home。
+// 同名跳过，不删源。用 prompt + confirm 起步，避免重新搞一个 modal。
+async function runCodexSessionMigration() {
+  const listRes = await api('/api/codex/session-homes');
+  if (!listRes?.ok) {
+    flash(listRes?.error || '读取 CODEX_HOME 列表失败', 'error');
+    return;
+  }
+  const homes = Array.isArray(listRes.data?.homes) ? listRes.data.homes : [];
+  if (!homes.length) {
+    flash('没有可用的 CODEX_HOME', 'error');
+    return;
+  }
+  // 用当前 codexHomeInput 作为目标；没有就用默认
+  const currentTarget = (el('codexHomeInput')?.value || '').trim() || homes[0].codexHome || '';
+  const candidates = homes.filter((h) => h.codexHome !== currentTarget);
+  if (!candidates.length) {
+    flash('没有别的 CODEX_HOME 可以迁移（已经在用唯一的 home）', 'info');
+    return;
+  }
+  const listText = candidates.map((h, i) => `  ${i + 1}. ${h.label}  —  ${h.sessionCount} 个会话\n     ${h.codexHome}`).join('\n');
+  const picked = window.prompt(
+    `从哪个 CODEX_HOME 把会话历史复制到当前 home？\n\n目标：${currentTarget}\n\n${listText}\n\n输入序号（1-${candidates.length}），取消请清空：`,
+    '1',
+  );
+  if (!picked) return;
+  const idx = parseInt(picked, 10) - 1;
+  if (Number.isNaN(idx) || idx < 0 || idx >= candidates.length) {
+    flash('序号无效', 'error');
+    return;
+  }
+  const source = candidates[idx];
+  // 先 dry-run 看会动多少文件
+  const preview = await api('/api/codex/sessions/migrate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sourceCodexHome: source.codexHome,
+      targetCodexHome: currentTarget,
+      dryRun: true,
+    }),
+  });
+  if (!preview?.ok) {
+    flash(preview?.error || '扫描失败', 'error');
+    return;
+  }
+  const willCopy = Number(preview.data?.copied || 0);
+  const willSkip = Number(preview.data?.skipped || 0);
+  const total = Number(preview.data?.total || 0);
+  if (total === 0) {
+    flash('源 home 下没有 .jsonl 会话文件', 'info');
+    return;
+  }
+  if (willCopy === 0) {
+    flash(`所有 ${total} 个会话目标都已存在，无需复制`, 'info');
+    return;
+  }
+  const ok = window.confirm(
+    `准备从「${source.label}」复制 ${willCopy} 个新会话到当前 CODEX_HOME（${willSkip} 个同名跳过）。\n\n源会话**不会**被删除，是 copy 不是 move。\n\n继续？`,
+  );
+  if (!ok) return;
+  const result = await api('/api/codex/sessions/migrate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sourceCodexHome: source.codexHome,
+      targetCodexHome: currentTarget,
+      dryRun: false,
+    }),
+  });
+  if (!result?.ok) {
+    flash(result?.error || '迁移失败', 'error');
+    return;
+  }
+  const copied = Number(result.data?.copied || 0);
+  const skipped = Number(result.data?.skipped || 0);
+  const errCount = (Array.isArray(result.data?.errors) ? result.data.errors.length : 0);
+  flash(`已迁移：复制 ${copied} 个 · 跳过 ${skipped} 个${errCount ? ` · 失败 ${errCount} 个` : ''}`, errCount ? 'warning' : 'success');
+  // 拿到新文件后立刻刷新会话列表
+  window.__consoleV3.codexStats = null;
+  loadConsoleCodexStats();
+}
+
 async function loadConsoleCodexStats() {
   try {
     const res = await api('/api/codex/session-stats', { method: 'GET' });
@@ -9455,7 +9538,8 @@ function renderConsoleV3Usage(tool) {
         }).join('')}
       </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
 
-    const refreshUsage = '<button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>';
+    const refreshUsage = '<button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>'
+      + ' <button type="button" class="cv3-link-btn" data-codex-sessions-migrate>迁移历史</button>';
     el.innerHTML = `
       ${cv3SectionHead(CV3_ICONS.clock, '本地会话', { extras: refreshUsage })}
       <div class="cv3-usage-grid">
@@ -20228,6 +20312,10 @@ function bindEvents() {
         const tool = state.consoleTool || 'codex';
         if (tool === 'claudecode') { window.__consoleV3.claudeUsage = null; loadConsoleClaudeUsage(); }
         else if (tool === 'codex') { window.__consoleV3.codexStats = null; loadConsoleCodexStats(); }
+        return;
+      }
+      if (t.closest('[data-codex-sessions-migrate]')) {
+        runCodexSessionMigration().catch((err) => console.warn('[codex-migrate] failed', err));
         return;
       }
       // 点击会话行：展开/收起。Codex 还会去 fetch 详细事件。

@@ -3343,6 +3343,130 @@ fn add_codex_usage_totals(target: &mut CodexUsageTotals, usage: &Value) {
   target.total += codex_usage_num(usage.get("total_tokens"));
 }
 
+/// 把 source/sessions/ 下的所有 .jsonl 会话拷贝到 target/sessions/。
+/// 同名文件跳过（不覆盖），不删源。返回各类计数 + 失败明细。
+///
+/// 典型场景：用户在 ~/.codex（默认 home）下面跑了一段时间，攒了一堆 sessions/；
+/// 后来切到某个 OAuth profile (CODEX_HOME = ~/.codex-config-ui/codex-oauth-profiles/prof_xxx)
+/// 之后那些老 session 就看不见了。这个 fn 把老 home 的 jsonl 复制一份到新 home，
+/// 这样 codex resume / dashboard / 控制台都能看到。
+pub(crate) fn migrate_codex_sessions(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let source_input = get_string(&object, "sourceCodexHome");
+  let target_input = get_string(&object, "targetCodexHome");
+  let dry_run = object.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+  let source = expand_home_path(&source_input).ok_or_else(|| "sourceCodexHome 不能为空".to_string())?;
+  let target = expand_home_path(&target_input).ok_or_else(|| "targetCodexHome 不能为空".to_string())?;
+  if source == target {
+    return Err("源和目标是同一个 CODEX_HOME，无需迁移".to_string());
+  }
+  let source_sessions = source.join("sessions");
+  if !source_sessions.exists() {
+    return Err(format!("源 home 下没有 sessions/ 目录：{}", source_sessions.to_string_lossy()));
+  }
+  let target_sessions = target.join("sessions");
+  if !dry_run {
+    ensure_dir(&target_sessions)?;
+  }
+
+  let files = list_jsonl_files(&source_sessions);
+  let total = files.len();
+  let mut copied = 0usize;
+  let mut skipped = 0usize;
+  let mut errors: Vec<Value> = Vec::new();
+
+  for src_path in files.iter() {
+    let rel = match src_path.strip_prefix(&source_sessions) {
+      Ok(p) => p.to_path_buf(),
+      Err(_) => {
+        errors.push(json!({ "path": src_path.to_string_lossy().to_string(), "error": "无法计算相对路径" }));
+        continue;
+      }
+    };
+    let dst_path = target_sessions.join(&rel);
+    if dst_path.exists() {
+      skipped += 1;
+      continue;
+    }
+    if dry_run {
+      copied += 1;
+      continue;
+    }
+    if let Some(parent) = dst_path.parent() {
+      if let Err(error) = ensure_dir(parent) {
+        errors.push(json!({ "path": src_path.to_string_lossy().to_string(), "error": error }));
+        continue;
+      }
+    }
+    match fs::copy(src_path, &dst_path) {
+      Ok(_) => copied += 1,
+      Err(error) => errors.push(json!({
+        "path": src_path.to_string_lossy().to_string(),
+        "error": error.to_string(),
+      })),
+    }
+  }
+
+  Ok(json!({
+    "ok": true,
+    "dryRun": dry_run,
+    "source": source_sessions.to_string_lossy().to_string(),
+    "target": target_sessions.to_string_lossy().to_string(),
+    "total": total,
+    "copied": copied,
+    "skipped": skipped,
+    "errors": errors,
+  }))
+}
+
+/// 列出 UI 可挑的所有 CODEX_HOME（默认 ~/.codex + 每个 OAuth profile）。
+/// 每条带：标签、路径、sessions 数（用于挑源时给个直观提示）。
+pub(crate) fn list_codex_session_homes(_query: &Value) -> Result<Value, String> {
+  let mut entries: Vec<Value> = Vec::new();
+
+  let default_home = default_codex_home()?;
+  let default_sessions = default_home.join("sessions");
+  let default_count = if default_sessions.exists() {
+    list_jsonl_files(&default_sessions).len()
+  } else {
+    0
+  };
+  entries.push(json!({
+    "id": "__default__",
+    "label": "默认（~/.codex）",
+    "codexHome": default_home.to_string_lossy().to_string(),
+    "sessionCount": default_count,
+    "isDefault": true,
+  }));
+
+  let profiles_state = crate::oauth_profiles::list_oauth_profiles(&json!({}))
+    .unwrap_or_else(|_| json!({ "profiles": [] }));
+  if let Some(profiles) = profiles_state.get("profiles").and_then(Value::as_array) {
+    for profile in profiles {
+      let id = profile.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+      if id.is_empty() { continue; }
+      let codex_home = profile.get("codexHome").and_then(Value::as_str).unwrap_or("").to_string();
+      if codex_home.is_empty() { continue; }
+      let sessions = PathBuf::from(&codex_home).join("sessions");
+      let count = if sessions.exists() { list_jsonl_files(&sessions).len() } else { 0 };
+      let label = profile.get("name").and_then(Value::as_str).unwrap_or("")
+        .to_string();
+      let email = profile.get("email").and_then(Value::as_str).unwrap_or("").to_string();
+      let display = if !label.is_empty() { label } else if !email.is_empty() { email } else { id.clone() };
+      entries.push(json!({
+        "id": format!("oauth:{}", id),
+        "label": format!("OAuth · {}", display),
+        "codexHome": codex_home,
+        "sessionCount": count,
+        "profileId": id,
+        "isDefault": false,
+      }));
+    }
+  }
+
+  Ok(json!({ "homes": entries }))
+}
+
 fn list_jsonl_files(root: &Path) -> Vec<PathBuf> {
   let mut result = Vec::new();
   let mut stack = vec![root.to_path_buf()];

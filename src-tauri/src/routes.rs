@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use crate::codex::{
   check_setup_environment, codex_npm_action, get_codex_release_info, launch_codex,
   login_codex, get_codex_usage_metrics, list_codex_sessions, get_codex_session_detail,
+  list_codex_session_homes, migrate_codex_sessions,
   resume_codex_session, fork_codex_session, export_codex_session,
   get_codex_app_state, install_codex_app, open_codex_app,
   list_tools, load_claudecode_state, save_claudecode_config, save_claudecode_raw_config,
@@ -83,6 +84,8 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/codex/resume", "POST") => resume_codex_session(body),
     ("/api/codex/fork", "POST") => fork_codex_session(body),
     ("/api/codex/session-export", "POST") => export_codex_session(body),
+    ("/api/codex/session-homes", "GET") => list_codex_session_homes(query),
+    ("/api/codex/sessions/migrate", "POST") => migrate_codex_sessions(body),
     ("/api/dashboard/codex-usage", "GET") => get_codex_usage_metrics(query),
     ("/api/codex-app/state", "GET") => get_codex_app_state(),
     ("/api/codex-app/install", "POST") => install_codex_app(body),
