@@ -10466,15 +10466,25 @@ function refreshRawCodeEditors() {
 function switchConfigEditorView(view) {
   const layout = el('configEditorLayout');
   if (!layout) return;
-  // Update toggle buttons
   document.querySelectorAll('.cfg-view-icon').forEach(b => {
     b.classList.toggle('active', b.dataset.cfgView === view);
   });
-  // Apply view mode
   layout.dataset.viewMode = view;
   closeCfg3Drawer();
   syncConfigEditorShellView(view);
   refreshRawCodeEditors();
+  // 表单视图：默认网格态；非表单（原始文件等）：把网格 + 返回头藏掉
+  const grid = document.getElementById('cfgGrid');
+  const subhead = document.getElementById('cfgSubhead');
+  if (view === 'form') {
+    exitCfgSubpage();
+  } else {
+    if (grid) grid.classList.add('hide');
+    if (subhead) subhead.classList.add('hide');
+    document.querySelectorAll('.config-editor-main details.cfg-section').forEach((p) => {
+      p.classList.remove('cfg-sec-hidden', 'cfg-sec-active');
+    });
+  }
 }
 
 // Expose to global scope for onclick attributes (script is type="module")
@@ -12298,10 +12308,13 @@ function enterCfgSubpage(sectionId) {
   const sec = document.getElementById(sectionId);
   if (!sec) return;
   const tool = sec.closest('.config-editor-main')?.dataset?.toolEditor || '';
-  // 折回同 tool 下所有 section，只 open 这一节
+  // 同 tool 下所有 section：只让点中的那一节显示并展开，其他全藏
   const peers = sec.parentElement?.querySelectorAll(':scope > details.cfg-section') || [];
-  peers.forEach((p) => { p.open = (p === sec); p.classList.toggle('cfg-sec-active', p === sec); p.classList.toggle('cfg-sec-hidden', p !== sec); });
-  // 隐藏网格 + 显示返回 head
+  peers.forEach((p) => {
+    p.open = (p === sec);
+    p.classList.toggle('cfg-sec-active', p === sec);
+    p.classList.toggle('cfg-sec-hidden', p !== sec);
+  });
   document.getElementById('cfgGrid')?.classList.add('hide');
   const subhead = document.getElementById('cfgSubhead');
   const crumb = document.getElementById('cfgSubCrumb');
@@ -12311,14 +12324,14 @@ function enterCfgSubpage(sectionId) {
     const title = (head?.textContent || '').replace(/\s+/g, ' ').trim().split(/[·：:|]/)[0].trim() || '配置';
     crumb.innerHTML = `${escapeHtml(TOOL_LABELS[tool] || tool)} <em>/</em> <strong>${escapeHtml(title)}</strong>`;
   }
-  // 滚到顶
   sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function exitCfgSubpage() {
-  // 恢复所有 section（取消独占），重新显示网格
+  // 默认网格态：所有 section 一律隐藏 + 折叠；显示卡片网格、藏返回 head
   document.querySelectorAll('.config-editor-main details.cfg-section').forEach((p) => {
-    p.classList.remove('cfg-sec-active', 'cfg-sec-hidden');
+    p.classList.add('cfg-sec-hidden');
+    p.classList.remove('cfg-sec-active');
     p.open = false;
   });
   document.getElementById('cfgGrid')?.classList.remove('hide');
