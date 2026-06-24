@@ -85,6 +85,9 @@ const state = {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return null;
     return { from, to };
   })(),
+  // 周期下拉 + 日历 picker 的临时状态（不持久化）
+  dashboardPeriodOpen: false,
+  rangePicker: null, // { viewMonth, fromDraft, toDraft }
   dashboardMetrics: { codex: null, opencode: null },
   dashboardLoading: false,
   dashboardRefreshing: false,
@@ -6510,6 +6513,87 @@ function getDashboardWindow() {
   };
 }
 
+// ─── 自定义日期范围 picker ──────────────────────────────
+// 打开下拉时按当前 dashboardRange / window 给 picker 初始化
+function ensureRangePicker() {
+  if (state.rangePicker) return;
+  const win = getDashboardWindow();
+  state.rangePicker = {
+    viewMonth: (state.dashboardRange?.to || win.to).slice(0, 7),
+    fromDraft: state.dashboardRange?.from || '',
+    toDraft: state.dashboardRange?.to || '',
+  };
+}
+
+function shiftMonth(viewMonth, delta) {
+  const [y, m] = viewMonth.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1 + delta, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function renderRangePickerPanel() {
+  ensureRangePicker();
+  const { viewMonth, fromDraft, toDraft } = state.rangePicker;
+  const [year, month] = viewMonth.split('-').map(Number);
+  const monthIdx = month - 1;
+  const firstWeekday = new Date(Date.UTC(year, monthIdx, 1)).getUTCDay(); // 0=Sun
+  const lastDate = new Date(Date.UTC(year, monthIdx + 1, 0)).getUTCDate();
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) {
+    cells.push('<div class="db2-range-cell is-empty"></div>');
+  }
+  for (let d = 1; d <= lastDate; d++) {
+    const ds = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const isFuture = ds > todayStr;
+    const isToday = ds === todayStr;
+    const isFrom = ds === fromDraft;
+    const isTo = ds === toDraft;
+    const inRange = fromDraft && toDraft && ds > fromDraft && ds < toDraft;
+    const cls = [
+      'db2-range-cell',
+      isFuture ? 'is-disabled' : '',
+      isToday ? 'is-today' : '',
+      (isFrom || isTo) ? 'is-selected' : '',
+      isFrom ? 'is-start' : '',
+      isTo ? 'is-end' : '',
+      inRange ? 'is-in-range' : '',
+    ].filter(Boolean).join(' ');
+    cells.push(`<button type="button" class="${cls}" data-range-day="${ds}" ${isFuture ? 'disabled' : ''}>${d}</button>`);
+  }
+
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六']
+    .map((w) => `<div class="db2-range-wkd">${w}</div>`).join('');
+
+  const preview = fromDraft && toDraft
+    ? `${fromDraft} → ${toDraft} · 共 ${Math.round((Date.parse(toDraft + 'T00:00:00Z') - Date.parse(fromDraft + 'T00:00:00Z')) / 86400000) + 1} 天`
+    : fromDraft
+      ? `${fromDraft} → <em>请选结束日期</em>`
+      : '<em>点击选择起始日期</em>';
+
+  const canApply = fromDraft && toDraft;
+  return `
+    <div class="db2-range-picker" data-period-custom>
+      <div class="db2-range-head">
+        <button type="button" class="db2-range-nav" data-range-nav="prev" aria-label="上个月">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6.5 1.5L3 5l3.5 3.5"/></svg>
+        </button>
+        <span class="db2-range-title">${year} 年 ${String(month).padStart(2, '0')} 月</span>
+        <button type="button" class="db2-range-nav" data-range-nav="next" aria-label="下个月">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3.5 1.5L7 5l-3.5 3.5"/></svg>
+        </button>
+      </div>
+      <div class="db2-range-wkds">${weekdays}</div>
+      <div class="db2-range-grid">${cells.join('')}</div>
+      <div class="db2-range-preview">${preview}</div>
+      <div class="db2-range-actions">
+        <button type="button" class="db2-range-reset" data-range-reset>清空</button>
+        <button type="button" class="db2-range-apply" data-range-apply ${canApply ? '' : 'disabled'}>应用</button>
+      </div>
+    </div>`;
+}
+
 // 用主模型单价 + 当日 token 分布直算一段时间的费用。返回 USD。
 // dailyItems: [{ input, output, reasoning?, cachedInput|cacheRead|cached, cacheCreation? }]
 // models: 已按 totals.total 降序排的 model 列表（首项视为窗口主模型，给出单价）
@@ -7269,24 +7353,18 @@ function renderDashboardPage() {
         <div class="db3-toolbar-actions">
           ${dashboardTool === 'claudecode' ? renderClaudeScopeDropdown() : ''}
           <span class="db2-period-wrap">
-            <div class="db2-period-dropdown" data-period-dropdown>
-              <button type="button" class="db2-period-trigger" data-period-trigger>${escapeHtml(winLabel.includes('~') ? winLabel : winLabel)} <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
+            <div class="db2-period-dropdown ${state.dashboardPeriodOpen ? 'open' : ''}" data-period-dropdown>
+              <button type="button" class="db2-period-trigger" data-period-trigger>${escapeHtml(winLabel)} <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
               <div class="db2-period-menu" data-period-menu>
-                ${[7, 14, 30, 90, 180, 365].map((d) => {
-                  const labels = { 7: '7 天', 14: '14 天', 30: '30 天', 90: '近 3 个月', 180: '近半年', 365: '近一年' };
-                  const isActive = !state.dashboardRange && state.dashboardDays === d;
-                  return `<div class="db2-period-option ${isActive ? 'active' : ''}" data-dashboard-days="${d}">${labels[d]}</div>`;
-                }).join('')}
-                <div class="db2-period-divider"></div>
-                <div class="db2-period-custom" data-period-custom>
-                  <div class="db2-period-custom-label">自定义日期</div>
-                  <div class="db2-period-custom-inputs">
-                    <input type="date" data-dashboard-range-from value="${winFrom}" max="${winTo}" />
-                    <span>—</span>
-                    <input type="date" data-dashboard-range-to value="${winTo}" max="${new Date().toISOString().slice(0, 10)}" />
-                  </div>
-                  <button type="button" class="db2-period-custom-apply" data-dashboard-range-apply>应用</button>
+                <div class="db2-period-presets">
+                  ${[7, 14, 30, 90, 180, 365].map((d) => {
+                    const labels = { 7: '7 天', 14: '14 天', 30: '30 天', 90: '近 3 个月', 180: '近半年', 365: '近一年' };
+                    const isActive = !state.dashboardRange && state.dashboardDays === d;
+                    return `<button type="button" class="db2-period-option ${isActive ? 'active' : ''}" data-dashboard-days="${d}">${labels[d]}</button>`;
+                  }).join('')}
                 </div>
+                <div class="db2-period-divider"></div>
+                ${renderRangePickerPanel()}
               </div>
             </div>
           </span>
@@ -20065,23 +20143,26 @@ function bindEvents() {
       renderDashboardPage();
       return;
     }
-    // Custom period dropdown trigger
+    // 周期触发器：打开/关闭下拉，open 时初始化 picker 草稿
     const periodTrigger = e.target.closest('[data-period-trigger]');
     if (periodTrigger) {
-      const dropdown = periodTrigger.closest('[data-period-dropdown]');
-      if (dropdown) dropdown.classList.toggle('open');
+      state.dashboardPeriodOpen = !state.dashboardPeriodOpen;
+      if (state.dashboardPeriodOpen) {
+        state.rangePicker = null; // 每次打开都按最新 dashboardRange 重置草稿
+        ensureRangePicker();
+      }
+      renderDashboardPage();
       return;
     }
     const daysPill = e.target.closest('[data-dashboard-days]');
     if (daysPill) {
       state.dashboardDays = Number(daysPill.dataset.dashboardDays) || 30;
       localStorage.setItem('easyaiconfig_dashboard_days', String(state.dashboardDays));
-      // 选了预设档就清掉自定义日期范围
+      // 选了预设档就清掉自定义日期范围 + 关菜单
       state.dashboardRange = null;
       localStorage.removeItem('easyaiconfig_dashboard_range');
-      const dropdown = daysPill.closest('[data-period-dropdown]');
-      if (dropdown) dropdown.classList.remove('open');
-      // 区间扩大可能需要后端重新拉数据
+      state.dashboardPeriodOpen = false;
+      state.rangePicker = null;
       if (state.dashboardTool === 'claudecode') {
         ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
       } else {
@@ -20090,22 +20171,62 @@ function bindEvents() {
       renderDashboardPage();
       return;
     }
-    // 自定义日期 - 应用
-    const rangeApply = e.target.closest('[data-dashboard-range-apply]');
+    // 日历 - 上/下月翻页
+    const rangeNav = e.target.closest('[data-range-nav]');
+    if (rangeNav) {
+      ensureRangePicker();
+      state.rangePicker.viewMonth = shiftMonth(state.rangePicker.viewMonth, rangeNav.dataset.rangeNav === 'next' ? 1 : -1);
+      renderDashboardPage();
+      return;
+    }
+    // 日历 - 点 day
+    const rangeDay = e.target.closest('[data-range-day]');
+    if (rangeDay) {
+      ensureRangePicker();
+      const day = rangeDay.dataset.rangeDay;
+      const rp = state.rangePicker;
+      // 状态机：
+      //   - 没起点 → 设起点
+      //   - 有起点没终点 → 比起点大设终点，比起点小则把它当成新起点
+      //   - 起点终点都有 → 视为重新选起点
+      if (!rp.fromDraft) {
+        rp.fromDraft = day;
+        rp.toDraft = '';
+      } else if (rp.fromDraft && !rp.toDraft) {
+        if (day < rp.fromDraft) {
+          rp.toDraft = rp.fromDraft;
+          rp.fromDraft = day;
+        } else {
+          rp.toDraft = day;
+        }
+      } else {
+        rp.fromDraft = day;
+        rp.toDraft = '';
+      }
+      renderDashboardPage();
+      return;
+    }
+    // 日历 - 清空草稿
+    if (e.target.closest('[data-range-reset]')) {
+      ensureRangePicker();
+      state.rangePicker.fromDraft = '';
+      state.rangePicker.toDraft = '';
+      renderDashboardPage();
+      return;
+    }
+    // 日历 - 应用
+    const rangeApply = e.target.closest('[data-range-apply]');
     if (rangeApply) {
-      const wrap = rangeApply.closest('[data-period-custom]');
-      const fromInput = wrap?.querySelector('[data-dashboard-range-from]');
-      const toInput = wrap?.querySelector('[data-dashboard-range-to]');
-      const from = String(fromInput?.value || '').trim();
-      const to = String(toInput?.value || '').trim();
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
-        flash('请填写有效的起止日期', 'error');
+      ensureRangePicker();
+      const { fromDraft, toDraft } = state.rangePicker;
+      if (!fromDraft || !toDraft) {
+        flash('请先选完起止日期', 'error');
         return;
       }
-      state.dashboardRange = { from, to };
-      localStorage.setItem('easyaiconfig_dashboard_range', `${from}|${to}`);
-      const dropdown = rangeApply.closest('[data-period-dropdown]');
-      if (dropdown) dropdown.classList.remove('open');
+      state.dashboardRange = { from: fromDraft, to: toDraft };
+      localStorage.setItem('easyaiconfig_dashboard_range', `${fromDraft}|${toDraft}`);
+      state.dashboardPeriodOpen = false;
+      state.rangePicker = null;
       if (state.dashboardTool === 'claudecode') {
         ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
       } else {
@@ -20114,9 +20235,15 @@ function bindEvents() {
       renderDashboardPage();
       return;
     }
-    // 点 picker 自身别冒泡到关闭下拉
-    if (e.target.closest('[data-period-custom]')) {
+    // 点菜单/日历本体别冒泡到外部关闭
+    if (e.target.closest('[data-period-menu]')) {
       return;
+    }
+    // 点外部 → 关菜单
+    if (state.dashboardPeriodOpen) {
+      state.dashboardPeriodOpen = false;
+      state.rangePicker = null;
+      renderDashboardPage();
     }
     const refreshBtn = e.target.closest('[data-dashboard-refresh]');
     if (refreshBtn) {
