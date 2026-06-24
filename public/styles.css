@@ -19636,7 +19636,9 @@ body {
 /* ── Auto-detect frequency (borderless trigger + floating glass menu) ── */
 .shell-v2 .ch-autodetect {
   position: relative;
-  padding-bottom: 10px; /* align with ribbon item bottom padding */
+  /* 跟 .ch-ribbon-item 的 padding 完全一致 (10/0/12)，确保文字基线水平对齐 */
+  padding: 10px 0 12px;
+  display: inline-flex; align-items: center;
 }
 
 .shell-v2 .ch-autodetect-trigger {
@@ -25020,7 +25022,17 @@ body {
 
 /* ─── Auto Failover trigger + popover ─────────────────────────── */
 .shell-v2 .ch-autodetect.af-trig,
-.shell-v2 #chAutoFailoverTrigger { background: transparent !important; }
+.shell-v2 #chAutoFailoverTrigger {
+  background: transparent !important;
+  /* 跟左侧 ribbon item 的 10px 0 12px padding 对齐到同一基线，
+     避免 "自动检测 / 自动切换" 视觉上比 全部/官方/API Key 高一截 */
+  padding: 10px 0 12px !important;
+  height: auto !important;
+  min-height: 0 !important;
+  align-self: stretch;
+}
+/* autodetect 包了 padding，里面的 trigger 不再自加 padding */
+.shell-v2 .ch-autodetect .ch-autodetect-trigger { padding: 0 !important; }
 .shell-v2 #chAutoFailoverTrigger.is-on { color: #8dbdff !important; }
 .shell-v2 #chAutoFailoverTrigger.is-on .af-trig-label { color: #8dbdff !important; }
 [data-theme="light"] .shell-v2 #chAutoFailoverTrigger.is-on,
