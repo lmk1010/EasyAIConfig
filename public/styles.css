@@ -16228,9 +16228,13 @@ button.about-link-card {
   display: none;
   position: absolute;
   top: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  min-width: 68px;
+  /* 触发器在 toolbar 右侧，菜单对齐到触发器右边缘向左展开，
+     避免画到屏幕右边外面。带自定义日期 picker 至少 240px 才装得下两个 date input。*/
+  right: 0;
+  left: auto;
+  transform: none;
+  min-width: 248px;
+  white-space: nowrap;
   background: rgba(30, 41, 59, 0.95);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -16241,8 +16245,8 @@ button.about-link-card {
   animation: db2MenuIn 100ms ease;
 }
 @keyframes db2MenuIn {
-  from { opacity: 0; transform: translateX(-50%) translateY(-3px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .db2-period-dropdown.open .db2-period-menu {
   display: block;
@@ -22459,9 +22463,12 @@ body {
 }
 
 .shell-v2 .dashboard-shell .db2-period-menu {
-  left: 0;
+  /* 触发器靠右，菜单也对齐右边缘向左展开。
+     自定义日期 picker 两个 date input 至少需要 250px 宽。 */
+  left: auto;
+  right: 0;
   transform: none;
-  min-width: 92px;
+  min-width: 260px;
 }
 
 .shell-v2 .dashboard-shell .dashboard-refresh-btn {
