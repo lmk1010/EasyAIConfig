@@ -21271,37 +21271,26 @@ loadTools();
       const cmd = buildCodexLaunchCommand({ codexHome, isOauth, flags: preset.flags, isWindows, withPrefix });
       const danger = preset.danger ? ' is-danger' : '';
       return `
-        <div class="ch-cmd-row${danger}" data-cmd-idx="${idx}">
+        <div class="ch-cmd-row${danger}">
           <div class="ch-cmd-meta">
-            <div class="ch-cmd-title">${safeEscape(preset.title)}${preset.danger ? ' <span class="ch-cmd-warn">⚠</span>' : ''}</div>
+            <div class="ch-cmd-title">${safeEscape(preset.title)}${preset.danger ? '<span class="ch-cmd-warn">⚠</span>' : ''}</div>
             <div class="ch-cmd-desc">${safeEscape(preset.desc)}</div>
           </div>
-          <div class="ch-cmd-line"><code>${safeEscape(cmd)}</code></div>
-          <button type="button" class="ch-cmd-copy" data-codex-cmd-copy="${idx}" title="复制命令">
+          <code class="ch-cmd-line">${safeEscape(cmd)}</code>
+          <button type="button" class="ch-cmd-copy" data-codex-cmd-copy="${idx}" title="复制">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="9" height="9" rx="1.5"/><path d="M11 4V2.5A1 1 0 0 0 10 1.5H3.5A1 1 0 0 0 2.5 2.5V10A1 1 0 0 0 3.5 11h1.5"/></svg>
-            复制
           </button>
         </div>
       `;
     }).join('');
-    // 切到 OAuth profile 或者 codexHome 不是默认 ~/.codex 时，强烈建议带前缀；
-    // 普通 ~/.codex + API key 场景下其实直接 `codex --flags` 就行。
-    const prefixHint = withPrefix
-      ? (isOauth
-        ? '安全前缀已开：避免 shell 残留的 <code>OPENAI_API_KEY</code> 顶掉 OAuth tokens。'
-        : '安全前缀已开：内联 <code>CODEX_HOME</code>，便于多账号切换。')
-      : '默认输出最短命令。点开"安全前缀"自动加上 <code>unset OPENAI_API_KEY</code> / <code>CODEX_HOME=...</code>。';
     return `
       <div class="ch-cmd-palette ${state.codexCmdPaletteOpen ? 'open' : ''}">
         <div class="ch-cmd-palette-head">
-          <div class="ch-cmd-palette-title-wrap">
-            <span class="ch-cmd-palette-title">复制启动命令</span>
-            <label class="ch-cmd-prefix-toggle">
-              <input type="checkbox" data-codex-cmd-prefix-toggle ${withPrefix ? 'checked' : ''} />
-              <span>安全前缀（多账号 / 环境残留时打开）</span>
-            </label>
-          </div>
-          <span class="ch-cmd-palette-hint">${prefixHint}</span>
+          <span class="ch-cmd-palette-title">启动命令</span>
+          <label class="ch-cmd-prefix-toggle" title="多账号或 shell 有 OPENAI_API_KEY 残留时打开">
+            <input type="checkbox" data-codex-cmd-prefix-toggle ${withPrefix ? 'checked' : ''} />
+            <span>含环境前缀</span>
+          </label>
         </div>
         <div class="ch-cmd-list">${items}</div>
       </div>`;
@@ -22655,19 +22644,11 @@ loadTools();
       }
       const add = target.closest('[data-ch-add]');
       if (add) { openSlideover('add'); return; }
-      // Codex 启动命令面板开/关
+      // Codex 启动命令面板开/关（"安全前缀"无论 OAuth/API 默认都关，
+      // 用户自己点上去才补 unset / CODEX_HOME）
       const cmdToggle = target.closest('[data-ch-cmd-toggle]');
       if (cmdToggle) {
-        const opening = !state.codexCmdPaletteOpen;
-        state.codexCmdPaletteOpen = opening;
-        if (opening) {
-          // 首次打开时按当前 active 给一个合理的默认：
-          //   - OAuth profile（自带非默认 CODEX_HOME）→ 默认 ON（多账号必需）
-          //   - 其他情况 → 默认 OFF，输出最短命令
-          const rowsForDefault = buildProviderRows(hubState()?.activeTool || 'codex');
-          const activeForDefault = rowsForDefault.find((r) => r.isActive);
-          state.codexCmdShowPrefix = Boolean(activeForDefault && activeForDefault.mode === 'oauth' && activeForDefault.homePath);
-        }
+        state.codexCmdPaletteOpen = !state.codexCmdPaletteOpen;
         const heroEl = document.getElementById('chHero');
         if (heroEl) {
           const rows = buildProviderRows(hubState()?.activeTool || 'codex');

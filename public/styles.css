@@ -19066,139 +19066,104 @@ body {
   z-index: 1;
 }
 
-/* ── Codex 启动命令面板 ── */
+/* ── Codex 启动命令面板（紧凑版） ── */
 .shell-v2 .ch-cmd-palette {
   grid-column: 1 / -1;
-  margin-top: 14px;
+  margin-top: 10px;
   padding: 0;
   max-height: 0;
   opacity: 0;
   overflow: hidden;
-  transition: max-height 220ms ease, opacity 200ms ease, padding 200ms ease;
+  transition: max-height 200ms ease, opacity 180ms ease, padding 180ms ease;
   border-top: 1px solid rgba(255,255,255,0.06);
-  display: grid;
-  gap: 0;
 }
-.shell-v2 .ch-cmd-palette.open {
-  max-height: 760px;
-  opacity: 1;
-  padding: 16px 0 6px;
-}
+.shell-v2 .ch-cmd-palette.open { max-height: 620px; opacity: 1; padding: 12px 0 4px; }
 [data-theme="light"] .shell-v2 .ch-cmd-palette { border-top-color: rgba(15,23,42,0.07); }
 
 .shell-v2 .ch-cmd-palette-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 12px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px;
 }
-.shell-v2 .ch-cmd-palette-title-wrap { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .shell-v2 .ch-cmd-palette-title {
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--s2-text);
+  font-size: 0.62rem; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--s2-faint);
 }
 .shell-v2 .ch-cmd-prefix-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  font-size: 0.65rem;
-  color: var(--s2-muted);
-  cursor: pointer;
-  user-select: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  font-size: 0.62rem; font-weight: 550;
+  color: var(--s2-muted); cursor: pointer; user-select: none;
   transition: background 100ms, color 100ms;
 }
-.shell-v2 .ch-cmd-prefix-toggle:hover { background: rgba(91,140,255,0.1); color: var(--s2-text); }
-.shell-v2 .ch-cmd-prefix-toggle input { accent-color: #5b8cff; width: 13px; height: 13px; cursor: pointer; }
-.shell-v2 .ch-cmd-prefix-toggle:has(input:checked) { background: rgba(91,140,255,0.16); border-color: rgba(91,140,255,0.4); color: #8dbdff; }
-[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle { background: rgba(15,23,42,0.04); border-color: rgba(15,23,42,0.08); color: rgba(15,23,42,0.55); }
-[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle:hover { background: rgba(91,140,255,0.12); color: #1e293b; }
-[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle:has(input:checked) { background: rgba(91,140,255,0.14); color: #3358ff; }
-.shell-v2 .ch-cmd-palette-hint {
-  font-size: 0.65rem;
-  color: var(--s2-faint);
-  line-height: 1.55;
-  max-width: 40%;
-  text-align: right;
-}
-.shell-v2 .ch-cmd-palette-hint code {
-  font-family: var(--font-mono-ui);
-  font-size: 0.62rem;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: rgba(91,140,255,0.1);
+.shell-v2 .ch-cmd-prefix-toggle:hover { background: rgba(91,140,255,0.08); color: var(--s2-text); }
+.shell-v2 .ch-cmd-prefix-toggle input { accent-color: #5b8cff; width: 12px; height: 12px; margin: 0; cursor: pointer; }
+.shell-v2 .ch-cmd-prefix-toggle:has(input:checked) {
+  background: rgba(91,140,255,0.14);
+  border-color: rgba(91,140,255,0.4);
   color: #8dbdff;
 }
-[data-theme="light"] .shell-v2 .ch-cmd-palette-hint code { background: rgba(91,140,255,0.12); color: #3358ff; }
+[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle { border-color: rgba(15,23,42,0.12); color: rgba(15,23,42,0.55); }
+[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle:hover { background: rgba(91,140,255,0.1); color: #1e293b; }
+[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle:has(input:checked) { background: rgba(91,140,255,0.14); color: #3358ff; border-color: rgba(91,140,255,0.4); }
 
-.shell-v2 .ch-cmd-list {
-  display: grid;
-  gap: 6px;
-}
+.shell-v2 .ch-cmd-list { display: grid; gap: 4px; }
 .shell-v2 .ch-cmd-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) minmax(0, 2fr) auto;
-  gap: 14px;
-  align-items: center;
-  padding: 11px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.05);
-  background: rgba(255,255,255,0.018);
-  transition: background 120ms, border-color 120ms;
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr) 28px;
+  gap: 12px; align-items: center;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  transition: background 100ms, border-color 100ms;
 }
-.shell-v2 .ch-cmd-row:hover { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.08); }
-.shell-v2 .ch-cmd-row.is-danger { border-color: rgba(248,113,113,0.25); background: rgba(248,113,113,0.04); }
+.shell-v2 .ch-cmd-row:hover { background: rgba(91,140,255,0.06); border-color: rgba(91,140,255,0.15); }
+.shell-v2 .ch-cmd-row.is-danger { border-color: rgba(248,113,113,0.2); background: rgba(248,113,113,0.04); }
 .shell-v2 .ch-cmd-row.is-danger:hover { background: rgba(248,113,113,0.08); }
-[data-theme="light"] .shell-v2 .ch-cmd-row { border-color: rgba(15,23,42,0.06); background: rgba(255,255,255,0.6); }
-[data-theme="light"] .shell-v2 .ch-cmd-row:hover { background: rgba(15,23,42,0.03); }
-[data-theme="light"] .shell-v2 .ch-cmd-row.is-danger { border-color: rgba(220,38,38,0.25); background: rgba(220,38,38,0.04); }
+[data-theme="light"] .shell-v2 .ch-cmd-row:hover { background: rgba(91,140,255,0.06); }
+[data-theme="light"] .shell-v2 .ch-cmd-row.is-danger { border-color: rgba(220,38,38,0.2); background: rgba(220,38,38,0.04); }
 
-.shell-v2 .ch-cmd-meta { min-width: 0; display: grid; gap: 3px; }
-.shell-v2 .ch-cmd-title { font-size: 0.78rem; font-weight: 640; color: var(--s2-text); }
-.shell-v2 .ch-cmd-warn { font-size: 0.82rem; color: #f87171; margin-left: 4px; }
-.shell-v2 .ch-cmd-desc { font-size: 0.66rem; color: var(--s2-faint); line-height: 1.45; }
-.shell-v2 .ch-cmd-line { min-width: 0; }
-.shell-v2 .ch-cmd-line code {
-  display: block;
+.shell-v2 .ch-cmd-meta { min-width: 0; line-height: 1.35; }
+.shell-v2 .ch-cmd-title {
+  font-size: 0.72rem; font-weight: 620; color: var(--s2-text);
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.shell-v2 .ch-cmd-warn { font-size: 0.7rem; color: #f87171; }
+.shell-v2 .ch-cmd-desc { font-size: 0.6rem; color: var(--s2-faint); margin-top: 1px; line-height: 1.4; }
+.shell-v2 .ch-cmd-line {
+  display: block; min-width: 0;
   font-family: var(--font-mono-ui);
-  font-size: 0.66rem;
-  line-height: 1.55;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(0,0,0,0.24);
+  font-size: 0.66rem; line-height: 1.4;
+  padding: 6px 9px; border-radius: 5px;
+  background: rgba(0,0,0,0.18);
   color: #c4d4ff;
   white-space: nowrap;
-  overflow: auto;
-  scrollbar-width: thin;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-[data-theme="light"] .shell-v2 .ch-cmd-line code { background: rgba(15,23,42,0.04); color: #1e293b; }
+[data-theme="light"] .shell-v2 .ch-cmd-line { background: rgba(15,23,42,0.05); color: #0f172a; }
 
 .shell-v2 .ch-cmd-copy {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 30px !important; padding: 0 12px !important;
-  font-size: 0.7rem !important; font-weight: 600;
-  border-radius: 7px !important;
-  border: 1px solid rgba(91,140,255,0.35) !important;
-  background: rgba(91,140,255,0.1) !important; background-image: none !important;
+  width: 28px !important; height: 28px !important; padding: 0 !important;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px !important;
+  border: 1px solid rgba(91,140,255,0.3) !important;
+  background: rgba(91,140,255,0.08) !important; background-image: none !important;
   color: #8dbdff !important;
   cursor: pointer; transition: background 100ms;
   box-shadow: none !important;
 }
 .shell-v2 .ch-cmd-copy:hover { background: rgba(91,140,255,0.18) !important; transform: none !important; }
-[data-theme="light"] .shell-v2 .ch-cmd-copy { color: #3358ff !important; border-color: rgba(91,140,255,0.45) !important; background: rgba(91,140,255,0.12) !important; }
+[data-theme="light"] .shell-v2 .ch-cmd-copy { color: #3358ff !important; border-color: rgba(91,140,255,0.4) !important; background: rgba(91,140,255,0.1) !important; }
+
 .shell-v2 .ch-hero-ghost.active { background: rgba(91,140,255,0.16) !important; color: #8dbdff !important; border-color: rgba(91,140,255,0.4) !important; }
 [data-theme="light"] .shell-v2 .ch-hero-ghost.active { background: rgba(91,140,255,0.14) !important; color: #3358ff !important; }
 
 @media (max-width: 860px) {
-  .shell-v2 .ch-cmd-row { grid-template-columns: 1fr; }
-  .shell-v2 .ch-cmd-palette-hint { display: none; }
+  .shell-v2 .ch-cmd-row { grid-template-columns: 1fr 28px; }
+  .shell-v2 .ch-cmd-line { grid-column: 1 / -1; }
 }
 
 .shell-v2 .ch-hero-launch {
