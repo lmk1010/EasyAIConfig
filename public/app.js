@@ -88,6 +88,8 @@ const state = {
   // 周期下拉 + 日历 picker 的临时状态（不持久化）
   dashboardPeriodOpen: false,
   rangePicker: null, // { viewMonth, fromDraft, toDraft }
+  // Codex 启动命令面板（hero 下拉开/关）
+  codexCmdPaletteOpen: false,
   dashboardMetrics: { codex: null, opencode: null },
   dashboardLoading: false,
   dashboardRefreshing: false,
@@ -15374,6 +15376,14 @@ function persistCodexProviderHistory(currentProviders = []) {
   writeCodexProviderHistory([...historyMap.values()]);
 }
 
+
+function removeCodexProviderHistoryItem(provider = {}) {
+  const targetId = codexProviderHistoryId(provider);
+  if (!targetId) return;
+  const next = readCodexProviderHistory().filter((item) => codexProviderHistoryId(item) !== targetId);
+  writeCodexProviderHistory(next);
+}
+
 function mergeCodexProvidersWithHistory(currentProviders = []) {
   const merged = currentProviders.map((provider) => ({ ...provider, historyOnly: false }));
   const existing = new Set(merged.map((provider) => codexProviderHistoryId(provider)).filter(Boolean));
@@ -15608,20 +15618,66 @@ function getCodexSwitchModelValue() {
   return el('modelSelect')?.value?.trim() || state.current?.summary?.model || '';
 }
 
+
+function normalizeCodexHomeForCompare(value = '') {
+  return String(value || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function isCodexOauthProfileHome(value = '') {
+  const current = normalizeCodexHomeForCompare(value);
+  if (!current) return false;
+  const profiles = window.__chOauthProfiles?.data?.profiles || [];
+  if (Array.isArray(profiles) && profiles.some((p) => normalizeCodexHomeForCompare(p?.codexHome) === current)) {
+    return true;
+  }
+  return /(?:^|\/)codex-oauth-profiles\/prof_[^/]+$/.test(current);
+}
+
+function getCodexHomeForApiKeySwitch() {
+  const selected = el('codexHomeInput')?.value?.trim() || '';
+  // OAuth profiles intentionally live in their own CODEX_HOME so tokens do not
+  // pollute the user's normal ~/.codex. When switching back to API Key, do not
+  // write model_provider into that OAuth home; use backend default CODEX_HOME.
+  return isCodexOauthProfileHome(selected) ? '' : selected;
+}
+
 async function quickSwitchCodexProvider(provider) {
   if (!provider?.key) return { ok: false, error: 'Provider 无效' };
   const baseUrl = normalizeBaseUrl(provider.baseUrl || '');
   if (!baseUrl) return { ok: false, error: `Provider「${provider.name || provider.key}」缺少 Base URL` };
 
+  const sourceCodexHome = el('codexHomeInput')?.value?.trim() || '';
+  const targetCodexHome = getCodexHomeForApiKeySwitch();
+  let carryApiKey = '';
+  if (sourceCodexHome && !targetCodexHome && provider.hasApiKey && !provider.historyOnly) {
+    try {
+      const secret = await api('/api/provider/secret', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: el('scopeSelect')?.value || 'global',
+          projectPath: el('projectPathInput')?.value?.trim() || '',
+          codexHome: sourceCodexHome,
+          providerKey: provider.key,
+        }),
+      });
+      if (secret?.ok && secret.data?.apiKey) {
+        carryApiKey = String(secret.data.apiKey || '');
+      }
+    } catch (err) {
+      console.warn('[codex] carry API key from OAuth profile failed', err);
+    }
+  }
+
   const payload = {
     scope: el('scopeSelect')?.value || 'global',
     projectPath: el('projectPathInput')?.value?.trim() || '',
-    codexHome: el('codexHomeInput')?.value?.trim() || '',
+    codexHome: targetCodexHome,
     providerKey: provider.key,
     providerLabel: String(provider.name || provider.key || '').trim(),
     envKey: String(provider.envKey || inferEnvKey(provider.key)).trim(),
     baseUrl,
-    apiKey: '',
+    apiKey: carryApiKey,
     model: getCodexSwitchModelValue(),
   };
 
@@ -15631,6 +15687,11 @@ async function quickSwitchCodexProvider(provider) {
     body: JSON.stringify(payload),
   });
   if (!saved.ok) return saved;
+
+  const savedRoot = saved.data?.paths?.rootPath || '';
+  if (savedRoot && el('codexHomeInput')) {
+    el('codexHomeInput').value = savedRoot;
+  }
 
   await loadState({ preserveForm: false });
   if (state.activePage === 'configEditor' && getConfigEditorTool() === 'codex') {
@@ -21146,6 +21207,89 @@ loadTools();
     return [];
   }
 
+  // ── Codex 启动命令构造 ─────────────────────────────────────────
+  // POSIX 单引号转义：用 '\'' 把字符串里的单引号 break/escape/重启 起来。
+  function posixQuote(value) {
+    return `'${String(value || '').replace(/'/g, `'\\''`)}'`;
+  }
+  function winCmdQuote(value) {
+    return `"${String(value || '').replace(/"/g, '""')}"`;
+  }
+
+  // 7 个常用启动预设。description 写"什么时候用"，flag 简短
+  const CODEX_LAUNCH_PRESETS = [
+    { id: 'default',          title: '标准启动',                   desc: '默认交互模式，每条命令都需要审批',     flags: [] },
+    { id: 'bypass-all',       title: '跳过审批 + 沙盒（危险）',     desc: '完全无防护：所有命令直接跑',         flags: ['--dangerously-bypass-approvals-and-sandbox'], danger: true },
+    { id: 'auto-approve',     title: '全自动审批',                 desc: '自动通过审批，仍在沙盒里跑',         flags: ['--ask-for-approval', 'untrusted'] },
+    { id: 'sandbox-read',     title: '只读沙盒',                   desc: '最严格：只能读文件，不能写',         flags: ['--sandbox', 'read-only'] },
+    { id: 'sandbox-write',    title: '允许写工作区',               desc: '常用日常档：项目目录内可读写',       flags: ['--sandbox', 'workspace-write'] },
+    { id: 'resume-last',      title: '恢复最近会话',               desc: '接着上一次的对话继续聊',             flags: ['resume', '--last'] },
+    { id: 'oauth-login',      title: 'OAuth 官方登录',             desc: '打开浏览器走 ChatGPT 登录流程',     flags: ['login'] },
+  ];
+
+  function buildCodexLaunchCommand({ cwd, codexHome, isOauth, flags = [], isWindows = false }) {
+    const trimmedCwd = String(cwd || '').trim();
+    const trimmedHome = String(codexHome || '').trim();
+    const codexCmd = ['codex', ...flags].join(' ');
+    if (isWindows) {
+      const parts = [];
+      if (trimmedCwd) parts.push(`cd /d ${winCmdQuote(trimmedCwd)}`);
+      if (isOauth) {
+        parts.push('set "OPENAI_API_KEY="');
+        parts.push('set "OPENAI_BASE_URL="');
+      }
+      if (trimmedHome) parts.push(`set "CODEX_HOME=${trimmedHome}"`);
+      parts.push(codexCmd);
+      return parts.join(' && ');
+    }
+    // POSIX
+    const parts = [];
+    if (trimmedCwd) parts.push(`cd ${posixQuote(trimmedCwd)}`);
+    if (isOauth) parts.push('unset OPENAI_API_KEY OPENAI_BASE_URL');
+    // 把 CODEX_HOME 内联到 codex 这一条命令里，不污染外层 shell
+    const cmdWithEnv = trimmedHome
+      ? `CODEX_HOME=${posixQuote(trimmedHome)} ${codexCmd}`
+      : codexCmd;
+    parts.push(cmdWithEnv);
+    return parts.join(' && ');
+  }
+
+  function renderCodexCmdPalette(active, tool) {
+    if (tool !== 'codex' || !active) return '';
+    const isOauth = active.mode === 'oauth';
+    const codexHome = active.homePath || state.current?.codexHome || '';
+    const cwd = el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '';
+    const isWindows = String(state.current?.launch?.platform || '').toLowerCase() === 'win32';
+    const items = CODEX_LAUNCH_PRESETS.map((preset, idx) => {
+      const cmd = buildCodexLaunchCommand({ cwd, codexHome, isOauth, flags: preset.flags, isWindows });
+      const danger = preset.danger ? ' is-danger' : '';
+      return `
+        <div class="ch-cmd-row${danger}" data-cmd-idx="${idx}">
+          <div class="ch-cmd-meta">
+            <div class="ch-cmd-title">${safeEscape(preset.title)}${preset.danger ? ' <span class="ch-cmd-warn">⚠</span>' : ''}</div>
+            <div class="ch-cmd-desc">${safeEscape(preset.desc)}</div>
+          </div>
+          <div class="ch-cmd-line"><code>${safeEscape(cmd)}</code></div>
+          <button type="button" class="ch-cmd-copy" data-codex-cmd-copy="${idx}" title="复制命令">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="9" height="9" rx="1.5"/><path d="M11 4V2.5A1 1 0 0 0 10 1.5H3.5A1 1 0 0 0 2.5 2.5V10A1 1 0 0 0 3.5 11h1.5"/></svg>
+            复制
+          </button>
+        </div>
+      `;
+    }).join('');
+    const hint = isOauth
+      ? '前缀里的 <code>unset OPENAI_API_KEY OPENAI_BASE_URL</code> 是为了避免 shell 环境里的旧 key 顶掉 OAuth tokens。'
+      : '内联 <code>CODEX_HOME=...</code> 不会污染外层 shell，多账号切换更稳。';
+    return `
+      <div class="ch-cmd-palette ${state.codexCmdPaletteOpen ? 'open' : ''}">
+        <div class="ch-cmd-palette-head">
+          <span class="ch-cmd-palette-title">复制启动命令</span>
+          <span class="ch-cmd-palette-hint">${hint}</span>
+        </div>
+        <div class="ch-cmd-list">${items}</div>
+      </div>`;
+  }
+
   // ── Hero HTML ─────────────────────────────────────────────────────
   function renderHeroHTML(active, tool) {
     if (!active) {
@@ -21198,11 +21342,16 @@ loadTools();
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
           编辑
         </button>`}
+        ${tool === 'codex' ? `<button type="button" class="ch-hero-ghost ${state.codexCmdPaletteOpen ? 'active' : ''}" data-ch-cmd-toggle title="复制启动命令到剪贴板">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="9" height="9" rx="1.5"/><path d="M11 4V2.5A1 1 0 0 0 10 1.5H3.5A1 1 0 0 0 2.5 2.5V10A1 1 0 0 0 3.5 11h1.5"/></svg>
+          复制命令
+        </button>` : ''}
         <button type="button" class="ch-hero-launch" data-ch-launch>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>
           ${safeEscape(launchLabel)}
         </button>
-      </div>`;
+      </div>
+      ${renderCodexCmdPalette(active, tool)}`;
   }
 
   // ── List HTML ─────────────────────────────────────────────────────
@@ -21570,8 +21719,11 @@ loadTools();
           flash?.(res?.error || '删除失败', 'error');
           return;
         }
+        if (typeof removeCodexProviderHistoryItem === 'function') {
+          removeCodexProviderHistoryItem({ key, baseUrl: row?.baseUrl || '' });
+        }
         flash?.('已删除 provider', 'success');
-        if (typeof loadState === 'function') await loadState();
+        if (typeof loadState === 'function') await loadState({ preserveForm: false });
       } else if (kind === 'claudecode-apikey') {
         const res = await api('/api/claudecode/provider-delete', {
           method: 'POST',
@@ -21600,6 +21752,40 @@ loadTools();
     await loadCodexOauthProfiles();
   }
 
+
+  async function activateCurrentCodexOauth(codexHome = '') {
+    const targetHome = codexHome || getDashboardCodexHome();
+    if (targetHome && el('codexHomeInput')) {
+      el('codexHomeInput').value = targetHome;
+    }
+    const cleared = await api('/api/config/use-oauth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: el('scopeSelect')?.value || 'global',
+        projectPath: el('projectPathInput')?.value?.trim() || '',
+        codexHome: targetHome,
+      }),
+    });
+    if (!cleared || !cleared.ok) {
+      if (typeof flash === 'function') flash(cleared?.error || '切换 OAuth 模式失败', 'error');
+      return false;
+    }
+    try {
+      if (typeof loadState === 'function') await loadState({ preserveForm: false });
+    } catch (err) {
+      console.warn('[ch] activate oauth loadState failed', err);
+    }
+    await loadCodexOauthProfiles({ skipAutoSave: true });
+    try {
+      await refreshDashboardData({ force: true, silent: true, tool: 'codex' });
+    } catch (err) {
+      console.warn('[ch] activate oauth refreshDashboardData failed', err);
+    }
+    if (typeof flash === 'function') flash('已切换到官方 OAuth', 'success');
+    return true;
+  }
+
   async function saveCurrentOauthAsProfile() {
     const defaultName = (() => {
       const d = window.__chOauthProfiles?.data;
@@ -21624,6 +21810,7 @@ loadTools();
     }
     if (typeof flash === 'function') flash('已保存为 OAuth profile', 'success');
     await loadCodexOauthProfiles();
+    return res.data || {};
   }
 
   async function switchOauthProfile(id) {
@@ -21640,6 +21827,24 @@ loadTools();
     const nextCodexHome = res.data?.codexHome || '';
     if (nextCodexHome && el('codexHomeInput')) {
       el('codexHomeInput').value = nextCodexHome;
+    }
+    // OAuth mode must not leave a model_provider pointer active in this
+    // profile's config.toml, otherwise Codex will still use the API-Key
+    // provider even though the UI row was switched to an OAuth account.
+    if (nextCodexHome) {
+      const cleared = await api('/api/config/use-oauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: el('scopeSelect')?.value || 'global',
+          projectPath: el('projectPathInput')?.value?.trim() || '',
+          codexHome: nextCodexHome,
+        }),
+      });
+      if (!cleared || !cleared.ok) {
+        if (typeof flash === 'function') flash(cleared?.error || '切换 OAuth 模式失败', 'error');
+        return;
+      }
     }
     if (typeof flash === 'function') flash('已切换 OAuth 账号', 'success');
     try {
@@ -22201,10 +22406,14 @@ loadTools();
     const tool = s.activeTool || 'codex';
     try {
       if (tool === 'codex') {
-        if (key === '__codex_official_oauth__') return;
+        if (key === '__codex_official_oauth__') {
+          await activateCurrentCodexOauth();
+          return;
+        }
         if (key === '__codex_oauth_unsaved__') {
-          // Body click on the unsaved OAuth row = save it as a profile.
-          await saveCurrentOauthAsProfile();
+          // Body click on an unsaved OAuth row should switch immediately.
+          // Saving it as a named profile is handled by the row action button.
+          await activateCurrentCodexOauth(getDashboardCodexHome());
           return;
         }
         if (key.startsWith('__codex_oauth_profile:')) {
@@ -22415,6 +22624,49 @@ loadTools();
       }
       const add = target.closest('[data-ch-add]');
       if (add) { openSlideover('add'); return; }
+      // Codex 启动命令面板开/关
+      const cmdToggle = target.closest('[data-ch-cmd-toggle]');
+      if (cmdToggle) {
+        state.codexCmdPaletteOpen = !state.codexCmdPaletteOpen;
+        // 只 re-render hero 块，不动列表/搜索状态
+        const heroEl = document.getElementById('chHero');
+        if (heroEl) {
+          const rows = buildProviderRows(hubState()?.activeTool || 'codex');
+          const active = rows.find((r) => r.isActive) || null;
+          heroEl.innerHTML = renderHeroHTML(active, hubState()?.activeTool || 'codex');
+          heroEl.classList.toggle('empty', !active);
+        }
+        return;
+      }
+      // 复制某条启动命令
+      const cmdCopy = target.closest('[data-codex-cmd-copy]');
+      if (cmdCopy) {
+        const idx = Number(cmdCopy.dataset.codexCmdCopy);
+        const preset = CODEX_LAUNCH_PRESETS[idx];
+        if (!preset) return;
+        const rows = buildProviderRows(hubState()?.activeTool || 'codex');
+        const active = rows.find((r) => r.isActive);
+        if (!active) {
+          if (typeof flash === 'function') flash('当前没有激活的 provider', 'error');
+          return;
+        }
+        const cmd = buildCodexLaunchCommand({
+          cwd: el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '',
+          codexHome: active.homePath || state.current?.codexHome || '',
+          isOauth: active.mode === 'oauth',
+          flags: preset.flags,
+          isWindows: String(state.current?.launch?.platform || '').toLowerCase() === 'win32',
+        });
+        navigator.clipboard?.writeText(cmd)
+          .then(() => {
+            if (typeof flash === 'function') flash(`已复制：${preset.title}`, 'success');
+          })
+          .catch((err) => {
+            console.warn('[codex cmd copy] clipboard failed', err);
+            window.prompt('自动复制失败 —— 请手动选中下方命令并 Cmd-C：', cmd);
+          });
+        return;
+      }
     });
 
     // Row clicks
@@ -22463,13 +22715,6 @@ loadTools();
       const row = target.closest('[data-ch-key]');
       if (row) {
         const key = row.getAttribute('data-ch-key');
-        // OAuth is managed by `codex login`; can't switch / edit in-app.
-        if (key === '__codex_official_oauth__') {
-          if (typeof flash === 'function') {
-            flash('官方登录由 Codex CLI 管理，请在终端运行 codex login', 'info');
-          }
-          return;
-        }
         // Body click = switch to / activate this provider.
         // Editing its contents is the ✏ icon (opens the drawer).
         switchRow(key);
@@ -22481,7 +22726,6 @@ loadTools();
       const row = target && target.closest('[data-ch-key]');
       if (row) {
         const key = row.getAttribute('data-ch-key');
-        if (key === '__codex_official_oauth__') return;
         e.preventDefault();
         switchRow(key);
       }
