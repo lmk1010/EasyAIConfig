@@ -12321,6 +12321,10 @@ function buildCfgGrid(toolId) {
 
 function buildCfgHero(toolId) {
   const esc = escapeHtml;
+  // 同步页面标题区
+  const titleEl = document.getElementById('cfgPageTool');
+  if (titleEl) titleEl.textContent = TOOL_LABELS[toolId] || toolId || 'Codex';
+  // 计算每个 tool 的元信息：配置文件名 + 完整大小（如果能拿到）
   if (toolId === 'codex') {
     const cfg = state.current?.config || {};
     const summary = state.current?.summary || {};
@@ -12328,18 +12332,46 @@ function buildCfgHero(toolId) {
     const provider = cfg.model_provider || '—';
     const effort = cfg.model_reasoning_effort || 'medium';
     const codexHome = state.current?.codexHome || '~/.codex';
+    // 统计：N 项已配置 / M 开关启用
+    const totalInputs = document.querySelectorAll('.config-editor-main[data-tool-editor="codex"] input[type="text"], .config-editor-main[data-tool-editor="codex"] input[type="number"], .config-editor-main[data-tool-editor="codex"] input[type="url"], .config-editor-main[data-tool-editor="codex"] select, .config-editor-main[data-tool-editor="codex"] textarea').length;
+    const filledInputs = Array.from(document.querySelectorAll('.config-editor-main[data-tool-editor="codex"] input[type="text"], .config-editor-main[data-tool-editor="codex"] input[type="number"], .config-editor-main[data-tool-editor="codex"] input[type="url"], .config-editor-main[data-tool-editor="codex"] select, .config-editor-main[data-tool-editor="codex"] textarea')).filter((i) => (i.value || '').toString().trim()).length;
+    const totalChecks = document.querySelectorAll('.config-editor-main[data-tool-editor="codex"] input[type="checkbox"]').length;
+    const onChecks = Array.from(document.querySelectorAll('.config-editor-main[data-tool-editor="codex"] input[type="checkbox"]')).filter((c) => c.checked).length;
+    const metaEl = document.getElementById('cfgPageMeta');
+    if (metaEl) {
+      metaEl.innerHTML = `
+        <span class="cfg-page-pill"><em>${esc(String(filledInputs))}/${esc(String(totalInputs))}</em>已配置</span>
+        <span class="cfg-page-pill ${onChecks > 0 ? 'is-on' : ''}"><em>${esc(String(onChecks))}/${esc(String(totalChecks))}</em>开关启用</span>
+      `;
+    }
     return `
       <div class="cfg-hero">
         <div class="cfg-hero-eyebrow">CURRENT CODEX</div>
         <div class="cfg-hero-grid">
-          <div class="cfg-hero-item"><span>默认模型</span><strong>${esc(model)}</strong></div>
-          <div class="cfg-hero-item"><span>默认 Provider</span><strong>${esc(provider)}</strong></div>
-          <div class="cfg-hero-item"><span>推理强度</span><strong>${esc(effort)}</strong></div>
-          <div class="cfg-hero-item"><span>CODEX_HOME</span><code>${esc(codexHome)}</code></div>
+          <div class="cfg-hero-item">
+            <span>默认模型</span>
+            <strong>${esc(model)}</strong>
+          </div>
+          <div class="cfg-hero-divider"></div>
+          <div class="cfg-hero-item">
+            <span>默认 Provider</span>
+            <strong>${esc(provider)}</strong>
+          </div>
+          <div class="cfg-hero-divider"></div>
+          <div class="cfg-hero-item">
+            <span>推理强度</span>
+            <strong class="cfg-hero-effort">${esc(effort)}</strong>
+          </div>
+          <div class="cfg-hero-divider"></div>
+          <div class="cfg-hero-item">
+            <span>CODEX_HOME</span>
+            <code>${esc(codexHome)}</code>
+          </div>
         </div>
       </div>`;
   }
-  // 其他 tool 简化版
+  const metaEl = document.getElementById('cfgPageMeta');
+  if (metaEl) metaEl.innerHTML = '';
   return `
     <div class="cfg-hero">
       <div class="cfg-hero-eyebrow">CURRENT ${esc((toolId || '').toUpperCase())}</div>
