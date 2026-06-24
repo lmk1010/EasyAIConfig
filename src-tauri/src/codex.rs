@@ -2380,15 +2380,27 @@ fn requested_codex_home_from_object(object: &Map<String, Value>) -> Result<PathB
 }
 
 fn with_codex_home_command(command: &str, codex_home: &Path) -> String {
+  // 切到 OAuth profile 时，必须把环境里残留的 OPENAI_API_KEY / OPENAI_BASE_URL
+  // 清掉再启动 codex —— 否则 codex CLI 会优先用环境里的 API key 模式，
+  // OAuth tokens 永远不被使用，UI 上"切换成功"就是个假象。
+  let is_oauth = crate::oauth_profiles::is_oauth_profile_home(codex_home);
   if cfg!(target_os = "windows") {
+    let cleanup = if is_oauth {
+      "set \"OPENAI_API_KEY=\" && set \"OPENAI_BASE_URL=\" && "
+    } else {
+      ""
+    };
     return format!(
-      "set \"CODEX_HOME={}\" && {}",
+      "{}set \"CODEX_HOME={}\" && {}",
+      cleanup,
       normalize_windows_cmd_path(&codex_home.to_string_lossy()),
       command
     );
   }
+  let cleanup = if is_oauth { "unset OPENAI_API_KEY OPENAI_BASE_URL; " } else { "" };
   format!(
-    "CODEX_HOME={} {}",
+    "{}CODEX_HOME={} {}",
+    cleanup,
     quote_posix_shell_arg(&codex_home.to_string_lossy()),
     command
   )

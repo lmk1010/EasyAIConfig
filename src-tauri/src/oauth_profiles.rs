@@ -28,8 +28,15 @@ const PROFILES_INDEX: &str = "profiles.json";
 const AUTH_FILENAME: &str = "auth.json";
 const SWITCH_BACKUP_KEEP: usize = 5;
 
-fn profiles_root() -> Result<PathBuf, String> {
+pub(crate) fn profiles_root() -> Result<PathBuf, String> {
   Ok(app_home()?.join(PROFILES_DIRNAME))
+}
+
+/// 判断给定 codex_home 是否是 OAuth profile 目录（即落在 codex-oauth-profiles 下）。
+/// codex.rs::with_codex_home_command 用它来决定要不要 unset shell 里的 OPENAI_API_KEY。
+pub(crate) fn is_oauth_profile_home(codex_home: &Path) -> bool {
+  let Ok(root) = profiles_root() else { return false; };
+  codex_home.starts_with(&root)
 }
 
 fn profiles_index_path() -> Result<PathBuf, String> {
@@ -628,6 +635,23 @@ pub(crate) fn switch_oauth_profile(body: &Value) -> Result<Value, String> {
   let target_codex_home = profile_dir(&id)?;
   if !target_codex_home.exists() {
     return Err("目标 profile 目录不存在".to_string());
+  }
+
+  // 清掉 profile 目录里 .env 中残留的 OPENAI_API_KEY / OPENAI_BASE_URL。
+  // 这些可能是之前用 API key 模式时落下的，也可能是 save_current_oauth_profile
+  // 整文件复制 auth.json 时被迁移过去的，留着会让 codex CLI 回退到 API key 模式。
+  let env_path = target_codex_home.join(".env");
+  if let Ok(raw) = crate::read_text(&env_path) {
+    let mut env = crate::parse_env(&raw);
+    let mut changed = false;
+    for stale_key in ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"] {
+      if env.remove(stale_key).is_some() {
+        changed = true;
+      }
+    }
+    if changed {
+      let _ = crate::write_text(&env_path, &crate::stringify_env(&env));
+    }
   }
 
   // Update active pointer.

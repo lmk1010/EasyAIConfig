@@ -443,6 +443,52 @@ pub(crate) fn delete_codex_provider(body: &Value) -> Result<Value, String> {
   }))
 }
 
+
+pub(crate) fn use_oauth_config(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let codex_home = {
+    let input = get_string(&object, "codexHome");
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
+  };
+  let scope = get_string(&object, "scope");
+  let project_path = get_string(&object, "projectPath");
+  let paths = scope_paths(if scope.is_empty() { "global" } else { &scope }, &project_path, &codex_home)?;
+
+  let config_content = read_text(&paths.config_path)?;
+  let mut config = parse_toml_config(&config_content)?;
+  let original_config = config.clone();
+
+  if let Some(obj) = config.as_object_mut() {
+    obj.remove("model_provider");
+  }
+
+  let config_changed = config != original_config;
+  let backup_path = if config_changed {
+    Some(create_backup(&paths)?)
+  } else {
+    None
+  };
+  if config_changed {
+    write_text(&paths.config_path, &stringify_toml_config(&config)?)?;
+  }
+
+  Ok(json!({
+    "saved": true,
+    "backupPath": backup_path,
+    "paths": {
+      "scope": paths.scope,
+      "rootPath": paths.root_path.to_string_lossy().to_string(),
+      "configPath": paths.config_path.to_string_lossy().to_string(),
+      "envPath": paths.env_path.to_string_lossy().to_string(),
+    },
+    "activeProvider": "",
+    "changed": {
+      "config": config_changed,
+      "env": false,
+    },
+  }))
+}
+
 pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let codex_home = {
