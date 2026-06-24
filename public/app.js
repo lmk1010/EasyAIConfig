@@ -17657,6 +17657,7 @@ function ensureProviderDetailEvents() {
     if (target.closest('[data-pd-delete]')) { actionPdDelete(); return; }
     if (target.closest('[data-pd-test]')) { actionPdRunTest(); return; }
     if (target.closest('[data-pd-refresh-health]')) { actionPdRefreshHealth(); return; }
+    if (target.closest('[data-pd-refresh-usage]')) { actionPdRefreshUsage(); return; }
     if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
   });
 }
@@ -17705,12 +17706,20 @@ function openProviderDetail(key) {
   fetchDashboardMetricsForDetail().catch(() => {});
 }
 
-async function fetchDashboardMetricsForDetail() {
-  if (state.dashboardMetrics?.codex) return;
+async function fetchDashboardMetricsForDetail(force = false) {
+  if (state.dashboardMetrics?.codex && !force) return;
   if (typeof refreshDashboardData === 'function') {
-    await refreshDashboardData({ force: false, silent: true, tool: 'codex' });
+    await refreshDashboardData({ force, silent: true, tool: 'codex' });
     renderProviderDetail();
   }
+}
+
+async function actionPdRefreshUsage() {
+  state.providerDetail.usageRefreshing = true;
+  renderProviderDetail();
+  await fetchDashboardMetricsForDetail(true).catch(() => {});
+  state.providerDetail.usageRefreshing = false;
+  renderProviderDetail();
 }
 
 function closeProviderDetail() {
@@ -17886,6 +17895,7 @@ function renderPdBatteryBar(history, segments = 40) {
     else cells.push(`<span class="pd-bat-cell ${r.success ? 'is-ok' : 'is-bad'}" title="${escapeHtml(`${new Date(r.probedAt).toLocaleString()}\n${fmtLatency(r.latencyMs)}${r.error ? '\n' + r.error.slice(0, 80) : ''}`)}"></span>`);
   }
   const tier = uptime == null ? 'empty' : (uptime >= 99 ? 'good' : uptime >= 90 ? 'warn' : 'bad');
+  const running = state.providerDetail.testRunning;
   return `
     <div class="pd-battery is-${tier}">
       <div class="pd-battery-head">
@@ -17897,6 +17907,10 @@ function renderPdBatteryBar(history, segments = 40) {
           <span><em class="pd-dot-ok"></em>${escapeHtml(String(success))} 成功</span>
           <span><em class="pd-dot-bad"></em>${escapeHtml(String(failure))} 失败</span>
           <span class="pd-battery-meta-faint">${escapeHtml(String(total))} 次 / 24h</span>
+          <button type="button" class="pd-battery-refresh ${running ? 'is-busy' : ''}" data-pd-test ${running ? 'disabled' : ''} title="立即向 /models 发一次探测，结果会落进 24h 历史">
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6a6 6 0 0 1 11-2.5L14 5M14 10a6 6 0 0 1-11 2.5L2 11M14 2v3h-3M2 14v-3h3"/></svg>
+            ${running ? '检测中…' : '立即重检'}
+          </button>
         </div>
       </div>
       <div class="pd-battery-track">
@@ -18018,11 +18032,15 @@ function pdNormalizeProviderKey(value) {
 function renderPdUsage(row) {
   const esc = escapeHtml;
   const codexMetrics = state.dashboardMetrics?.codex;
+  const usageRefreshing = state.providerDetail.usageRefreshing;
   if (!codexMetrics) {
     return `
       <div class="pd-empty">
         <div class="pd-empty-title-line">用量数据加载中…</div>
         <p>正在从本地 sessions 聚合 token / 费用 / 模型分布。</p>
+        <div class="pd-empty-actions">
+          <button type="button" class="pd-btn pd-btn-primary pd-btn-small ${usageRefreshing ? 'is-busy' : ''}" data-pd-refresh-usage ${usageRefreshing ? 'disabled' : ''}>${usageRefreshing ? '刷新中…' : '强制刷新'}</button>
+        </div>
       </div>`;
   }
   // 宽松匹配：normalize 掉非字母数字再比，避免 'gpt-5-codex' vs 'gpt5codex' 之类差错；
@@ -18076,7 +18094,7 @@ function renderPdUsage(row) {
         ${knownChips}
         <div class="pd-empty-actions">
           ${row.isActive ? '' : '<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-switch>切换为当前</button>'}
-          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-test>立即重检</button>
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small ${usageRefreshing ? 'is-busy' : ''}" data-pd-refresh-usage ${usageRefreshing ? 'disabled' : ''}>${usageRefreshing ? '刷新中…' : '强制刷新用量'}</button>
         </div>
       </div>`;
   }

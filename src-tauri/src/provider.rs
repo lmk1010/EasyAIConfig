@@ -405,6 +405,7 @@ pub(crate) async fn detect_saved_provider(
   auth_json: &BTreeMap<String, String>,
   provider_key: &str,
   timeout_ms: u64,
+  codex_home_hint: &str,
 ) -> Result<Value, String> {
   let (provider, secret) = resolve_saved_provider(config, env_file, auth_json, provider_key)?;
   if provider.base_url.trim().is_empty() {
@@ -414,10 +415,14 @@ pub(crate) async fn detect_saved_provider(
     return Err(format!("Provider {} 未找到 API Key", provider.name));
   }
 
+  // 把 providerKey + codexHome 显式传下去，让 probe log 用真正的行 key 落记录，
+  // 否则 detect_provider 只能从 baseUrl 推断，跟前端 /probe-summary 查询 key 不一致。
   detect_provider(&json!({
     "baseUrl": provider.base_url,
     "apiKey": secret.value,
     "timeoutMs": timeout_ms,
+    "providerKey": provider_key,
+    "codexHome": codex_home_hint,
   }))
   .await
 }

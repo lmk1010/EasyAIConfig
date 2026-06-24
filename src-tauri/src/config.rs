@@ -278,7 +278,14 @@ pub(crate) async fn test_saved_provider(body: &Value) -> Result<Value, String> {
   let config = parse_toml_config(&config_content)?;
   let env = parse_env(&env_content);
   let flat_auth = flatten_auth_json(&auth_json);
-  detect_saved_provider(&config, &env, &flat_auth, &provider_key, timeout_ms).await
+  detect_saved_provider(
+    &config,
+    &env,
+    &flat_auth,
+    &provider_key,
+    timeout_ms,
+    &codex_home.to_string_lossy(),
+  ).await
 }
 
 pub(crate) fn pick_directory(app: tauri::AppHandle, body: &Value) -> Result<Value, String> {
