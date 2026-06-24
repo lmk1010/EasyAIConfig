@@ -25673,3 +25673,293 @@ body {
 .shell-v2 .pd-battery-refresh.is-busy svg { animation: pdSpin 1.2s linear infinite; }
 @keyframes pdSpin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 [data-theme="light"] .shell-v2 .pd-battery-refresh { color: #3358ff !important; border-color: rgba(91,140,255,0.4) !important; background: rgba(91,140,255,0.1) !important; }
+
+/* 进程分组：App vs CLI */
+.shell-v2 .cv3-proc-group { margin-top: 10px; }
+.shell-v2 .cv3-proc-group:first-child { margin-top: 4px; }
+.shell-v2 .cv3-proc-group-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 4px 6px;
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--s2-faint);
+  border-bottom: 1px dashed rgba(255,255,255,0.05);
+  margin-bottom: 6px;
+}
+[data-theme="light"] .shell-v2 .cv3-proc-group-head { border-bottom-color: rgba(15,23,42,0.06); }
+.shell-v2 .cv3-proc-group-title { color: var(--s2-muted); font-weight: 660; }
+.shell-v2 .cv3-proc-group-count {
+  padding: 1px 7px; border-radius: 999px;
+  background: rgba(91,140,255,0.12); color: #8dbdff;
+  font-size: 0.6rem; font-variant-numeric: tabular-nums;
+}
+[data-theme="light"] .shell-v2 .cv3-proc-group-count { color: #3358ff; }
+
+.shell-v2 .cv3-proc-kind {
+  display: inline-flex; align-items: center;
+  padding: 1px 6px; border-radius: 4px;
+  font-size: 0.54rem; font-weight: 700; letter-spacing: 0.08em;
+  font-family: var(--font-mono-ui);
+}
+.shell-v2 .cv3-proc-kind.is-app { background: rgba(168,85,247,0.18); color: #c4b5fd; }
+.shell-v2 .cv3-proc-kind.is-cli { background: rgba(91,140,255,0.18); color: #8dbdff; }
+[data-theme="light"] .shell-v2 .cv3-proc-kind.is-app { background: rgba(124,58,237,0.14); color: #6d28d9; }
+[data-theme="light"] .shell-v2 .cv3-proc-kind.is-cli { background: rgba(51,88,255,0.14); color: #3358ff; }
+
+.shell-v2 .cv3-proc-row.is-app { border-left: 2px solid rgba(168,85,247,0.4); }
+.shell-v2 .cv3-proc-row.is-cli { border-left: 2px solid rgba(91,140,255,0.4); }
+[data-theme="light"] .shell-v2 .cv3-proc-row.is-app { border-left-color: rgba(124,58,237,0.4); }
+[data-theme="light"] .shell-v2 .cv3-proc-row.is-cli { border-left-color: rgba(51,88,255,0.4); }
+
+/* ─── 配置编辑器组件库重做 ──────────────────────────────────────
+   把所有 .toggle-item 改成精致 pill 开关；原 native checkbox 隐藏。
+   同时给 cfg-section <details> headers / inputs / selects / progress
+   一层统一现代风。 */
+
+/* Toggle switch */
+.shell-v2 .toggle-item {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 8px 14px; margin: 0;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.05);
+  font-size: 0.75rem; font-weight: 540;
+  color: var(--s2-text);
+  cursor: pointer;
+  transition: border-color 140ms, background 140ms;
+  user-select: none;
+}
+.shell-v2 .toggle-item:hover { border-color: rgba(91,140,255,0.25); background: rgba(91,140,255,0.04); }
+[data-theme="light"] .shell-v2 .toggle-item { background: rgba(15,23,42,0.025); border-color: rgba(15,23,42,0.06); }
+[data-theme="light"] .shell-v2 .toggle-item:hover { background: rgba(91,140,255,0.06); }
+
+.shell-v2 .toggle-item > input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  position: relative;
+  width: 32px !important; height: 18px !important;
+  margin: 0 !important; padding: 0 !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  background: rgba(255,255,255,0.06) !important;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 180ms ease, border-color 180ms ease;
+  display: inline-block;
+  vertical-align: middle;
+}
+.shell-v2 .toggle-item > input[type="checkbox"]::after {
+  content: ''; position: absolute;
+  top: 1px; left: 2px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.shell-v2 .toggle-item > input[type="checkbox"]:checked {
+  background: linear-gradient(140deg, #6b86ff, #3358ff) !important;
+  border-color: rgba(91,140,255,0.45) !important;
+}
+.shell-v2 .toggle-item > input[type="checkbox"]:checked::after {
+  transform: translateX(13px);
+}
+.shell-v2 .toggle-item > input[type="checkbox"]:focus-visible {
+  outline: 2px solid rgba(91,140,255,0.5); outline-offset: 2px;
+}
+[data-theme="light"] .shell-v2 .toggle-item > input[type="checkbox"] {
+  background: rgba(15,23,42,0.08) !important;
+  border-color: rgba(15,23,42,0.12) !important;
+}
+
+.shell-v2 .toggle-item > span { color: var(--s2-text); font-weight: 540; line-height: 1.3; }
+
+/* Cfg section header */
+.shell-v2 .cfg-section {
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.005));
+  padding: 0;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+[data-theme="light"] .shell-v2 .cfg-section { border-color: rgba(15,23,42,0.06); background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0.4)); }
+.shell-v2 .cfg-section[open] { background: linear-gradient(180deg, rgba(91,140,255,0.04), rgba(91,140,255,0.005)); }
+.shell-v2 .cfg-section-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px;
+  cursor: pointer; user-select: none;
+  font-size: 0.85rem; font-weight: 640;
+  color: var(--s2-text);
+  list-style: none;
+  position: relative;
+  transition: background 140ms;
+}
+.shell-v2 .cfg-section-header::-webkit-details-marker { display: none; }
+.shell-v2 .cfg-section-header::after {
+  content: ''; margin-left: auto;
+  width: 8px; height: 8px;
+  border-right: 1.6px solid var(--s2-muted);
+  border-bottom: 1.6px solid var(--s2-muted);
+  transform: rotate(-45deg);
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.shell-v2 .cfg-section[open] > .cfg-section-header::after { transform: rotate(45deg); }
+.shell-v2 .cfg-section-header:hover { background: rgba(91,140,255,0.06); }
+
+/* 输入框 / 下拉 / textarea 统一观感 */
+.shell-v2 .config-editor-main input[type="text"],
+.shell-v2 .config-editor-main input[type="search"],
+.shell-v2 .config-editor-main input[type="number"],
+.shell-v2 .config-editor-main input[type="url"],
+.shell-v2 .config-editor-main select,
+.shell-v2 .config-editor-main textarea {
+  background: rgba(255,255,255,0.04) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  color: var(--s2-text) !important;
+  border-radius: 9px !important;
+  font-size: 0.78rem;
+  padding: 9px 12px !important;
+  transition: border-color 140ms, background 140ms, box-shadow 140ms;
+}
+[data-theme="light"] .shell-v2 .config-editor-main input[type="text"],
+[data-theme="light"] .shell-v2 .config-editor-main input[type="search"],
+[data-theme="light"] .shell-v2 .config-editor-main input[type="number"],
+[data-theme="light"] .shell-v2 .config-editor-main input[type="url"],
+[data-theme="light"] .shell-v2 .config-editor-main select,
+[data-theme="light"] .shell-v2 .config-editor-main textarea {
+  background: rgba(255,255,255,0.7) !important;
+  border-color: rgba(15,23,42,0.1) !important;
+  color: #0f172a !important;
+}
+.shell-v2 .config-editor-main input:focus,
+.shell-v2 .config-editor-main select:focus,
+.shell-v2 .config-editor-main textarea:focus {
+  outline: none !important;
+  border-color: rgba(91,140,255,0.5) !important;
+  box-shadow: 0 0 0 3px rgba(91,140,255,0.15) !important;
+}
+
+/* select 加自定义箭头 */
+.shell-v2 .config-editor-main select {
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round'%3e%3cpath d='M1 1l4 4 4-4'/%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  background-size: 10px !important;
+  padding-right: 32px !important;
+  cursor: pointer;
+}
+
+/* Progress bar */
+.shell-v2 progress, .shell-v2 .cfg-progress {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; height: 8px;
+  border: 0; border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+}
+.shell-v2 progress::-webkit-progress-bar { background: transparent; }
+.shell-v2 progress::-webkit-progress-value { background: linear-gradient(90deg, #6b86ff, #3358ff); border-radius: 999px; transition: width 220ms ease; }
+.shell-v2 progress::-moz-progress-bar { background: linear-gradient(90deg, #6b86ff, #3358ff); }
+[data-theme="light"] .shell-v2 progress, [data-theme="light"] .shell-v2 .cfg-progress { background: rgba(15,23,42,0.06); }
+
+/* Range slider */
+.shell-v2 .config-editor-main input[type="range"] {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; height: 4px;
+  background: rgba(255,255,255,0.08) !important;
+  border: 0 !important;
+  border-radius: 999px;
+  padding: 0 !important;
+}
+.shell-v2 .config-editor-main input[type="range"]::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: linear-gradient(140deg, #6b86ff, #3358ff);
+  box-shadow: 0 2px 8px rgba(51,88,255,0.32);
+  cursor: pointer;
+  transition: transform 120ms;
+}
+.shell-v2 .config-editor-main input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+[data-theme="light"] .shell-v2 .config-editor-main input[type="range"] { background: rgba(15,23,42,0.08) !important; }
+
+/* ─── Store 卡片网格 + 子页面 (cfg-grid / cfg-card / cfg-sec-hidden) ───── */
+.shell-v2 .cfg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 8px 0 24px;
+}
+.shell-v2 .cfg-grid.hide { display: none; }
+
+.shell-v2 .cfg-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.005));
+  cursor: pointer;
+  text-align: left;
+  color: var(--s2-text);
+  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), border-color 140ms, background 140ms, box-shadow 140ms;
+}
+[data-theme="light"] .shell-v2 .cfg-card { background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0.45)); border-color: rgba(15,23,42,0.06); }
+.shell-v2 .cfg-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(91,140,255,0.3);
+  background: linear-gradient(180deg, rgba(91,140,255,0.06), rgba(91,140,255,0.01));
+  box-shadow: 0 14px 28px rgba(91,140,255,0.12);
+}
+
+.shell-v2 .cfg-card-icon {
+  width: 38px; height: 38px;
+  border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(140deg, rgba(91,140,255,0.18), rgba(91,140,255,0.06));
+  color: #8dbdff;
+  flex-shrink: 0;
+  transition: transform 140ms;
+}
+.shell-v2 .cfg-card:hover .cfg-card-icon { transform: rotate(-3deg) scale(1.05); }
+.shell-v2 .cfg-card-icon svg { width: 18px; height: 18px; }
+[data-theme="light"] .shell-v2 .cfg-card-icon { color: #3358ff; background: linear-gradient(140deg, rgba(91,140,255,0.16), rgba(91,140,255,0.05)); }
+
+.shell-v2 .cfg-card-body { display: grid; gap: 2px; min-width: 0; }
+.shell-v2 .cfg-card-title { font-size: 0.88rem; font-weight: 660; color: var(--s2-text); letter-spacing: -0.005em; }
+.shell-v2 .cfg-card-sub { font-size: 0.64rem; color: var(--s2-faint); font-weight: 500; letter-spacing: 0.04em; }
+
+.shell-v2 .cfg-card-arrow { color: var(--s2-faint); transition: transform 160ms, color 140ms; flex-shrink: 0; }
+.shell-v2 .cfg-card:hover .cfg-card-arrow { transform: translateX(3px); color: #8dbdff; }
+[data-theme="light"] .shell-v2 .cfg-card:hover .cfg-card-arrow { color: #3358ff; }
+
+/* 子页头 + 返回 */
+.shell-v2 .cfg-subhead {
+  display: flex; align-items: center; gap: 14px;
+  margin: 8px 0 14px;
+}
+.shell-v2 .cfg-subhead.hide { display: none; }
+.shell-v2 .cfg-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  background: rgba(255,255,255,0.04); background-image: none;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  color: var(--s2-text);
+  font-size: 0.72rem; font-weight: 580;
+  cursor: pointer; box-shadow: none;
+  transition: background 120ms, transform 100ms;
+}
+.shell-v2 .cfg-back:hover { background: rgba(91,140,255,0.12); transform: translateX(-2px); }
+[data-theme="light"] .shell-v2 .cfg-back { background: rgba(15,23,42,0.04); border-color: rgba(15,23,42,0.08); color: #1e293b; }
+[data-theme="light"] .shell-v2 .cfg-back:hover { background: rgba(91,140,255,0.1); }
+.shell-v2 .cfg-sub-crumb { font-size: 0.7rem; color: var(--s2-faint); letter-spacing: 0.02em; }
+.shell-v2 .cfg-sub-crumb em { font-style: normal; opacity: 0.5; margin: 0 4px; }
+.shell-v2 .cfg-sub-crumb strong { color: var(--s2-text); font-weight: 660; }
+
+/* 进入子页时其他 section 全部隐藏 */
+.shell-v2 .cfg-sec-hidden { display: none !important; }
+.shell-v2 .cfg-sec-active { animation: cfgSubFade 240ms ease both; }
+@keyframes cfgSubFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
