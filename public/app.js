@@ -9488,25 +9488,30 @@ function renderConsoleV3Procs(tool, toolLabel) {
       <div class="cv3-proc-empty">正在扫描进程…</div>`;
     return;
   }
+  const appRows = rows.filter((p) => p.kind === 'app');
+  const cliRows = rows.filter((p) => p.kind !== 'app');
   if (!rows.length) {
     el.innerHTML = `
       ${cv3SectionHead(CV3_ICONS.cpu, headLabel, { count: 0, extras: refreshProcsBtn })}
       <div class="cv3-proc-empty">当前没有在跑的 ${esc(toolLabel)} 进程</div>`;
     return;
   }
-  const rowsHtml = rows.map((p) => {
+  const renderRow = (p) => {
     const mem = p.memMB ? `${p.memMB} MB` : (p.memPct ? `${p.memPct.toFixed(1)}%` : '—');
     const cpu = (typeof p.cpu === 'number') ? `${p.cpu.toFixed(1)}%` : '—';
-    // Trim the most common shell boilerplate for a cleaner command preview.
     const cmdClean = (p.command || '').replace(/^\S*\/node\s+/, 'node ').trim();
     const accountBadge = p.accountLabel
       ? `<span class="cv3-proc-account" title="${esc(p.accountHome ? `${p.accountLabel} · ${p.accountHome}` : p.accountLabel)}">${esc(p.accountLabel)}</span>`
       : '';
     const cwd = p.cwd ? `<span class="cv3-proc-cwd" title="${esc(p.cwd)}">${esc(p.cwd)}</span>` : '';
+    const kindBadge = p.kind === 'app'
+      ? '<span class="cv3-proc-kind is-app" title="桌面 GUI 应用">APP</span>'
+      : '<span class="cv3-proc-kind is-cli" title="命令行 CLI">CLI</span>';
     return `
-      <div class="cv3-proc-row">
+      <div class="cv3-proc-row ${p.kind === 'app' ? 'is-app' : 'is-cli'}">
         <div class="cv3-proc-head">
           <span class="cv3-proc-dot"></span>
+          ${kindBadge}
           <span class="cv3-proc-pid">PID ${esc(String(p.pid))}</span>
           ${accountBadge}
           <span class="cv3-proc-elapsed" title="已运行">${esc(p.elapsed || '—')}</span>
@@ -9520,10 +9525,18 @@ function renderConsoleV3Procs(tool, toolLabel) {
         ${cmdClean ? `<div class="cv3-proc-cmd" title="${esc(cmdClean)}">${esc(cmdClean)}</div>` : ''}
         ${cwd ? `<div class="cv3-proc-cwd-row"><span class="cv3-proc-cwd-label">cwd</span>${cwd}</div>` : ''}
       </div>`;
-  }).join('');
+  };
+  const sectionFor = (title, group, kindCls) => group.length
+    ? `<div class="cv3-proc-group ${kindCls}">
+         <div class="cv3-proc-group-head"><span class="cv3-proc-group-title">${esc(title)}</span><span class="cv3-proc-group-count">${group.length}</span></div>
+         <div class="cv3-proc-list">${group.map(renderRow).join('')}</div>
+       </div>`
+    : '';
+  const summary = `${cliRows.length} CLI · ${appRows.length} App`;
   el.innerHTML = `
-    ${cv3SectionHead(CV3_ICONS.cpu, headLabel, { count: rows.length, extras: refreshProcsBtn })}
-    <div class="cv3-proc-list">${rowsHtml}</div>`;
+    ${cv3SectionHead(CV3_ICONS.cpu, headLabel, { count: summary, extras: refreshProcsBtn })}
+    ${sectionFor(`${toolLabel} CLI`, cliRows, 'kind-cli')}
+    ${sectionFor(`${toolLabel} App`, appRows, 'kind-app')}`;
 }
 
 function renderConsoleV3Usage(tool) {
@@ -12214,7 +12227,118 @@ function renderConfigEditorShell(toolId = '') {
   if (drawerTitleEl) drawerTitleEl.textContent = meta.drawerTitle;
   if (drawerBtn) drawerBtn.title = `查看 ${meta.files}`;
   syncConfigEditorShellView(el('configEditorLayout')?.dataset.viewMode || 'form');
+  // 重建分类卡片网格（每次切 tool 都需要刷一遍，因为 sections 不同）
+  buildCfgGrid(toolId || getConfigEditorTool());
 }
+
+// ─── Store 卡片网格 + 子页面导航 ────────────────────────────────
+// 默认列出当前 tool 下所有 .cfg-section 作为卡片；点卡片 → 隐藏网格、
+// 只展开那一节、显示返回按钮；返回 → 折回所有 section、显示网格。
+const CFG_CARD_ICONS = {
+  '模型与推理': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.2 4.2l2.8 2.8M17 17l2.8 2.8M1 12h4M19 12h4M4.2 19.8l2.8-2.8M17 7l2.8-2.8"/></svg>',
+  '行为与审批': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
+  '上下文与性能': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+  '路径与环境': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+  '会话恢复': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  'Provider 与备份': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>',
+  '开关选项': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="22" height="12" rx="6"/><circle cx="17" cy="12" r="3" fill="currentColor"/></svg>',
+  '指令': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+};
+const CFG_CARD_FALLBACK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+
+function getCfgSectionsForTool(toolId) {
+  const root = document.querySelector(`.config-editor-main[data-tool-editor="${toolId}"]`);
+  if (!root) return [];
+  return Array.from(root.querySelectorAll(':scope > details.cfg-section'));
+}
+
+function buildCfgGrid(toolId) {
+  const grid = document.getElementById('cfgGrid');
+  if (!grid) return;
+  const sections = getCfgSectionsForTool(toolId);
+  if (!sections.length) {
+    grid.classList.add('hide');
+    return;
+  }
+  // 每个 section 自动加 id（如果还没有），便于跳转
+  sections.forEach((sec, idx) => {
+    if (!sec.id) sec.id = `cfgSec_${toolId}_${idx}`;
+  });
+  const cards = sections.map((sec) => {
+    const summary = sec.querySelector(':scope > summary.cfg-section-header');
+    const text = (summary?.textContent || '').replace(/\s+/g, ' ').trim();
+    // 提取标题主词 + 数量统计
+    const heading = text.split(/[·：:|]/)[0].trim() || '配置';
+    const icon = CFG_CARD_ICONS[heading] || CFG_CARD_FALLBACK;
+    // 数一下里面有多少开关 / 字段（给副标用）
+    const switches = sec.querySelectorAll('input[type="checkbox"]').length;
+    const inputs = sec.querySelectorAll('input[type="text"], input[type="number"], input[type="url"], select, textarea').length;
+    const sub = [
+      inputs ? `${inputs} 项设置` : '',
+      switches ? `${switches} 开关` : '',
+    ].filter(Boolean).join(' · ') || '可配置';
+    return `
+      <button type="button" class="cfg-card" data-cfg-card="${sec.id}">
+        <span class="cfg-card-icon">${icon}</span>
+        <span class="cfg-card-body">
+          <span class="cfg-card-title">${escapeHtml(heading)}</span>
+          <span class="cfg-card-sub">${escapeHtml(sub)}</span>
+        </span>
+        <span class="cfg-card-arrow">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
+        </span>
+      </button>`;
+  }).join('');
+  grid.innerHTML = cards;
+  grid.classList.remove('hide');
+  exitCfgSubpage(); // 默认是网格态
+}
+
+function enterCfgSubpage(sectionId) {
+  const sec = document.getElementById(sectionId);
+  if (!sec) return;
+  const tool = sec.closest('.config-editor-main')?.dataset?.toolEditor || '';
+  // 折回同 tool 下所有 section，只 open 这一节
+  const peers = sec.parentElement?.querySelectorAll(':scope > details.cfg-section') || [];
+  peers.forEach((p) => { p.open = (p === sec); p.classList.toggle('cfg-sec-active', p === sec); p.classList.toggle('cfg-sec-hidden', p !== sec); });
+  // 隐藏网格 + 显示返回 head
+  document.getElementById('cfgGrid')?.classList.add('hide');
+  const subhead = document.getElementById('cfgSubhead');
+  const crumb = document.getElementById('cfgSubCrumb');
+  if (subhead) subhead.classList.remove('hide');
+  if (crumb) {
+    const head = sec.querySelector(':scope > summary.cfg-section-header');
+    const title = (head?.textContent || '').replace(/\s+/g, ' ').trim().split(/[·：:|]/)[0].trim() || '配置';
+    crumb.innerHTML = `${escapeHtml(TOOL_LABELS[tool] || tool)} <em>/</em> <strong>${escapeHtml(title)}</strong>`;
+  }
+  // 滚到顶
+  sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function exitCfgSubpage() {
+  // 恢复所有 section（取消独占），重新显示网格
+  document.querySelectorAll('.config-editor-main details.cfg-section').forEach((p) => {
+    p.classList.remove('cfg-sec-active', 'cfg-sec-hidden');
+    p.open = false;
+  });
+  document.getElementById('cfgGrid')?.classList.remove('hide');
+  document.getElementById('cfgSubhead')?.classList.add('hide');
+}
+
+// 事件代理：卡片点击 + 返回按钮
+document.addEventListener('click', (e) => {
+  const target = e.target instanceof Element ? e.target : null;
+  if (!target) return;
+  const card = target.closest('[data-cfg-card]');
+  if (card) {
+    enterCfgSubpage(card.dataset.cfgCard);
+    return;
+  }
+  if (target.closest('#cfgBackBtn')) {
+    exitCfgSubpage();
+    return;
+  }
+});
 
 function getConfigEditorTool() {
   return normalizeConfigEditorTool(state.configEditorTool);

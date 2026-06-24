@@ -47,21 +47,16 @@ fn filter_matches(line: &str, needle: &str, self_pid: u32) -> bool {
   let raw = line.trim_start();
   if raw.is_empty() { return false; }
 
-  // Early reject: our own things.
   let lower = raw.to_ascii_lowercase();
   if lower.contains("grep ") || lower.starts_with("grep") { return false; }
   if lower.contains("easy_ai_config") { return false; }
   if lower.contains("easyaiconfig") { return false; }
-  if lower.contains("codex-config-ui") { return false; }   // our dev repo path
-  if lower.contains("config-editor") { return false; }      // our sub-dirs
-  // macOS .app bundles：Codex.app / Claude.app / OpenCode.app / Codex Helper.app 等
-  // 都是 GUI 应用，跟 CLI 是完全两个产品。它们的主二进制 lowercase 后
-  // (e.g. /Applications/Codex.app/Contents/MacOS/Codex → "codex") 会假阳性匹配
-  // Case 1 的 basename 比较，必须在这里整段排除。包括各种 Helper / Renderer 子进程。
-  if lower.contains(".app/contents/") { return false; }
+  if lower.contains("codex-config-ui") { return false; }
+  if lower.contains("config-editor") { return false; }
 
-  // Column layout from ps -axo pid,pcpu,pmem,etime,command is:
-  //   <pid>  <cpu>  <mem>  <etime>  <command...>
+  // .app bundles 不再整段排除 —— 它们是 GUI app，用户也想看到。
+  // 在 enrich 阶段加 kind:"app" 区分；这里只过滤明确无关的进程。
+
   let parts: Vec<&str> = raw.split_whitespace().collect();
   if parts.len() < 5 { return false; }
   let pid: u32 = parts[0].parse().unwrap_or(0);
@@ -71,7 +66,19 @@ fn filter_matches(line: &str, needle: &str, self_pid: u32) -> bool {
   let basename = cmd_argv0.rsplit('/').next().unwrap_or(cmd_argv0).to_ascii_lowercase();
   let needle_l = needle.to_ascii_lowercase();
 
-  // Case 1: the binary's basename IS the needle (e.g. `/usr/local/bin/codex`).
+  // Case 0: macOS .app bundle main binary：basename 跟 needle 一样 + 路径含 .app/contents
+  // 都算 match（让 Codex.app / Claude.app GUI 进程也被列出来，前端按 kind 分组展示）
+  if lower.contains(".app/contents/") {
+    // 主二进制名要跟 needle 接近：basename 完全等于 needle，或包含 needle 作为前缀
+    // 排除 Helper / Renderer 之类的子进程（用户看不需要）
+    if basename == needle_l { return true; }
+    // 也接受像 "Codex Helper" 这种 → 但 basename 会包含空格 + helper，先放过
+    if basename.starts_with(&needle_l) && !basename.contains("helper") && !basename.contains("renderer") && !basename.contains("gpu") {
+      return true;
+    }
+    return false;
+  }
+
   if basename == needle_l { return true; }
 
   // Case 2: node / bun / deno / npx wrapper invoking a JS CLI. The needle
@@ -276,12 +283,14 @@ fn list_posix(needle: &str) -> Vec<Value> {
     let mem: f64 = parts[2].parse().unwrap_or(0.0);
     let etime = parts[3].to_string();
     let command = parts[4].trim().to_string();
+    let kind = if command.to_ascii_lowercase().contains(".app/contents/") { "app" } else { "cli" };
     rows.push(json!({
       "pid": pid,
       "cpu": cpu,
       "memPct": mem,
       "elapsed": etime,
       "command": command,
+      "kind": kind,
     }));
   }
 

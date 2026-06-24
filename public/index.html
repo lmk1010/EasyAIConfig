@@ -1145,6 +1145,16 @@
               </header>
               <div id="configEditorSearchEmpty" class="config-editor-search-empty hide">没有找到匹配的配置项，试试更短的关键词。</div>
 
+              <!-- Store-style 卡片网格：默认展示，点卡进子页 -->
+              <div class="cfg-grid hide" id="cfgGrid"></div>
+              <!-- 子页头部：详情态时显示，含返回按钮 -->
+              <div class="cfg-subhead hide" id="cfgSubhead">
+                <button type="button" class="cfg-back" id="cfgBackBtn">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3L4.5 8L9.5 13M4.5 8H14"/></svg>
+                  返回分类
+                </button>
+                <span class="cfg-sub-crumb" id="cfgSubCrumb">配置</span>
+              </div>
               <div class="config-editor-layout" id="configEditorLayout" data-view-mode="form">
 
                 <!-- ═══ Codex Config Editor ═══ -->
