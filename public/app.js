@@ -17674,9 +17674,11 @@ function ensureProviderDetailDom() {
 }
 
 function lookupProviderDetailRow() {
-  const s = (typeof hubState === 'function' ? hubState() : null) || state;
-  const tool = (s.activeTool || s.activeTool) || 'codex';
-  const rows = typeof buildProviderRows === 'function' ? buildProviderRows(tool) : [];
+  // hubState / buildProviderRows 都是 connection hub 的 IIFE 内部函数，
+  // 通过 window.__chHubState / window.__chBuildRows 桥出来。
+  const s = (typeof window.__chHubState === 'function' ? window.__chHubState() : null) || state;
+  const tool = s.activeTool || 'codex';
+  const rows = typeof window.__chBuildRows === 'function' ? window.__chBuildRows(tool) : [];
   return rows.find((r) => r.key === state.providerDetail.providerKey) || null;
 }
 
@@ -18043,10 +18045,9 @@ function renderPdHealth(row) {
 async function actionPdSwitch() {
   const row = lookupProviderDetailRow();
   if (!row) return;
-  if (typeof switchRow === 'function') {
-    await switchRow(row.key);
+  if (typeof window.__chSwitchRow === 'function') {
+    await window.__chSwitchRow(row.key);
   }
-  // 切完后 re-render（active 状态变了，按钮要变成"已是当前"）
   renderProviderDetail();
 }
 
@@ -18054,8 +18055,8 @@ function actionPdEdit() {
   const row = lookupProviderDetailRow();
   if (!row) return;
   closeProviderDetail();
-  if (typeof openSlideover === 'function') {
-    openSlideover('edit', row.key);
+  if (typeof window.__chOpenSlideover === 'function') {
+    window.__chOpenSlideover('edit', row.key);
   }
 }
 
@@ -18063,8 +18064,8 @@ async function actionPdDelete() {
   const row = lookupProviderDetailRow();
   if (!row) return;
   if (!window.confirm(`确认删除 provider「${row.name || row.key}」？\n该操作会从 ~/.codex/config.toml 移除条目，并清掉本地草稿历史。`)) return;
-  if (typeof deleteApiKeyProvider === 'function') {
-    await deleteApiKeyProvider(row.key, row.kind || 'codex-apikey');
+  if (typeof window.__chDeleteApiKeyProvider === 'function') {
+    await window.__chDeleteApiKeyProvider(row.key, row.kind || 'codex-apikey');
   }
   closeProviderDetail();
 }
@@ -18203,7 +18204,7 @@ function removeFromAutoFailoverPriority(key) {
 
 function getAutoFailoverCandidates() {
   // 只考虑 API key provider（OAuth profile 切换路径不同，第一版先不混进来）
-  const rows = (typeof buildProviderRows === 'function' ? buildProviderRows('codex') : [])
+  const rows = (typeof window.__chBuildRows === 'function' ? window.__chBuildRows('codex') : [])
     .filter((r) => r.mode === 'apikey' && !r.historyOnly);
   return rows;
 }
@@ -23861,6 +23862,12 @@ loadTools();
   window.renderConnectionHub = renderConnectionHub;
   window.__chLoadOauthProfiles = loadCodexOauthProfiles;
   window.__chLoadClaudeCodeOauthProfiles = loadClaudeCodeOauthProfiles;
+  // 让外面的 detail drawer / auto-failover 能拿到 hub 内部函数
+  window.__chBuildRows = buildProviderRows;
+  window.__chHubState = hubState;
+  window.__chSwitchRow = switchRow;
+  window.__chOpenSlideover = openSlideover;
+  window.__chDeleteApiKeyProvider = deleteApiKeyProvider;
 
   async function initialLoad() {
     wire();
