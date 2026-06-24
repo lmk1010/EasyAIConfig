@@ -12242,8 +12242,15 @@ function renderConfigEditorShell(toolId = '') {
 }
 
 // ─── Store 卡片网格 + 子页面导航 ────────────────────────────────
-// 默认列出当前 tool 下所有 .cfg-section 作为卡片；点卡片 → 隐藏网格、
-// 只展开那一节、显示返回按钮；返回 → 折回所有 section、显示网格。
+const CFG_TOOL_LABELS = {
+  codex: 'Codex',
+  claudecode: 'Claude Code',
+  opencode: 'OpenCode',
+  openclaw: 'OpenClaw',
+};
+function cfgToolLabel(toolId) {
+  return CFG_TOOL_LABELS[toolId] || (typeof window !== 'undefined' && window.__cfgToolLabel?.(toolId)) || toolId || '';
+}
 const CFG_CARD_ICONS = {
   '模型与推理': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.2 4.2l2.8 2.8M17 17l2.8 2.8M1 12h4M19 12h4M4.2 19.8l2.8-2.8M17 7l2.8-2.8"/></svg>',
   '行为与审批': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
@@ -12323,7 +12330,7 @@ function buildCfgHero(toolId) {
   const esc = escapeHtml;
   // 同步页面标题区
   const titleEl = document.getElementById('cfgPageTool');
-  if (titleEl) titleEl.textContent = TOOL_LABELS[toolId] || toolId || 'Codex';
+  if (titleEl) titleEl.textContent = cfgToolLabel(toolId) || 'Codex';
   // 计算每个 tool 的元信息：配置文件名 + 完整大小（如果能拿到）
   if (toolId === 'codex') {
     const cfg = state.current?.config || {};
@@ -12376,7 +12383,7 @@ function buildCfgHero(toolId) {
     <div class="cfg-hero">
       <div class="cfg-hero-eyebrow">CURRENT ${esc((toolId || '').toUpperCase())}</div>
       <div class="cfg-hero-grid">
-        <div class="cfg-hero-item"><span>工具</span><strong>${esc(TOOL_LABELS[toolId] || toolId)}</strong></div>
+        <div class="cfg-hero-item"><span>工具</span><strong>${esc(cfgToolLabel(toolId))}</strong></div>
       </div>
     </div>`;
 }
@@ -12422,7 +12429,7 @@ function enterCfgSubpage(sectionId) {
   if (crumb) {
     const head = sec.querySelector(':scope > summary.cfg-section-header');
     const title = (head?.textContent || '').replace(/\s+/g, ' ').trim().split(/[·：:|]/)[0].trim() || '配置';
-    crumb.innerHTML = `${escapeHtml(TOOL_LABELS[tool] || tool)} <em>/</em> <strong>${escapeHtml(title)}</strong>`;
+    crumb.innerHTML = `${escapeHtml(cfgToolLabel(tool))} <em>/</em> <strong>${escapeHtml(title)}</strong>`;
   }
   sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
