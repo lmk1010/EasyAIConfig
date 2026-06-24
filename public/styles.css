@@ -25886,11 +25886,74 @@ body {
 /* ─── Store 卡片网格 + 子页面 (cfg-grid / cfg-card / cfg-sec-hidden) ───── */
 .shell-v2 .cfg-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
+  gap: 14px;
   margin: 8px 0 24px;
 }
 .shell-v2 .cfg-grid.hide { display: none; }
+
+/* hero 当前生效配置概览 */
+.shell-v2 .cfg-hero {
+  padding: 16px 18px 18px;
+  border-radius: 14px;
+  background: linear-gradient(140deg, rgba(91,140,255,0.08), rgba(91,140,255,0.015));
+  border: 1px solid rgba(91,140,255,0.16);
+}
+[data-theme="light"] .shell-v2 .cfg-hero { border-color: rgba(91,140,255,0.2); background: linear-gradient(140deg, rgba(91,140,255,0.1), rgba(91,140,255,0.02)); }
+.shell-v2 .cfg-hero-eyebrow { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.14em; color: var(--s2-faint); margin-bottom: 10px; }
+.shell-v2 .cfg-hero-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
+.shell-v2 .cfg-hero-item { display: grid; gap: 2px; min-width: 0; }
+.shell-v2 .cfg-hero-item > span { font-size: 0.58rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--s2-faint); }
+.shell-v2 .cfg-hero-item strong { font-size: 0.94rem; font-weight: 660; color: var(--s2-text); letter-spacing: -0.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shell-v2 .cfg-hero-item code { font-family: var(--font-mono-ui); font-size: 0.66rem; color: var(--s2-text); padding: 4px 8px; border-radius: 6px; background: rgba(255,255,255,0.04); word-break: break-all; }
+[data-theme="light"] .shell-v2 .cfg-hero-item code { background: rgba(15,23,42,0.04); }
+
+/* 卡片网格容器：自适应 2/3 列，stretch 同行等高 */
+.shell-v2 .cfg-grid-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+/* 卡片底部 pill 计数 */
+.shell-v2 .cfg-card-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.shell-v2 .cfg-card-pill {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 4px;
+  font-size: 0.58rem; font-weight: 600;
+  background: rgba(255,255,255,0.05); color: var(--s2-faint);
+  font-variant-numeric: tabular-nums; letter-spacing: 0.03em;
+}
+.shell-v2 .cfg-card-pill.is-on { background: rgba(91,140,255,0.16); color: #8dbdff; }
+[data-theme="light"] .shell-v2 .cfg-card-pill { background: rgba(15,23,42,0.06); }
+[data-theme="light"] .shell-v2 .cfg-card-pill.is-on { color: #3358ff; }
+
+/* 底部快捷操作 */
+.shell-v2 .cfg-quick {
+  margin-top: 4px;
+  padding: 14px 16px 16px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255,255,255,0.08);
+}
+[data-theme="light"] .shell-v2 .cfg-quick { border-color: rgba(15,23,42,0.08); }
+.shell-v2 .cfg-quick-head { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--s2-faint); margin-bottom: 10px; }
+.shell-v2 .cfg-quick-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.shell-v2 .cfg-quick-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 40px; padding: 0 14px;
+  background: rgba(255,255,255,0.03); background-image: none;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  color: var(--s2-text);
+  font-size: 0.74rem; font-weight: 580;
+  cursor: pointer; box-shadow: none;
+  transition: background 120ms, transform 100ms, border-color 120ms;
+}
+.shell-v2 .cfg-quick-btn:hover { background: rgba(91,140,255,0.1); border-color: rgba(91,140,255,0.3); transform: translateY(-1px); }
+.shell-v2 .cfg-quick-icon { color: #8dbdff; display: inline-flex; }
+[data-theme="light"] .shell-v2 .cfg-quick-btn { background: rgba(255,255,255,0.6); border-color: rgba(15,23,42,0.08); color: #1e293b; }
+[data-theme="light"] .shell-v2 .cfg-quick-btn:hover { background: rgba(91,140,255,0.1); border-color: rgba(91,140,255,0.3); }
+[data-theme="light"] .shell-v2 .cfg-quick-icon { color: #3358ff; }
 
 .shell-v2 .cfg-card {
   display: grid;

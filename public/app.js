@@ -12270,38 +12270,104 @@ function buildCfgGrid(toolId) {
     grid.classList.add('hide');
     return;
   }
-  // 每个 section 自动加 id（如果还没有），便于跳转
   sections.forEach((sec, idx) => {
     if (!sec.id) sec.id = `cfgSec_${toolId}_${idx}`;
   });
+
+  // 顶部 hero：当前关键值速览（模型 / provider / 推理强度 / 启用开关数）
+  const heroHtml = buildCfgHero(toolId);
+
   const cards = sections.map((sec) => {
     const summary = sec.querySelector(':scope > summary.cfg-section-header');
     const text = (summary?.textContent || '').replace(/\s+/g, ' ').trim();
-    // 提取标题主词 + 数量统计
     const heading = text.split(/[·：:|]/)[0].trim() || '配置';
     const icon = CFG_CARD_ICONS[heading] || CFG_CARD_FALLBACK;
-    // 数一下里面有多少开关 / 字段（给副标用）
-    const switches = sec.querySelectorAll('input[type="checkbox"]').length;
-    const inputs = sec.querySelectorAll('input[type="text"], input[type="number"], input[type="url"], select, textarea').length;
-    const sub = [
-      inputs ? `${inputs} 项设置` : '',
-      switches ? `${switches} 开关` : '',
-    ].filter(Boolean).join(' · ') || '可配置';
+    // 真正在 section 里去数生效中的字段值 + 启用的开关数（之前都是 0 也写"可配置"）
+    const checks = sec.querySelectorAll('input[type="checkbox"]');
+    const enabledCount = Array.from(checks).filter((c) => c.checked).length;
+    const inputs = sec.querySelectorAll('input[type="text"], input[type="number"], input[type="url"], select, textarea');
+    const filledCount = Array.from(inputs).filter((i) => {
+      const v = (i.value || '').toString().trim();
+      return v && v !== '0';
+    }).length;
+    const subParts = [];
+    if (inputs.length) subParts.push(`<span class="cfg-card-pill">${filledCount}/${inputs.length} 项已填</span>`);
+    if (checks.length) subParts.push(`<span class="cfg-card-pill ${enabledCount > 0 ? 'is-on' : ''}">${enabledCount}/${checks.length} 开关启用</span>`);
+    if (!subParts.length) subParts.push('<span class="cfg-card-pill">可配置</span>');
     return `
       <button type="button" class="cfg-card" data-cfg-card="${sec.id}">
         <span class="cfg-card-icon">${icon}</span>
         <span class="cfg-card-body">
           <span class="cfg-card-title">${escapeHtml(heading)}</span>
-          <span class="cfg-card-sub">${escapeHtml(sub)}</span>
+          <span class="cfg-card-pills">${subParts.join('')}</span>
         </span>
         <span class="cfg-card-arrow">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
         </span>
       </button>`;
   }).join('');
-  grid.innerHTML = cards;
+
+  // 底部快捷操作：备份 / 重置 / 检查 / 商店
+  const footerHtml = buildCfgQuickActions(toolId);
+
+  grid.innerHTML = `
+    ${heroHtml}
+    <div class="cfg-grid-cards">${cards}</div>
+    ${footerHtml}
+  `;
   grid.classList.remove('hide');
-  exitCfgSubpage(); // 默认是网格态
+  exitCfgSubpage();
+}
+
+function buildCfgHero(toolId) {
+  const esc = escapeHtml;
+  if (toolId === 'codex') {
+    const cfg = state.current?.config || {};
+    const summary = state.current?.summary || {};
+    const model = summary.model || cfg.model || '—';
+    const provider = cfg.model_provider || '—';
+    const effort = cfg.model_reasoning_effort || 'medium';
+    const codexHome = state.current?.codexHome || '~/.codex';
+    return `
+      <div class="cfg-hero">
+        <div class="cfg-hero-eyebrow">CURRENT CODEX</div>
+        <div class="cfg-hero-grid">
+          <div class="cfg-hero-item"><span>默认模型</span><strong>${esc(model)}</strong></div>
+          <div class="cfg-hero-item"><span>默认 Provider</span><strong>${esc(provider)}</strong></div>
+          <div class="cfg-hero-item"><span>推理强度</span><strong>${esc(effort)}</strong></div>
+          <div class="cfg-hero-item"><span>CODEX_HOME</span><code>${esc(codexHome)}</code></div>
+        </div>
+      </div>`;
+  }
+  // 其他 tool 简化版
+  return `
+    <div class="cfg-hero">
+      <div class="cfg-hero-eyebrow">CURRENT ${esc((toolId || '').toUpperCase())}</div>
+      <div class="cfg-hero-grid">
+        <div class="cfg-hero-item"><span>工具</span><strong>${esc(TOOL_LABELS[toolId] || toolId)}</strong></div>
+      </div>
+    </div>`;
+}
+
+function buildCfgQuickActions(toolId) {
+  // 备份 / 重置 / 校验 / 商店 — 都是 hub 上现有 button 的 alias
+  const actions = [
+    { id: 'cfgQuickValidate',  label: '校验配置', icon: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3l-8.5 8.5L2 8"/></svg>' },
+    { id: 'cfgQuickStore',     label: '配置商店', icon: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6l6-4 6 4v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/><path d="M5 13V9h6v4"/></svg>' },
+    { id: 'cfgQuickRaw',       label: '原始文件', icon: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3L1 8l4 5M11 3l4 5-4 5"/></svg>' },
+    { id: 'cfgQuickReset',     label: '重置当前',  icon: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3v4h4M14.5 9a6 6 0 0 1-11.2 2.5M1.5 7a6 6 0 0 1 11.2-2.5"/></svg>' },
+  ];
+  return `
+    <div class="cfg-quick">
+      <div class="cfg-quick-head">快捷操作</div>
+      <div class="cfg-quick-row">
+        ${actions.map((a) => `
+          <button type="button" class="cfg-quick-btn" data-cfg-quick="${a.id}">
+            <span class="cfg-quick-icon">${a.icon}</span>
+            <span class="cfg-quick-label">${escapeHtml(a.label)}</span>
+          </button>`).join('')}
+      </div>
+    </div>`;
 }
 
 function enterCfgSubpage(sectionId) {
@@ -12338,7 +12404,7 @@ function exitCfgSubpage() {
   document.getElementById('cfgSubhead')?.classList.add('hide');
 }
 
-// 事件代理：卡片点击 + 返回按钮
+// 事件代理：卡片点击 + 返回按钮 + 快捷操作转发
 document.addEventListener('click', (e) => {
   const target = e.target instanceof Element ? e.target : null;
   if (!target) return;
@@ -12350,6 +12416,27 @@ document.addEventListener('click', (e) => {
   if (target.closest('#cfgBackBtn')) {
     exitCfgSubpage();
     return;
+  }
+  const quick = target.closest('[data-cfg-quick]');
+  if (quick) {
+    const aliasMap = {
+      cfgQuickValidate: 'validateConfigBtn',
+      cfgQuickStore:    'openConfigStoreBtn',
+      cfgQuickRaw:      null, // 直接切到原始文件视图
+      cfgQuickReset:    'resetConfigEditorBtn',
+    };
+    const id = quick.dataset.cfgQuick;
+    if (id === 'cfgQuickRaw' && typeof switchConfigEditorView === 'function') {
+      switchConfigEditorView('code');
+      return;
+    }
+    const targetId = aliasMap[id];
+    const orig = targetId ? document.getElementById(targetId) : null;
+    if (orig) {
+      orig.click();
+    } else {
+      flash(`暂不支持：${id}`, 'warning');
+    }
   }
 });
 
