@@ -90,6 +90,25 @@ const state = {
   rangePicker: null, // { viewMonth, fromDraft, toDraft }
   // Codex 启动命令面板（hero 下拉开/关）
   codexCmdPaletteOpen: false,
+  // 自动故障转移：当前 active provider 连续失败 N 次，按 priority 自动切下一档
+  autoFailover: (() => {
+    try {
+      const raw = localStorage.getItem('easyaiconfig_auto_failover_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          enabled: Boolean(parsed?.enabled),
+          failThreshold: Math.max(1, Math.min(10, Number(parsed?.failThreshold) || 3)),
+          priority: Array.isArray(parsed?.priority) ? parsed.priority.filter((k) => typeof k === 'string') : [],
+          lastSwitchAt: Number(parsed?.lastSwitchAt) || 0,
+          panelOpen: false,
+        };
+      }
+    } catch {}
+    return { enabled: false, failThreshold: 3, priority: [], lastSwitchAt: 0, panelOpen: false };
+  })(),
+  // 每个 provider 的最近连续失败计数（运行时，不持久化）
+  providerFailureStreak: {},
   // Provider 详情 drawer：点击行打开，里面有 4 个 tab（概览/用量/测试/健康）
   providerDetail: {
     open: false,
@@ -16515,6 +16534,8 @@ async function refreshProviderHealth(force = false) {
     }
     renderCurrentConfig();
   }));
+  // 每轮探测完检查一下 auto-failover 该不该出手
+  try { if (typeof evaluateAutoFailover === 'function') evaluateAutoFailover(); } catch (_) {}
 }
 
 function toggleProviderDropdown(force) {
@@ -18089,6 +18110,266 @@ async function actionPdRefreshHealth() {
 
 async function actionPdCopyLaunchCmd() {
   // 占位：未来跟 Codex hero 的命令面板复用一份
+}
+
+// ─── Auto-Failover ───────────────────────────────────────────────
+// 监控 active provider 的健康，连续失败 failThreshold 次自动切到 priority 里
+// 下一档"已通"的 provider。switch 会写一条 toast；可手动撤销。
+function saveAutoFailoverConfig() {
+  try {
+    const cfg = state.autoFailover;
+    localStorage.setItem('easyaiconfig_auto_failover_v1', JSON.stringify({
+      enabled: cfg.enabled,
+      failThreshold: cfg.failThreshold,
+      priority: cfg.priority,
+      lastSwitchAt: cfg.lastSwitchAt,
+    }));
+  } catch {}
+}
+
+function ensureAutoFailoverPanelDom() {
+  let panel = document.getElementById('chAutoFailover');
+  if (panel) return panel;
+  panel = document.createElement('div');
+  panel.id = 'chAutoFailover';
+  panel.className = 'af-pop hide';
+  document.body.appendChild(panel);
+  panel.addEventListener('click', (e) => {
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    if (target.closest('[data-af-close]')) { closeAutoFailoverPanel(); return; }
+    if (target.closest('[data-af-toggle-enabled]')) {
+      state.autoFailover.enabled = !state.autoFailover.enabled;
+      // 关闭时清空 streak，避免下次开启即触发
+      if (!state.autoFailover.enabled) state.providerFailureStreak = {};
+      saveAutoFailoverConfig();
+      renderAutoFailoverPanel();
+      renderAutoFailoverTrigger();
+      return;
+    }
+    const moveBtn = target.closest('[data-af-move]');
+    if (moveBtn) {
+      const key = moveBtn.dataset.afMove;
+      const dir = moveBtn.dataset.afDir === 'up' ? -1 : 1;
+      moveAutoFailoverPriority(key, dir);
+      renderAutoFailoverPanel();
+      return;
+    }
+    const addBtn = target.closest('[data-af-add]');
+    if (addBtn) {
+      addToAutoFailoverPriority(addBtn.dataset.afAdd);
+      renderAutoFailoverPanel();
+      return;
+    }
+    const removeBtn = target.closest('[data-af-remove]');
+    if (removeBtn) {
+      removeFromAutoFailoverPriority(removeBtn.dataset.afRemove);
+      renderAutoFailoverPanel();
+      return;
+    }
+  });
+  panel.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t?.dataset?.afField === 'failThreshold') {
+      const v = Math.max(1, Math.min(10, Number(t.value) || 3));
+      state.autoFailover.failThreshold = v;
+      saveAutoFailoverConfig();
+    }
+  });
+  return panel;
+}
+
+function moveAutoFailoverPriority(key, dir) {
+  const list = state.autoFailover.priority;
+  const idx = list.indexOf(key);
+  if (idx < 0) return;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  list.splice(idx, 1);
+  list.splice(newIdx, 0, key);
+  saveAutoFailoverConfig();
+}
+function addToAutoFailoverPriority(key) {
+  if (!key) return;
+  const list = state.autoFailover.priority;
+  if (list.includes(key)) return;
+  list.push(key);
+  saveAutoFailoverConfig();
+}
+function removeFromAutoFailoverPriority(key) {
+  state.autoFailover.priority = state.autoFailover.priority.filter((k) => k !== key);
+  saveAutoFailoverConfig();
+}
+
+function getAutoFailoverCandidates() {
+  // 只考虑 API key provider（OAuth profile 切换路径不同，第一版先不混进来）
+  const rows = (typeof buildProviderRows === 'function' ? buildProviderRows('codex') : [])
+    .filter((r) => r.mode === 'apikey' && !r.historyOnly);
+  return rows;
+}
+
+function openAutoFailoverPanel() {
+  state.autoFailover.panelOpen = true;
+  const panel = ensureAutoFailoverPanelDom();
+  panel.classList.remove('hide');
+  requestAnimationFrame(() => requestAnimationFrame(() => panel.classList.add('open')));
+  renderAutoFailoverPanel();
+  // 点外部关闭
+  setTimeout(() => {
+    document.addEventListener('click', autoFailoverOutsideClick, { capture: true });
+  }, 0);
+}
+function closeAutoFailoverPanel() {
+  state.autoFailover.panelOpen = false;
+  const panel = document.getElementById('chAutoFailover');
+  if (panel) {
+    panel.classList.remove('open');
+    setTimeout(() => panel.classList.add('hide'), 180);
+  }
+  document.removeEventListener('click', autoFailoverOutsideClick, { capture: true });
+}
+function autoFailoverOutsideClick(e) {
+  const panel = document.getElementById('chAutoFailover');
+  const trig = document.getElementById('chAutoFailoverTrigger');
+  if (!panel) return;
+  if (panel.contains(e.target) || trig?.contains(e.target)) return;
+  closeAutoFailoverPanel();
+}
+
+function renderAutoFailoverPanel() {
+  const panel = document.getElementById('chAutoFailover');
+  if (!panel) return;
+  const cfg = state.autoFailover;
+  const candidates = getAutoFailoverCandidates();
+  const inList = new Set(cfg.priority);
+  const orderedKnown = cfg.priority
+    .map((k) => candidates.find((c) => c.key === k))
+    .filter(Boolean);
+  const remaining = candidates.filter((c) => !inList.has(c.key));
+  const esc = escapeHtml;
+  panel.innerHTML = `
+    <div class="af-head">
+      <div class="af-head-title">
+        <span class="af-eyebrow">AUTO FAILOVER</span>
+        <div class="af-title">自动故障转移</div>
+      </div>
+      <button type="button" class="af-close" data-af-close aria-label="关闭">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
+      </button>
+    </div>
+    <div class="af-body">
+      <label class="af-toggle">
+        <span>
+          <strong>开启自动切换</strong>
+          <em>active provider 连续失败 N 次时自动按优先级切换</em>
+        </span>
+        <button type="button" class="af-switch ${cfg.enabled ? 'is-on' : ''}" data-af-toggle-enabled aria-pressed="${cfg.enabled}">
+          <span class="af-switch-thumb"></span>
+        </button>
+      </label>
+      <div class="af-row">
+        <label class="af-field">
+          <span>失败阈值（次）</span>
+          <input type="number" min="1" max="10" step="1" value="${cfg.failThreshold}" data-af-field="failThreshold" />
+        </label>
+        <div class="af-field af-field-readonly">
+          <span>最近自动切换</span>
+          <code>${esc(cfg.lastSwitchAt ? formatRelativeTime(new Date(cfg.lastSwitchAt).toISOString()) : '从未')}</code>
+        </div>
+      </div>
+      <div class="af-section-title">优先级顺序</div>
+      ${orderedKnown.length ? `
+        <ol class="af-prio-list">
+          ${orderedKnown.map((row, i) => `
+            <li>
+              <span class="af-prio-rank">${i + 1}</span>
+              <span class="af-prio-meta">
+                <strong>${esc(row.name || row.key)}</strong>
+                <em>${esc(row.baseUrl || '')}</em>
+              </span>
+              <span class="af-prio-actions">
+                <button type="button" class="af-icon" data-af-move="${esc(row.key)}" data-af-dir="up" ${i === 0 ? 'disabled' : ''} title="上移">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1.5 6.5L5 3l3.5 3.5"/></svg>
+                </button>
+                <button type="button" class="af-icon" data-af-move="${esc(row.key)}" data-af-dir="down" ${i === orderedKnown.length - 1 ? 'disabled' : ''} title="下移">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1.5 3.5L5 7l3.5-3.5"/></svg>
+                </button>
+                <button type="button" class="af-icon af-icon-danger" data-af-remove="${esc(row.key)}" title="移出优先级表">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l4 4M7 3L3 7"/></svg>
+                </button>
+              </span>
+            </li>`).join('')}
+        </ol>` : '<div class="af-empty">还没有优先级 — 从下面挑几条加入。</div>'}
+      ${remaining.length ? `
+        <div class="af-section-title af-section-title-sub">备选 provider</div>
+        <div class="af-add-grid">
+          ${remaining.map((row) => `
+            <button type="button" class="af-add-chip" data-af-add="${esc(row.key)}">
+              <span>${esc(row.name || row.key)}</span>
+              <em>+</em>
+            </button>`).join('')}
+        </div>` : ''}
+    </div>
+    <div class="af-foot">
+      <span class="af-foot-hint">仅作用于 Codex API Key provider；OAuth 不参与。</span>
+    </div>
+  `;
+}
+
+function renderAutoFailoverTrigger() {
+  const trig = document.getElementById('chAutoFailoverTrigger');
+  if (!trig) return;
+  trig.classList.toggle('is-on', Boolean(state.autoFailover.enabled));
+  const label = trig.querySelector('.af-trig-label');
+  if (label) label.textContent = state.autoFailover.enabled
+    ? `自动切换 · 阈值 ${state.autoFailover.failThreshold}`
+    : '自动切换 关';
+}
+
+// 每次 refreshProviderHealth 完后调用：累计当前 active 的连续失败，触发 failover
+function evaluateAutoFailover() {
+  const cfg = state.autoFailover;
+  if (!cfg.enabled) return;
+  if (!cfg.priority.length) return;
+  // 上一次自动切换距现在 < 30 秒 → 冷却（避免抖动循环）
+  if (Date.now() - (cfg.lastSwitchAt || 0) < 30 * 1000) return;
+  const candidates = getAutoFailoverCandidates();
+  const active = candidates.find((c) => c.isActive);
+  if (!active) return;
+  if (!cfg.priority.includes(active.key)) return; // active 不在监控范围
+
+  const h = state.providerHealth?.[active.key] || {};
+  const streakMap = state.providerFailureStreak;
+  if (h.loading) return;
+  if (h.ok) {
+    streakMap[active.key] = 0;
+    return;
+  }
+  if (!h.checked) return;
+  streakMap[active.key] = (streakMap[active.key] || 0) + 1;
+  if (streakMap[active.key] < cfg.failThreshold) return;
+
+  // 在优先级表里找下一档"已通"且不是当前 active 的 provider
+  const activeIdx = cfg.priority.indexOf(active.key);
+  let target = null;
+  for (let offset = 1; offset <= cfg.priority.length; offset++) {
+    const idx = (activeIdx + offset) % cfg.priority.length;
+    if (idx === activeIdx) break;
+    const k = cfg.priority[idx];
+    const row = candidates.find((c) => c.key === k);
+    if (!row) continue;
+    const rowHealth = state.providerHealth?.[row.key] || {};
+    if (rowHealth.ok) { target = row; break; }
+  }
+  if (!target) return;
+
+  cfg.lastSwitchAt = Date.now();
+  streakMap[active.key] = 0;
+  saveAutoFailoverConfig();
+  flash(`自动切换：${active.name || active.key} 连续失败 ${cfg.failThreshold} 次 → ${target.name || target.key}`, 'warning');
+  if (typeof quickSwitchCodexProvider === 'function') {
+    quickSwitchCodexProvider(target).catch((err) => console.warn('[auto-failover] switch failed', err));
+  }
 }
 
 async function saveConfigOnly() {
@@ -23290,6 +23571,20 @@ loadTools();
     if (!allowed.includes(saved)) saved = 0;
     applyAutodetectUi(saved);
     scheduleAutodetect(saved);
+
+    // Auto-failover 触发器（旁边的小按钮）
+    const afTrig = document.getElementById('chAutoFailoverTrigger');
+    if (afTrig) {
+      if (typeof renderAutoFailoverTrigger === 'function') renderAutoFailoverTrigger();
+      afTrig.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (state.autoFailover?.panelOpen) {
+          closeAutoFailoverPanel();
+        } else {
+          openAutoFailoverPanel();
+        }
+      });
+    }
 
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
