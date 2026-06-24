@@ -90,6 +90,18 @@ const state = {
   rangePicker: null, // { viewMonth, fromDraft, toDraft }
   // Codex 启动命令面板（hero 下拉开/关）
   codexCmdPaletteOpen: false,
+  // Provider 详情 drawer：点击行打开，里面有 4 个 tab（概览/用量/测试/健康）
+  providerDetail: {
+    open: false,
+    providerKey: '',
+    tab: 'overview',           // overview | usage | test | health
+    summary: null,             // { uptimePct, avgLatencyMs, p95LatencyMs, total, success, lastAt }
+    history: null,             // { rows: [{ probedAt, success, latencyMs, error }] }
+    testResult: null,          // { ok, models, latencyMs, error }
+    testRunning: false,
+    loading: false,
+    error: '',
+  },
   // 默认只贴 `codex <flags>`；切到 OAuth profile 时自动打开"环境前缀"
   // 让命令带上 unset + CODEX_HOME（多账号/IP 残留 env 必须）
   codexCmdShowPrefix: false,
@@ -17598,6 +17610,487 @@ function inferOpenClawProviderFromModel(modelId) {
 }
 
 
+// ─── Provider 详情 Drawer ────────────────────────────────────────────
+// 点行 = 打开这个 drawer。drawer 有 4 个 tab：
+//   概览   — 状态点、24h uptime%、平均 / p95 latency、最近探测结果、切换按钮
+//   用量   — Codex sessions 按 provider 拆出来的费用 + token 分布（占位简版）
+//   测试   — 手动 probe + 列模型 + 自定义路径 ping
+//   健康   — 详细 sparkline + 最近 N 次探测的时间轴
+//
+// 切换 active provider 必须显式按 drawer 顶部"切换为当前"按钮，避免误触。
+function ensureProviderDetailDom() {
+  let drawer = document.getElementById('chProviderDetail');
+  if (drawer) return drawer;
+  drawer = document.createElement('aside');
+  drawer.id = 'chProviderDetail';
+  drawer.className = 'pd-drawer hide';
+  drawer.setAttribute('aria-hidden', 'true');
+  drawer.innerHTML = `
+    <div class="pd-scrim" data-pd-close></div>
+    <div class="pd-panel" role="dialog" aria-labelledby="pdTitle">
+      <div class="pd-inner" id="pdInner"></div>
+    </div>
+  `;
+  document.body.appendChild(drawer);
+  drawer.addEventListener('click', (e) => {
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    if (target.closest('[data-pd-close]')) { closeProviderDetail(); return; }
+    const tabBtn = target.closest('[data-pd-tab]');
+    if (tabBtn) {
+      state.providerDetail.tab = tabBtn.dataset.pdTab;
+      renderProviderDetail();
+      return;
+    }
+    if (target.closest('[data-pd-switch]')) { actionPdSwitch(); return; }
+    if (target.closest('[data-pd-edit]')) { actionPdEdit(); return; }
+    if (target.closest('[data-pd-delete]')) { actionPdDelete(); return; }
+    if (target.closest('[data-pd-test]')) { actionPdRunTest(); return; }
+    if (target.closest('[data-pd-refresh-health]')) { actionPdRefreshHealth(); return; }
+    if (target.closest('[data-pd-copy-cmd]')) { actionPdCopyLaunchCmd(); return; }
+  });
+  return drawer;
+}
+
+function lookupProviderDetailRow() {
+  const s = (typeof hubState === 'function' ? hubState() : null) || state;
+  const tool = (s.activeTool || s.activeTool) || 'codex';
+  const rows = typeof buildProviderRows === 'function' ? buildProviderRows(tool) : [];
+  return rows.find((r) => r.key === state.providerDetail.providerKey) || null;
+}
+
+function openProviderDetail(key) {
+  if (!key) return;
+  state.providerDetail.providerKey = key;
+  state.providerDetail.open = true;
+  state.providerDetail.tab = 'overview';
+  state.providerDetail.summary = null;
+  state.providerDetail.history = null;
+  state.providerDetail.testResult = null;
+  state.providerDetail.testRunning = false;
+  state.providerDetail.loading = false;
+  state.providerDetail.error = '';
+  ensureProviderDetailDom();
+  const drawer = document.getElementById('chProviderDetail');
+  if (!drawer) return;
+  drawer.classList.remove('hide');
+  requestAnimationFrame(() => requestAnimationFrame(() => drawer.classList.add('open')));
+  drawer.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('pd-drawer-active');
+  renderProviderDetail();
+  // 后台拉 probe 数据；对 OAuth 这种合成 row 直接跳过
+  const row = lookupProviderDetailRow();
+  if (row && row.mode === 'apikey') {
+    fetchProviderProbeData(row).catch(() => {});
+  }
+}
+
+function closeProviderDetail() {
+  const drawer = document.getElementById('chProviderDetail');
+  if (!drawer) return;
+  drawer.classList.remove('open');
+  drawer.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('pd-drawer-active');
+  setTimeout(() => drawer.classList.add('hide'), 240);
+  state.providerDetail.open = false;
+}
+
+async function fetchProviderProbeData(row) {
+  if (!row) return;
+  const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
+  const params = new URLSearchParams({ providerKey: row.key, codexHome });
+  state.providerDetail.loading = true;
+  renderProviderDetail();
+  try {
+    const [summary, history] = await Promise.all([
+      api(`/api/provider/probe-summary?${params.toString()}&windowHours=24`),
+      api(`/api/provider/probe-history?${params.toString()}&limit=120`),
+    ]);
+    state.providerDetail.summary = summary?.ok ? (summary.data || null) : null;
+    state.providerDetail.history = history?.ok ? (history.data || null) : null;
+  } catch (err) {
+    state.providerDetail.error = err?.message || String(err);
+  } finally {
+    state.providerDetail.loading = false;
+    renderProviderDetail();
+  }
+}
+
+function renderProviderDetail() {
+  const inner = document.getElementById('pdInner');
+  if (!inner) return;
+  const row = lookupProviderDetailRow();
+  if (!row) {
+    inner.innerHTML = `
+      <div class="pd-empty">
+        <p>该 provider 已不存在或已被删除。</p>
+        <button type="button" class="pd-btn pd-btn-ghost" data-pd-close>关闭</button>
+      </div>`;
+    return;
+  }
+  const tab = state.providerDetail.tab || 'overview';
+  const tabs = [
+    { id: 'overview', label: '概览' },
+    { id: 'usage',    label: '用量' },
+    { id: 'test',     label: '测试' },
+    { id: 'health',   label: '健康' },
+  ];
+  inner.innerHTML = `
+    ${renderPdHeader(row)}
+    <nav class="pd-tabs" role="tablist">
+      ${tabs.map((t) => `
+        <button type="button" role="tab" class="pd-tab ${tab === t.id ? 'is-active' : ''}" data-pd-tab="${t.id}" aria-selected="${tab === t.id}">
+          ${escapeHtml(t.label)}
+        </button>`).join('')}
+      <span class="pd-tabs-rail" aria-hidden="true"></span>
+    </nav>
+    <section class="pd-tab-content pd-tab-${tab}">
+      ${renderPdTab(tab, row)}
+    </section>
+  `;
+}
+
+function renderPdHeader(row) {
+  const esc = escapeHtml;
+  const isOauth = row.mode === 'oauth';
+  const isCurrent = Boolean(row.isActive);
+  const h = row.health || {};
+  let statusCls = 'muted', statusTxt = '未检测';
+  if (isOauth && row.hasCredential) { statusCls = 'ok'; statusTxt = '已认证'; }
+  else if (h.loading) { statusCls = 'warn'; statusTxt = '检测中'; }
+  else if (h.ok) { statusCls = 'ok'; statusTxt = '已通'; }
+  else if (h.checked) { statusCls = 'bad'; statusTxt = '失败'; }
+  else if (row.historyOnly) { statusCls = 'muted'; statusTxt = '本地草稿'; }
+  else if (!row.hasCredential) { statusCls = 'warn'; statusTxt = '缺 Key'; }
+  return `
+    <header class="pd-head">
+      <button type="button" class="pd-close" data-pd-close aria-label="关闭">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
+      </button>
+      <div class="pd-head-main">
+        <div class="pd-head-eyebrow">
+          <span class="pd-mode ${row.mode}">${esc(isOauth ? 'OAUTH' : 'API KEY')}</span>
+          ${isCurrent ? '<span class="pd-current-pill">当前</span>' : ''}
+          <span class="pd-status ${statusCls}">${esc(statusTxt)}</span>
+        </div>
+        <h2 class="pd-name" id="pdTitle">${esc(row.name || row.key)}</h2>
+        ${row.baseUrl ? `<div class="pd-url">${esc(row.baseUrl)}</div>` : ''}
+        ${row.homePath ? `<div class="pd-url pd-url-mono">${esc(`${row.homeLabel || 'HOME'}: ${row.homePath}`)}</div>` : ''}
+      </div>
+      <div class="pd-actions">
+        ${isCurrent
+          ? '<button type="button" class="pd-btn pd-btn-disabled" disabled>已是当前</button>'
+          : '<button type="button" class="pd-btn pd-btn-primary" data-pd-switch>切换为当前</button>'}
+        ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-btn pd-btn-ghost" data-pd-edit>编辑</button>' : ''}
+        ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-btn pd-btn-ghost" data-pd-delete>删除</button>' : ''}
+      </div>
+    </header>`;
+}
+
+function renderPdTab(tab, row) {
+  if (tab === 'overview') return renderPdOverview(row);
+  if (tab === 'usage') return renderPdUsage(row);
+  if (tab === 'test') return renderPdTest(row);
+  if (tab === 'health') return renderPdHealth(row);
+  return '';
+}
+
+function fmtLatency(ms) {
+  if (ms == null) return '—';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+function renderPdSparkline(history, width = 280, height = 40) {
+  const rows = Array.isArray(history?.rows) ? history.rows.slice().reverse() : [];
+  if (!rows.length) return '<div class="pd-spark-empty">还没有探测记录 — 切到"测试"做一次就有了。</div>';
+  // 用 latency 做 y 轴；失败的探测画成红点（latency 取一个稍高于 max 的"惩罚值"）
+  const latencies = rows.map((r) => Number(r.latencyMs || 0));
+  const maxLat = Math.max(...latencies, 1);
+  const stepX = rows.length > 1 ? width / (rows.length - 1) : width;
+  const pts = rows.map((r, i) => {
+    const lat = Number(r.latencyMs || 0);
+    const y = height - (lat / maxLat) * (height - 8) - 4;
+    return { x: i * stepX, y, ok: !!r.success, lat, ts: r.probedAt };
+  });
+  const smooth = (points) => {
+    if (!points.length) return '';
+    let d = `M ${points[0].x} ${points[0].y}`;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p0 = points[i - 1] || p1;
+      const p3 = points[i + 2] || p2;
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+    }
+    return d;
+  };
+  const linePath = smooth(pts);
+  const areaPath = `${linePath} L ${pts[pts.length - 1].x} ${height} L 0 ${height} Z`;
+  const dots = pts.map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.ok ? 1.6 : 2.2}" fill="${p.ok ? '#5b8cff' : '#f87171'}"/>`).join('');
+  const gradId = `pdSpark_${Math.random().toString(36).slice(2, 8)}`;
+  return `
+    <svg class="pd-spark" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#5b8cff" stop-opacity="0.32"/>
+          <stop offset="100%" stop-color="#5b8cff" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <path d="${areaPath}" fill="url(#${gradId})"/>
+      <path d="${linePath}" fill="none" stroke="#5b8cff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      ${dots}
+    </svg>`;
+}
+
+function renderPdOverview(row) {
+  const esc = escapeHtml;
+  const summary = state.providerDetail.summary || {};
+  const uptime = summary.uptimePct;
+  const avg = summary.avgLatencyMs;
+  const p95 = summary.p95LatencyMs;
+  const total = Number(summary.total || 0);
+  const lastAt = summary.lastAt ? formatRelativeTime(new Date(summary.lastAt).toISOString()) : '无记录';
+  const loading = state.providerDetail.loading;
+  return `
+    <div class="pd-overview">
+      <div class="pd-stat-grid">
+        <div class="pd-stat">
+          <div class="pd-stat-label">24h uptime</div>
+          <div class="pd-stat-value pd-uptime ${uptime == null ? 'is-empty' : (uptime >= 99 ? 'is-good' : uptime >= 90 ? 'is-warn' : 'is-bad')}">
+            ${uptime == null ? '—' : `${uptime}%`}
+          </div>
+          <div class="pd-stat-sub">${total === 0 ? '暂无探测' : `${esc(String(total))} 次探测`}</div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-label">平均时延</div>
+          <div class="pd-stat-value">${esc(fmtLatency(avg))}</div>
+          <div class="pd-stat-sub">p95 ${esc(fmtLatency(p95))}</div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-label">最近探测</div>
+          <div class="pd-stat-value pd-stat-soft">${esc(lastAt)}</div>
+          <div class="pd-stat-sub">点 "测试" 主动跑一次</div>
+        </div>
+      </div>
+      <div class="pd-spark-card">
+        <div class="pd-spark-head">
+          <span>近 ${esc(String(state.providerDetail.history?.rows?.length || 0))} 次时延曲线</span>
+          ${loading ? '<span class="pd-spark-loading">读取中…</span>' : ''}
+        </div>
+        ${renderPdSparkline(state.providerDetail.history)}
+      </div>
+      ${row.mode === 'apikey' ? `
+        <div class="pd-meta-grid">
+          ${row.baseUrl ? `<div class="pd-meta-row"><span>Base URL</span><code>${esc(row.baseUrl)}</code></div>` : ''}
+          ${row.ref?.envKey ? `<div class="pd-meta-row"><span>Env Key</span><code>${esc(row.ref.envKey)}</code></div>` : ''}
+          ${row.ref?.wireApi ? `<div class="pd-meta-row"><span>Wire API</span><code>${esc(row.ref.wireApi)}</code></div>` : ''}
+        </div>` : ''}
+    </div>`;
+}
+
+function renderPdUsage(row) {
+  // 占位 v1：从全局 codex stats 里筛 sessions 列出与 provider 名匹配的，
+  // 估算近 30 天调用次数 + 占比。真正按 provider 拆 token 需要 Codex 在
+  // 每条 session 里写 provider 字段，已经写了；这里先粗略统计。
+  const esc = escapeHtml;
+  const stats = window.__consoleV3?.codexStats;
+  if (!stats) {
+    return `
+      <div class="pd-empty">
+        <p>需要先去 <strong>运行控制台</strong> 触发一次本地会话扫描才能在这里看到 ${esc(row.name || row.key)} 的用量。</p>
+      </div>`;
+  }
+  const recent = Array.isArray(stats.recent) ? stats.recent : [];
+  const lower = String(row.key || '').toLowerCase();
+  const matched = recent.filter((r) => String(r?.provider || '').toLowerCase().includes(lower));
+  return `
+    <div class="pd-usage">
+      <div class="pd-stat-grid">
+        <div class="pd-stat">
+          <div class="pd-stat-label">本地会话数</div>
+          <div class="pd-stat-value">${esc(String(matched.length))}</div>
+          <div class="pd-stat-sub">仅展示该 provider 命中的</div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-label">总会话数</div>
+          <div class="pd-stat-value pd-stat-soft">${esc(String(stats.total || 0))}</div>
+          <div class="pd-stat-sub">近 7 天 ${esc(String(stats.week || 0))}</div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-label">占比</div>
+          <div class="pd-stat-value">${esc(stats.total ? `${Math.round(matched.length / stats.total * 100)}%` : '—')}</div>
+          <div class="pd-stat-sub">相对全部 Codex 会话</div>
+        </div>
+      </div>
+      ${matched.length ? `
+        <div class="pd-session-list">
+          ${matched.slice(0, 6).map((r) => `
+            <div class="pd-session">
+              <div class="pd-session-main">
+                <div class="pd-session-title">${esc((r.firstMessage || '').slice(0, 120) || '(无用户消息)')}</div>
+                <div class="pd-session-meta">
+                  ${r.model ? `<span>${esc(r.model)}</span>` : ''}
+                  <span>${esc(String(r.messageCount || 0))} 条</span>
+                  <span>${esc(formatRelativeTime(r.lastActiveAt))}</span>
+                </div>
+              </div>
+            </div>`).join('')}
+        </div>` : '<div class="pd-empty"><p>这个 provider 暂时还没有本地会话命中。</p></div>'}
+    </div>`;
+}
+
+function renderPdTest(row) {
+  const esc = escapeHtml;
+  const result = state.providerDetail.testResult;
+  const running = state.providerDetail.testRunning;
+  const isOauth = row.mode === 'oauth';
+  return `
+    <div class="pd-test">
+      ${isOauth
+        ? '<div class="pd-empty"><p>OAuth 会话不需要主动探测，登录态由 ChatGPT 服务端管。</p></div>'
+        : `
+          <div class="pd-test-bar">
+            <button type="button" class="pd-btn pd-btn-primary ${running ? 'is-busy' : ''}" data-pd-test ${running ? 'disabled' : ''}>
+              ${running ? '检测中…' : '运行检测'}
+            </button>
+            <span class="pd-test-hint">向 <code>${esc(row.baseUrl || '?')}/models</code> 发一次带鉴权的 GET。</span>
+          </div>
+          ${result ? renderPdTestResult(result) : '<div class="pd-empty pd-empty-small">点上面按钮跑一次，结果会落到下面，并写入健康历史。</div>'}
+        `}
+    </div>`;
+}
+
+function renderPdTestResult(result) {
+  const esc = escapeHtml;
+  if (result.error) {
+    return `
+      <div class="pd-test-card is-bad">
+        <div class="pd-test-card-head">
+          <span class="pd-status bad">失败</span>
+          ${result.latencyMs != null ? `<span>${esc(fmtLatency(result.latencyMs))}</span>` : ''}
+        </div>
+        <pre class="pd-test-error">${esc(result.error)}</pre>
+      </div>`;
+  }
+  const models = Array.isArray(result.models) ? result.models : [];
+  const top = models.slice(0, 24);
+  return `
+    <div class="pd-test-card is-ok">
+      <div class="pd-test-card-head">
+        <span class="pd-status ok">连通</span>
+        ${result.latencyMs != null ? `<span>${esc(fmtLatency(result.latencyMs))}</span>` : ''}
+        <span class="pd-test-card-meta">${esc(String(models.length))} 个模型</span>
+      </div>
+      <div class="pd-test-model-grid">
+        ${top.map((m) => `<code>${esc(typeof m === 'string' ? m : (m?.id || ''))}</code>`).join('')}
+        ${models.length > top.length ? `<span class="pd-test-more">+${esc(String(models.length - top.length))}</span>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderPdHealth(row) {
+  const esc = escapeHtml;
+  const history = state.providerDetail.history;
+  const rows = Array.isArray(history?.rows) ? history.rows : [];
+  return `
+    <div class="pd-health">
+      <div class="pd-health-bar">
+        <span class="pd-health-count">${esc(String(rows.length))} 条记录</span>
+        <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-refresh-health>刷新</button>
+      </div>
+      <div class="pd-spark-card pd-spark-card-large">
+        ${renderPdSparkline(history, 520, 64)}
+      </div>
+      ${rows.length ? `
+        <ol class="pd-probe-log">
+          ${rows.slice(0, 40).map((r) => `
+            <li class="${r.success ? 'is-ok' : 'is-bad'}">
+              <span class="pd-probe-when">${esc(formatRelativeTime(new Date(r.probedAt).toISOString()))}</span>
+              <span class="pd-probe-lat">${esc(fmtLatency(r.latencyMs))}</span>
+              ${r.statusCode ? `<span class="pd-probe-status">HTTP ${esc(String(r.statusCode))}</span>` : ''}
+              ${r.error ? `<span class="pd-probe-error" title="${esc(r.error)}">${esc(r.error.slice(0, 80))}</span>` : ''}
+            </li>`).join('')}
+        </ol>` : '<div class="pd-empty pd-empty-small">还没有探测历史。点"测试"或在外面用 "重检" 都会落记录。</div>'}
+    </div>`;
+}
+
+async function actionPdSwitch() {
+  const row = lookupProviderDetailRow();
+  if (!row) return;
+  if (typeof switchRow === 'function') {
+    await switchRow(row.key);
+  }
+  // 切完后 re-render（active 状态变了，按钮要变成"已是当前"）
+  renderProviderDetail();
+}
+
+function actionPdEdit() {
+  const row = lookupProviderDetailRow();
+  if (!row) return;
+  closeProviderDetail();
+  if (typeof openSlideover === 'function') {
+    openSlideover('edit', row.key);
+  }
+}
+
+async function actionPdDelete() {
+  const row = lookupProviderDetailRow();
+  if (!row) return;
+  if (!window.confirm(`确认删除 provider「${row.name || row.key}」？\n该操作会从 ~/.codex/config.toml 移除条目，并清掉本地草稿历史。`)) return;
+  if (typeof deleteApiKeyProvider === 'function') {
+    await deleteApiKeyProvider(row.key, row.kind || 'codex-apikey');
+  }
+  closeProviderDetail();
+}
+
+async function actionPdRunTest() {
+  const row = lookupProviderDetailRow();
+  if (!row || row.mode === 'oauth') return;
+  state.providerDetail.testRunning = true;
+  state.providerDetail.testResult = null;
+  renderProviderDetail();
+  const codexHome = state.current?.codexHome || '';
+  const res = await api('/api/provider/test-saved', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: el('scopeSelect')?.value || 'global',
+      projectPath: el('projectPathInput')?.value?.trim() || '',
+      codexHome,
+      providerKey: row.key,
+      timeoutMs: 8000,
+    }),
+    timeoutMs: 12000,
+  });
+  state.providerDetail.testRunning = false;
+  if (res?.ok && res.data?.status === 'ok') {
+    state.providerDetail.testResult = {
+      ok: true,
+      models: res.data.models || [],
+      latencyMs: res.data.latencyMs ?? null,
+    };
+  } else {
+    state.providerDetail.testResult = { ok: false, error: res?.error || res?.data?.error || '检测失败' };
+  }
+  renderProviderDetail();
+  // 测试也算一次探测 → 刷新 health 数据
+  fetchProviderProbeData(row).catch(() => {});
+}
+
+async function actionPdRefreshHealth() {
+  const row = lookupProviderDetailRow();
+  if (row) await fetchProviderProbeData(row);
+}
+
+async function actionPdCopyLaunchCmd() {
+  // 占位：未来跟 Codex hero 的命令面板复用一份
+}
+
 async function saveConfigOnly() {
   if (state.activeTool === 'claudecode') {
     return saveClaudeCodeConfigOnly();
@@ -22652,17 +23145,6 @@ loadTools();
     const s = hubState();
     if (!s) return;
     const tool = s.activeTool || 'codex';
-    // 误触防护：点行=切换 active provider，跟保存是两件事。这里加一层 confirm，
-    // 已经是当前 active 的行直接放过（不弹窗），其他情况必须显式确认。
-    const rowsForConfirm = buildProviderRows(tool);
-    const target = rowsForConfirm.find((r) => r.key === key);
-    const active = rowsForConfirm.find((r) => r.isActive);
-    if (target && !target.isActive) {
-      const targetLabel = target.name || target.key;
-      const activeLabel = active ? (active.name || active.key) : '无';
-      const ok = window.confirm(`确认切换 ${tool === 'codex' ? 'Codex' : tool} 的当前 provider？\n\n从「${activeLabel}」切到「${targetLabel}」。`);
-      if (!ok) return;
-    }
     try {
       if (tool === 'codex') {
         if (key === '__codex_official_oauth__') {
@@ -22988,9 +23470,9 @@ loadTools();
       const row = target.closest('[data-ch-key]');
       if (row) {
         const key = row.getAttribute('data-ch-key');
-        // Body click = switch to / activate this provider.
-        // Editing its contents is the ✏ icon (opens the drawer).
-        switchRow(key);
+        // 点行 = 打开详情 drawer（不再直接切换）。
+        // 切换 / 编辑 / 测试 / 删除 都是 drawer 内或行内显式按钮。
+        openProviderDetail(key);
       }
     });
     list?.addEventListener('keydown', (e) => {
@@ -23000,7 +23482,7 @@ loadTools();
       if (row) {
         const key = row.getAttribute('data-ch-key');
         e.preventDefault();
-        switchRow(key);
+        openProviderDetail(key);
       }
     });
 

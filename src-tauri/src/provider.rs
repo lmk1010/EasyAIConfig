@@ -545,6 +545,18 @@ pub(crate) async fn detect_provider(body: &Value) -> Result<Value, String> {
   let normalized_base_url = normalize_base_url(&get_string(&object, "baseUrl"))?;
   let api_key = get_string(&object, "apiKey");
   let timeout_ms = object.get("timeoutMs").and_then(Value::as_u64).unwrap_or(15000);
+  // 把这次探测的元信息提前抓出来：保存 provider 行触发的探测会带 providerKey + codexHome，
+  // 自由 detect 模式可能没有 providerKey，那就用 baseUrl slug 凑一个。
+  let probe_provider_key = {
+    let explicit = get_string(&object, "providerKey");
+    if !explicit.trim().is_empty() {
+      explicit
+    } else {
+      slugify_provider_key(&infer_provider_seed(&normalized_base_url))
+    }
+  };
+  let probe_codex_home = get_string(&object, "codexHome");
+  let probe_started_at = std::time::Instant::now();
 
   let mut headers = HeaderMap::new();
   headers.insert(ACCEPT, HeaderValue::from_static("application/json, text/plain, */*"));
@@ -562,18 +574,32 @@ pub(crate) async fn detect_provider(body: &Value) -> Result<Value, String> {
     .timeout(Duration::from_millis(timeout_ms))
     .build()
     .map_err(|error| error.to_string())?;
-  let response = client
+  let send_result = client
     .get(format!("{normalized_base_url}/models"))
     .headers(headers)
     .send()
-    .await
-    .map_err(|error| {
-      if error.is_timeout() {
+    .await;
+  let response = match send_result {
+    Ok(resp) => resp,
+    Err(error) => {
+      let elapsed = probe_started_at.elapsed().as_millis() as u64;
+      let msg = if error.is_timeout() {
         "检测超时：该接口 15 秒内没有返回模型列表，请检查 Base URL、Key 或服务端兼容性".to_string()
       } else {
         error.to_string()
-      }
-    })?;
+      };
+      crate::provider_health::record_probe(
+        &probe_provider_key,
+        &probe_codex_home,
+        Some(&normalized_base_url),
+        false,
+        Some(elapsed),
+        None,
+        Some(&msg),
+      );
+      return Err(msg);
+    }
+  };
 
   let status = response.status();
   let text = response.text().await.map_err(|error| error.to_string())?;
@@ -586,7 +612,18 @@ pub(crate) async fn detect_provider(body: &Value) -> Result<Value, String> {
       .or_else(|| payload.get("message").and_then(Value::as_str))
       .map(|text| text.to_string())
       .unwrap_or_else(|| if text.is_empty() { format!("HTTP {status}") } else { text.clone() });
-    return Err(format!("检测失败：{message}"));
+    let elapsed = probe_started_at.elapsed().as_millis() as u64;
+    let err = format!("检测失败：{message}");
+    crate::provider_health::record_probe(
+      &probe_provider_key,
+      &probe_codex_home,
+      Some(&normalized_base_url),
+      false,
+      Some(elapsed),
+      Some(status.as_u16()),
+      Some(&err),
+    );
+    return Err(err);
   }
 
   let model_ids = payload
@@ -599,9 +636,20 @@ pub(crate) async fn detect_provider(body: &Value) -> Result<Value, String> {
     .collect::<Vec<_>>();
 
   let summary = summarize_models(model_ids);
+  let elapsed = probe_started_at.elapsed().as_millis() as u64;
+  crate::provider_health::record_probe(
+    &probe_provider_key,
+    &probe_codex_home,
+    Some(&normalized_base_url),
+    true,
+    Some(elapsed),
+    Some(status.as_u16()),
+    None,
+  );
   Ok(json!({
     "baseUrl": normalized_base_url,
     "status": "ok",
+    "latencyMs": elapsed,
     "models": summary.get("models").cloned().unwrap_or_else(|| json!([])),
     "supportsGpt": summary.get("supportsGpt").cloned().unwrap_or_else(|| json!(false)),
     "recommendedModel": summary.get("recommendedModel").cloned().unwrap_or(Value::Null),
