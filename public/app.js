@@ -12373,6 +12373,8 @@ function buildCfgQuickActions(toolId) {
 function enterCfgSubpage(sectionId) {
   const sec = document.getElementById(sectionId);
   if (!sec) return;
+  // 主动 blur 当前焦点，避免点完卡片回到网格态时仍带蓝边
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   const tool = sec.closest('.config-editor-main')?.dataset?.toolEditor || '';
   // 同 tool 下所有 section：只让点中的那一节显示并展开，其他全藏
   const peers = sec.parentElement?.querySelectorAll(':scope > details.cfg-section') || [];
@@ -12402,6 +12404,7 @@ function exitCfgSubpage() {
   });
   document.getElementById('cfgGrid')?.classList.remove('hide');
   document.getElementById('cfgSubhead')?.classList.add('hide');
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
 }
 
 // 卡片 div[role=button] 支持键盘触发
