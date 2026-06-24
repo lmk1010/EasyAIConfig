@@ -15463,8 +15463,13 @@ function writeCodexProviderHistory(items = []) {
 }
 
 function persistCodexProviderHistory(currentProviders = []) {
+  // 关键保险：先把 localStorage 里现有的历史全部 deep clone 进 map，
+  // 这条永远不能丢。当前 providers 只是用来"刷新已有条目的 lastSeenAt"，
+  // 不会删任何东西。切到 OAuth profile 时 currentProviders 可能为空 / 只剩
+  // OAuth 一项，但 API Key 那些历史本地草稿必须留着。
+  const existing = readCodexProviderHistory();
   const historyMap = new Map();
-  readCodexProviderHistory().forEach((item) => {
+  existing.forEach((item) => {
     const id = codexProviderHistoryId(item);
     if (id) historyMap.set(id, item);
   });
@@ -15472,8 +15477,10 @@ function persistCodexProviderHistory(currentProviders = []) {
   currentProviders.forEach((provider) => {
     const id = codexProviderHistoryId(provider);
     if (!id) return;
+    // OAuth 之类的合成行 (key 是 __codex_oauth_profile:xxx) 不该入本地草稿表。
+    if (id.startsWith('__codex_')) return;
     const previous = historyMap.get(id) || null;
-    historyMap.set(id, normalizeCodexProviderHistoryItem({
+    const normalized = normalizeCodexProviderHistoryItem({
       key: provider.key,
       name: provider.name || previous?.name || provider.key,
       baseUrl: provider.baseUrl || previous?.baseUrl || '',
@@ -15481,9 +15488,17 @@ function persistCodexProviderHistory(currentProviders = []) {
       wireApi: provider.wireApi || previous?.wireApi || 'responses',
       firstSeenAt: previous?.firstSeenAt || now,
       lastSeenAt: now,
-    }));
+    });
+    if (normalized) historyMap.set(id, normalized);
   });
-  writeCodexProviderHistory([...historyMap.values()]);
+  // 真不该比读出来时还少。少了多半是 normalize 把某条 baseUrl 解析坏了；
+  // 此时不要写回 —— 等下一次 loadState 数据正常了再说。
+  const nextItems = [...historyMap.values()];
+  if (nextItems.length < existing.length) {
+    console.warn('[provider-history] preserved-write skipped: would have lost entries', { existing: existing.length, next: nextItems.length });
+    return;
+  }
+  writeCodexProviderHistory(nextItems);
 }
 
 
@@ -22549,6 +22564,17 @@ loadTools();
     const s = hubState();
     if (!s) return;
     const tool = s.activeTool || 'codex';
+    // 误触防护：点行=切换 active provider，跟保存是两件事。这里加一层 confirm，
+    // 已经是当前 active 的行直接放过（不弹窗），其他情况必须显式确认。
+    const rowsForConfirm = buildProviderRows(tool);
+    const target = rowsForConfirm.find((r) => r.key === key);
+    const active = rowsForConfirm.find((r) => r.isActive);
+    if (target && !target.isActive) {
+      const targetLabel = target.name || target.key;
+      const activeLabel = active ? (active.name || active.key) : '无';
+      const ok = window.confirm(`确认切换 ${tool === 'codex' ? 'Codex' : tool} 的当前 provider？\n\n从「${activeLabel}」切到「${targetLabel}」。`);
+      if (!ok) return;
+    }
     try {
       if (tool === 'codex') {
         if (key === '__codex_official_oauth__') {
