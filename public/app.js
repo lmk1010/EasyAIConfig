@@ -2592,10 +2592,27 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
 
 
 async function ensureClaudeDashboardData({ force = false } = {}) {
-  const result = await loadClaudeCodeQuickState({ force, cacheOnly: false });
-  if (result?.ok) return result;
-  if (!force) return loadClaudeCodeQuickState({ force: true, cacheOnly: false });
-  return result;
+  if (force) {
+    return loadClaudeCodeQuickState({ force: true, cacheOnly: false });
+  }
+  // Stale-while-revalidate：
+  //   1) 先无视新鲜度从缓存拿一份立即渲染（Rust 端 cacheOnly 模式会跳过
+  //      file_count/mtime 校验，直接返回上次写入的 payload）；
+  //   2) 后台再起一次正常的 refresh，新数据拿到后 re-render。
+  // 这样用户每次切回 Dashboard 都能秒看到上次的数字，不再"每次进来都白屏统计"。
+  const stale = await loadClaudeCodeQuickState({ force: false, cacheOnly: true });
+  if (stale?.ok) {
+    loadClaudeCodeQuickState({ force: false, cacheOnly: false })
+      .then((fresh) => {
+        if (fresh?.ok && state.activePage === 'dashboard') {
+          renderDashboardPage();
+        }
+      })
+      .catch((error) => console.warn('[ensureClaudeDashboardData] background refresh failed:', error));
+    return stale;
+  }
+  // 没有任何历史缓存 → 老老实实做完整 fetch（首次启动 app 会进这条）
+  return loadClaudeCodeQuickState({ force: false, cacheOnly: false });
 }
 
 function normalizeOpenCodeProviderKey(value = '') {
@@ -6361,48 +6378,125 @@ function renderDashboardLoadingCard() {
 }
 
 // ── Model Pricing ($ per 1M tokens) ──
+// 字段约定：
+//   input            非缓存输入单价（OpenAI 的 input_tokens 已含 cached，计费时要先减掉）
+//   output           输出+推理单价
+//   cached           缓存读单价（OpenAI 直接给；Anthropic ≈ input * 0.1）
+//   cacheWrite       缓存写入单价（仅 Anthropic 有，5 分钟 TTL 默认 input * 1.25）
+//   provider         'openai' / 'anthropic'，决定走哪套公式（见 calcModelCost）
 const CODEX_MODEL_PRICING = {
-  'gpt-5.4':           { input: 5.00,  output: 22.50, cached: 0.50,  label: 'GPT-5.4' },
-  'gpt-5.3-codex':     { input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.3 Codex' },
-  'gpt-5.2':           { input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.2' },
-  'gpt-5.2-codex':     { input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.2 Codex' },
-  'gpt-5.1-codex-max': { input: 1.25,  output: 10.00, cached: 0.125, label: 'GPT-5.1 Codex Max' },
-  'gpt-5.1-codex':     { input: 1.25,  output: 10.00, cached: 0.125, label: 'GPT-5.1 Codex' },
-  'gpt-5.1':           { input: 1.25,  output: 10.00, cached: 0.125, label: 'GPT-5.1' },
-  'o3':                { input: 2.00,  output: 8.00,  cached: 0.50,  label: 'o3' },
-  'o3-pro':            { input: 20.00, output: 80.00, cached: 2.50,  label: 'o3-pro' },
-  'o3-mini':           { input: 1.10,  output: 4.40,  cached: 0.275, label: 'o3-mini' },
-  'o4-mini':           { input: 1.10,  output: 4.40,  cached: 0.275, label: 'o4-mini' },
-  'gpt-4.1':           { input: 2.00,  output: 8.00,  cached: 0.50,  label: 'GPT-4.1' },
-  'gpt-4.1-mini':      { input: 0.40,  output: 1.60,  cached: 0.10,  label: 'GPT-4.1 Mini' },
-  'gpt-4.1-nano':      { input: 0.10,  output: 0.40,  cached: 0.025, label: 'GPT-4.1 Nano' },
-  'gpt-4o':            { input: 2.50,  output: 10.00, cached: 1.25,  label: 'GPT-4o' },
-  'gpt-4o-mini':       { input: 0.15,  output: 0.60,  cached: 0.075, label: 'GPT-4o Mini' },
-  // Anthropic Claude models
-  'claude-opus-4-5':           { input: 15.00, output: 75.00, cached: 1.50,  label: 'Claude Opus 4.5' },
-  'claude-opus-4-5-thinking':  { input: 15.00, output: 75.00, cached: 1.50,  label: 'Opus 4.5 Thinking' },
-  'claude-opus-4-6':           { input: 15.00, output: 75.00, cached: 1.50,  label: 'Claude Opus 4.6' },
-  'claude-opus-4.6':           { input: 15.00, output: 75.00, cached: 1.50,  label: 'Claude Opus 4.6' },
-  'claude-sonnet-4-5':         { input: 3.00,  output: 15.00, cached: 0.30,  label: 'Claude Sonnet 4.5' },
-  'claude-sonnet-4-5-thinking':{ input: 3.00,  output: 15.00, cached: 0.30,  label: 'Sonnet 4.5 Thinking' },
-  'claude-sonnet-4-6':         { input: 3.00,  output: 15.00, cached: 0.30,  label: 'Claude Sonnet 4.6' },
-  'claude-haiku-3-5':          { input: 0.80,  output: 4.00,  cached: 0.08,  label: 'Claude Haiku 3.5' },
-  'claude-haiku-4':            { input: 0.80,  output: 4.00,  cached: 0.08,  label: 'Claude Haiku 4' },
+  // ── OpenAI / Codex（价来源：ccusage pricing.rs put_builtin_pricing）──
+  'gpt-5.5':           { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.5' },
+  'gpt-5.4':           { provider: 'openai',    input: 2.50,  output: 15.00, cached: 0.25,  label: 'GPT-5.4' },
+  'gpt-5.3-codex':     { provider: 'openai',    input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.3 Codex' },
+  'gpt-5.2':           { provider: 'openai',    input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.2' },
+  'gpt-5.2-codex':     { provider: 'openai',    input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.2 Codex' },
+  'gpt-5.1-codex-max': { provider: 'openai',    input: 1.25,  output: 10.00, cached: 0.125, label: 'GPT-5.1 Codex Max' },
+  'gpt-5.1-codex':     { provider: 'openai',    input: 1.25,  output: 10.00, cached: 0.125, label: 'GPT-5.1 Codex' },
+  'gpt-5.1':           { provider: 'openai',    input: 1.25,  output: 10.00, cached: 0.125, label: 'GPT-5.1' },
+  'o3':                { provider: 'openai',    input: 2.00,  output: 8.00,  cached: 0.50,  label: 'o3' },
+  'o3-pro':            { provider: 'openai',    input: 20.00, output: 80.00, cached: 2.50,  label: 'o3-pro' },
+  'o3-mini':           { provider: 'openai',    input: 1.10,  output: 4.40,  cached: 0.275, label: 'o3-mini' },
+  'o4-mini':           { provider: 'openai',    input: 1.10,  output: 4.40,  cached: 0.275, label: 'o4-mini' },
+  'gpt-4.1':           { provider: 'openai',    input: 2.00,  output: 8.00,  cached: 0.50,  label: 'GPT-4.1' },
+  'gpt-4.1-mini':      { provider: 'openai',    input: 0.40,  output: 1.60,  cached: 0.10,  label: 'GPT-4.1 Mini' },
+  'gpt-4.1-nano':      { provider: 'openai',    input: 0.10,  output: 0.40,  cached: 0.025, label: 'GPT-4.1 Nano' },
+  'gpt-4o':            { provider: 'openai',    input: 2.50,  output: 10.00, cached: 1.25,  label: 'GPT-4o' },
+  'gpt-4o-mini':       { provider: 'openai',    input: 0.15,  output: 0.60,  cached: 0.075, label: 'GPT-4o Mini' },
+  // ── Anthropic Claude（价格来源：ccusage models-dev-pricing.json） ──
+  // 老版 opus 4-1：原始 $15/$75 价位，200K context
+  'claude-opus-4-1':           { provider: 'anthropic', input: 15.00, output: 75.00, cached: 1.50,  cacheWrite: 18.75,  label: 'Claude Opus 4.1' },
+  // 新版 opus 4-5/6/7/8：1M context，价格统一 $5/$25/$0.50/$6.25（不是 $15/$75！）
+  'claude-opus-4-5':           { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Claude Opus 4.5' },
+  'claude-opus-4-5-thinking':  { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Opus 4.5 Thinking' },
+  'claude-opus-4-6':           { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Claude Opus 4.6' },
+  'claude-opus-4.6':           { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Claude Opus 4.6' },
+  'claude-opus-4-7':           { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Claude Opus 4.7' },
+  'claude-opus-4-8':           { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Claude Opus 4.8' },
+  // Sonnet 4-5/6
+  'claude-sonnet-4-5':         { provider: 'anthropic', input: 3.00,  output: 15.00, cached: 0.30,  cacheWrite: 3.75,   label: 'Claude Sonnet 4.5' },
+  'claude-sonnet-4-5-thinking':{ provider: 'anthropic', input: 3.00,  output: 15.00, cached: 0.30,  cacheWrite: 3.75,   label: 'Sonnet 4.5 Thinking' },
+  'claude-sonnet-4-6':         { provider: 'anthropic', input: 3.00,  output: 15.00, cached: 0.30,  cacheWrite: 3.75,   label: 'Claude Sonnet 4.6' },
+  // Haiku
+  'claude-haiku-3-5':          { provider: 'anthropic', input: 0.80,  output: 4.00,  cached: 0.08,  cacheWrite: 1.00,   label: 'Claude Haiku 3.5' },
+  'claude-3-5-haiku':          { provider: 'anthropic', input: 0.80,  output: 4.00,  cached: 0.08,  cacheWrite: 1.00,   label: 'Claude Haiku 3.5' },
+  'claude-haiku-4':            { provider: 'anthropic', input: 0.80,  output: 4.00,  cached: 0.08,  cacheWrite: 1.00,   label: 'Claude Haiku 4' },
+  'claude-haiku-4-5':          { provider: 'anthropic', input: 1.00,  output: 5.00,  cached: 0.10,  cacheWrite: 1.25,   label: 'Claude Haiku 4.5' },
+  // Fable 5（最新一代，1M context，比 opus 贵一档）
+  'claude-fable-5':            { provider: 'anthropic', input: 10.00, output: 50.00, cached: 1.00,  cacheWrite: 12.50,  label: 'Claude Fable 5' },
 };
+
+// 家族级 fallback：精确 / 前缀 都没命中时，用同家族里 input 单价最高的一条估算
+// 这样新出的 gpt-5.x / claude-opus-4-x 不至于直接显示 $0。
+const PRICING_FAMILIES = [
+  { prefix: 'gpt-5',         label: 'GPT-5 家族' },
+  { prefix: 'gpt-4',         label: 'GPT-4 家族' },
+  { prefix: 'claude-opus',   label: 'Claude Opus 家族' },
+  { prefix: 'claude-sonnet', label: 'Claude Sonnet 家族' },
+  { prefix: 'claude-haiku',  label: 'Claude Haiku 家族' },
+  { prefix: 'o3',            label: 'o3 家族' },
+  { prefix: 'o4',            label: 'o4 家族' },
+];
 
 function lookupModelPricingEntry(modelName) {
   const name = String(modelName || '').trim().toLowerCase();
   if (!name || name === 'unknown') return null;
-  if (CODEX_MODEL_PRICING[name]) return { key: name, pricing: CODEX_MODEL_PRICING[name] };
+  if (CODEX_MODEL_PRICING[name]) return { key: name, pricing: CODEX_MODEL_PRICING[name], fallback: false };
   const keys = Object.keys(CODEX_MODEL_PRICING).sort((a, b) => b.length - a.length);
   for (const key of keys) {
-    if (name.startsWith(key)) return { key, pricing: CODEX_MODEL_PRICING[key] };
+    if (name.startsWith(key)) return { key, pricing: CODEX_MODEL_PRICING[key], fallback: false };
+  }
+  // 家族兜底
+  for (const family of PRICING_FAMILIES) {
+    if (!name.startsWith(family.prefix)) continue;
+    const candidates = Object.entries(CODEX_MODEL_PRICING)
+      .filter(([k]) => k.startsWith(family.prefix));
+    if (!candidates.length) continue;
+    candidates.sort((a, b) => (b[1].input || 0) - (a[1].input || 0));
+    const [bestKey, bestPricing] = candidates[0];
+    return {
+      key: bestKey,
+      pricing: { ...bestPricing, label: `${family.label}（按 ${bestPricing.label} 估算）` },
+      fallback: true,
+    };
   }
   return null;
 }
 
 function lookupModelPricing(modelName) {
   return lookupModelPricingEntry(modelName)?.pricing || null;
+}
+
+// 用主模型单价 + 当日 token 分布直算一段时间的费用。返回 USD。
+// dailyItems: [{ input, output, reasoning?, cachedInput|cacheRead|cached, cacheCreation? }]
+// models: 已按 totals.total 降序排的 model 列表（首项视为窗口主模型，给出单价）
+function estimateCostByDaily(dailyItems = [], models = [], kind = 'codex') {
+  const primary = models[0];
+  if (!primary) return 0;
+  const pricing = lookupModelPricing(primary.model);
+  if (!pricing) return 0;
+  const provider = pricing.provider || 'openai';
+  let total = 0;
+  for (const item of dailyItems) {
+    const input = Number(item.input || 0);
+    const output = Number(item.output || 0) + Number(item.reasoning || 0);
+    const cached = Number(item.cachedInput || item.cacheRead || item.cached || 0);
+    const cacheCreation = Number(item.cacheCreation || 0);
+    if (input + output + cached + cacheCreation <= 0) continue;
+    if (provider === 'anthropic') {
+      const writeRate = Number.isFinite(pricing.cacheWrite) ? pricing.cacheWrite : pricing.input * 1.25;
+      total += (input * pricing.input
+        + output * pricing.output
+        + cached * pricing.cached
+        + cacheCreation * writeRate) / 1e6;
+    } else {
+      const nonCached = Math.max(0, input - cached);
+      total += (nonCached * pricing.input
+        + cached * pricing.cached
+        + output * pricing.output) / 1e6;
+    }
+  }
+  return total;
 }
 
 function formatDashboardUsd(value, { min = 2, max = 4 } = {}) {
@@ -6414,20 +6508,59 @@ function formatDashboardUsd(value, { min = 2, max = 4 } = {}) {
   });
 }
 
+// 按 ccusage 思路：input/cached/output 单价的应用要看 provider 是怎么报字段的。
+//
+// OpenAI (Codex/GPT/o-series):
+//   input_tokens         总输入（已包含 cached 那部分）
+//   cached_input_tokens  其中命中缓存的部分（要扣掉后再按 cached 单价收）
+//   output_tokens        输出
+//   reasoning_output_tokens  推理（按 output 单价收）
+//   公式 = (input - cached) * inputRate + cached * cachedRate + (output + reasoning) * outputRate
+//   旧实现里 input * inputRate + cached * cachedRate 是把 cached 那段重复算了一次。
+//
+// Anthropic (Claude Code):
+//   input_tokens                非缓存输入（不含 cache hit / cache write）
+//   cache_creation_input_tokens 写入缓存的 token（5min TTL ≈ input * 1.25）
+//   cache_read_input_tokens     命中缓存的 token（≈ input * 0.1）
+//   output_tokens               输出
+//   公式 = input * inputRate + cacheCreation * cacheWriteRate + cacheRead * cachedRate + output * outputRate
 function calcModelCost(modelEntry) {
   const pricing = lookupModelPricing(modelEntry.model);
   if (!pricing) return null;
-  const inp = (modelEntry.totals?.input || 0) / 1e6;
-  const out = (modelEntry.totals?.output || 0) / 1e6;
-  const cachedRead = (modelEntry.totals?.cachedInput || modelEntry.totals?.cacheRead || 0) / 1e6;
-  const cacheWrite = (modelEntry.totals?.cacheCreation || 0) / 1e6;
-  const reasoning = (modelEntry.totals?.reasoning || 0) / 1e6;
-  const inputCost = inp * pricing.input;
+  const provider = pricing.provider || 'openai';
+  const totals = modelEntry.totals || {};
+  const input = (totals.input || 0) / 1e6;
+  const out = (totals.output || 0) / 1e6;
+  const reasoning = (totals.reasoning || 0) / 1e6;
+  // Codex/OpenAI 用 cachedInput；Claude/Anthropic 用 cacheRead
+  const cachedRead = (totals.cachedInput || totals.cacheRead || 0) / 1e6;
+  const cacheWrite = (totals.cacheCreation || 0) / 1e6;
+
+  let inputCost;
+  let cacheWriteCost;
+  if (provider === 'anthropic') {
+    // input 字段本身就不含 cached / cacheWrite，全价收
+    inputCost = input * pricing.input;
+    const writeRate = Number.isFinite(pricing.cacheWrite) ? pricing.cacheWrite : pricing.input * 1.25;
+    cacheWriteCost = cacheWrite * writeRate;
+  } else {
+    // OpenAI：input 字段含 cached，必须先减出 non-cached 部分
+    const nonCached = Math.max(0, input - cachedRead);
+    inputCost = nonCached * pricing.input;
+    cacheWriteCost = 0; // OpenAI 不另外收缓存写入
+  }
   const outputCost = (out + reasoning) * pricing.output;
   const cachedReadCost = cachedRead * pricing.cached;
-  const cacheWriteCost = cacheWrite * (pricing.input * 1.25);
   const totalCost = inputCost + outputCost + cachedReadCost + cacheWriteCost;
-  return { inputCost, outputCost, cachedReadCost, cacheWriteCost, totalCost, pricing };
+  return {
+    inputCost,
+    outputCost,
+    cachedReadCost,
+    cacheWriteCost,
+    totalCost,
+    pricing,
+    provider,
+  };
 }
 
 function renderPricingStandardsCards(models = [], preferredKeys = []) {
@@ -6436,28 +6569,32 @@ function renderPricingStandardsCards(models = [], preferredKeys = []) {
       .map((entry) => lookupModelPricingEntry(entry.model)?.key)
       .filter(Boolean)
   );
-  const keys = [...new Set([...(preferredKeys || []), ...detectedKeys])].filter((key) => CODEX_MODEL_PRICING[key]).slice(0, 6);
+  // 优先把"当前实际用到的"放最前面，再补预设展示项
+  const keys = [...new Set([...detectedKeys, ...(preferredKeys || [])])]
+    .filter((key) => CODEX_MODEL_PRICING[key])
+    .slice(0, 6);
   if (!keys.length) return '<div class="db2-empty">暂无可识别的官方计费标准。</div>';
   return `
-    <div class="db3-standards-note">单位：USD / 1M tokens。缓存写入按输入单价 1.25x 估算。</div>
-    <div class="db3-standards-list">
+    <div class="db3-standards-note">USD / 1M tokens · 仅供参考</div>
+    <div class="db3-rate-table">
+      <div class="db3-rate-table-head">
+        <div>模型</div>
+        <div>输入</div>
+        <div>输出</div>
+        <div>缓存读</div>
+      </div>
       ${keys.map((key) => {
         const pricing = CODEX_MODEL_PRICING[key];
         const detected = detectedKeys.has(key);
-        return `<article class="db3-standard-card ${detected ? 'is-detected' : ''}">
-          <div class="db3-standard-head">
-            <div class="db3-standard-copy">
-              <div class="db3-standard-name">${escapeHtml(pricing.label)}</div>
-              <div class="db3-standard-key">${escapeHtml(key)}</div>
-            </div>
-            <span class="db3-standard-chip ${detected ? 'is-live' : ''}">${detected ? '已检测' : '未检测'}</span>
+        return `<div class="db3-rate-table-row ${detected ? 'is-detected' : ''}">
+          <div class="db3-rate-table-model">
+            <div class="db3-rate-table-name">${escapeHtml(pricing.label)}</div>
+            <div class="db3-rate-table-key">${escapeHtml(key)}</div>
           </div>
-          <div class="db3-standard-rates">
-            <span>输入 ${escapeHtml(formatDashboardUsd(pricing.input, { min: pricing.input < 1 ? 3 : 2, max: 3 }))}</span>
-            <span>输出 ${escapeHtml(formatDashboardUsd(pricing.output, { min: pricing.output < 1 ? 3 : 2, max: 3 }))}</span>
-            <span>缓存 ${escapeHtml(formatDashboardUsd(pricing.cached, { min: pricing.cached < 1 ? 3 : 2, max: 3 }))}</span>
-          </div>
-        </article>`;
+          <div class="db3-rate-table-num">${escapeHtml(formatDashboardUsd(pricing.input, { min: pricing.input < 1 ? 3 : 2, max: 3 }))}</div>
+          <div class="db3-rate-table-num">${escapeHtml(formatDashboardUsd(pricing.output, { min: pricing.output < 1 ? 3 : 2, max: 3 }))}</div>
+          <div class="db3-rate-table-num">${escapeHtml(formatDashboardUsd(pricing.cached, { min: pricing.cached < 1 ? 3 : 2, max: 3 }))}</div>
+        </div>`;
       }).join('')}
     </div>`;
 }
@@ -6483,7 +6620,7 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     const cachedRead = entry.totals?.cachedInput || entry.totals?.cacheRead || 0;
     const cacheWrite = entry.totals?.cacheCreation || 0;
     const pct = totalTokens ? Math.round(tokens / totalTokens * 100) : 0;
-    const modelLabel = cost?.pricing?.label || pricingEntry?.pricing?.label || entry.model;
+    const modelLabel = (pricingEntry?.fallback ? entry.model : (cost?.pricing?.label || pricingEntry?.pricing?.label || entry.model));
 
     totals.input += input;
     totals.output += output;
@@ -6495,22 +6632,18 @@ function renderModelCostRows(models = [], totalTokens = 0) {
       totals.matched += 1;
     }
 
-    const rateChips = pricingEntry
-      ? `<div class="db3-price-rates db3-price-rates--matrix">
-          <span class="db3-price-rate"><em>IN</em><strong>${escapeHtml(formatDashboardUsd(pricingEntry.pricing.input, { min: pricingEntry.pricing.input < 1 ? 3 : 2, max: 3 }))}</strong></span>
-          <span class="db3-price-rate"><em>OUT</em><strong>${escapeHtml(formatDashboardUsd(pricingEntry.pricing.output, { min: pricingEntry.pricing.output < 1 ? 3 : 2, max: 3 }))}</strong></span>
-          <span class="db3-price-rate"><em>CACHE</em><strong>${escapeHtml(formatDashboardUsd(pricingEntry.pricing.cached, { min: pricingEntry.pricing.cached < 1 ? 3 : 2, max: 3 }))}</strong></span>
-        </div>`
-      : '<div class="db3-price-rates db3-price-rates--na"><span>未匹配官方定价</span></div>';
+    // 状态文案：精准命中 / 家族兜底 / 未匹配
+    const matchTag = !pricingEntry
+      ? '未匹配定价'
+      : (pricingEntry.fallback ? `按 ${pricingEntry.pricing.label} 估算` : '已匹配');
 
     return `<div class="db3-price-row">
       <div class="db3-price-model-cell">
         <div class="db3-price-model-main">${escapeHtml(modelLabel)}</div>
         <div class="db3-price-model-meta">
-          <span>${pct}% 占比</span>
-          <span>${cost ? '已估算' : '待补齐映射'}</span>
+          <span>${pct}%</span>
+          <span>${escapeHtml(matchTag)}</span>
         </div>
-        ${modelLabel !== entry.model ? `<div class="db3-price-model-raw" title="${escapeHtml(entry.model)}">${escapeHtml(entry.model)}</div>` : ''}
       </div>
       <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(input))}">
         <strong>${escapeHtml(formatDashboardMetric(input))}</strong>
@@ -6524,10 +6657,9 @@ function renderModelCostRows(models = [], totalTokens = 0) {
         <strong>${escapeHtml(formatDashboardMetric(cachedRead))}</strong>
         <span>${cacheWrite ? `写 ${escapeHtml(formatDashboardMetric(cacheWrite))}` : '缓存读'}</span>
       </div>
-      <div class="db3-price-rate-cell">${rateChips}</div>
       <div class="db3-price-total ${cost ? '' : 'db3-price-total--na'}">
-        <strong>${escapeHtml(cost ? formatDashboardUsd(cost.totalCost, { min: 4, max: 4 }) : '–')}</strong>
-        <span>${escapeHtml(cost ? `写入 ${formatDashboardUsd(cost.cacheWriteCost, { min: 4, max: 4 })}` : '无可用估算')}</span>
+        <strong>${escapeHtml(cost ? formatDashboardUsd(cost.totalCost, { min: 4, max: 4 }) : '—')}</strong>
+        <span>${escapeHtml(cost ? '预估' : '无估算')}</span>
       </div>
     </div>`;
   });
@@ -6535,7 +6667,7 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     <div class="db3-price-model-cell">
       <div class="db3-price-model-main">合计</div>
       <div class="db3-price-model-meta">
-        <span>${totals.matched}/${models.length} 个模型已匹配定价</span>
+        <span>${totals.matched}/${models.length} 个匹配</span>
       </div>
     </div>
     <div class="db3-price-metric">
@@ -6550,14 +6682,9 @@ function renderModelCostRows(models = [], totalTokens = 0) {
       <strong>${escapeHtml(formatDashboardMetric(totals.cachedRead))}</strong>
       <span>${totals.cacheWrite ? `写 ${escapeHtml(formatDashboardMetric(totals.cacheWrite))}` : '缓存读'}</span>
     </div>
-    <div class="db3-price-rate-cell">
-      <div class="db3-price-rates db3-price-rates--summary">
-        <span>${escapeHtml(formatDashboardMetric(totalTokens))} total</span>
-      </div>
-    </div>
     <div class="db3-price-total">
-      <strong>${escapeHtml(totals.totalCost ? formatDashboardUsd(totals.totalCost, { min: 4, max: 4 }) : '–')}</strong>
-      <span>累计估算</span>
+      <strong>${escapeHtml(totals.totalCost ? formatDashboardUsd(totals.totalCost, { min: 4, max: 4 }) : '—')}</strong>
+      <span>累计</span>
     </div>
   </div>`);
   return `<div class="db3-price-table">
@@ -6567,7 +6694,6 @@ function renderModelCostRows(models = [], totalTokens = 0) {
         <div>输入</div>
         <div>输出 / 推理</div>
         <div>缓存</div>
-        <div>计费标准</div>
         <div>预估费用</div>
       </div>
       ${rows.join('')}
@@ -6672,13 +6798,8 @@ function renderDashboardPage() {
   const codexModels = codexMetrics.models || [];
   const codexModelTotal = codexModels.reduce((sum, entry) => sum + (entry.totals?.total || 0), 0);
   
-  const codexTotalCost = codexModels.reduce((sum, entry) => {
-    const cost = calcModelCost(entry);
-    // Scale cost proportionally to the window
-    const allTotal = codexMetrics.totals?.total || 1;
-    const windowShare = codexTotal / allTotal;
-    return sum + (cost ? cost.totalCost * windowShare : 0);
-  }, 0);
+  // 直接按窗口内每日 token 分布 × 主模型单价算钱，比"窗口占比 × 模型总费用"准。
+  const codexTotalCost = estimateCostByDaily(codexDaily, codexModels, 'codex');
 
   const codexCacheHitPct = codexTotal ? Math.round(codexCached / codexTotal * 100) : 0;
   const codexInputPct = codexTotal ? Math.round(codexInput / codexTotal * 100) : 0;
@@ -6718,7 +6839,7 @@ function renderDashboardPage() {
             </div>
             <div class="db2-card-meta">GPT-5.4 / GPT-5.3 Codex 检测结果</div>
           </div>
-          ${renderPricingStandardsCards(codexModels, ['gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'])}
+          ${renderPricingStandardsCards(codexModels, ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex'])}
         </section>
 
         <section class="db2-section db3-panel db3-panel--wide">
@@ -6851,7 +6972,7 @@ function renderDashboardPage() {
             </div>
             <div class="db2-card-meta">来自 OpenCode 本地会话的实际 cost 字段</div>
           </div>
-          ${renderCostTrendPanel(opencodeDaily.map((item) => ({ label: (item.date || '').slice(5), value: item.cost || 0 })), `近 ${daysWindow} 天合计`, 'background:linear-gradient(180deg,#d6deff 0%,#6b86ff 56%,#3558ff 100%)')}
+          ${renderCostTrendPanel(opencodeDaily.map((item) => ({ label: (item.date || '').slice(5), value: item.cost || 0 })), `近 ${daysWindow} 天合计`, '#5b8cff')}
         </section>
 
         <section class="db2-section db3-panel">
@@ -6893,21 +7014,39 @@ function renderDashboardPage() {
     cost: claudeDailySliced.reduce((s, d) => s + (d.cost || 0), 0),
   };
 
-  // ── Compute windowed model distribution from dailyModelTokens ──
+  // ── 取窗口内出现过的模型集合（用作 claudeAllModels 的过滤器） ──
+  // dailyModelTokens 只记每个模型的 total，没拆 input/cacheRead/cacheCreation。
+  // 旧实现里用 `total * 0.85` 当 input、cache 全 0，再丢给 calcModelCost，
+  // → 4.74B 假 input × $5 = $44K 这种离谱估算。
+  // 现在改为：用 claudeAllModels（含真实 cacheRead / cacheCreation）作为基础，
+  // dailyModelTokens 仅用来筛掉窗口外的模型。
   const claudeWindowedDMT = claudeDailyModelTokens.filter(d => (d.date || '') >= claudeCutoff);
   let claudeModels;
   if (claudeWindowedDMT.length > 0) {
-    const modelMap = {};
-    claudeWindowedDMT.forEach(entry => {
+    const windowedSet = new Set();
+    claudeWindowedDMT.forEach((entry) => {
+      const byModel = entry.tokensByModel || {};
+      Object.keys(byModel).forEach((m) => windowedSet.add(m));
+    });
+    // 优先保留窗口期内出现过的模型；若 claudeAllModels 没列全，
+    // 还可以从 dailyModelTokens 兜底补一份 total（cache 仍未知，calcModelCost 会得到偏低值，
+    // 但不会再出现"假 input × 全价 = 天价"这种灾难）。
+    const fromAll = (claudeAllModels || []).filter((m) => windowedSet.has(m.model));
+    const knownModels = new Set(fromAll.map((m) => m.model));
+    const fallbackTokens = {};
+    claudeWindowedDMT.forEach((entry) => {
       const byModel = entry.tokensByModel || {};
       for (const [model, tokens] of Object.entries(byModel)) {
-        if (!modelMap[model]) modelMap[model] = 0;
-        modelMap[model] += tokens;
+        if (knownModels.has(model)) continue;
+        fallbackTokens[model] = (fallbackTokens[model] || 0) + tokens;
       }
     });
-    claudeModels = Object.entries(modelMap)
-      .map(([model, total]) => ({ model, totals: { total, input: Math.round(total * 0.85), output: Math.round(total * 0.15) } }))
-      .sort((a, b) => b.totals.total - a.totals.total);
+    const fallbackEntries = Object.entries(fallbackTokens).map(([model, total]) => ({
+      model,
+      totals: { total, input: 0, output: 0, cacheRead: 0, cacheCreation: 0, cost: 0 },
+    }));
+    claudeModels = [...fromAll, ...fallbackEntries]
+      .sort((a, b) => (b.totals?.total || 0) - (a.totals?.total || 0));
   } else {
     claudeModels = claudeAllModels;
   }
@@ -6931,7 +7070,15 @@ function renderDashboardPage() {
       const dt = new Date(Date.now() - i * 86400000);
       const key = dt.toISOString().slice(0, 10);
       const d = dailyMap[key] || {};
-      out.push({ label: key.slice(5), value: d.total || 0, input: d.input || 0, output: d.output || 0, cached: d.cacheRead || 0 });
+      out.push({
+        label: key.slice(5),
+        value: d.total || 0,
+        input: d.input || 0,
+        output: d.output || 0,
+        cached: d.cacheRead || 0,
+        // tooltip 把 cacheCreation 也带上，否则 Claude 单日缓存写入那段会少算
+        cacheCreation: d.cacheCreation || 0,
+      });
     }
     return out;
   })();
@@ -7301,22 +7448,38 @@ function _initDbInteractiveChart(chartId) {
         // Cost estimation
         let costLine = '';
         if (showCost && models.length) {
-          const dayTotal = Number(s.value || 0);
-          if (dayTotal > 0) {
-            const totalAllModels = models.reduce((sum, m) => sum + (m.totals?.total || 0), 0) || 1;
-            let dayCost = 0;
-            models.forEach(m => {
-              const pricing = lookupModelPricing(m.model);
-              if (!pricing) return;
-              const share = (m.totals?.total || 0) / totalAllModels;
-              const dayTokens = dayTotal * share;
-              const inpShare = (m.totals?.input || 0) / ((m.totals?.total || 1));
-              const outShare = (m.totals?.output || 0) / ((m.totals?.total || 1));
-              const cachedShare = ((m.totals?.cachedInput || m.totals?.cacheRead || 0)) / ((m.totals?.total || 1));
-              const cacheWriteShare = (m.totals?.cacheCreation || 0) / ((m.totals?.total || 1));
-              dayCost += (dayTokens * inpShare / 1e6 * pricing.input) + (dayTokens * outShare / 1e6 * pricing.output) + (dayTokens * cachedShare / 1e6 * pricing.cached) + (dayTokens * cacheWriteShare / 1e6 * (pricing.input * 1.25));
-            });
-            costLine = `<div class="db2-tip-row db2-tip-cost"><span>预估费用</span><strong>${escapeHtml(formatDashboardUsd(dayCost, { min: 4, max: 4 }))}</strong></div>`;
+          // 直接按当日 input/output/cached 量算钱，不再用"窗口平均单价 × 当日 tokens"。
+          // 用窗口平均会把高费用日的均价摊到所有日，得出像 $21K/天 这种离谱数字。
+          // 多模型场景：以占比最大的模型（models 已按总量降序排）单价估算，
+          // 单模型场景下就是该模型自身，结果精确。
+          const dayInput = Number(s.input || 0);
+          const dayOutput = Number(s.output || 0);
+          const dayCached = Number(s.cached || 0);
+          const dayCacheCreation = Number(s.cacheCreation || 0);
+          if (dayInput + dayOutput + dayCached + dayCacheCreation > 0) {
+            const primary = models[0];
+            const pricing = primary && lookupModelPricing(primary.model);
+            if (pricing) {
+              const provider = pricing.provider || 'openai';
+              let dayCost;
+              if (provider === 'anthropic') {
+                // Anthropic：input / output / cache_read / cache_creation 全是分离字段，
+                // 跟 ccusage 一致地各乘各的单价。cache_creation 5m TTL 默认 1.25x input。
+                const writeRate = Number.isFinite(pricing.cacheWrite) ? pricing.cacheWrite : pricing.input * 1.25;
+                dayCost = (dayInput * pricing.input
+                  + dayOutput * pricing.output
+                  + dayCached * pricing.cached
+                  + dayCacheCreation * writeRate) / 1e6;
+              } else {
+                // OpenAI：input_tokens 已含 cached，先扣 cached（和 ccusage 的
+                // calculate_codex_model_cost 一致：non_cached = input - cached）
+                const nonCached = Math.max(0, dayInput - dayCached);
+                dayCost = (nonCached * pricing.input
+                  + dayCached * pricing.cached
+                  + dayOutput * pricing.output) / 1e6;
+              }
+              costLine = `<div class="db2-tip-row db2-tip-cost"><span>预估费用</span><strong>${escapeHtml(formatDashboardUsd(dayCost, { min: 2, max: 4 }))}</strong></div>`;
+            }
           }
         }
 
@@ -7391,36 +7554,98 @@ function renderDashboardModelDistChart(models = [], totalTokens = 0) {
   return `<div class="db2-mdist-chart" id="${chartId}">${bars}</div>`;
 }
 
-function renderCostTrendPanel(costSeries = [], summaryLabel = '', fillStyle = '') {
+// 重做版费用趋势图：放弃丑陋的柱状条，改成柔和 SVG 面积图（和 Token 用量趋势同风格）。
+// 三条参数：data 数组、汇总文案、主色（默认蓝紫，可被覆盖）。
+function renderCostTrendPanel(costSeries = [], summaryLabel = '', accentColor = '#7c3aed') {
   if (!costSeries.length) return '<div class="dashboard-empty-note">暂无费用趋势数据。</div>';
-  const maxCost = Math.max(...costSeries.map((s) => s.value || 0), 0.001);
-  const totalCost = costSeries.reduce((sum, item) => sum + (item.value || 0), 0);
-  const labelStep = Math.max(1, Math.floor((costSeries.length - 1) / 5));
+  const chartId = `costTrend_${Math.random().toString(36).slice(2, 9)}`;
+  const values = costSeries.map((s) => Number(s.value || 0));
+  const maxCost = Math.max(...values, 0.001);
+  const totalCost = values.reduce((sum, v) => sum + v, 0);
   const usdFmt = (value) => formatDashboardUsd(value, { min: value < 1 ? 3 : 2, max: value < 1 ? 3 : 2 });
-  const axis = [maxCost, maxCost / 2, 0].map((value) => `<span>${escapeHtml(usdFmt(value))}</span>`).join('');
-  const bars = costSeries.map((item, index) => {
-    const value = Number(item.value || 0);
-    const pct = value > 0 ? Math.max(4, (value / maxCost) * 100) : 0;
-    const tip = `${item.label}  ${usdFmt(value)}`;
-    const showLabel = index === costSeries.length - 1 || index % labelStep === 0;
-    return `<div class="db2-costbar" data-tip="${escapeHtml(tip)}">
-      <div class="db2-costbar-fill" style="height:${pct}%;${fillStyle}"></div>
-      <span class="db2-costbar-label ${showLabel ? 'is-visible' : ''}">${escapeHtml(item.label)}</span>
-    </div>`;
-  }).join('');
+
+  // 画布尺寸用 viewBox 自适应，外层容器固定高度，由 CSS 控制宽度
+  const W = 720;
+  const H = 168;
+  const padL = 46;
+  const padR = 12;
+  const padT = 10;
+  const padB = 22;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  // 等距点：x 用 index 等分，y 按 cost 反向映射
+  const n = costSeries.length;
+  const stepX = n > 1 ? innerW / (n - 1) : innerW;
+  const pts = costSeries.map((item, i) => {
+    const x = padL + i * stepX;
+    const y = padT + innerH - (Number(item.value || 0) / maxCost) * innerH;
+    return { x, y, value: Number(item.value || 0), label: item.label };
+  });
+
+  // Catmull-Rom → Bezier 路径，得到柔和曲线（与主趋势图相同感觉）
+  const smoothPath = (points) => {
+    if (!points.length) return '';
+    let d = `M ${points[0].x} ${points[0].y}`;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i - 1] || points[i];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p3 = points[i + 2] || p2;
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+    }
+    return d;
+  };
+
+  const linePath = smoothPath(pts);
+  const baselineY = padT + innerH;
+  const areaPath = pts.length
+    ? `${linePath} L ${pts[pts.length - 1].x} ${baselineY} L ${pts[0].x} ${baselineY} Z`
+    : '';
+
+  // Y 轴 4 个 tick：max / 2/3 max / 1/3 max / 0
+  const yTickValues = [maxCost, maxCost * 2 / 3, maxCost / 3, 0];
+  const yTicks = yTickValues.map((value) => {
+    const y = padT + innerH - (value / maxCost) * innerH;
+    return { y, label: usdFmt(value) };
+  });
+
+  // X 轴只标几个关键点
+  const xTickStep = Math.max(1, Math.floor((n - 1) / 6));
+  const xTicks = pts
+    .map((p, i) => ({ p, i }))
+    .filter(({ i }) => i === 0 || i === n - 1 || i % xTickStep === 0)
+    .map(({ p, i }) => ({ x: p.x, label: costSeries[i].label }));
+
+  const gradientId = `${chartId}_grad`;
+  const dots = pts.map((p, i) => `<circle data-i="${i}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.4" fill="${accentColor}" opacity="0" class="db3-cost-area-dot"/>`).join('');
+  const gridLines = yTicks.map((t) => `<line x1="${padL}" x2="${W - padR}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="currentColor" stroke-width="0.5" stroke-dasharray="2 3" opacity="0.18"/>`).join('');
+  const yLabels = yTicks.map((t) => `<text x="${padL - 8}" y="${(t.y + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="currentColor" opacity="0.55">${escapeHtml(t.label)}</text>`).join('');
+  const xLabels = xTicks.map((t) => `<text x="${t.x.toFixed(1)}" y="${(H - 4).toFixed(1)}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.55">${escapeHtml(t.label)}</text>`).join('');
 
   return `
-    <div class="db2-cost-trend">
-      <div class="db2-cost-trend-plot">
-        <div class="db2-cost-axis">${axis}</div>
-        <div class="db2-cost-chart">
-          <div class="db2-cost-grid"><span></span><span></span><span></span></div>
-          <div class="db2-cost-trend-bars">${bars}</div>
-        </div>
-      </div>
-      <div class="db2-cost-trend-summary">
-        <span>${escapeHtml(summaryLabel)}</span>
-        <div class="db2-cost-trend-totals">
+    <div class="db3-cost-area" id="${chartId}">
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="db3-cost-area-svg">
+        <defs>
+          <linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${accentColor}" stop-opacity="0.32"/>
+            <stop offset="100%" stop-color="${accentColor}" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        ${gridLines}
+        ${areaPath ? `<path d="${areaPath}" fill="url(#${gradientId})"/>` : ''}
+        ${linePath ? `<path d="${linePath}" fill="none" stroke="${accentColor}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>` : ''}
+        ${yLabels}
+        ${xLabels}
+        ${dots}
+      </svg>
+      <div class="db3-cost-area-foot">
+        <span class="db3-cost-area-summary">${escapeHtml(summaryLabel)}</span>
+        <div class="db3-cost-area-totals">
           <em>峰值 ${escapeHtml(usdFmt(maxCost))}</em>
           <strong>${escapeHtml(usdFmt(totalCost))}</strong>
         </div>
@@ -7438,36 +7663,22 @@ function renderClaudeCostTrendChart(dailySlice = [], windowDays = 30) {
   return renderCostTrendPanel(
     costSeries,
     `近 ${windowDays} 天合计`,
-    'background:linear-gradient(180deg,#b794ff 0%,#7c3aed 58%,#5b21b6 100%)'
+    '#7c3aed'
   );
 }
 
 function renderDashboardCostTrendChart(daily = [], models = []) {
   if (!daily.length || !models.length) return '<div class="dashboard-empty-note">暂无费用趋势数据。</div>';
-
-  const totalAllModels = models.reduce((sum, m) => sum + (m.totals?.total || 0), 0) || 1;
-  const costSeries = daily.map((item) => {
-    const dayTotal = item.total || 0;
-    let dayCost = 0;
-    if (dayTotal > 0) {
-      models.forEach((m) => {
-        const pricing = lookupModelPricing(m.model);
-        if (!pricing) return;
-        const share = (m.totals?.total || 0) / totalAllModels;
-        const dayTokens = dayTotal * share;
-        const inpShare = (m.totals?.input || 0) / (m.totals?.total || 1);
-        const outShare = (m.totals?.output || 0) / (m.totals?.total || 1);
-        const cachedShare = (m.totals?.cachedInput || m.totals?.cacheRead || 0) / (m.totals?.total || 1);
-        dayCost += (dayTokens * inpShare / 1e6 * pricing.input) + (dayTokens * outShare / 1e6 * pricing.output) + (dayTokens * cachedShare / 1e6 * pricing.cached);
-      });
-    }
-    return { label: (item.date || '').slice(5), value: dayCost };
-  });
-
+  // 改用 estimateCostByDaily 单点直算（每个 daily item 走一次主模型单价），
+  // 跟 tooltip / hero stat 同口径。旧实现用"占比 × 总量"会双计 cached 段。
+  const costSeries = daily.map((item) => ({
+    label: (item.date || '').slice(5),
+    value: estimateCostByDaily([item], models),
+  }));
   return renderCostTrendPanel(
     costSeries,
     `近 ${costSeries.length} 天合计`,
-    'background:linear-gradient(180deg,#bcd0ff 0%,#5b8cff 56%,#3358ff 100%)'
+    '#5b8cff'
   );
 }
 
@@ -14846,6 +15057,8 @@ function normalizeBaseUrl(baseUrl) {
       ? raw
       : (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(raw) ? `http://${raw}` : `https://${raw}`);
     const url = new URL(withScheme);
+    // 只做最小处理：去掉多余尾部斜杠，路径段原样保留。
+    // 不替用户做任何"智能补全"——有的网关就是不要 /v1。
     url.pathname = url.pathname.replace(/\/+$/, '');
     return url.toString().replace(/\/+$/, '');
   } catch {
@@ -16815,7 +17028,8 @@ async function detectModels() {
   if (state.activeTool === 'codex' && state.codexAuthView === 'official') {
     return flash('官方登录模式下无需手动检测 URL / Key；直接启动即可。', 'info');
   }
-  if (!params.baseUrl || (!params.apiKey && !params.useStored)) return flash('先填 URL 和 API Key', 'error');
+  if (!params.baseUrl) return flash('请先填写 Base URL', 'error');
+  if (!params.apiKey && !params.useStored) return flash('请填写 API Key 后再检测模型', 'error');
   setBusy('detectBtn', true, '检测中...');
   const json = await api(params.useStored ? '/api/provider/test-saved' : '/api/provider/test', {
     method: 'POST',
@@ -16970,10 +17184,8 @@ async function saveConfigOnly() {
     return saveOpenClawConfigOnly();
   }
   const payload = currentPayload();
-  const canReuseStoredKey = canUseStoredApiKey({ baseUrl: payload.baseUrl, providerKey: payload.providerKey });
-  if (!(state.activeTool === 'codex' && state.codexAuthView === 'official' && state.current?.login?.loggedIn)) {
-    if (!payload.baseUrl || (!payload.apiKey && !canReuseStoredKey)) return flash('先填 URL 和 API Key', 'error');
-  }
+  // 不在前端做任何拦截。用户点了保存就是想保存，
+  // 后端校验失败会把错误信息回传出来，前端只负责转发。
 
   setBusy('saveBtn', true, '保存中...');
   const saved = await api('/api/config/save', {
@@ -16984,6 +17196,22 @@ async function saveConfigOnly() {
   setBusy('saveBtn', false);
   if (!saved.ok) return flash(saved.error || '保存失败', 'error');
   flash('配置已保存', 'success');
+  // 显示后端给出的提示（自动补 /v1、清孤儿 env、替换 providerKey 等）
+  const hints = saved.data?.hints;
+  if (Array.isArray(hints) && hints.length) {
+    for (const hint of hints) {
+      if (hint?.message) flash(hint.message, 'info');
+    }
+  }
+  // 保存成功后立刻把输入框对齐到后端 normalize 之后的 URL，
+  // 否则下次再保存可能因为前后端 normalize 结果不一致触发 canUseStored 失效。
+  const savedBaseUrl = String(saved.data?.baseUrl || '').trim();
+  if (savedBaseUrl) {
+    const baseUrlInput = el('baseUrlInput');
+    if (baseUrlInput && baseUrlInput.value.trim() !== savedBaseUrl) {
+      baseUrlInput.value = savedBaseUrl;
+    }
+  }
   await loadState({ preserveForm: true });
   await loadBackups();
   loadAppUpdateState();
@@ -18638,8 +18866,12 @@ function bindEvents() {
   // Model refresh button (inline, next to model select)
   el('modelRefreshBtn')?.addEventListener('click', () => {
     const params = _getDetectParams();
-    if (!params.baseUrl || (!params.apiKey && !params.useStored)) {
-      flash('先填 URL 和 API Key', 'error');
+    if (!params.baseUrl) {
+      flash('请先填写 Base URL', 'error');
+      return;
+    }
+    if (!params.apiKey && !params.useStored) {
+      flash('请填写 API Key 后再刷新模型列表', 'error');
       return;
     }
     const btn = el('modelRefreshBtn');

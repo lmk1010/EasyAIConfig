@@ -379,7 +379,10 @@ pub(crate) fn migrate_auth_json_env_to_codex_env(codex_home: &Path, auth_raw: &s
     }
 
     let existing = env.get(key).map(|item| item.trim()).unwrap_or("");
-    if !existing.is_empty() {
+    // 旧逻辑：env 里已有值就 skip，导致用户在 codex login 重新拿到的新
+    // OPENAI_API_KEY 永远写不进 .env。改为：仅当 incoming 与现存相同时 skip，
+    // 不同则覆盖（CLI 已经把新值放进 auth.json，是最新源）。
+    if clean == existing {
       continue;
     }
 

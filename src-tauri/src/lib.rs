@@ -67,6 +67,29 @@ pub(crate) fn home_dir() -> Result<PathBuf, String> {
   dirs::home_dir().ok_or_else(|| "无法获取用户主目录".to_string())
 }
 
+/// 将用户传入的路径中的 `~` 展开成真实 home。UI 经常会传 `~/Projects`
+/// 这种路径过来，`PathBuf::from` 不会自动展开，直接 cd / spawn 会失败。
+/// 空字符串返回 None，调用方按"未提供 cwd"处理。
+pub(crate) fn expand_home_path(input: &str) -> Option<PathBuf> {
+  let trimmed = input.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  let home = dirs::home_dir();
+  if trimmed == "~" {
+    return home;
+  }
+  if let Some(rest) = trimmed.strip_prefix("~/") {
+    return home.map(|h| h.join(rest));
+  }
+  // 也兼容反斜杠（Windows 用户复制粘贴时常见）
+  #[cfg(target_os = "windows")]
+  if let Some(rest) = trimmed.strip_prefix("~\\") {
+    return home.map(|h| h.join(rest));
+  }
+  Some(PathBuf::from(trimmed))
+}
+
 pub(crate) fn default_codex_home() -> Result<PathBuf, String> {
   let env_home = std::env::var("CODEX_HOME").unwrap_or_default();
   if !env_home.trim().is_empty() {

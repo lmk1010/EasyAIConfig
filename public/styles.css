@@ -22623,8 +22623,6 @@ body {
   color: var(--s2-text);
 }
 
-[data-theme="light"] .shell-v2 .dashboard-page .db3-standard-rates span,
-[data-theme="light"] .shell-v2 .dashboard-page .db3-price-rates span,
 [data-theme="light"] .shell-v2 .dashboard-shell .dashboard-fetch-state,
 [data-theme="light"] .shell-v2 .dashboard-shell .db2-period-trigger {
   background: rgba(255, 255, 255, 0.82) !important;
@@ -22634,6 +22632,8 @@ body {
 [data-theme="light"] .shell-v2 .dashboard-page .db3-standard-rates span,
 [data-theme="light"] .shell-v2 .dashboard-page .db3-price-rates span {
   background: transparent !important;
+  border-left-color: rgba(15, 23, 42, 0.12) !important;
+  color: var(--s2-text);
 }
 
 .shell-v2 .dashboard-page .db3-price-table {
@@ -22651,21 +22651,23 @@ body {
 
 .shell-v2 .dashboard-page .db3-price-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.35fr) repeat(3, minmax(86px, 0.56fr)) minmax(190px, 1.05fr) minmax(110px, 0.72fr);
-  gap: 10px;
+  grid-template-columns: minmax(200px, 1.6fr) repeat(3, minmax(90px, 0.85fr)) minmax(130px, 0.95fr);
+  gap: 14px;
   align-items: center;
-  padding: 12px 10px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  padding: 12px 6px;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 [data-theme="light"] .shell-v2 .dashboard-page .db3-price-row {
-  background: rgba(15, 23, 42, 0.015);
-  border-color: rgba(15, 23, 42, 0.06);
-  border-bottom-color: rgba(15, 23, 42, 0.07);
+  background: transparent;
+  border-bottom-color: rgba(15, 23, 42, 0.06);
+}
 
+.shell-v2 .dashboard-page .db3-price-row:last-child {
+  border-bottom: 0;
 }
 
 .shell-v2 .dashboard-page .db3-price-row--head {
@@ -22866,7 +22868,7 @@ body {
 
 .shell-v2 .dashboard-page .db3-dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.56fr) minmax(300px, 1fr); gap: 16px 24px; align-items: start; }
 .shell-v2 .dashboard-page .db3-panel--wide { grid-column: 1 / -1; }
-.shell-v2 .dashboard-page .db2-section.db3-panel { padding: 14px 18px 10px !important; border-radius: 22px; border: 1px solid rgba(255,255,255,0.05); background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05); backdrop-filter: blur(18px) saturate(134%); -webkit-backdrop-filter: blur(18px) saturate(134%); gap: 10px; }
+.shell-v2 .dashboard-page .db2-section.db3-panel { padding: 14px 2px 10px !important; border-radius: 0; border: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; gap: 10px; }
 .shell-v2 .dashboard-page .db3-panel .db2-card-head { margin-bottom: 2px; padding: 0 2px 10px; align-items: baseline; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .shell-v2 .dashboard-page .db3-panel .db2-card-title { color: var(--s2-text); }
 .shell-v2 .dashboard-page .db3-panel .db2-card-title svg { opacity: 0.62; }
@@ -22883,14 +22885,15 @@ body {
 .shell-v2 .dashboard-page .db3-price-row:not(.db3-price-row--head),
 .shell-v2 .dashboard-page .db3-panel .db2-mdist-item,
 .shell-v2 .dashboard-page .dashboard-mini-bar,
-.shell-v2 .dashboard-page .db2-kv-row { padding: 11px 2px; border: 0 !important; border-bottom: 1px solid rgba(255,255,255,0.055) !important; border-radius: 0 !important; background: linear-gradient(90deg, rgba(255,255,255,0.032), transparent 84%) !important; box-shadow: none !important; backdrop-filter: none !important; }
+.shell-v2 .dashboard-page .db2-kv-row { padding: 11px 2px; border: 0 !important; border-bottom: 1px solid rgba(255,255,255,0.055) !important; border-radius: 0 !important; background: transparent !important; box-shadow: none !important; backdrop-filter: none !important; }
 .shell-v2 .dashboard-page .db3-standard-card:last-child,
 .shell-v2 .dashboard-page .db3-price-grid > .db3-price-row:last-child,
 .shell-v2 .dashboard-page .db2-mdist-chart > .db2-mdist-item:last-child,
 .shell-v2 .dashboard-page .dashboard-mini-bars > .dashboard-mini-bar:last-child,
 .shell-v2 .dashboard-page .db2-kv-list > .db2-kv-row:last-child { border-bottom: 0 !important; }
-.shell-v2 .dashboard-page .db3-standard-card.is-detected,
-.shell-v2 .dashboard-page .db3-price-row--total { background: linear-gradient(90deg, rgba(91,140,255,0.12), transparent 76%) !important; }
+/* 检出 / 合计行：不再用背景色块标记，改为左侧 2px 强调条 + 标题色加重 */
+.shell-v2 .dashboard-page .db3-standard-card.is-detected { background: transparent !important; box-shadow: inset 2px 0 0 rgba(91,140,255,0.65) !important; padding-left: 10px !important; }
+.shell-v2 .dashboard-page .db3-price-row--total { background: transparent !important; border-top: 1px solid rgba(91,140,255,0.22) !important; padding-top: 14px !important; }
 
 .shell-v2 .dashboard-page .db3-standard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .shell-v2 .dashboard-page .db3-standard-copy { min-width: 0; display: grid; gap: 3px; }
@@ -22901,15 +22904,60 @@ body {
 .shell-v2 .dashboard-page .db3-price-model-raw,
 .shell-v2 .dashboard-page .db3-price-metric span,
 .shell-v2 .dashboard-page .db3-price-total span { font-size: 0.6rem; }
-.shell-v2 .dashboard-page .db3-standard-chip,
+/* 速率胶囊：去掉胶囊背景，仅靠 label/value 排版区分；chip（已检测）单独保留细边 */
+.shell-v2 .dashboard-page .db3-standard-chip { display: inline-flex; align-items: center; min-height: 21px; padding: 0 8px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.10); background: transparent; box-shadow: none !important; font-size: 0.58rem; font-weight: 660; }
 .shell-v2 .dashboard-page .db3-standard-rates span,
-.shell-v2 .dashboard-page .db3-price-rates span { display: inline-flex; align-items: center; min-height: 21px; padding: 0 8px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.075); background: rgba(255,255,255,0.04); box-shadow: none !important; font-size: 0.58rem; font-weight: 660; }
+.shell-v2 .dashboard-page .db3-price-rates span { display: inline-flex; align-items: baseline; min-height: 20px; padding: 0 0 0 10px; border-radius: 0 !important; border: 0 !important; border-left: 1px solid rgba(255,255,255,0.10) !important; background: transparent !important; box-shadow: none !important; font-size: 0.62rem; font-weight: 600; color: var(--s2-text); }
+.shell-v2 .dashboard-page .db3-standard-rates span:first-child,
+.shell-v2 .dashboard-page .db3-price-rates span:first-child { padding-left: 0; border-left: 0 !important; }
+
+/* Light theme: 浅色背景下的细分隔线 */
+[data-theme="light"] .shell-v2 .dashboard-page .db3-standard-card,
+[data-theme="light"] .shell-v2 .dashboard-page .db3-price-row:not(.db3-price-row--head),
+[data-theme="light"] .shell-v2 .dashboard-page .db3-panel .db2-mdist-item,
+[data-theme="light"] .shell-v2 .dashboard-page .dashboard-mini-bar,
+[data-theme="light"] .shell-v2 .dashboard-page .db2-kv-row { border-bottom-color: rgba(15,23,42,0.07) !important; }
+[data-theme="light"] .shell-v2 .dashboard-page .db3-panel .db2-card-head { border-bottom-color: rgba(15,23,42,0.07); }
+[data-theme="light"] .shell-v2 .dashboard-page .db3-standard-rates span,
+[data-theme="light"] .shell-v2 .dashboard-page .db3-price-rates span { border-left-color: rgba(15,23,42,0.12) !important; color: var(--s2-text); }
+[data-theme="light"] .shell-v2 .dashboard-page .db3-standard-chip { border-color: rgba(15,23,42,0.16); }
+[data-theme="light"] .shell-v2 .dashboard-page .db3-price-row--total { border-top-color: rgba(91,140,255,0.32) !important; }
 .shell-v2 .dashboard-page .db3-standard-rates,
 .shell-v2 .dashboard-page .db3-price-rates { display: flex; flex-wrap: wrap; gap: 5px 6px; }
 
 .shell-v2 .dashboard-page .db3-price-table { overflow-x: auto; padding-bottom: 2px; }
-.shell-v2 .dashboard-page .db3-price-grid { min-width: 940px; }
-.shell-v2 .dashboard-page .db3-price-row { display: grid; grid-template-columns: minmax(210px, 1.32fr) repeat(3, minmax(90px, 0.58fr)) minmax(220px, 1.02fr) minmax(120px, 0.72fr); gap: 12px; align-items: center; padding: 11px 4px; }
+.shell-v2 .dashboard-page .db3-price-grid { min-width: 720px; }
+
+/* ── 重做版费用趋势：柔和 SVG 面积图 ── */
+.shell-v2 .dashboard-page .db3-cost-area { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 2px; }
+.shell-v2 .dashboard-page .db3-cost-area-svg { width: 100%; height: 168px; display: block; color: var(--s2-text); }
+.shell-v2 .dashboard-page .db3-cost-area-dot { transition: opacity 120ms ease; }
+.shell-v2 .dashboard-page .db3-cost-area:hover .db3-cost-area-dot { opacity: 0.55; }
+.shell-v2 .dashboard-page .db3-cost-area-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 2px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+[data-theme="light"] .shell-v2 .dashboard-page .db3-cost-area-foot { border-top-color: rgba(15,23,42,0.06); }
+.shell-v2 .dashboard-page .db3-cost-area-summary { font-size: 0.66rem; font-weight: 600; color: var(--s2-muted); letter-spacing: 0.04em; }
+.shell-v2 .dashboard-page .db3-cost-area-totals { display: flex; align-items: baseline; gap: 12px; font-variant-numeric: tabular-nums; }
+.shell-v2 .dashboard-page .db3-cost-area-totals em { font-style: normal; font-size: 0.64rem; color: var(--s2-faint); }
+.shell-v2 .dashboard-page .db3-cost-area-totals strong { font-size: 1rem; font-weight: 700; color: var(--s2-text); }
+
+/* ── 新版 "GPT 计费标准" 4 列轻量价表 ── */
+.shell-v2 .dashboard-page .db3-rate-table { display: grid; gap: 0; }
+.shell-v2 .dashboard-page .db3-rate-table-head,
+.shell-v2 .dashboard-page .db3-rate-table-row { display: grid; grid-template-columns: minmax(160px, 1.6fr) repeat(3, minmax(80px, 1fr)); gap: 14px; align-items: baseline; padding: 11px 2px; }
+.shell-v2 .dashboard-page .db3-rate-table-head { padding: 2px 2px 8px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--s2-faint); border-bottom: 1px solid rgba(255,255,255,0.06); }
+.shell-v2 .dashboard-page .db3-rate-table-head > :not(:first-child),
+.shell-v2 .dashboard-page .db3-rate-table-row > :not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.shell-v2 .dashboard-page .db3-rate-table-row { border-bottom: 1px solid rgba(255,255,255,0.05); }
+.shell-v2 .dashboard-page .db3-rate-table-row:last-child { border-bottom: 0; }
+.shell-v2 .dashboard-page .db3-rate-table-row.is-detected { box-shadow: inset 2px 0 0 rgba(91,140,255,0.55); padding-left: 10px; }
+.shell-v2 .dashboard-page .db3-rate-table-model { display: grid; gap: 2px; min-width: 0; }
+.shell-v2 .dashboard-page .db3-rate-table-name { font-size: 0.78rem; font-weight: 670; color: var(--s2-text); }
+.shell-v2 .dashboard-page .db3-rate-table-key { font-family: var(--font-mono-ui); font-size: 0.6rem; color: var(--s2-faint); }
+.shell-v2 .dashboard-page .db3-rate-table-num { font-size: 0.78rem; font-weight: 600; color: var(--s2-text); }
+[data-theme="light"] .shell-v2 .dashboard-page .db3-rate-table-head { border-bottom-color: rgba(15,23,42,0.08); }
+[data-theme="light"] .shell-v2 .dashboard-page .db3-rate-table-row { border-bottom-color: rgba(15,23,42,0.06); }
+[data-theme="light"] .shell-v2 .dashboard-page .db3-rate-table-row.is-detected { box-shadow: inset 2px 0 0 rgba(59,108,235,0.6); }
+.shell-v2 .dashboard-page .db3-price-row { display: grid; grid-template-columns: minmax(200px, 1.6fr) repeat(3, minmax(90px, 0.85fr)) minmax(130px, 0.95fr); gap: 14px; align-items: center; padding: 11px 4px; }
 .shell-v2 .dashboard-page .db3-price-row--head { padding: 0 4px 8px; border: 0 !important; background: transparent !important; box-shadow: none !important; color: var(--s2-faint); letter-spacing: 0.12em; text-transform: uppercase; }
 .shell-v2 .dashboard-page .db3-price-row--total { padding-top: 13px; border-top: 1px solid rgba(91,140,255,0.18) !important; }
 .shell-v2 .dashboard-page .db3-price-model-cell { min-width: 0; display: grid; gap: 3px; }
@@ -23169,7 +23217,7 @@ body {
 }
 
 .shell-v2 .dashboard-page .db3-price-row {
-  grid-template-columns: minmax(0, 1.48fr) repeat(3, minmax(108px, 0.58fr)) minmax(210px, 0.92fr) minmax(104px, 0.54fr);
+  grid-template-columns: minmax(0, 1.7fr) repeat(3, minmax(108px, 0.88fr)) minmax(118px, 0.78fr);
 }
 
 .shell-v2 .dashboard-page .db3-price-row--head > :nth-child(2),
@@ -23206,12 +23254,12 @@ body {
 }
 
 .shell-v2 .dashboard-page .db3-dashboard-grid--claude .db3-price-grid {
-  min-width: 960px;
+  min-width: 740px;
 }
 
 .shell-v2 .dashboard-page .db3-dashboard-grid--claude .db3-price-row {
-  grid-template-columns: minmax(220px, 1.25fr) repeat(3, minmax(88px, 104px)) minmax(228px, 250px) minmax(108px, 126px);
-  gap: 10px 12px;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(96px, 116px)) minmax(120px, 140px);
+  gap: 12px;
   padding: 10px 0;
 }
 

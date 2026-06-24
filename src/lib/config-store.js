@@ -1,7 +1,7 @@
 // touched on 2026-05-11
 import fs from 'node:fs/promises';
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -154,6 +154,39 @@ function resolveBackupDir(backupName) {
   return resolved;
 }
 
+function nvmVersionBinDirs() {
+  if (process.platform === 'win32') return [];
+  const nvmDir = process.env.NVM_DIR?.trim() || path.join(os.homedir(), '.nvm');
+  const versionsRoot = path.join(nvmDir, 'versions', 'node');
+  if (!existsSync(versionsRoot)) return [];
+  try {
+    return readdirSync(versionsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(versionsRoot, entry.name, 'bin'))
+      .filter((dir) => existsSync(dir))
+      // 新版本（高字典序）优先：v22.x > v20.x，避免 codex 多版本时挑到老的
+      .sort((a, b) => b.localeCompare(a));
+  } catch {
+    return [];
+  }
+}
+
+function unixSystemBinDirs() {
+  if (process.platform === 'win32') return [];
+  // GUI 启动（Tauri/Electron）下 PATH 通常很瘦，把 macOS / Linux 上
+  // brew、系统、用户级 bin 全部补一遍，保证 commandExists 不依赖原生 PATH。
+  return [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
+  ];
+}
+
 function managerGlobalBinDirs() {
   const home = os.homedir();
   const dirs = new Set();
@@ -184,6 +217,11 @@ function managerGlobalBinDirs() {
     add(path.join(home, '.asdf', 'shims'));
     add(path.join(home, '.npm-global', 'bin'));
     add(path.join(home, '.local', 'bin'));
+    add(path.join(home, 'bin'));
+    // nvm 多版本：用户没在 GUI shell 里 source nvm 也能找到 codex
+    nvmVersionBinDirs().forEach(add);
+    // 系统 / brew 路径，必须放最后，优先级低于用户 node 版本
+    unixSystemBinDirs().forEach(add);
   }
 
   return [...dirs];
@@ -299,7 +337,13 @@ function toolBinaryCandidates(toolId, { passive = false } = {}) {
   }
 
   if (!passiveWindows) {
-    for (const dirPath of [...managerGlobalBinDirs(), ...managerReportedBinDirs()]) {
+    const scanDirs = [...managerGlobalBinDirs(), ...managerReportedBinDirs()];
+    // Unix 还要扫一遍当前进程 PATH 里出现的目录（Tauri GUI 模式下可能补到
+    // 一些用户自定义的 export PATH=...）
+    if (process.platform !== 'win32') {
+      scanDirs.push(...envPathBinDirs());
+    }
+    for (const dirPath of scanDirs) {
       for (const candidate of binaryCandidatesFromDir(binaryName, dirPath)) {
         if (candidate && existsSync(candidate)) addCandidate(candidate);
       }
@@ -320,9 +364,38 @@ function toolBinaryCandidates(toolId, { passive = false } = {}) {
         if (candidate) addCandidate(candidate);
       }
     }
+
+    // Tauri/Electron GUI 进程的 PATH 通常很瘦（macOS .app 不继承登录 shell PATH）。
+    // 兜底：通过登录 shell 拿一遍真实 PATH，覆盖用户在 .zshrc / .bashrc 里加的目录。
+    if (process.platform !== 'win32') {
+      const loginShellPath = readLoginShellPath();
+      if (loginShellPath) {
+        for (const entry of loginShellPath.split(':')) {
+          const dir = safeResolveDir(entry);
+          if (!dir) continue;
+          for (const candidate of binaryCandidatesFromDir(binaryName, dir)) {
+            if (candidate && existsSync(candidate)) addCandidate(candidate);
+          }
+        }
+      }
+    }
   }
 
   return [...candidates];
+}
+
+// 跑用户登录 shell（zsh / bash）的 PATH，并缓存一次，避免每次启动都 spawn。
+let cachedLoginShellPath = null;
+function readLoginShellPath() {
+  if (cachedLoginShellPath !== null) return cachedLoginShellPath;
+  if (process.platform === 'win32') {
+    cachedLoginShellPath = '';
+    return cachedLoginShellPath;
+  }
+  const shell = process.env.SHELL?.trim() || '/bin/zsh';
+  const result = runSpawnSync(shell, ['-lc', 'echo $PATH'], { encoding: 'utf8', timeout: 1500 });
+  cachedLoginShellPath = result.status === 0 ? String(result.stdout || '').trim() : '';
+  return cachedLoginShellPath;
 }
 
 function windowsBinaryCandidateRank(binPath = '') {
@@ -2337,7 +2410,15 @@ function normalizeBaseUrl(baseUrl) {
     ? raw
     : (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(raw) ? `http://${raw}` : `https://${raw}`);
 
-  const url = new URL(withScheme);
+  let url;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    throw new Error(`Base URL 不合法：${raw}`);
+  }
+
+  // 只做最小处理：去掉多余尾部斜杠，路径段原样保留。
+  // 不替用户做任何"智能补全"——有的网关就是不要 /v1，自动加上会 404。
   url.pathname = url.pathname.replace(/\/+$/, '');
   return url.toString().replace(/\/+$/, '');
 }
@@ -2473,10 +2554,15 @@ async function preserveCodexAuthJsonEntriesToEnv({ codexHome = defaultCodexHome(
     if (typeof value !== 'string' || !shouldPreserveAuthEntry(key, value)) {
       continue;
     }
-    if (String(env[key] || '').trim()) {
+    const incoming = value.trim();
+    const existing = String(env[key] || '').trim();
+    // 旧版本：env 里已有值就直接 skip 掉，导致用户在 Codex CLI 重新 login
+    // 拿到的新 OPENAI_API_KEY 永远写不进 .env，UI 一直看老 key。
+    // 现在：incoming 非空且与现有值不同时覆盖，仍跳过同值（避免空写）。
+    if (!incoming || incoming === existing) {
       continue;
     }
-    env[key] = value.trim();
+    env[key] = incoming;
     migrated.push(key);
   }
 
@@ -2586,10 +2672,12 @@ function scoreKeyCandidate(candidateKey, provider) {
     if (prefixLen >= 4 && target.slice(0, prefixLen) === candidate.slice(0, prefixLen)) score += prefixLen * 5;
   }
 
-  if (candidate === 'openai' && !targets.some((target) => target.includes('openai'))) {
-    score -= 60;
-  }
-
+  // 第三方 OpenAI 兼容网关（NewAPI / oneapi / packycode 等）默认就用
+  // `OPENAI_API_KEY` 作为环境变量名。旧逻辑无条件给它 -60，会反复出现
+  // ".env 里明明有 key UI 却显示未配置"的问题。现在不再特殊处罚——
+  //   1. provider.envKey 显式存在时，本身有 +1000 分，OPENAI_API_KEY 也赢不过；
+  //   2. 真正存在其他名字更贴近的 key（ANTHROPIC_API_KEY 等）时，自然胜出；
+  //   3. 否则 OPENAI_API_KEY 就是合理的回退。
   return score;
 }
 
@@ -3066,23 +3154,27 @@ function launchWindowsTerminal(cwd, commandText, { toolLabel = 'Codex', terminal
 }
 
 function launchTerminalCommand(cwd, { binaryPath, binaryName = 'codex', toolLabel = 'Codex', commandText = '', terminalProfile = 'auto' } = {}) {
-  const bin = commandText || binaryPath || binaryName;
-  const escapedCwd = String(cwd).replace(/([\\"$])/g, '\\$1');
-  const escapedBin = String(bin).replace(/([\\"$])/g, '\\$1');
-  const windowsBin = commandText || (binaryPath ? buildWindowsBinaryCommand(binaryPath, [], binaryName) : bin);
+  // POSIX 平台必须把 binaryPath 用 quotePosixShellArg 包裹，否则路径里
+  // 含空格 / nvm 多版本目录会被 shell 拆分（典型："/Users/张三/.nvm/.../codex"）。
+  // 如果调用方已经传了 commandText（资深路径，自己拼接好的命令字符串），
+  // 就信任它原样使用。
+  const posixBin = commandText
+    || (binaryPath ? quotePosixShellArg(String(binaryPath)) : binaryName);
+  const windowsBin = commandText || (binaryPath ? buildWindowsBinaryCommand(binaryPath, [], binaryName) : binaryName);
 
   if (process.platform === 'darwin') {
-    return launchDarwinTerminal(cwd, escapedBin, { toolLabel, terminalProfile });
+    return launchDarwinTerminal(cwd, posixBin, { toolLabel, terminalProfile });
   }
 
   if (process.platform === 'win32') {
     return launchWindowsTerminal(cwd, windowsBin, { toolLabel, terminalProfile });
   }
 
+  const quotedCwd = quotePosixShellArg(String(cwd || process.cwd()));
   const terminals = [
-    ['x-terminal-emulator', ['-e', `bash -lc "cd \\"${escapedCwd}\\" && ${bin}"`]],
-    ['gnome-terminal', ['--', 'bash', '-lc', `cd "${escapedCwd}" && ${bin}`]],
-    ['konsole', ['-e', 'bash', '-lc', `cd "${escapedCwd}" && ${bin}`]],
+    ['x-terminal-emulator', ['-e', `bash -lc 'cd ${quotedCwd} && ${posixBin}'`]],
+    ['gnome-terminal', ['--', 'bash', '-lc', `cd ${quotedCwd} && ${posixBin}`]],
+    ['konsole', ['-e', 'bash', '-lc', `cd ${quotedCwd} && ${posixBin}`]],
   ];
 
   for (const [command, args] of terminals) {
@@ -3574,6 +3666,10 @@ export async function saveConfig(payload) {
   const approvalPolicy = String(payload.approvalPolicy || '').trim();
   const sandboxMode = String(payload.sandboxMode || '').trim();
   const reasoningEffort = String(payload.reasoningEffort || '').trim();
+  // 收集前端可展示的提示。仅保留"真正动了用户配置"的项（清理 env、替换 providerKey）。
+  // 不主动告诉用户 URL 被加了 https:// / 去了尾部斜杠之类的纯字面规范化——
+  // 那些是无侵入修整，闹腾反而吵。
+  const hints = [];
 
   config.model_provider = providerKey;
   if (model) config.model = model;
@@ -3594,12 +3690,45 @@ export async function saveConfig(payload) {
     nextProvider.wire_api = 'responses';
   }
   config.model_providers[providerKey] = nextProvider;
+
+  // 收集所有要被废弃 / 替换的旧 env_key，准备从 .env 清理掉。
+  // 触发条件：
+  //   1. 同 URL 匹配到旧 providerKey 且 != 新 providerKey，旧 provider 整条被删；
+  //   2. 当前 providerKey 改名了 env_key（例如改 URL 推断变成新名字）。
+  const obsoleteEnvKeys = new Set();
   if (matchedProviderKey && matchedProviderKey !== providerKey) {
+    const oldEnvKey = String(matchedProvider?.env_key || '').trim();
+    if (oldEnvKey && oldEnvKey !== envKey) obsoleteEnvKeys.add(oldEnvKey);
     delete config.model_providers[matchedProviderKey];
+    hints.push({
+      code: 'provider_key_replaced',
+      message: `已替换旧 provider「${matchedProviderKey}」为「${providerKey}」（同一 Base URL）`,
+    });
+  }
+  const prevEnvKeyForKey = String(currentProvider?.env_key || '').trim();
+  if (prevEnvKeyForKey && prevEnvKeyForKey !== envKey) {
+    obsoleteEnvKeys.add(prevEnvKeyForKey);
   }
 
   if (apiKey && envKey) {
     env[envKey] = apiKey;
+  }
+  // 清理孤儿 env_key：只在该变量没有被用户主动复用（即不是当前要写入的 envKey），
+  // 而且 .env 里确实存在时再删。避免误删用户共享给其他工具的环境变量。
+  const removedEnvKeys = [];
+  for (const oldKey of obsoleteEnvKeys) {
+    if (!oldKey || oldKey === envKey) continue;
+    if (Object.prototype.hasOwnProperty.call(env, oldKey)) {
+      delete env[oldKey];
+      removedEnvKeys.push(oldKey);
+    }
+  }
+  if (removedEnvKeys.length) {
+    hints.push({
+      code: 'env_keys_cleaned',
+      message: `已清理失效的 .env 变量：${removedEnvKeys.join(', ')}`,
+      detail: { keys: removedEnvKeys },
+    });
   }
 
   const configChanged = JSON.stringify(config) !== JSON.stringify(originalConfig);
@@ -3619,6 +3748,9 @@ export async function saveConfig(payload) {
     backupPath,
     paths,
     activeProvider: providerKey,
+    baseUrl,
+    envKey,
+    hints,
     changed: {
       config: configChanged,
       env: envChanged,
@@ -3918,11 +4050,28 @@ function buildCodexSessionCommand(codexBinary, args = []) {
   return [binary, ...args.map((arg) => quotePosixShellArg(String(arg)))].join(' ');
 }
 
+// 把用户传入的 cwd 做完整规范化：展开 ~ 、收敛到绝对路径、并校验存在性。
+// Codex / Claude 启动场景下，UI 可能会传 "~/Projects" 或者拷贝粘贴的路径，
+// 直接 path.resolve 会得到 "<server cwd>/~/Projects" 这种悬空路径。
+function resolveLaunchCwd(cwd) {
+  const resolved = resolveMaybeHomePath(cwd, process.cwd()) || process.cwd();
+  return path.resolve(resolved);
+}
+
+function describeCodexInstallError() {
+  // 启动时找不到 codex 的最常见原因是 GUI 进程 PATH 不含 nvm。
+  // 给一个有方向感的提示，而不是干巴巴一句"尚未安装"。
+  if (process.platform === 'darwin') {
+    return 'Codex 尚未安装，或当前 PATH 没扫到。如确认本机已 `npm i -g @openai/codex`，可在终端执行 `which codex` 验证；GUI 启动场景下我们已经会扫 nvm/asdf/volta/brew，仍找不到请点击重新安装。';
+  }
+  return 'Codex 尚未安装，请先点击安装';
+}
+
 async function launchCodexSessionAction({ cwd, sessionId = '', action = 'resume', last = false, terminalProfile = 'auto' } = {}) {
-  const targetCwd = path.resolve(cwd || process.cwd());
+  const targetCwd = resolveLaunchCwd(cwd);
   const codexBinary = findCodexBinary();
   if (!codexBinary.installed) {
-    throw new Error('Codex 尚未安装，请先点击安装');
+    throw new Error(describeCodexInstallError());
   }
   const normalizedSessionId = normalizeCodexSessionId(sessionId);
   const subcommand = action === 'fork' ? 'fork' : 'resume';
@@ -3950,10 +4099,10 @@ export async function forkCodexSession({ cwd, sessionId = '', terminalProfile = 
 }
 
 export async function launchCodex({ cwd, terminalProfile = 'auto' } = {}) {
-  const targetCwd = path.resolve(cwd || process.cwd());
+  const targetCwd = resolveLaunchCwd(cwd);
   const codexBinary = findCodexBinary();
   if (!codexBinary.installed) {
-    throw new Error('Codex 尚未安装，请先点击安装');
+    throw new Error(describeCodexInstallError());
   }
 
   const message = launchTerminalCommand(targetCwd, {
@@ -3966,7 +4115,7 @@ export async function launchCodex({ cwd, terminalProfile = 'auto' } = {}) {
 }
 
 export async function loginCodex({ cwd, terminalProfile = 'auto' } = {}) {
-  const targetCwd = path.resolve(cwd || process.cwd());
+  const targetCwd = resolveLaunchCwd(cwd);
   const codexHome = defaultCodexHome();
   const authPath = path.join(codexHome, 'auth.json');
   const authRaw = await readText(authPath);
@@ -3976,7 +4125,7 @@ export async function loginCodex({ cwd, terminalProfile = 'auto' } = {}) {
   }
   const codexBinary = findCodexBinary();
   if (!codexBinary.installed) {
-    throw new Error('Codex 尚未安装，请先点击安装');
+    throw new Error(describeCodexInstallError());
   }
 
   const message = launchTerminalCommand(targetCwd, {
@@ -4568,7 +4717,7 @@ export async function uninstallClaudeCode() {
 }
 
 export async function launchClaudeCode({ cwd } = {}) {
-  const targetCwd = path.resolve(cwd || process.cwd());
+  const targetCwd = resolveLaunchCwd(cwd);
   const binary = findToolBinary('claudecode');
   if (!binary.installed) {
     throw new Error('Claude Code 尚未安装，请先点击安装');
@@ -4582,7 +4731,7 @@ export async function launchClaudeCode({ cwd } = {}) {
 }
 
 export async function loginClaudeCode({ cwd } = {}) {
-  const targetCwd = path.resolve(cwd || process.cwd());
+  const targetCwd = resolveLaunchCwd(cwd);
   const binary = findToolBinary('claudecode');
   if (!binary.installed) {
     throw new Error('Claude Code 尚未安装，请先点击安装');
@@ -4591,7 +4740,7 @@ export async function loginClaudeCode({ cwd } = {}) {
   const message = launchTerminalCommand(targetCwd, {
     commandText: process.platform === 'win32'
       ? buildWindowsBinaryCommand(binaryPath, ['auth', 'login'], 'claude')
-      : `"${binaryPath.replace(/"/g, '\\"')}" auth login`,
+      : `${quotePosixShellArg(binaryPath)} auth login`,
     toolLabel: 'Claude Code OAuth 登录',
   });
   return { ok: true, cwd: targetCwd, message };

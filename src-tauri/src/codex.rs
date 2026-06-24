@@ -2231,6 +2231,16 @@ pub(crate) fn find_codex_binary() -> Value {
   find_codex_binary_with_options(true)
 }
 
+fn describe_codex_install_error() -> String {
+  if cfg!(target_os = "macos") {
+    return "Codex 尚未安装，或当前 PATH 没扫到。\n\
+            如确认本机已 `npm i -g @openai/codex`，可在终端执行 `which codex` 验证；\n\
+            GUI 启动场景下我们已经会扫 nvm/asdf/volta/brew 等常见路径，仍找不到请点击重新安装。"
+      .to_string();
+  }
+  "Codex 尚未安装，请先点击安装".to_string()
+}
+
 
 
 pub(crate) fn find_codex_binary_with_options(passive: bool) -> Value {
@@ -2569,14 +2579,14 @@ pub(crate) fn launch_codex(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
     let input = get_string(&object, "cwd");
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let codex_home = requested_codex_home_from_object(&object)?;
   ensure_dir(&codex_home)?;
   let terminal_profile = get_string(&object, "terminalProfile");
   let codex_binary = find_codex_binary();
   if !codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
-    return Err("Codex 尚未安装，请先点击安装".to_string());
+    return Err(describe_codex_install_error());
   }
   let codex_path = codex_binary
     .get("path")
@@ -2617,7 +2627,7 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
     let input = get_string(&object, "cwd");
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let terminal_profile = get_string(&object, "terminalProfile");
   let codex_home = requested_codex_home_from_object(&object)?;
@@ -2629,7 +2639,7 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
   }
   let codex_binary = find_codex_binary();
   if !codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
-    return Err("Codex 尚未安装，请先点击安装".to_string());
+    return Err(describe_codex_install_error());
   }
   let binary_path = codex_binary
     .get("path")
@@ -3055,7 +3065,7 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
   let object = parse_json_object(body);
   let cwd = {
     let input = get_string(&object, "cwd");
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let codex_home = requested_codex_home_from_object(&object)?;
   ensure_dir(&codex_home)?;
@@ -3064,7 +3074,7 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
   let terminal_profile = get_string(&object, "terminalProfile");
   let codex_binary = find_codex_binary();
   if !codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
-    return Err("Codex 尚未安装，请先点击安装".to_string());
+    return Err(describe_codex_install_error());
   }
   let subcommand = if action == "fork" { "fork" } else { "resume" };
   let mut args = vec![subcommand.to_string()];
@@ -3227,7 +3237,10 @@ struct CodexUsageSessionFile {
   modified_ms: u64,
 }
 
-const CODEX_USAGE_CACHE_TTL_SECS: i64 = 60;
+// 1 小时新鲜窗。窗口内即使有 jsonl 增量也直接返回缓存，避免每次切到 Dashboard
+// 都要全扫一遍 ~/.claude/projects/**/*.jsonl。stale-while-revalidate 路径下
+// 前端会再起一次显式 refresh 兜底，所以延长 TTL 不会让数据真过期。
+const CODEX_USAGE_CACHE_TTL_SECS: i64 = 3600;
 
 fn codex_usage_num(value: Option<&Value>) -> u64 {
   value
@@ -3389,8 +3402,11 @@ fn codex_usage_cache_path(_codex_home: &Path, _day_count: i64) -> Result<PathBuf
   Ok(cache_dir.join("metrics.db"))
 }
 
+// 改 calc_cost 的定价表时把版本号 +1，旧缓存里的 cost 数据立即失效。
+const USAGE_PRICING_VERSION: u32 = 3;
+
 fn codex_usage_cache_key(sessions_root: &Path, day_count: i64) -> String {
-  format!("{}::{}", sessions_root.to_string_lossy(), day_count)
+  format!("v{}::{}::{}", USAGE_PRICING_VERSION, sessions_root.to_string_lossy(), day_count)
 }
 
 fn open_codex_usage_cache_db(db_path: &Path) -> Result<Connection, String> {
@@ -3423,7 +3439,7 @@ fn open_codex_usage_cache_db(db_path: &Path) -> Result<Connection, String> {
 }
 
 fn claude_usage_cache_key(telemetry_root: &Path, day_count: i64) -> String {
-  format!("{}::{}", telemetry_root.to_string_lossy(), day_count)
+  format!("v{}::{}::{}", USAGE_PRICING_VERSION, telemetry_root.to_string_lossy(), day_count)
 }
 
 fn read_claude_usage_cache(cache_path: &Path, telemetry_root: &Path, day_count: i64, file_count: u64, latest_mtime_ms: u64, cache_only: bool) -> Option<Value> {
@@ -3965,8 +3981,8 @@ pub(crate) fn check_setup_environment(query: &Value) -> Result<Value, String> {
   }))
 }
 use crate::{
-  app_home, compare_versions, default_codex_home, extract_version, home_dir, npm_command,
-  parse_json_object, parse_toml_config, read_text, OPENAI_CODEX_PACKAGE,
+  app_home, compare_versions, default_codex_home, expand_home_path, extract_version, home_dir,
+  npm_command, parse_json_object, parse_toml_config, read_text, OPENAI_CODEX_PACKAGE,
   claude_code_home, effective_claude_code_home, openclaw_home, opencode_config_home, opencode_data_home, write_text, ensure_dir, backups_root, CLAUDE_CODE_PACKAGE,
   OPENCODE_PACKAGE, OPENCLAW_PACKAGE,
 };
@@ -4349,9 +4365,30 @@ fn read_claude_telemetry_usage_for_home(home: &Path, days: i64, force_refresh: b
     cost: f64,
     session_count: u64,
   }
+  // 价格按 ccusage models-dev-pricing.json + pricing.rs 对齐：
+  //   - fable-5：$10/$50/$1/$12.50（最新一代 1M context，比 opus 高一档）
+  //   - opus-4-1：老价 $15/$75/$1.5/$18.75（200K context）
+  //   - opus-4-5/6/7/8：新价 $5/$25/$0.5/$6.25（1M context，比老价便宜 3x）
+  //   - sonnet 4-5/6：$3/$15/$0.3/$3.75
+  //   - haiku-4-5：$1/$5/$0.1/$1.25
+  //   - haiku 3-5 / 老 haiku：$0.8/$4/$0.08/$1
   let calc_cost = |model: &str, input: u64, output: u64, cache_read: u64, cache_creation: u64| {
     let lower = model.to_lowercase();
-    let (pin, pout, pread, pcreate) = if lower.contains("opus") { (15.0, 75.0, 1.5, 18.75) } else if lower.contains("sonnet") { (3.0, 15.0, 0.3, 3.75) } else if lower.contains("haiku") { (0.8, 4.0, 0.08, 1.0) } else { (3.0, 15.0, 0.3, 3.75) };
+    let (pin, pout, pread, pcreate) = if lower.contains("fable-5") || lower.contains("fable5") {
+      (10.0, 50.0, 1.0, 12.50)
+    } else if lower.contains("opus-4-1") {
+      (15.0, 75.0, 1.5, 18.75)
+    } else if lower.contains("opus") {
+      (5.0, 25.0, 0.5, 6.25)
+    } else if lower.contains("sonnet") {
+      (3.0, 15.0, 0.3, 3.75)
+    } else if lower.contains("haiku-4-5") || lower.contains("haiku-4.5") || lower.contains("haiku-4") {
+      (1.0, 5.0, 0.1, 1.25)
+    } else if lower.contains("haiku") {
+      (0.8, 4.0, 0.08, 1.0)
+    } else {
+      (3.0, 15.0, 0.3, 3.75)
+    };
 
     (input as f64 * pin + output as f64 * pout + cache_read as f64 * pread + cache_creation as f64 * pcreate) / 1_000_000.0
   };
@@ -5606,7 +5643,7 @@ pub(crate) fn launch_claudecode(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
     let input = get_string(&object, "cwd");
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let binary = find_tool_binary("claude");
   if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
@@ -5669,7 +5706,7 @@ pub(crate) fn login_claudecode(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
     let input = get_string(&object, "cwd");
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let binary = find_tool_binary("claude");
   if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
@@ -6322,7 +6359,7 @@ pub(crate) fn launch_opencode(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
     let input = get_string(&object, "cwd");
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let binary = find_tool_binary("opencode");
   if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
@@ -6337,7 +6374,7 @@ pub(crate) fn login_opencode(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
     let input = get_string(&object, "cwd");
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let binary = find_tool_binary("opencode");
   if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
@@ -6482,7 +6519,7 @@ pub(crate) fn get_openclaw_dashboard_url(body: &Value) -> Result<Value, String> 
   let object = parse_json_object(body);
   let cwd = {
     let input = object.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let state = load_openclaw_state()?;
   let binary = state.get("binary").cloned().unwrap_or_else(|| json!({}));
@@ -6510,7 +6547,7 @@ pub(crate) fn repair_openclaw_dashboard_auth(body: &Value) -> Result<Value, Stri
   let object = parse_json_object(body);
   let cwd = {
     let input = object.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let mut state = load_openclaw_state()?;
   let binary = state.get("binary").cloned().unwrap_or_else(|| json!({}));
@@ -6626,7 +6663,7 @@ pub(crate) fn launch_openclaw(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
     let input = object.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let state = load_openclaw_state()?;
   let binary = state.get("binary").cloned().unwrap_or_else(|| json!({}));
@@ -6698,7 +6735,7 @@ pub(crate) fn onboard_openclaw(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = {
     let input = object.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
-    if input.is_empty() { home_dir()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(home_dir, Ok)?
   };
   let binary = find_tool_binary("openclaw");
   if !binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {

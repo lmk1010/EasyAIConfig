@@ -29,15 +29,11 @@ pub(crate) fn normalize_base_url(base_url: &str) -> Result<String, String> {
   };
 
   let mut url = Url::parse(&with_scheme).map_err(|error| error.to_string())?;
-  let trimmed = url.path().trim_end_matches('/');
-  let next_path = if trimmed.is_empty() {
-    "/v1".to_string()
-  } else if trimmed.ends_with("/v1") {
-    trimmed.to_string()
-  } else {
-    format!("{trimmed}/v1")
-  };
-  url.set_path(&next_path);
+  // 只做最小处理：去掉多余尾部斜杠，路径段原样保留。
+  // 不做任何"智能补全"——有的网关就是不要 /v1，自动加上会 404。
+  // 旧实现里"自动补 /v1 + 在 /v2 后面再拼 /v1"也一并删掉。
+  let trimmed = url.path().trim_end_matches('/').to_string();
+  url.set_path(&trimmed);
   Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
@@ -107,6 +103,31 @@ pub(crate) fn infer_env_key(provider_key: &str) -> String {
   )
 }
 
+/// 在已有 `model_providers` 表里按 base_url（已规范化）找命中条目。
+/// 用于 save_config 检测「用户只改了 URL/重命名 providerKey，实际指向的还是
+/// 同一个 provider」的场景，避免在 TOML 里产生孤儿条目。
+pub(crate) fn find_provider_entry_by_base_url(
+  config: &Value,
+  base_url: &str,
+) -> Option<(String, Map<String, Value>)> {
+  let providers = config.get("model_providers")?.as_object()?;
+  let target = base_url.trim();
+  if target.is_empty() {
+    return None;
+  }
+  for (key, provider) in providers.iter() {
+    let item = match provider.as_object() {
+      Some(item) => item,
+      None => continue,
+    };
+    let existing = item.get("base_url").and_then(Value::as_str).unwrap_or("").trim();
+    if existing == target {
+      return Some((key.clone(), item.clone()));
+    }
+  }
+  None
+}
+
 fn normalize_token(value: &str) -> String {
   value
     .to_lowercase()
@@ -148,10 +169,11 @@ fn score_key_candidate(candidate_key: &str, provider: &ProviderMeta) -> i32 {
     }
   }
 
-  if candidate == "openai" && !provider.base_url.to_lowercase().contains("openai") {
-    score -= 60;
-  }
-
+  // 第三方 OpenAI 兼容网关（NewAPI / oneapi / packycode 等）默认就用
+  // `OPENAI_API_KEY`，旧版无条件 -60 会让正常部署反复"找不到 key"。
+  // 不再特殊处罚 —— provider.env_key 显式存在时凭 +1000 分自然胜出，
+  // 其他更贴近的 key 也会自然命中；OPENAI_API_KEY 在没有更优候选时
+  // 是合理的回退。
   score
 }
 

@@ -5,12 +5,12 @@ use toml::Value as TomlValue;
 
 use crate::codex::find_codex_binary_with_options;
 use crate::provider::{
-  detect_saved_provider, flatten_auth_json, get_string, infer_env_key, infer_provider_label,
-  infer_provider_seed, normalize_base_url, reveal_provider_api_key, slugify_provider_key,
-  summarize_providers,
+  detect_saved_provider, find_provider_entry_by_base_url, flatten_auth_json, get_string,
+  infer_env_key, infer_provider_label, infer_provider_seed, normalize_base_url,
+  reveal_provider_api_key, slugify_provider_key, summarize_providers,
 };
 use crate::{
-  app_home, apply_patch, backups_root, default_codex_home, ensure_dir, home_dir,
+  app_home, apply_patch, backups_root, default_codex_home, ensure_dir, expand_home_path, home_dir,
   normalize_settings_patch, parse_env, parse_json_object, parse_toml_config, read_text,
   stringify_env, stringify_toml_config, timestamp, write_text,
 };
@@ -101,7 +101,10 @@ fn scope_paths(scope: &str, project_path: &str, codex_home: &Path) -> Result<Sco
     if project_path.trim().is_empty() {
       return Err("Project path is required for project scope".to_string());
     }
-    let root_path = assert_allowed_path(Path::new(project_path.trim()), "projectPath")?;
+    // 支持用户传入 `~/Projects/foo` 这种带 ~ 的项目路径。
+    let expanded_project_path = expand_home_path(project_path)
+      .ok_or_else(|| "Project path is required for project scope".to_string())?;
+    let root_path = assert_allowed_path(expanded_project_path.as_path(), "projectPath")?;
     return Ok(ScopePaths {
       scope: "project".to_string(),
       root_path: root_path.clone(),
@@ -160,7 +163,7 @@ pub(crate) fn load_state(query: &Value) -> Result<Value, String> {
   let project_path = get_string(&query_object, "projectPath");
   let codex_home = {
     let input = get_string(&query_object, "codexHome");
-    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
   };
   ensure_dir(&codex_home)?;
 
@@ -238,7 +241,7 @@ pub(crate) fn get_provider_secret(body: &Value) -> Result<Value, String> {
 
   let codex_home = {
     let input = get_string(&object, "codexHome");
-    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
   };
   let scope = get_string(&object, "scope");
   let project_path = get_string(&object, "projectPath");
@@ -262,7 +265,7 @@ pub(crate) async fn test_saved_provider(body: &Value) -> Result<Value, String> {
 
   let codex_home = {
     let input = get_string(&object, "codexHome");
-    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
   };
   let scope = get_string(&object, "scope");
   let project_path = get_string(&object, "projectPath");
@@ -323,7 +326,7 @@ pub(crate) fn delete_codex_provider(body: &Value) -> Result<Value, String> {
 
   let codex_home = {
     let input = get_string(&object, "codexHome");
-    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
   };
   let scope = get_string(&object, "scope");
   let project_path = get_string(&object, "projectPath");
@@ -444,7 +447,7 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let codex_home = {
     let input = get_string(&object, "codexHome");
-    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
   };
   let scope = get_string(&object, "scope");
   let project_path = get_string(&object, "projectPath");
@@ -466,6 +469,11 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
   let sandbox_mode = get_string(&object, "sandboxMode");
   let reasoning_effort = get_string(&object, "reasoningEffort");
 
+  // 通过 base_url 找已有 provider —— 用户改 URL / 重命名 providerKey 后，
+  // 同一个 provider 不应该在 TOML 里残留旧条目。这里在还没把 config 借为
+  // mut 之前先拷出 matched，避免与下面 mut 借用冲突。
+  let matched_entry = find_provider_entry_by_base_url(&config, &base_url);
+
   if !config.is_object() {
     config = json!({});
   }
@@ -476,6 +484,7 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
     .and_then(|providers| providers.get(&provider_key))
     .and_then(Value::as_object)
     .cloned()
+    .or_else(|| matched_entry.as_ref().map(|(_, item)| item.clone()))
     .unwrap_or_default();
 
   let provider_label = {
@@ -527,8 +536,55 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
   }
   providers_object.insert(provider_key.clone(), Value::Object(next_provider));
 
+  // 收集要从 .env 清掉的旧 env_key（与 Node 端逻辑保持一致）。
+  let mut obsolete_env_keys: Vec<String> = Vec::new();
+  let mut hints: Vec<Value> = Vec::new();
+  if let Some((matched_key, matched_provider)) = matched_entry.as_ref() {
+    if matched_key != &provider_key {
+      let old_env_key = matched_provider
+        .get("env_key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+      if !old_env_key.is_empty() && old_env_key != env_key {
+        obsolete_env_keys.push(old_env_key);
+      }
+      providers_object.remove(matched_key);
+      hints.push(json!({
+        "code": "provider_key_replaced",
+        "message": format!("已替换旧 provider「{}」为「{}」（同一 Base URL）", matched_key, provider_key),
+      }));
+    }
+  }
+  let prev_env_key_for_key = current_provider
+    .get("env_key")
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_string();
+  if !prev_env_key_for_key.is_empty() && prev_env_key_for_key != env_key {
+    obsolete_env_keys.push(prev_env_key_for_key);
+  }
+
   if !api_key.trim().is_empty() && !env_key.trim().is_empty() {
     env.insert(env_key.clone(), api_key.trim().to_string());
+  }
+
+  let mut removed_env_keys: Vec<String> = Vec::new();
+  for old_key in obsolete_env_keys.iter() {
+    if old_key.is_empty() || old_key == &env_key { continue; }
+    if env.contains_key(old_key.as_str()) {
+      env.remove(old_key.as_str());
+      removed_env_keys.push(old_key.clone());
+    }
+  }
+  if !removed_env_keys.is_empty() {
+    hints.push(json!({
+      "code": "env_keys_cleaned",
+      "message": format!("已清理失效的 .env 变量：{}", removed_env_keys.join(", ")),
+      "detail": { "keys": removed_env_keys },
+    }));
   }
 
   let config_changed = config != original_config;
@@ -556,6 +612,9 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
       "envPath": paths.env_path.to_string_lossy().to_string(),
     },
     "activeProvider": provider_key,
+    "baseUrl": base_url,
+    "envKey": env_key,
+    "hints": hints,
     "changed": {
       "config": config_changed,
       "env": env_changed,
@@ -567,7 +626,7 @@ pub(crate) fn save_settings(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let codex_home = {
     let input = get_string(&object, "codexHome");
-    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
   };
   let scope = get_string(&object, "scope");
   let project_path = get_string(&object, "projectPath");
@@ -605,7 +664,7 @@ pub(crate) fn save_raw_config(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let codex_home = {
     let input = get_string(&object, "codexHome");
-    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
   };
   let scope = get_string(&object, "scope");
   let project_path = get_string(&object, "projectPath");
@@ -680,7 +739,7 @@ pub(crate) fn restore_backup(body: &Value) -> Result<Value, String> {
   let backup_name = get_string(&object, "backupName");
   let codex_home = {
     let input = get_string(&object, "codexHome");
-    if input.is_empty() { default_codex_home()? } else { PathBuf::from(input) }
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
   };
   let scope = get_string(&object, "scope");
   let project_path = get_string(&object, "projectPath");
