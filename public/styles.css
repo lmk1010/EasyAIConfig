@@ -25967,8 +25967,18 @@ body {
   cursor: pointer;
   text-align: left;
   color: var(--s2-text);
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
   transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), border-color 140ms, background 140ms, box-shadow 140ms;
 }
+/* 干掉默认 focus 蓝边；用键盘 tab 时给柔和的发光环 */
+.shell-v2 .cfg-card:focus { outline: none !important; }
+.shell-v2 .cfg-card:focus-visible {
+  border-color: rgba(91,140,255,0.45) !important;
+  box-shadow: 0 0 0 3px rgba(91,140,255,0.16) !important;
+}
+/* 鼠标点的瞬间：用与 hover 完全一致的态，不要"select" 高亮 */
+.shell-v2 .cfg-card:active { transform: translateY(0); }
 [data-theme="light"] .shell-v2 .cfg-card { background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0.45)); border-color: rgba(15,23,42,0.06); }
 .shell-v2 .cfg-card:hover {
   transform: translateY(-2px);
