@@ -81,6 +81,7 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/codex/oauth/profiles/delete", "POST") => delete_oauth_profile(body),
     ("/api/provider/probe-history", "GET") => crate::provider_health::get_probe_history(query),
     ("/api/provider/probe-summary", "GET") => crate::provider_health::get_probe_summary(query),
+    ("/api/tray/refresh", "POST") => crate::tray::refresh_menu(&app, body),
     ("/api/codex/sessions", "GET") => list_codex_sessions(query),
     ("/api/codex/session-detail", "GET") => get_codex_session_detail(query),
     ("/api/codex/resume", "POST") => resume_codex_session(body),

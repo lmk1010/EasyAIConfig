@@ -17997,6 +17997,86 @@ function inferOpenClawProviderFromModel(modelId) {
 }
 
 
+// ─── 系统托盘 (tray) ──────────────────────────────────────────────
+// 每次 hub render 完调一次 refreshTrayMenu()，把可见 provider 列表 push
+// 到 Rust，Rust 重建菜单。点托盘后 Rust emit "tray-switch" 事件回来，
+// 这里捕获后走原来的 quickSwitch / activate 流程。
+let trayRefreshScheduled = false;
+function scheduleTrayRefresh() {
+  if (trayRefreshScheduled) return;
+  trayRefreshScheduled = true;
+  setTimeout(() => {
+    trayRefreshScheduled = false;
+    refreshTrayMenu().catch(() => {});
+  }, 200); // 200ms 节流，避免多次 render 串行
+}
+
+async function refreshTrayMenu() {
+  const tools = ['codex', 'claudecode', 'opencode', 'openclaw'];
+  const providers = [];
+  for (const t of tools) {
+    const rows = (typeof window.__chBuildRows === 'function')
+      ? window.__chBuildRows(t)
+      : [];
+    for (const r of rows) {
+      // 隐藏只在本地草稿里的；隐藏无 credential 的 OAuth（没登录）
+      if (r.historyOnly) continue;
+      if (r.mode === 'oauth' && !r.hasCredential) continue;
+      providers.push({
+        tool: t,
+        key: r.key,
+        label: r.name || r.key,
+        sub: r.baseUrl || '',
+        active: Boolean(r.isActive),
+        mode: r.mode || 'apikey',
+      });
+    }
+  }
+  try {
+    await api('/api/tray/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providers }),
+    });
+  } catch (_) { /* tray 不该影响主流程 */ }
+}
+
+// 在 connection hub 完成 render 后把数据塞给 tray
+function trayHookOnHubRender() { scheduleTrayRefresh(); }
+
+// 监听 Rust emit 的 "tray-switch"
+(async function installTraySwitchListener() {
+  try {
+    const { listen } = window.__TAURI__?.event || {};
+    if (typeof listen !== 'function') return;
+    await listen('tray-switch', async (event) => {
+      const { tool, key } = event.payload || {};
+      if (!tool || !key) return;
+      // 1) 切到对应 tool tab
+      if (state.activeTool !== tool) {
+        state.activeTool = tool;
+        try { renderConnectionHub?.(); renderCurrentConfig?.(); } catch (_) {}
+      }
+      // 2) 找 row 并复用 hub 的 switchRow 逻辑
+      const rows = typeof window.__chBuildRows === 'function' ? window.__chBuildRows(tool) : [];
+      const row = rows.find((r) => r.key === key);
+      if (!row) {
+        flash(`找不到 provider: ${key}`, 'warning');
+        return;
+      }
+      if (row.isActive) {
+        flash(`${row.name || row.key} 已是当前`, 'info');
+        return;
+      }
+      if (typeof window.__chSwitchRow === 'function') {
+        flash(`托盘切换：${row.name || row.key}`, 'info');
+        await window.__chSwitchRow(key);
+        refreshTrayMenu().catch(() => {});
+      }
+    });
+  } catch (_) { /* listener 失败也不阻塞 */ }
+})();
+
 // ─── Provider 详情视图（inline，非抽屉） ─────────────────────────────
 // 点击行 → 隐藏 hero/toolbar/ribbon/list-wrap，把 #chDetail 显示出来接管整个内容区。
 // 顶部一个 "← 返回" 按钮回列表。4 个 tab：概览 / 用量 / 测试 / 健康。
@@ -23351,6 +23431,9 @@ loadTools();
 
     // 懒加载每条 API key 行的 24h uptime（5 分钟缓存）
     fetchRowUptimeSummaries(filtered.filter((r) => r.mode === 'apikey' && !r.historyOnly));
+
+    // 同步托盘菜单（每次 hub 重渲染时 push 最新 provider 列表）
+    try { if (typeof trayHookOnHubRender === 'function') trayHookOnHubRender(); } catch (_) {}
   }
 
   async function fetchRowUptimeSummaries(rows) {

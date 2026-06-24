@@ -350,6 +350,7 @@ mod app_settings;
 mod provider_health;
 mod shell_integration;
 mod terminal;
+mod tray;
 mod routes;
 
 use routes::backend_request;
@@ -360,6 +361,13 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
     .plugin(tauri_plugin_updater::Builder::new().build())
+    .setup(|app| {
+      // 启动后挂托盘；失败不致命，记日志继续
+      if let Err(err) = tray::install(&app.handle()) {
+        log::warn!("tray install failed: {err}");
+      }
+      Ok(())
+    })
     .invoke_handler(tauri::generate_handler![backend_request])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
