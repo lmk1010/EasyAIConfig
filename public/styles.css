@@ -16283,6 +16283,20 @@ button.about-link-card {
   color: #0f172a;
 }
 
+/* ── 自定义日期范围 picker ── */
+.db2-period-divider { height: 1px; margin: 4px 8px; background: rgba(255,255,255,0.08); }
+[data-theme="light"] .db2-period-divider { background: rgba(15,23,42,0.08); }
+.db2-period-custom { padding: 8px 10px 10px; display: grid; gap: 8px; }
+.db2-period-custom-label { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--s2-faint); }
+.db2-period-custom-inputs { display: flex; align-items: center; gap: 6px; }
+.db2-period-custom-inputs input[type="date"] { flex: 1 1 0; min-width: 0; height: 28px; padding: 0 8px; font-size: 0.72rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04); color: var(--s2-text); font-variant-numeric: tabular-nums; }
+.db2-period-custom-inputs input[type="date"]:focus { outline: none; border-color: rgba(91,140,255,0.5); background: rgba(91,140,255,0.08); }
+.db2-period-custom-inputs span { color: var(--s2-faint); font-size: 0.7rem; }
+.db2-period-custom-apply { height: 28px; padding: 0 12px; font-size: 0.7rem; font-weight: 600; border-radius: 6px; border: 1px solid rgba(91,140,255,0.4); background: rgba(91,140,255,0.12); color: #5b8cff; cursor: pointer; transition: background 120ms; }
+.db2-period-custom-apply:hover { background: rgba(91,140,255,0.2); }
+[data-theme="light"] .db2-period-custom-inputs input[type="date"] { background: rgba(255,255,255,0.85); border-color: rgba(15,23,42,0.12); color: #0f172a; }
+[data-theme="light"] .db2-period-custom-apply { color: #3358ff; border-color: rgba(59,108,235,0.45); background: rgba(91,140,255,0.1); }
+
 /* ── UX polish override: denser layout, lower card feel, better light theme contrast ── */
 .desktop-layout {
   grid-template-columns: 228px minmax(0, 1fr) !important;

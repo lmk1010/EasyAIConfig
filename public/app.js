@@ -76,6 +76,15 @@ const state = {
   consoleTool: 'codex',
   dashboardTool: 'codex',
   dashboardDays: Number(localStorage.getItem('easyaiconfig_dashboard_days') || 30) || 30,
+  // 自定义日期范围（YYYY-MM-DD），null 表示用 dashboardDays。
+  // 持久化到 localStorage：format 是 `${from}|${to}`，'|' 分隔。
+  dashboardRange: (() => {
+    const raw = localStorage.getItem('easyaiconfig_dashboard_range') || '';
+    if (!raw.includes('|')) return null;
+    const [from, to] = raw.split('|');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return null;
+    return { from, to };
+  })(),
   dashboardMetrics: { codex: null, opencode: null },
   dashboardLoading: false,
   dashboardRefreshing: false,
@@ -2464,6 +2473,9 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
     const params = new URLSearchParams();
     if (force) params.set('forceUsageRefresh', '1');
     if (cacheOnly) params.set('cacheOnly', '1');
+    // dashboard 当前窗口对应的天数（自定义日期范围也算成天数），让后端按需要 fetch
+    const requestDays = Math.min(366, Math.max(1, getDashboardWindow().days));
+    params.set('days', String(requestDays));
     // 用 localStorage 持久化 Dashboard 账号筛选偏好(切号后仍保留用户选择)
     const scope = usageScope || localStorage.getItem('easyaiconfig_claude_usage_scope') || 'active';
     if (scope && scope !== 'active') params.set('usageScope', scope);
@@ -6467,6 +6479,37 @@ function lookupModelPricing(modelName) {
   return lookupModelPricingEntry(modelName)?.pricing || null;
 }
 
+// 算 dashboard 当前的时间窗。优先用 state.dashboardRange（自定义日期），
+// 其次用 state.dashboardDays（预设的 7/14/30）。统一返回 { from, to, days, label }
+// 给各看板的 cutoff 过滤和文案使用。
+function getDashboardWindow() {
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const range = state.dashboardRange;
+  const isValidDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  if (range && isValidDate(range.from) && isValidDate(range.to) && range.from <= range.to) {
+    const fromMs = Date.parse(`${range.from}T00:00:00Z`);
+    const toMs = Date.parse(`${range.to}T00:00:00Z`);
+    const days = Math.max(1, Math.round((toMs - fromMs) / 86400000) + 1);
+    return {
+      from: range.from,
+      to: range.to,
+      days,
+      label: range.from === range.to ? range.from : `${range.from} ~ ${range.to}`,
+      custom: true,
+    };
+  }
+  const days = Math.max(1, Number(state.dashboardDays) || 30);
+  const fromDate = new Date(today.getTime() - (days - 1) * 86400000);
+  return {
+    from: fromDate.toISOString().slice(0, 10),
+    to: todayStr,
+    days,
+    label: `${days} 天`,
+    custom: false,
+  };
+}
+
 // 用主模型单价 + 当日 token 分布直算一段时间的费用。返回 USD。
 // dailyItems: [{ input, output, reasoning?, cachedInput|cacheRead|cached, cacheCreation? }]
 // models: 已按 totals.total 降序排的 model 列表（首项视为窗口主模型，给出单价）
@@ -6720,7 +6763,11 @@ function renderDashboardPage() {
   const opencodeLastUpdated = formatDashboardUpdatedAt(opencodeMetrics.generatedAt);
   const claudeLastUpdated = formatDashboardUpdatedAt(claude.usage?.generatedAt);
   const showDashboardRefresh = dashboardTool === 'codex' || dashboardTool === 'claudecode' || dashboardTool === 'opencode';
-  const daysWindow = state.dashboardDays || 30;
+  const win = getDashboardWindow();
+  const daysWindow = win.days;
+  const winFrom = win.from;
+  const winTo = win.to;
+  const winLabel = win.label;
   const dashboardStatusText = dashboardTool === 'claudecode'
     ? (isLoading ? '正在统计本地 Claude Code token…' : (claudeLastUpdated || '统计已完成'))
     : dashboardTool === 'opencode'
@@ -6738,7 +6785,7 @@ function renderDashboardPage() {
   if (el('pageSubtitle')) {
     el('pageSubtitle').textContent = dashboardTool === 'openclaw'
       ? `${toolLabel} · Gateway、渠道与 Provider 状态`
-      : `${toolLabel} · ${dashboardStatusText} · 最近 ${daysWindow} 天`;
+      : `${toolLabel} · ${dashboardStatusText} · ${winLabel.includes('~') ? winLabel : '最近 ' + winLabel}`;
   }
 
   // ── Stat strip ──
@@ -6786,8 +6833,11 @@ function renderDashboardPage() {
 
   // ── Codex Token percentage bar ──
   // ── Filter daily data by calendar date cutoff ──
-  const codexCutoff = new Date(Date.now() - daysWindow * 86400000).toISOString().slice(0, 10);
-  const codexDaily = (codexMetrics.daily || []).filter(d => (d.date || '') >= codexCutoff);
+  // 区间过滤：同时尊重起点和终点，自定义日期范围支持任意 N 天聚合
+  const codexDaily = (codexMetrics.daily || []).filter((d) => {
+    const date = d.date || '';
+    return date >= winFrom && date <= winTo;
+  });
 
   // Recompute totals from the sliced window
   const codexTotal = codexDaily.reduce((s, d) => s + (d.total || 0), 0);
@@ -6824,7 +6874,7 @@ function renderDashboardPage() {
         <div class="db3-hero-chart-wrap">
           <div class="db3-hero-chart-head">
             <span class="db3-hero-chart-title">Token 用量趋势</span>
-            <span class="db3-hero-chart-meta">近 ${daysWindow} 天 · ${codexModels.length} 个模型 · ${escapeHtml(codexTopModel)}</span>
+            <span class="db3-hero-chart-meta">${winLabel.includes('~') ? winLabel : '近 ' + winLabel} · ${codexModels.length} 个模型 · ${escapeHtml(codexTopModel)}</span>
           </div>
           ${renderDashboardInteractiveChart(codexDaily.map((item) => ({ label: item.date.slice(5), value: item.total || 0, input: item.input || 0, output: item.output || 0, cached: item.cachedInput || 0 })), { stroke: '#5b8cff', showCost: true, models: codexModels })}
         </div>
@@ -6888,8 +6938,10 @@ function renderDashboardPage() {
       </div>
     </div>`;
 
-  const opencodeCutoff = new Date(Date.now() - daysWindow * 86400000).toISOString().slice(0, 10);
-  const opencodeDaily = (opencodeMetrics.daily || []).filter((d) => (d.date || '') >= opencodeCutoff);
+  const opencodeDaily = (opencodeMetrics.daily || []).filter((d) => {
+    const date = d.date || '';
+    return date >= winFrom && date <= winTo;
+  });
   const opencodeTotal = opencodeDaily.reduce((sum, item) => sum + (item.total || 0), 0);
   const opencodeInput = opencodeDaily.reduce((sum, item) => sum + (item.input || 0), 0);
   const opencodeOutput = opencodeDaily.reduce((sum, item) => sum + (item.output || 0), 0);
@@ -6924,7 +6976,7 @@ function renderDashboardPage() {
         <div class="db3-hero-chart-wrap">
           <div class="db3-hero-chart-head">
             <span class="db3-hero-chart-title">Token 用量趋势</span>
-            <span class="db3-hero-chart-meta">近 ${daysWindow} 天 · ${opencodeModels.length} 个模型 · ${escapeHtml(opencodeTopModel)}</span>
+            <span class="db3-hero-chart-meta">${winLabel.includes('~') ? winLabel : '近 ' + winLabel} · ${opencodeModels.length} 个模型 · ${escapeHtml(opencodeTopModel)}</span>
           </div>
           ${renderDashboardInteractiveChart(opencodeDaily.map((item) => ({ label: item.date.slice(5), value: item.total || 0, input: item.input || 0, output: (item.output || 0) + (item.reasoning || 0), cached: item.cacheRead || 0 })), { stroke: '#6b86ff' })}
         </div>
@@ -6972,7 +7024,7 @@ function renderDashboardPage() {
             </div>
             <div class="db2-card-meta">来自 OpenCode 本地会话的实际 cost 字段</div>
           </div>
-          ${renderCostTrendPanel(opencodeDaily.map((item) => ({ label: (item.date || '').slice(5), value: item.cost || 0 })), `近 ${daysWindow} 天合计`, '#5b8cff')}
+          ${renderCostTrendPanel(opencodeDaily.map((item) => ({ label: (item.date || '').slice(5), value: item.cost || 0 })), `${winLabel.includes('~') ? winLabel : '近 ' + winLabel}合计`, '#5b8cff')}
         </section>
 
         <section class="db2-section db3-panel">
@@ -7000,9 +7052,11 @@ function renderDashboardPage() {
   const claudeDaily = claude.usage?.daily || [];
   const claudeDailyModelTokens = claude.usage?.dailyModelTokens || [];
 
-  // Filter by actual calendar date cutoff
-  const claudeCutoff = new Date(Date.now() - daysWindow * 86400000).toISOString().slice(0, 10);
-  const claudeDailySliced = claudeDaily.filter(d => (d.date || '') >= claudeCutoff);
+  // 区间过滤，自定义日期范围下也走 from/to 两端
+  const claudeDailySliced = claudeDaily.filter((d) => {
+    const date = d.date || '';
+    return date >= winFrom && date <= winTo;
+  });
 
   // Windowed totals from filtered daily data (no fallback — show 0 if no activity in window)
   const ct = {
@@ -7020,7 +7074,10 @@ function renderDashboardPage() {
   // → 4.74B 假 input × $5 = $44K 这种离谱估算。
   // 现在改为：用 claudeAllModels（含真实 cacheRead / cacheCreation）作为基础，
   // dailyModelTokens 仅用来筛掉窗口外的模型。
-  const claudeWindowedDMT = claudeDailyModelTokens.filter(d => (d.date || '') >= claudeCutoff);
+  const claudeWindowedDMT = claudeDailyModelTokens.filter((d) => {
+    const date = d.date || '';
+    return date >= winFrom && date <= winTo;
+  });
   let claudeModels;
   if (claudeWindowedDMT.length > 0) {
     const windowedSet = new Set();
@@ -7066,8 +7123,9 @@ function renderDashboardPage() {
     const dailyMap = {};
     claudeDailySliced.forEach((d) => { if (d.date) dailyMap[d.date] = d; });
     const out = [];
-    for (let i = daysWindow - 1; i >= 0; i--) {
-      const dt = new Date(Date.now() - i * 86400000);
+    const fromMs = Date.parse(`${winFrom}T00:00:00Z`);
+    for (let i = 0; i < daysWindow; i++) {
+      const dt = new Date(fromMs + i * 86400000);
       const key = dt.toISOString().slice(0, 10);
       const d = dailyMap[key] || {};
       out.push({
@@ -7092,7 +7150,7 @@ function renderDashboardPage() {
         <div class="db3-hero-chart-wrap">
           <div class="db3-hero-chart-head">
             <span class="db3-hero-chart-title">Token 用量趋势</span>
-            <span class="db3-hero-chart-meta">近 ${daysWindow} 天 · 悬停看当日详情</span>
+            <span class="db3-hero-chart-meta">${winLabel.includes('~') ? winLabel : '近 ' + winLabel} · 悬停看当日详情</span>
           </div>
           ${renderDashboardInteractiveChart(claudeFilledSeries, { stroke: '#7c3aed', showCost: true, models: claudeModels })}
         </div>
@@ -7116,7 +7174,7 @@ function renderDashboardPage() {
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
               模型分布
             </div>
-            <div class="db2-card-meta">近 ${daysWindow} 天 · ${claudeModels.length} 个模型</div>
+            <div class="db2-card-meta">${winLabel.includes('~') ? winLabel : '近 ' + winLabel} · ${claudeModels.length} 个模型</div>
           </div>
           ${renderDashboardModelDistChart(claudeModels, claudeModelTotal)}
         </section>
@@ -7212,9 +7270,23 @@ function renderDashboardPage() {
           ${dashboardTool === 'claudecode' ? renderClaudeScopeDropdown() : ''}
           <span class="db2-period-wrap">
             <div class="db2-period-dropdown" data-period-dropdown>
-              <button type="button" class="db2-period-trigger" data-period-trigger>${state.dashboardDays} 天 <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
+              <button type="button" class="db2-period-trigger" data-period-trigger>${escapeHtml(winLabel.includes('~') ? winLabel : winLabel)} <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
               <div class="db2-period-menu" data-period-menu>
-                ${[7, 14, 30].map(d => `<div class="db2-period-option ${state.dashboardDays === d ? 'active' : ''}" data-dashboard-days="${d}">${d} 天</div>`).join('')}
+                ${[7, 14, 30, 90, 180, 365].map((d) => {
+                  const labels = { 7: '7 天', 14: '14 天', 30: '30 天', 90: '近 3 个月', 180: '近半年', 365: '近一年' };
+                  const isActive = !state.dashboardRange && state.dashboardDays === d;
+                  return `<div class="db2-period-option ${isActive ? 'active' : ''}" data-dashboard-days="${d}">${labels[d]}</div>`;
+                }).join('')}
+                <div class="db2-period-divider"></div>
+                <div class="db2-period-custom" data-period-custom>
+                  <div class="db2-period-custom-label">自定义日期</div>
+                  <div class="db2-period-custom-inputs">
+                    <input type="date" data-dashboard-range-from value="${winFrom}" max="${winTo}" />
+                    <span>—</span>
+                    <input type="date" data-dashboard-range-to value="${winTo}" max="${new Date().toISOString().slice(0, 10)}" />
+                  </div>
+                  <button type="button" class="db2-period-custom-apply" data-dashboard-range-apply>应用</button>
+                </div>
               </div>
             </div>
           </span>
@@ -7705,7 +7777,9 @@ async function refreshDashboardData({ force = false, silent = false, tool = stat
   if (state.activePage === 'dashboard') renderDashboardPage();
 
   try {
-    const params = new URLSearchParams({ days: '30' });
+    // 用当前 dashboard window 的天数请求后端，自定义日期范围下也能拿到足够远的数据
+    const requestDays = String(Math.min(366, Math.max(1, getDashboardWindow().days)));
+    const params = new URLSearchParams({ days: requestDays });
     if (tool === 'codex') {
       params.set('codexHome', getDashboardCodexHome());
     }
@@ -20002,10 +20076,46 @@ function bindEvents() {
     if (daysPill) {
       state.dashboardDays = Number(daysPill.dataset.dashboardDays) || 30;
       localStorage.setItem('easyaiconfig_dashboard_days', String(state.dashboardDays));
-      // Close dropdown
+      // 选了预设档就清掉自定义日期范围
+      state.dashboardRange = null;
+      localStorage.removeItem('easyaiconfig_dashboard_range');
       const dropdown = daysPill.closest('[data-period-dropdown]');
       if (dropdown) dropdown.classList.remove('open');
+      // 区间扩大可能需要后端重新拉数据
+      if (state.dashboardTool === 'claudecode') {
+        ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
+      } else {
+        refreshDashboardData({ force: true, tool: state.dashboardTool });
+      }
       renderDashboardPage();
+      return;
+    }
+    // 自定义日期 - 应用
+    const rangeApply = e.target.closest('[data-dashboard-range-apply]');
+    if (rangeApply) {
+      const wrap = rangeApply.closest('[data-period-custom]');
+      const fromInput = wrap?.querySelector('[data-dashboard-range-from]');
+      const toInput = wrap?.querySelector('[data-dashboard-range-to]');
+      const from = String(fromInput?.value || '').trim();
+      const to = String(toInput?.value || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+        flash('请填写有效的起止日期', 'error');
+        return;
+      }
+      state.dashboardRange = { from, to };
+      localStorage.setItem('easyaiconfig_dashboard_range', `${from}|${to}`);
+      const dropdown = rangeApply.closest('[data-period-dropdown]');
+      if (dropdown) dropdown.classList.remove('open');
+      if (state.dashboardTool === 'claudecode') {
+        ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
+      } else {
+        refreshDashboardData({ force: true, tool: state.dashboardTool });
+      }
+      renderDashboardPage();
+      return;
+    }
+    // 点 picker 自身别冒泡到关闭下拉
+    if (e.target.closest('[data-period-custom]')) {
       return;
     }
     const refreshBtn = e.target.closest('[data-dashboard-refresh]');

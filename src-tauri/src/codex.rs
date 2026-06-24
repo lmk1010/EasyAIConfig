@@ -3605,7 +3605,7 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
   let day_count = get_string(&query_object, "days")
     .parse::<i64>()
     .ok()
-    .map(|days| days.clamp(1, 90))
+    .map(|days| days.clamp(1, 366))
     .unwrap_or(30);
   let force_refresh = matches!(get_string(&query_object, "force").as_str(), "1" | "true" | "yes");
   let window_start = chrono::Utc::now() - chrono::Duration::days(day_count);
@@ -4303,7 +4303,7 @@ fn claude_json_path_for_home(home: &Path) -> PathBuf {
 
 fn empty_claude_usage_payload(days: i64, telemetry_root: &Path) -> Value {
   json!({
-    "days": days.clamp(1, 90),
+    "days": days.clamp(1, 366),
     "generatedAt": chrono::Utc::now().to_rfc3339(),
     "source": telemetry_root.to_string_lossy().to_string(),
     "totals": {"input":0,"output":0,"cacheCreation":0,"cacheRead":0,"total":0,"cost":0.0},
@@ -4340,14 +4340,14 @@ fn read_claude_telemetry_usage_for_home(home: &Path, days: i64, force_refresh: b
   let file_count = telemetry_files.len() as u64;
   let latest_mtime_ms = telemetry_files.iter().map(|path| file_modified_ms(path)).max().unwrap_or(0);
   if !force_refresh {
-    if let Some(payload) = read_claude_usage_cache(&cache_path, &telemetry_root, days.clamp(1, 90), file_count, latest_mtime_ms, cache_only) {
+    if let Some(payload) = read_claude_usage_cache(&cache_path, &telemetry_root, days.clamp(1, 366), file_count, latest_mtime_ms, cache_only) {
       return payload;
     }
   }
   if cache_only {
     return json!({"cacheMiss": true});
   }
-  let cutoff = chrono::Utc::now() - chrono::Duration::days(days.clamp(1, 90));
+  let cutoff = chrono::Utc::now() - chrono::Duration::days(days.clamp(1, 366));
   let mut sessions = Vec::new();
   let mut daily: BTreeMap<String, Value> = BTreeMap::new();
   let mut daily_model_tokens_map: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
@@ -4589,7 +4589,7 @@ fn read_claude_telemetry_usage_for_home(home: &Path, days: i64, force_refresh: b
   }
 
   let payload = json!({
-    "days": days.clamp(1, 90),
+    "days": days.clamp(1, 366),
     "generatedAt": chrono::Utc::now().to_rfc3339(),
     "source": telemetry_root.to_string_lossy().to_string(),
     "totals": {
@@ -4607,12 +4607,12 @@ fn read_claude_telemetry_usage_for_home(home: &Path, days: i64, force_refresh: b
     "models": models,
     "dailyModelTokens": daily_model_tokens,
   });
-  write_claude_usage_cache(&cache_path, &telemetry_root, days.clamp(1, 90), file_count, latest_mtime_ms, &payload);
+  write_claude_usage_cache(&cache_path, &telemetry_root, days.clamp(1, 366), file_count, latest_mtime_ms, &payload);
   payload
 }
 
 fn merge_claude_usage_payloads(days: i64, payloads: Vec<Value>, source_label: &str) -> Value {
-  let day_count = days.clamp(1, 90);
+  let day_count = days.clamp(1, 366);
   if payloads.iter().any(|payload| payload.get("cacheMiss").and_then(Value::as_bool).unwrap_or(false)) {
     return json!({ "cacheMiss": true });
   }
@@ -4800,6 +4800,13 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
   let query_object = parse_json_object(query);
   let force_usage_refresh = matches!(get_string(&query_object, "forceUsageRefresh").as_str(), "1" | "true" | "yes");
   let cache_only = matches!(get_string(&query_object, "cacheOnly").as_str(), "1" | "true" | "yes");
+  // 用户在 dashboard 上选了 30/90/365 或自定义日期范围时，前端会传 days 过来；
+  // 默认 30，最大 366。
+  let usage_days = get_string(&query_object, "days")
+    .parse::<i64>()
+    .ok()
+    .map(|days| days.clamp(1, 366))
+    .unwrap_or(30);
   let default_home = claude_code_home()?;
   let home = effective_claude_code_home()?;
   let settings_path = home.join("settings.json");
@@ -5082,18 +5089,18 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
       .map(PathBuf::from)
       .collect::<Vec<_>>();
     let payloads = homes.iter()
-      .map(|scope_home| read_claude_telemetry_usage_for_home(scope_home, 30, force_usage_refresh, cache_only))
+      .map(|scope_home| read_claude_telemetry_usage_for_home(scope_home, usage_days, force_usage_refresh, cache_only))
       .collect::<Vec<_>>();
-    merge_claude_usage_payloads(30, payloads, "all")
+    merge_claude_usage_payloads(usage_days, payloads, "all")
   } else if effective_scope_id == "default" {
-    read_claude_telemetry_usage_for_home(&default_home, 30, force_usage_refresh, cache_only)
+    read_claude_telemetry_usage_for_home(&default_home, usage_days, force_usage_refresh, cache_only)
   } else {
     let scope_home = available_scopes.iter()
       .find(|scope| scope.get("scopeId").and_then(Value::as_str).unwrap_or("") == effective_scope_id)
       .and_then(|scope| scope.get("configDir").and_then(Value::as_str))
       .map(PathBuf::from)
       .unwrap_or_else(|| home.clone());
-    read_claude_telemetry_usage_for_home(&scope_home, 30, force_usage_refresh, cache_only)
+    read_claude_telemetry_usage_for_home(&scope_home, usage_days, force_usage_refresh, cache_only)
   };
 
   Ok(json!({
