@@ -15789,6 +15789,9 @@ async function quickSwitchCodexProvider(provider) {
     baseUrl,
     apiKey: carryApiKey,
     model: getCodexSwitchModelValue(),
+    // 这条 fn 的语义就是"切换 active provider"，所以必须显式 activate:true
+    // 才能让后端写 config.model_provider
+    activate: true,
   };
 
   const saved = await api('/api/config/save', {
@@ -17511,7 +17514,8 @@ async function saveConfigOnly() {
   // 后端校验失败会把错误信息回传出来，前端只负责转发。
 
   setBusy('saveBtn', true, '保存中...');
-  // 默认不带 activate=true：保存就是保存，后端不会主动切 model_provider
+  // 保存就是保存：永远不切 model_provider，也不弹任何"是否切换"提示。
+  // 想切到这条 provider？点列表里那条 row。
   const saved = await api('/api/config/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -17519,7 +17523,13 @@ async function saveConfigOnly() {
   });
   setBusy('saveBtn', false);
   if (!saved.ok) return flash(saved.error || '保存失败', 'error');
-  flash('配置已保存', 'success');
+  const savedKey = String(saved.data?.savedProviderKey || '').trim();
+  const isStillNotActive = Boolean(saved.data?.needsActivation);
+  if (isStillNotActive && savedKey) {
+    flash(`已保存「${savedKey}」（当前活跃 provider 未改动，点列表切换）`, 'success');
+  } else {
+    flash('配置已保存', 'success');
+  }
   const hints = saved.data?.hints;
   if (Array.isArray(hints) && hints.length) {
     for (const hint of hints) {
@@ -17533,28 +17543,6 @@ async function saveConfigOnly() {
       baseUrlInput.value = savedBaseUrl;
     }
   }
-
-  // 保存的 provider 不是当前活跃的 → 弹一个确认是否切换
-  if (saved.data?.needsActivation) {
-    const newKey = String(saved.data?.savedProviderKey || '').trim();
-    const oldKey = String(saved.data?.previousActiveProvider || '').trim() || '无';
-    const ok = window.confirm(`配置已保存。是否把 Codex 的当前 provider 从「${oldKey}」切换到「${newKey}」？\n\n点"取消"则只保留这条 provider 的配置，但当前会话依然走「${oldKey}」。`);
-    if (ok) {
-      setBusy('saveBtn', true, '切换中...');
-      const activated = await api('/api/config/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, activate: true }),
-      });
-      setBusy('saveBtn', false);
-      if (!activated.ok) {
-        flash(activated.error || '切换失败', 'error');
-      } else {
-        flash(`已切换到 ${newKey}`, 'success');
-      }
-    }
-  }
-
   await loadState({ preserveForm: true });
   await loadBackups();
   loadAppUpdateState();
@@ -19073,6 +19061,8 @@ async function wizardSaveAndComplete() {
           approvalPolicy: '',
           sandboxMode: '',
           reasoningEffort: '',
+          // 向导第一次配 provider，就是要它立即变成 active
+          activate: true,
         }),
       });
     } else {
@@ -22947,46 +22937,18 @@ loadTools();
     // Save button: when the drawer is open we want edit-in-place semantics —
     // the save should update this provider's URL / Key / model, but NOT change
     // Codex's active pointer (switching is a separate, outer action). The
-    // legacy save call always re-activates whatever the form points at, so we
-    // intercept in the capture phase, perform the save ourselves, and then
-    // restore the previous active provider if it was different from the edit
-    // target. When the drawer is closed the default save handler takes over.
+    // saveConfigOnly 现在已经默认 activate:false，不再动 model_provider，
+    // 所以之前那套"先 save 再 quickSwitch 回原 active"的拦截器没必要了 ——
+    // 让默认 bubble-phase 的 saveBtn 监听器直接处理。drawer 在保存后关掉就好。
     const saveBtn = document.getElementById('saveBtn');
     if (saveBtn) {
-      saveBtn.addEventListener('click', async (e) => {
-        const so = document.getElementById('chSlideover');
-        if (!so || !so.classList.contains('open')) return; // let default handler run
-        // Only Codex supports the restore-active flow; other tools keep their
-        // normal save semantics.
-        const s = hubState();
-        if (!s || (s.activeTool || 'codex') !== 'codex') return;
-        e.stopImmediatePropagation();
-        e.preventDefault();
-
-        const prevActive = s.current?.activeProvider || null;
-        const prevActiveKey = prevActive?.key || null;
-
-        try {
-          if (typeof saveConfigOnly === 'function') {
-            await saveConfigOnly();
-          }
-        } catch (err) {
-          console.warn('[ch] drawer save failed', err);
-        }
-
-        // After save, if active got switched to the edit target (which the
-        // save API always does), restore the previous active provider.
-        const s2 = hubState();
-        const newActiveKey = s2?.current?.activeProvider?.key || null;
-        if (prevActiveKey && newActiveKey && prevActiveKey !== newActiveKey) {
-          const prev = (s2.current.providers || []).find((p) => p.key === prevActiveKey);
-          if (prev && typeof quickSwitchCodexProvider === 'function') {
-            try { await quickSwitchCodexProvider(prev); } catch (_) {}
-          }
-        }
-
-        if (so.classList.contains('open')) closeSlideover();
-      }, true); // capture phase — runs before the bubble-phase saveConfigOnly listener
+      saveBtn.addEventListener('click', () => {
+        // 用 setTimeout 让 saveConfigOnly 先跑完一帧，再关 drawer
+        setTimeout(() => {
+          const so = document.getElementById('chSlideover');
+          if (so && so.classList.contains('open')) closeSlideover();
+        }, 120);
+      });
     }
 
     // Launch button: close drawer after launch (same as before, no save-restore needed)
