@@ -90,6 +90,8 @@ const state = {
   rangePicker: null, // { viewMonth, fromDraft, toDraft }
   // Codex 启动命令面板（hero 下拉开/关）
   codexCmdPaletteOpen: false,
+  // 列表行的 uptime 缓存：{ providerKey: { uptimePct, fetchedAt } }
+  providerUptime: {},
   // 自动故障转移：当前 active provider 连续失败 N 次，按 priority 自动切下一档
   autoFailover: (() => {
     try {
@@ -17631,32 +17633,19 @@ function inferOpenClawProviderFromModel(modelId) {
 }
 
 
-// ─── Provider 详情 Drawer ────────────────────────────────────────────
-// 点行 = 打开这个 drawer。drawer 有 4 个 tab：
-//   概览   — 状态点、24h uptime%、平均 / p95 latency、最近探测结果、切换按钮
-//   用量   — Codex sessions 按 provider 拆出来的费用 + token 分布（占位简版）
-//   测试   — 手动 probe + 列模型 + 自定义路径 ping
-//   健康   — 详细 sparkline + 最近 N 次探测的时间轴
-//
-// 切换 active provider 必须显式按 drawer 顶部"切换为当前"按钮，避免误触。
-function ensureProviderDetailDom() {
-  let drawer = document.getElementById('chProviderDetail');
-  if (drawer) return drawer;
-  drawer = document.createElement('aside');
-  drawer.id = 'chProviderDetail';
-  drawer.className = 'pd-drawer hide';
-  drawer.setAttribute('aria-hidden', 'true');
-  drawer.innerHTML = `
-    <div class="pd-scrim" data-pd-close></div>
-    <div class="pd-panel" role="dialog" aria-labelledby="pdTitle">
-      <div class="pd-inner" id="pdInner"></div>
-    </div>
-  `;
-  document.body.appendChild(drawer);
-  drawer.addEventListener('click', (e) => {
+// ─── Provider 详情视图（inline，非抽屉） ─────────────────────────────
+// 点击行 → 隐藏 hero/toolbar/ribbon/list-wrap，把 #chDetail 显示出来接管整个内容区。
+// 顶部一个 "← 返回" 按钮回列表。4 个 tab：概览 / 用量 / 测试 / 健康。
+let pdEventsBound = false;
+function ensureProviderDetailEvents() {
+  if (pdEventsBound) return;
+  const container = document.getElementById('chDetail');
+  if (!container) return;
+  pdEventsBound = true;
+  container.addEventListener('click', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
-    if (target.closest('[data-pd-close]')) { closeProviderDetail(); return; }
+    if (target.closest('[data-pd-back]') || target.closest('[data-pd-close]')) { closeProviderDetail(); return; }
     const tabBtn = target.closest('[data-pd-tab]');
     if (tabBtn) {
       state.providerDetail.tab = tabBtn.dataset.pdTab;
@@ -17668,9 +17657,8 @@ function ensureProviderDetailDom() {
     if (target.closest('[data-pd-delete]')) { actionPdDelete(); return; }
     if (target.closest('[data-pd-test]')) { actionPdRunTest(); return; }
     if (target.closest('[data-pd-refresh-health]')) { actionPdRefreshHealth(); return; }
-    if (target.closest('[data-pd-copy-cmd]')) { actionPdCopyLaunchCmd(); return; }
+    if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
   });
-  return drawer;
 }
 
 function lookupProviderDetailRow() {
@@ -17693,15 +17681,16 @@ function openProviderDetail(key) {
   state.providerDetail.testRunning = false;
   state.providerDetail.loading = false;
   state.providerDetail.error = '';
-  ensureProviderDetailDom();
-  const drawer = document.getElementById('chProviderDetail');
-  if (!drawer) return;
-  drawer.classList.remove('hide');
-  requestAnimationFrame(() => requestAnimationFrame(() => drawer.classList.add('open')));
-  drawer.setAttribute('aria-hidden', 'false');
-  document.body.classList.add('pd-drawer-active');
+  const hub = document.getElementById('connectionHub');
+  if (hub) hub.classList.add('ch-detail-on');
+  const detail = document.getElementById('chDetail');
+  if (detail) detail.classList.remove('hide');
+  ensureProviderDetailEvents();
+  // 先 render 让骨架立刻显示，避免空白闪烁
   renderProviderDetail();
-  // 后台拉 probe 数据；对 OAuth 这种合成 row 直接跳过
+  // 滑入动画：next frame 加 .open
+  requestAnimationFrame(() => requestAnimationFrame(() => detail?.classList.add('is-in')));
+  // 异步拉真数据
   const row = lookupProviderDetailRow();
   if (row && row.mode === 'apikey') {
     fetchProviderProbeData(row).catch(() => {});
@@ -17709,12 +17698,13 @@ function openProviderDetail(key) {
 }
 
 function closeProviderDetail() {
-  const drawer = document.getElementById('chProviderDetail');
-  if (!drawer) return;
-  drawer.classList.remove('open');
-  drawer.setAttribute('aria-hidden', 'true');
-  document.body.classList.remove('pd-drawer-active');
-  setTimeout(() => drawer.classList.add('hide'), 240);
+  const detail = document.getElementById('chDetail');
+  const hub = document.getElementById('connectionHub');
+  if (detail) {
+    detail.classList.remove('is-in');
+    setTimeout(() => detail.classList.add('hide'), 200);
+  }
+  if (hub) hub.classList.remove('ch-detail-on');
   state.providerDetail.open = false;
 }
 
@@ -17740,14 +17730,19 @@ async function fetchProviderProbeData(row) {
 }
 
 function renderProviderDetail() {
-  const inner = document.getElementById('pdInner');
-  if (!inner) return;
+  const container = document.getElementById('chDetail');
+  if (!container) return;
   const row = lookupProviderDetailRow();
   if (!row) {
-    inner.innerHTML = `
+    container.innerHTML = `
+      <div class="pd-back-row">
+        <button type="button" class="pd-back" data-pd-back>
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3L4.5 8L9.5 13M4.5 8H14"/></svg>
+          返回列表
+        </button>
+      </div>
       <div class="pd-empty">
         <p>该 provider 已不存在或已被删除。</p>
-        <button type="button" class="pd-btn pd-btn-ghost" data-pd-close>关闭</button>
       </div>`;
     return;
   }
@@ -17758,14 +17753,20 @@ function renderProviderDetail() {
     { id: 'test',     label: '测试' },
     { id: 'health',   label: '健康' },
   ];
-  inner.innerHTML = `
+  container.innerHTML = `
+    <div class="pd-back-row">
+      <button type="button" class="pd-back" data-pd-back>
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3L4.5 8L9.5 13M4.5 8H14"/></svg>
+        返回列表
+      </button>
+      <span class="pd-back-crumb">${escapeHtml((state.activeTool === 'codex' ? 'Codex' : (state.activeTool || ''))) } / 连接配置 / <strong>${escapeHtml(row.name || row.key)}</strong></span>
+    </div>
     ${renderPdHeader(row)}
     <nav class="pd-tabs" role="tablist">
       ${tabs.map((t) => `
         <button type="button" role="tab" class="pd-tab ${tab === t.id ? 'is-active' : ''}" data-pd-tab="${t.id}" aria-selected="${tab === t.id}">
           ${escapeHtml(t.label)}
         </button>`).join('')}
-      <span class="pd-tabs-rail" aria-hidden="true"></span>
     </nav>
     <section class="pd-tab-content pd-tab-${tab}">
       ${renderPdTab(tab, row)}
@@ -17778,6 +17779,8 @@ function renderPdHeader(row) {
   const isOauth = row.mode === 'oauth';
   const isCurrent = Boolean(row.isActive);
   const h = row.health || {};
+  const summary = state.providerDetail.summary;
+  // 状态：OAuth 没意义，看探测结果优先；否则看缓存 health；最后看 row 标志
   let statusCls = 'muted', statusTxt = '未检测';
   if (isOauth && row.hasCredential) { statusCls = 'ok'; statusTxt = '已认证'; }
   else if (h.loading) { statusCls = 'warn'; statusTxt = '检测中'; }
@@ -17785,27 +17788,30 @@ function renderPdHeader(row) {
   else if (h.checked) { statusCls = 'bad'; statusTxt = '失败'; }
   else if (row.historyOnly) { statusCls = 'muted'; statusTxt = '本地草稿'; }
   else if (!row.hasCredential) { statusCls = 'warn'; statusTxt = '缺 Key'; }
+  const uptime = summary?.uptimePct;
+  const uptimeChip = uptime != null
+    ? `<span class="pd-up-pill ${uptime >= 99 ? 'is-good' : uptime >= 90 ? 'is-warn' : 'is-bad'}" title="24h 可用率">${esc(`${uptime}%`)}</span>`
+    : '';
   return `
     <header class="pd-head">
-      <button type="button" class="pd-close" data-pd-close aria-label="关闭">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
-      </button>
       <div class="pd-head-main">
         <div class="pd-head-eyebrow">
           <span class="pd-mode ${row.mode}">${esc(isOauth ? 'OAUTH' : 'API KEY')}</span>
           ${isCurrent ? '<span class="pd-current-pill">当前</span>' : ''}
           <span class="pd-status ${statusCls}">${esc(statusTxt)}</span>
+          ${uptimeChip}
         </div>
-        <h2 class="pd-name" id="pdTitle">${esc(row.name || row.key)}</h2>
+        <h2 class="pd-name">${esc(row.name || row.key)}</h2>
         ${row.baseUrl ? `<div class="pd-url">${esc(row.baseUrl)}</div>` : ''}
         ${row.homePath ? `<div class="pd-url pd-url-mono">${esc(`${row.homeLabel || 'HOME'}: ${row.homePath}`)}</div>` : ''}
       </div>
       <div class="pd-actions">
         ${isCurrent
-          ? '<button type="button" class="pd-btn pd-btn-disabled" disabled>已是当前</button>'
+          ? '<button type="button" class="pd-btn pd-btn-soft" disabled>已是当前</button>'
           : '<button type="button" class="pd-btn pd-btn-primary" data-pd-switch>切换为当前</button>'}
         ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-btn pd-btn-ghost" data-pd-edit>编辑</button>' : ''}
-        ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-btn pd-btn-ghost" data-pd-delete>删除</button>' : ''}
+        ${row.mode === 'codex' && row.tool === 'codex' ? '<button type="button" class="pd-btn pd-btn-ghost" data-pd-launch>启动</button>' : ''}
+        ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-btn pd-btn-ghost pd-btn-danger" data-pd-delete>删除</button>' : ''}
       </div>
     </header>`;
 }
@@ -17822,6 +17828,47 @@ function fmtLatency(ms) {
   if (ms == null) return '—';
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
   return `${Math.round(ms)}ms`;
+}
+
+// 电量条：把最近 N 次探测画成横向格子，绿成功红失败灰未知。
+// 像电池能量条一样直观，旁边大字号显示 uptime %。
+function renderPdBatteryBar(history, segments = 40) {
+  const rows = Array.isArray(history?.rows) ? history.rows.slice(0, segments).reverse() : [];
+  const summary = state.providerDetail.summary || {};
+  const uptime = summary.uptimePct;
+  const success = Number(summary.success || 0);
+  const failure = Number(summary.failure || 0);
+  const total = Number(summary.total || 0);
+  // 填充未满 segments 的尾部用"未探测"占位
+  const cells = [];
+  for (let i = 0; i < segments; i++) {
+    const r = rows[i];
+    if (!r) cells.push('<span class="pd-bat-cell is-empty"></span>');
+    else cells.push(`<span class="pd-bat-cell ${r.success ? 'is-ok' : 'is-bad'}" title="${escapeHtml(`${new Date(r.probedAt).toLocaleString()}\n${fmtLatency(r.latencyMs)}${r.error ? '\n' + r.error.slice(0, 80) : ''}`)}"></span>`);
+  }
+  const tier = uptime == null ? 'empty' : (uptime >= 99 ? 'good' : uptime >= 90 ? 'warn' : 'bad');
+  return `
+    <div class="pd-battery is-${tier}">
+      <div class="pd-battery-head">
+        <div class="pd-battery-label">
+          <span class="pd-battery-eyebrow">24H UPTIME</span>
+          <span class="pd-battery-big">${uptime == null ? '—' : `${uptime}%`}</span>
+        </div>
+        <div class="pd-battery-meta">
+          <span><em class="pd-dot-ok"></em>${escapeHtml(String(success))} 成功</span>
+          <span><em class="pd-dot-bad"></em>${escapeHtml(String(failure))} 失败</span>
+          <span class="pd-battery-meta-faint">${escapeHtml(String(total))} 次 / 24h</span>
+        </div>
+      </div>
+      <div class="pd-battery-track">
+        ${cells.join('')}
+      </div>
+      <div class="pd-battery-legend">
+        <span>最早</span>
+        <span>${escapeHtml(String(rows.length))} / ${segments} 段</span>
+        <span>最近</span>
+      </div>
+    </div>`;
 }
 
 function renderPdSparkline(history, width = 280, height = 40) {
@@ -17873,98 +17920,145 @@ function renderPdSparkline(history, width = 280, height = 40) {
 function renderPdOverview(row) {
   const esc = escapeHtml;
   const summary = state.providerDetail.summary || {};
-  const uptime = summary.uptimePct;
   const avg = summary.avgLatencyMs;
   const p95 = summary.p95LatencyMs;
-  const total = Number(summary.total || 0);
-  const lastAt = summary.lastAt ? formatRelativeTime(new Date(summary.lastAt).toISOString()) : '无记录';
+  const lastAt = summary.lastAt ? formatRelativeTime(new Date(summary.lastAt).toISOString()) : '尚未探测';
   const loading = state.providerDetail.loading;
+  const ref = row.ref || {};
+  const env = state.current?.env || {};
+  const envKey = ref.envKey || row.envKey || '';
+  const hasKey = envKey && env[envKey];
+  const keyMask = ref.maskedApiKey || (hasKey ? '****' : '');
   return `
     <div class="pd-overview">
-      <div class="pd-stat-grid">
-        <div class="pd-stat">
-          <div class="pd-stat-label">24h uptime</div>
-          <div class="pd-stat-value pd-uptime ${uptime == null ? 'is-empty' : (uptime >= 99 ? 'is-good' : uptime >= 90 ? 'is-warn' : 'is-bad')}">
-            ${uptime == null ? '—' : `${uptime}%`}
-          </div>
-          <div class="pd-stat-sub">${total === 0 ? '暂无探测' : `${esc(String(total))} 次探测`}</div>
+      ${renderPdBatteryBar(state.providerDetail.history, 40)}
+      <div class="pd-stat-rail">
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">平均时延</div>
+          <div class="pd-stat-mini-value">${esc(fmtLatency(avg))}</div>
         </div>
-        <div class="pd-stat">
-          <div class="pd-stat-label">平均时延</div>
-          <div class="pd-stat-value">${esc(fmtLatency(avg))}</div>
-          <div class="pd-stat-sub">p95 ${esc(fmtLatency(p95))}</div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">p95 时延</div>
+          <div class="pd-stat-mini-value">${esc(fmtLatency(p95))}</div>
         </div>
-        <div class="pd-stat">
-          <div class="pd-stat-label">最近探测</div>
-          <div class="pd-stat-value pd-stat-soft">${esc(lastAt)}</div>
-          <div class="pd-stat-sub">点 "测试" 主动跑一次</div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">最近探测</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(lastAt)}</div>
         </div>
-      </div>
-      <div class="pd-spark-card">
-        <div class="pd-spark-head">
-          <span>近 ${esc(String(state.providerDetail.history?.rows?.length || 0))} 次时延曲线</span>
-          ${loading ? '<span class="pd-spark-loading">读取中…</span>' : ''}
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">${row.isActive ? '当前模型' : '默认模型'}</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(row.model || state.current?.summary?.model || '—')}</div>
         </div>
-        ${renderPdSparkline(state.providerDetail.history)}
       </div>
       ${row.mode === 'apikey' ? `
-        <div class="pd-meta-grid">
-          ${row.baseUrl ? `<div class="pd-meta-row"><span>Base URL</span><code>${esc(row.baseUrl)}</code></div>` : ''}
-          ${row.ref?.envKey ? `<div class="pd-meta-row"><span>Env Key</span><code>${esc(row.ref.envKey)}</code></div>` : ''}
-          ${row.ref?.wireApi ? `<div class="pd-meta-row"><span>Wire API</span><code>${esc(row.ref.wireApi)}</code></div>` : ''}
-        </div>` : ''}
+        <div class="pd-section">
+          <div class="pd-section-title">连接信息</div>
+          <div class="pd-info-grid">
+            ${row.baseUrl ? `<div class="pd-info-row"><span>Base URL</span><code>${esc(row.baseUrl)}</code></div>` : ''}
+            ${envKey ? `<div class="pd-info-row"><span>Env Key</span><code>${esc(envKey)}${keyMask ? `<em class="pd-info-mask"> · ${esc(keyMask)}</em>` : ''}</code></div>` : ''}
+            ${ref.wireApi ? `<div class="pd-info-row"><span>Wire API</span><code>${esc(ref.wireApi)}</code></div>` : ''}
+            ${row.homePath ? `<div class="pd-info-row"><span>CODEX_HOME</span><code>${esc(row.homePath)}</code></div>` : ''}
+          </div>
+        </div>` : `
+        <div class="pd-section">
+          <div class="pd-section-title">登录信息</div>
+          <div class="pd-info-grid">
+            ${row.email ? `<div class="pd-info-row"><span>账号</span><code>${esc(row.email)}</code></div>` : ''}
+            ${row.plan ? `<div class="pd-info-row"><span>计划</span><code>${esc(String(row.plan).toUpperCase())}</code></div>` : ''}
+            ${row.homePath ? `<div class="pd-info-row"><span>CODEX_HOME</span><code>${esc(row.homePath)}</code></div>` : ''}
+          </div>
+        </div>`}
+      ${loading ? '<div class="pd-loading-hint">读取探测历史…</div>' : ''}
     </div>`;
 }
 
 function renderPdUsage(row) {
-  // 占位 v1：从全局 codex stats 里筛 sessions 列出与 provider 名匹配的，
-  // 估算近 30 天调用次数 + 占比。真正按 provider 拆 token 需要 Codex 在
-  // 每条 session 里写 provider 字段，已经写了；这里先粗略统计。
   const esc = escapeHtml;
   const stats = window.__consoleV3?.codexStats;
+  const lower = String(row.key || '').toLowerCase();
+  const recent = Array.isArray(stats?.recent) ? stats.recent : [];
+  const matched = recent.filter((r) => {
+    const p = String(r?.provider || '').toLowerCase();
+    return p === lower || p.includes(lower) || lower.includes(p);
+  });
   if (!stats) {
     return `
       <div class="pd-empty">
-        <p>需要先去 <strong>运行控制台</strong> 触发一次本地会话扫描才能在这里看到 ${esc(row.name || row.key)} 的用量。</p>
+        <div class="pd-empty-title-line">还没扫描本地会话</div>
+        <p>切到 <strong>运行控制台</strong> 触发一次扫描，回来就能看到 ${esc(row.name || row.key)} 的用量。</p>
       </div>`;
   }
-  const recent = Array.isArray(stats.recent) ? stats.recent : [];
-  const lower = String(row.key || '').toLowerCase();
-  const matched = recent.filter((r) => String(r?.provider || '').toLowerCase().includes(lower));
+  if (matched.length === 0) {
+    return `
+      <div class="pd-empty">
+        <div class="pd-empty-title-line">没有匹配的本地会话</div>
+        <p>${esc(row.name || row.key)} 还没在 codex 里跑过会话；切到该 provider 后启动 Codex 就会有记录。</p>
+        ${row.isActive ? '' : '<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-switch>切换为当前</button>'}
+      </div>`;
+  }
+  // 计算简单聚合
+  const totalMsgs = matched.reduce((a, r) => a + (Number(r.messageCount) || 0), 0);
+  const models = new Map();
+  matched.forEach((r) => {
+    const m = r.model || 'unknown';
+    models.set(m, (models.get(m) || 0) + 1);
+  });
+  const modelChips = [...models.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([m, c]) => `<span class="pd-chip"><strong>${esc(m)}</strong><em>${esc(String(c))}</em></span>`)
+    .join('');
   return `
     <div class="pd-usage">
-      <div class="pd-stat-grid">
-        <div class="pd-stat">
-          <div class="pd-stat-label">本地会话数</div>
-          <div class="pd-stat-value">${esc(String(matched.length))}</div>
-          <div class="pd-stat-sub">仅展示该 provider 命中的</div>
+      <div class="pd-stat-rail">
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">本地会话</div>
+          <div class="pd-stat-mini-value">${esc(String(matched.length))}</div>
         </div>
-        <div class="pd-stat">
-          <div class="pd-stat-label">总会话数</div>
-          <div class="pd-stat-value pd-stat-soft">${esc(String(stats.total || 0))}</div>
-          <div class="pd-stat-sub">近 7 天 ${esc(String(stats.week || 0))}</div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">消息总数</div>
+          <div class="pd-stat-mini-value">${esc(formatDashboardMetric ? formatDashboardMetric(totalMsgs) : String(totalMsgs))}</div>
         </div>
-        <div class="pd-stat">
-          <div class="pd-stat-label">占比</div>
-          <div class="pd-stat-value">${esc(stats.total ? `${Math.round(matched.length / stats.total * 100)}%` : '—')}</div>
-          <div class="pd-stat-sub">相对全部 Codex 会话</div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">使用模型</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(String(models.size))} 种</div>
+        </div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">最近</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(formatRelativeTime(matched[0]?.lastActiveAt) || '—')}</div>
         </div>
       </div>
-      ${matched.length ? `
+      ${modelChips ? `
+        <div class="pd-section">
+          <div class="pd-section-title">模型分布</div>
+          <div class="pd-chip-row">${modelChips}</div>
+        </div>` : ''}
+      <div class="pd-section">
+        <div class="pd-section-title">
+          <span>最近会话</span>
+          <span class="pd-section-meta">展示前 ${esc(String(Math.min(8, matched.length)))}</span>
+        </div>
         <div class="pd-session-list">
-          ${matched.slice(0, 6).map((r) => `
+          ${matched.slice(0, 8).map((r) => `
             <div class="pd-session">
-              <div class="pd-session-main">
-                <div class="pd-session-title">${esc((r.firstMessage || '').slice(0, 120) || '(无用户消息)')}</div>
-                <div class="pd-session-meta">
-                  ${r.model ? `<span>${esc(r.model)}</span>` : ''}
-                  <span>${esc(String(r.messageCount || 0))} 条</span>
-                  <span>${esc(formatRelativeTime(r.lastActiveAt))}</span>
-                </div>
+              <div class="pd-session-title">${esc((r.firstMessage || '').trim().slice(0, 140) || '(无用户消息)')}</div>
+              <div class="pd-session-meta">
+                ${r.model ? `<span class="pd-session-model">${esc(r.model)}</span>` : ''}
+                <span>${esc(String(r.messageCount || 0))} 条</span>
+                <span>${esc(formatRelativeTime(r.lastActiveAt))}</span>
               </div>
             </div>`).join('')}
-        </div>` : '<div class="pd-empty"><p>这个 provider 暂时还没有本地会话命中。</p></div>'}
+        </div>
+      </div>
     </div>`;
+}
+
+async function actionPdLaunch() {
+  const row = lookupProviderDetailRow();
+  if (!row) return;
+  if (typeof launchCodex === 'function') {
+    launchCodex('launchBtn', 'Codex 已启动', 'auto').catch(console.warn);
+  }
 }
 
 function renderPdTest(row) {
@@ -18019,26 +18113,45 @@ function renderPdTestResult(result) {
 function renderPdHealth(row) {
   const esc = escapeHtml;
   const history = state.providerDetail.history;
+  const summary = state.providerDetail.summary || {};
   const rows = Array.isArray(history?.rows) ? history.rows : [];
+  const total = Number(summary.total || 0);
+  const success = Number(summary.success || 0);
+  const failure = Number(summary.failure || 0);
+  const successRate = total > 0 ? Math.round((success / total) * 100) : null;
   return `
     <div class="pd-health">
-      <div class="pd-health-bar">
-        <span class="pd-health-count">${esc(String(rows.length))} 条记录</span>
-        <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-refresh-health>刷新</button>
+      ${renderPdBatteryBar(history, 60)}
+      <div class="pd-section">
+        <div class="pd-section-title">
+          <span>时延曲线</span>
+          <button type="button" class="pd-link" data-pd-refresh-health>刷新</button>
+        </div>
+        <div class="pd-spark-card pd-spark-card-large">
+          ${renderPdSparkline(history, 520, 72)}
+        </div>
+        <div class="pd-latency-meta">
+          <span>平均 <strong>${esc(fmtLatency(summary.avgLatencyMs))}</strong></span>
+          <span>p95 <strong>${esc(fmtLatency(summary.p95LatencyMs))}</strong></span>
+          <span>成功率 <strong>${successRate == null ? '—' : `${successRate}%`}</strong></span>
+        </div>
       </div>
-      <div class="pd-spark-card pd-spark-card-large">
-        ${renderPdSparkline(history, 520, 64)}
+      <div class="pd-section">
+        <div class="pd-section-title">
+          <span>探测时间轴</span>
+          <span class="pd-section-meta">${esc(String(Math.min(rows.length, 40)))} / ${esc(String(rows.length))} 条</span>
+        </div>
+        ${rows.length ? `
+          <ol class="pd-probe-log">
+            ${rows.slice(0, 40).map((r) => `
+              <li class="${r.success ? 'is-ok' : 'is-bad'}">
+                <span class="pd-probe-when">${esc(formatRelativeTime(new Date(r.probedAt).toISOString()))}</span>
+                <span class="pd-probe-lat">${esc(fmtLatency(r.latencyMs))}</span>
+                ${r.statusCode ? `<span class="pd-probe-status">HTTP ${esc(String(r.statusCode))}</span>` : '<span class="pd-probe-status">—</span>'}
+                ${r.error ? `<span class="pd-probe-error" title="${esc(r.error)}">${esc(r.error.slice(0, 100))}</span>` : '<span class="pd-probe-error pd-probe-ok">连接正常</span>'}
+              </li>`).join('')}
+          </ol>` : '<div class="pd-empty pd-empty-small">还没有探测历史。点 "测试" 或在列表上 "重检" 都会落记录。</div>'}
       </div>
-      ${rows.length ? `
-        <ol class="pd-probe-log">
-          ${rows.slice(0, 40).map((r) => `
-            <li class="${r.success ? 'is-ok' : 'is-bad'}">
-              <span class="pd-probe-when">${esc(formatRelativeTime(new Date(r.probedAt).toISOString()))}</span>
-              <span class="pd-probe-lat">${esc(fmtLatency(r.latencyMs))}</span>
-              ${r.statusCode ? `<span class="pd-probe-status">HTTP ${esc(String(r.statusCode))}</span>` : ''}
-              ${r.error ? `<span class="pd-probe-error" title="${esc(r.error)}">${esc(r.error.slice(0, 80))}</span>` : ''}
-            </li>`).join('')}
-        </ol>` : '<div class="pd-empty pd-empty-small">还没有探测历史。点"测试"或在外面用 "重检" 都会落记录。</div>'}
     </div>`;
 }
 
@@ -22476,7 +22589,13 @@ loadTools();
             ${homeMeta}
           </span>
         </span>
-        <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}" title="${safeEscape(r.historyOnly ? '本地草稿：之前在这台机器上配过 baseUrl 但 ~/.codex/config.toml 里已不存在该 provider。重新填一次 API Key 保存即可恢复。' : '')}">${safeEscape(statusTxt)}</span>` : ''}</span>
+        <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}" title="${safeEscape(r.historyOnly ? '本地草稿：之前在这台机器上配过 baseUrl 但 ~/.codex/config.toml 里已不存在该 provider。重新填一次 API Key 保存即可恢复。' : '')}">${safeEscape(statusTxt)}</span>` : ''}${(() => {
+          const up = state.providerUptime?.[r.key];
+          if (r.mode !== 'apikey' || up == null || up.uptimePct == null) return '';
+          const v = Number(up.uptimePct);
+          const tier = v >= 99 ? 'is-good' : v >= 90 ? 'is-warn' : 'is-bad';
+          return `<span class="ch-row-uptime ${tier}" title="近 24h 可用率 (${up.total || 0} 次探测)"><span class="ch-row-uptime-bar" style="--up:${v}%"></span>${v}%</span>`;
+        })()}</span>
         <span class="ch-row-actions">${actions}
         </span>
       </div>`;
@@ -22589,6 +22708,67 @@ loadTools();
     listEl.innerHTML = renderListHTML(filtered);
 
     if (emptyEl) emptyEl.classList.toggle('hide', allRows.length > 0);
+
+    // 如果在 detail 模式，把详情页也 render 出来
+    const hubEl = document.getElementById('connectionHub');
+    if (state.providerDetail?.open) {
+      if (hubEl) hubEl.classList.add('ch-detail-on');
+      const detailEl = document.getElementById('chDetail');
+      if (detailEl) detailEl.classList.remove('hide');
+      ensureProviderDetailEvents();
+      renderProviderDetail();
+    } else {
+      if (hubEl) hubEl.classList.remove('ch-detail-on');
+      const detailEl = document.getElementById('chDetail');
+      if (detailEl) { detailEl.classList.remove('is-in'); detailEl.classList.add('hide'); }
+    }
+
+    // 懒加载每条 API key 行的 24h uptime（5 分钟缓存）
+    fetchRowUptimeSummaries(filtered.filter((r) => r.mode === 'apikey' && !r.historyOnly));
+  }
+
+  async function fetchRowUptimeSummaries(rows) {
+    if (!Array.isArray(rows) || !rows.length) return;
+    const codexHome = state.current?.codexHome || '';
+    const FRESH_MS = 5 * 60 * 1000;
+    const now = Date.now();
+    const todo = rows.filter((r) => {
+      const cached = state.providerUptime[r.key];
+      return !cached || (now - (cached.fetchedAt || 0) > FRESH_MS);
+    });
+    if (!todo.length) return;
+    await Promise.all(todo.map(async (r) => {
+      try {
+        const params = new URLSearchParams({ providerKey: r.key, codexHome, windowHours: '24' });
+        const res = await api(`/api/provider/probe-summary?${params.toString()}`);
+        if (res?.ok && res.data) {
+          state.providerUptime[r.key] = {
+            uptimePct: res.data.uptimePct,
+            total: res.data.total,
+            fetchedAt: now,
+          };
+        } else {
+          state.providerUptime[r.key] = { uptimePct: null, total: 0, fetchedAt: now };
+        }
+      } catch (_) {
+        state.providerUptime[r.key] = { uptimePct: null, total: 0, fetchedAt: now };
+      }
+    }));
+    // 数据回来后只重渲染列表，不闪 hero
+    const listEl = document.getElementById('chList');
+    if (listEl) {
+      const search = (hubState()?.chSearch || '').trim().toLowerCase();
+      const filter = hubState()?.chFilter || 'all';
+      const all = buildProviderRows(hubState()?.activeTool || 'codex');
+      const filteredAgain = all.filter((r) => {
+        if (filter === 'oauth' && r.mode !== 'oauth') return false;
+        if (filter === 'apikey' && r.mode !== 'apikey') return false;
+        if (!search) return true;
+        const hay = [r.name, r.baseUrl, r.model, r.key].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(search);
+      });
+      listEl.innerHTML = renderListHTML(filteredAgain);
+    }
   }
 
   // ── Interactions ────────────────────────────────────────────────
