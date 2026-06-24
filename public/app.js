@@ -12295,7 +12295,7 @@ function buildCfgGrid(toolId) {
     if (checks.length) subParts.push(`<span class="cfg-card-pill ${enabledCount > 0 ? 'is-on' : ''}">${enabledCount}/${checks.length} 开关启用</span>`);
     if (!subParts.length) subParts.push('<span class="cfg-card-pill">可配置</span>');
     return `
-      <button type="button" class="cfg-card" data-cfg-card="${sec.id}">
+      <div role="button" tabindex="0" class="cfg-card" data-cfg-card="${sec.id}">
         <span class="cfg-card-icon">${icon}</span>
         <span class="cfg-card-body">
           <span class="cfg-card-title">${escapeHtml(heading)}</span>
@@ -12304,7 +12304,7 @@ function buildCfgGrid(toolId) {
         <span class="cfg-card-arrow">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
         </span>
-      </button>`;
+      </div>`;
   }).join('');
 
   // 底部快捷操作：备份 / 重置 / 检查 / 商店
@@ -12403,6 +12403,17 @@ function exitCfgSubpage() {
   document.getElementById('cfgGrid')?.classList.remove('hide');
   document.getElementById('cfgSubhead')?.classList.add('hide');
 }
+
+// 卡片 div[role=button] 支持键盘触发
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const target = e.target instanceof Element ? e.target : null;
+  const card = target?.closest('[data-cfg-card]');
+  if (card) {
+    e.preventDefault();
+    enterCfgSubpage(card.dataset.cfgCard);
+  }
+});
 
 // 事件代理：卡片点击 + 返回按钮 + 快捷操作转发
 document.addEventListener('click', (e) => {
