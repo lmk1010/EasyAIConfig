@@ -3485,7 +3485,7 @@ export async function loadState({ scope = 'global', projectPath = '', codexHome 
   const providers = summarizeProviders(config, env, authJson);
   const implicitProvider = providers.length ? null : buildImplicitCodexProvider(env, authJson);
   if (implicitProvider) providers.push(implicitProvider);
-  const activeProvider = providers.find((provider) => provider.isActive) || providers[0] || null;
+  const activeProvider = providers.find((provider) => provider.isActive) || null;
   const login = summarizeCodexLogin(authJson);
   const codexBinary = findCodexBinary({ passive: true });
 
@@ -3508,7 +3508,7 @@ export async function loadState({ scope = 'global', projectPath = '', codexHome 
     login,
     summary: {
       model: config.model || '',
-      modelProvider: config.model_provider || activeProvider?.key || '',
+      modelProvider: config.model_provider || '',
       providerBaseUrl: activeProvider?.baseUrl || '',
       envKey: activeProvider?.resolvedKeyName || activeProvider?.envKey || '',
       approvalPolicy: config.approval_policy || '',
@@ -3755,6 +3755,120 @@ export async function saveConfig(payload) {
       config: configChanged,
       env: envChanged,
     },
+  };
+}
+
+
+export async function deleteProviderConfig(payload) {
+  const codexHome = assertAllowedPath(payload.codexHome || defaultCodexHome(), 'codexHome');
+  const paths = scopePaths({
+    scope: payload.scope || 'global',
+    projectPath: payload.projectPath || '',
+    codexHome,
+  });
+
+  const providerKey = slugifyProviderKey(payload.providerKey || '');
+  if (!providerKey) throw new Error('Provider key is required');
+
+  const [configContent, envContent] = await Promise.all([
+    readText(paths.configPath),
+    readText(paths.envPath),
+  ]);
+
+  const config = parseToml(configContent);
+  const originalConfig = structuredClone(config);
+  const env = parseEnv(envContent);
+  const originalEnv = { ...env };
+  const providers = config.model_providers && typeof config.model_providers === 'object'
+    ? config.model_providers
+    : {};
+
+  const targetProvider = providers[providerKey];
+  if (!targetProvider) {
+    return {
+      removed: false,
+      reason: 'not_found',
+      providerKey,
+      paths,
+      changed: { config: false, env: false },
+    };
+  }
+
+  const targetEnvKey = String(targetProvider.env_key || '').trim();
+  delete providers[providerKey];
+  config.model_providers = providers;
+
+  if (String(config.model_provider || '').trim() === providerKey) {
+    const fallbackKey = Object.keys(providers)[0] || '';
+    if (fallbackKey) config.model_provider = fallbackKey;
+    else delete config.model_provider;
+  }
+
+  if (targetEnvKey) {
+    const stillUsed = Object.entries(providers).some(([key, provider]) => {
+      if (key === providerKey) return false;
+      return String(provider?.env_key || '').trim() === targetEnvKey;
+    });
+    if (!stillUsed && Object.prototype.hasOwnProperty.call(env, targetEnvKey)) {
+      delete env[targetEnvKey];
+    }
+  }
+
+  const configChanged = JSON.stringify(config) !== JSON.stringify(originalConfig);
+  const envChanged = JSON.stringify(env) !== JSON.stringify(originalEnv);
+  const needsWrite = configChanged || envChanged;
+  const backupPath = needsWrite ? await createBackup(paths) : null;
+
+  if (configChanged) {
+    await writeText(paths.configPath, TOML.stringify(config));
+  }
+  if (envChanged) {
+    await writeText(paths.envPath, stringifyEnv(env));
+  }
+
+  return {
+    removed: true,
+    providerKey,
+    removedEnvKey: targetEnvKey && !Object.prototype.hasOwnProperty.call(env, targetEnvKey) ? targetEnvKey : '',
+    backupPath,
+    paths,
+    activeProvider: config.model_provider || '',
+    changed: {
+      config: configChanged,
+      env: envChanged,
+    },
+  };
+}
+
+export async function useOauthConfig(payload) {
+  const codexHome = assertAllowedPath(payload.codexHome || defaultCodexHome(), 'codexHome');
+  const paths = scopePaths({
+    scope: payload.scope || 'global',
+    projectPath: payload.projectPath || '',
+    codexHome,
+  });
+
+  const configContent = await readText(paths.configPath);
+  const config = parseToml(configContent);
+  const originalConfig = structuredClone(config);
+
+  if (config && typeof config === 'object' && !Array.isArray(config)) {
+    delete config.model_provider;
+  }
+
+  const configChanged = JSON.stringify(config) !== JSON.stringify(originalConfig);
+  const backupPath = configChanged ? await createBackup(paths) : null;
+
+  if (configChanged) {
+    await writeText(paths.configPath, TOML.stringify(config));
+  }
+
+  return {
+    saved: true,
+    backupPath,
+    paths,
+    activeProvider: '',
+    changed: { config: configChanged, env: false },
   };
 }
 

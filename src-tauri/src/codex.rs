@@ -2370,6 +2370,67 @@ fn launch_macos_terminal_with_profile(cwd: &Path, command_text: &str, tool_label
   Ok(format!("{} 已在 {} 中启动", tool_label, app_label))
 }
 
+
+
+fn collect_codex_provider_env_keys_from_config(config_path: &Path, keys: &mut Vec<String>) {
+  let config_raw = read_text(config_path).unwrap_or_default();
+  if let Ok(config) = parse_toml_config(&config_raw) {
+    if let Some(providers) = config.get("model_providers").and_then(Value::as_object) {
+      for provider in providers.values() {
+        let env_key = provider
+          .get("env_key")
+          .and_then(Value::as_str)
+          .unwrap_or("")
+          .trim();
+        if !env_key.is_empty() && !keys.iter().any(|item| item == env_key) {
+          keys.push(env_key.to_string());
+        }
+      }
+    }
+  }
+}
+
+fn collect_codex_provider_env_keys(codex_home: &Path, cwd: Option<&Path>) -> Vec<String> {
+  let mut keys = vec![
+    "OPENAI_API_KEY".to_string(),
+    "OPENAI_BASE_URL".to_string(),
+    "CODEX_API_KEY".to_string(),
+    "CODEX_BASE_URL".to_string(),
+  ];
+  collect_codex_provider_env_keys_from_config(&codex_home.join("config.toml"), &mut keys);
+  if let Some(project_dir) = cwd {
+    collect_codex_provider_env_keys_from_config(&project_dir.join(".codex").join("config.toml"), &mut keys);
+  }
+  keys
+}
+
+fn clear_model_provider_in_config(config_path: &Path) -> Result<bool, String> {
+  let config_raw = read_text(config_path)?;
+  let mut config = parse_toml_config(&config_raw)?;
+  let mut changed = false;
+  if let Some(obj) = config.as_object_mut() {
+    changed = obj.remove("model_provider").is_some();
+  }
+  if changed {
+    write_text(config_path, &stringify_toml_config(&config)?)?;
+  }
+  Ok(changed)
+}
+
+fn clear_codex_oauth_active_provider(codex_home: &Path, cwd: Option<&Path>) -> Result<bool, String> {
+  if !crate::oauth_profiles::is_oauth_profile_home(codex_home) {
+    return Ok(false);
+  }
+  let mut changed = clear_model_provider_in_config(&codex_home.join("config.toml"))?;
+  if let Some(project_dir) = cwd {
+    // Codex can also read project-local .codex/config.toml from the launch cwd.
+    // When the user explicitly switches to an OAuth profile, an old project
+    // model_provider would otherwise override OAuth and trigger "Missing env".
+    changed |= clear_model_provider_in_config(&project_dir.join(".codex").join("config.toml"))?;
+  }
+  Ok(changed)
+}
+
 fn requested_codex_home_from_object(object: &Map<String, Value>) -> Result<PathBuf, String> {
   let input = get_string(object, "codexHome");
   if input.is_empty() {
@@ -2379,16 +2440,19 @@ fn requested_codex_home_from_object(object: &Map<String, Value>) -> Result<PathB
   }
 }
 
-fn with_codex_home_command(command: &str, codex_home: &Path) -> String {
-  // 切到 OAuth profile 时，必须把环境里残留的 OPENAI_API_KEY / OPENAI_BASE_URL
-  // 清掉再启动 codex —— 否则 codex CLI 会优先用环境里的 API key 模式，
-  // OAuth tokens 永远不被使用，UI 上"切换成功"就是个假象。
+fn with_codex_home_command(command: &str, codex_home: &Path, cwd: Option<&Path>) -> String {
+  // 切到 OAuth profile 时，必须把 shell / 用户环境里残留的 API-Key provider
+  // env 全部清掉再启动 codex。不能只清 OPENAI_*，因为用户 provider 可能是
+  // CHARITYDOING_API_KEY / OPENROUTER_API_KEY 等自定义 env_key。
   let is_oauth = crate::oauth_profiles::is_oauth_profile_home(codex_home);
   if cfg!(target_os = "windows") {
     let cleanup = if is_oauth {
-      "set \"OPENAI_API_KEY=\" && set \"OPENAI_BASE_URL=\" && "
+      collect_codex_provider_env_keys(codex_home, cwd)
+        .iter()
+        .map(|key| format!("set \"{}=\" && ", key))
+        .collect::<String>()
     } else {
-      ""
+      String::new()
     };
     return format!(
       "{}set \"CODEX_HOME={}\" && {}",
@@ -2397,7 +2461,15 @@ fn with_codex_home_command(command: &str, codex_home: &Path) -> String {
       command
     );
   }
-  let cleanup = if is_oauth { "unset OPENAI_API_KEY OPENAI_BASE_URL; " } else { "" };
+  let cleanup = if is_oauth {
+    let keys = collect_codex_provider_env_keys(codex_home, cwd)
+      .into_iter()
+      .filter(|key| key.bytes().all(|b| b == b'_' || b.is_ascii_uppercase() || b.is_ascii_digit()))
+      .collect::<Vec<_>>();
+    if keys.is_empty() { String::new() } else { format!("unset {}; ", keys.join(" ")) }
+  } else {
+    String::new()
+  };
   format!(
     "{}CODEX_HOME={} {}",
     cleanup,
@@ -2531,9 +2603,9 @@ fn launch_codex_terminal_command(cwd: &Path, terminal_profile: &str, codex_home:
     .unwrap_or("codex");
   let command_text = if cfg!(target_os = "windows") {
     let empty_args: Vec<String> = Vec::new();
-    with_codex_home_command(&build_windows_binary_command(codex_path, &empty_args, "codex"), codex_home)
+    with_codex_home_command(&build_windows_binary_command(codex_path, &empty_args, "codex"), codex_home, Some(cwd))
   } else {
-    with_codex_home_command(&quote_posix_shell_arg(codex_path), codex_home)
+    with_codex_home_command(&quote_posix_shell_arg(codex_path), codex_home, Some(cwd))
   };
 
   if cfg!(target_os = "macos") {
@@ -2596,6 +2668,9 @@ pub(crate) fn launch_codex(body: &Value) -> Result<Value, String> {
   let codex_home = requested_codex_home_from_object(&object)?;
   ensure_dir(&codex_home)?;
   let terminal_profile = get_string(&object, "terminalProfile");
+  // 启动 OAuth profile 前再次兜底清 active model_provider，避免 UI 切换成功
+  // 但旧 config.toml 仍让 Codex 走 API-Key provider。
+  let _ = clear_codex_oauth_active_provider(&codex_home, Some(&cwd))?;
   let codex_binary = find_codex_binary();
   if !codex_binary.get("installed").and_then(Value::as_bool).unwrap_or(false) {
     return Err(describe_codex_install_error());
@@ -2685,7 +2760,7 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
   } else {
     format!("{} login", quote_posix_shell_arg(binary_path))
   };
-  let command = with_codex_home_command(&command, &codex_home);
+  let command = with_codex_home_command(&command, &codex_home, Some(&cwd));
   let message = if cfg!(target_os = "macos") {
     launch_macos_terminal_with_profile(&cwd, &command, "Codex 登录", &terminal_profile)?
   } else {
@@ -3126,7 +3201,7 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
       "terminalSession": terminal_session,
     }));
   }
-  let command = with_codex_home_command(&build_codex_session_command(binary_path, &args), &codex_home);
+  let command = with_codex_home_command(&build_codex_session_command(binary_path, &args), &codex_home, Some(&cwd));
   let message = if cfg!(target_os = "macos") {
     launch_macos_terminal_with_profile(&cwd, &command, tool_label, &terminal_profile)?
   } else {
@@ -3994,7 +4069,7 @@ pub(crate) fn check_setup_environment(query: &Value) -> Result<Value, String> {
 }
 use crate::{
   app_home, compare_versions, default_codex_home, expand_home_path, extract_version, home_dir,
-  npm_command, parse_json_object, parse_toml_config, read_text, OPENAI_CODEX_PACKAGE,
+  npm_command, parse_json_object, parse_toml_config, read_text, stringify_toml_config, OPENAI_CODEX_PACKAGE,
   claude_code_home, effective_claude_code_home, openclaw_home, opencode_config_home, opencode_data_home, write_text, ensure_dir, backups_root, CLAUDE_CODE_PACKAGE,
   OPENCODE_PACKAGE, OPENCLAW_PACKAGE,
 };

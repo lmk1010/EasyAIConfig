@@ -7,9 +7,10 @@
 //       auth.json                — OAuth tokens for this account
 //       .env / config.toml / sessions / history.jsonl / ... managed by Codex
 //
-// Switching only updates which profile/home the UI points to. We no longer
-// copy auth.json back into ~/.codex; each profile keeps its own isolated
-// CODEX_HOME so auth, sessions, history and config stay separated.
+// Switching a profile now also activates it in the default ~/.codex home so
+// plain `codex` launched from any normal terminal uses the selected official
+// login. The profile directory remains the source-of-truth snapshot for each
+// saved account.
 
 use chrono::Utc;
 use serde_json::{json, Map, Value};
@@ -19,8 +20,8 @@ use uuid::Uuid;
 
 use crate::provider::get_string;
 use crate::{
-  app_home, default_codex_home, ensure_dir, parse_env, parse_json_object, read_text,
-  stringify_env, write_secret, write_text,
+  app_home, default_codex_home, ensure_dir, parse_env, parse_json_object, parse_toml_config, read_text,
+  stringify_env, stringify_toml_config, write_secret, write_text,
 };
 
 const PROFILES_DIRNAME: &str = "codex-oauth-profiles";
@@ -37,6 +38,68 @@ pub(crate) fn profiles_root() -> Result<PathBuf, String> {
 pub(crate) fn is_oauth_profile_home(codex_home: &Path) -> bool {
   let Ok(root) = profiles_root() else { return false; };
   codex_home.starts_with(&root)
+}
+
+
+fn clear_model_provider_at(config_path: &Path) -> Result<bool, String> {
+  let raw = read_text(config_path)?;
+  let mut config = parse_toml_config(&raw)?;
+  let mut changed = false;
+  if let Some(obj) = config.as_object_mut() {
+    changed = obj.remove("model_provider").is_some();
+  }
+  if changed {
+    write_text(config_path, &stringify_toml_config(&config)?)?;
+  }
+  Ok(changed)
+}
+
+fn activate_profile_in_default_codex_home(profile_id: &str) -> Result<PathBuf, String> {
+  let source_auth_path = profile_auth_path(profile_id)?;
+  let source_auth_raw = read_text(&source_auth_path)?;
+  if source_auth_raw.trim().is_empty() {
+    return Err("目标 OAuth profile 没有 auth.json，请先重新登录".to_string());
+  }
+  let source_auth_json: Value = serde_json::from_str(&source_auth_raw)
+    .map_err(|e| format!("OAuth profile auth.json 解析失败: {}", e))?;
+  let meta = extract_oauth_meta(&source_auth_json);
+  if !meta.get("hasTokens").and_then(Value::as_bool).unwrap_or(false) {
+    return Err("目标 OAuth profile 没有 OAuth tokens，请先重新登录".to_string());
+  }
+
+  let default_home = default_codex_home()?;
+  ensure_dir(&default_home)?;
+  let default_auth_path = default_home.join(AUTH_FILENAME);
+  let previous_default_auth = read_text(&default_auth_path).unwrap_or_default();
+  if !previous_default_auth.trim().is_empty() && previous_default_auth != source_auth_raw {
+    let _ = write_switch_backup(&previous_default_auth);
+  }
+
+  // Make plain `codex` in any normal terminal use the selected official login.
+  write_secret(&default_auth_path, &source_auth_raw)?;
+
+  // Clear the global active API-key pointer. Keep provider definitions/secrets so
+  // switching back to API Key is not destructive, but default `codex` must not
+  // require e.g. CHARITYDOING_API_KEY after OAuth is selected.
+  let _ = clear_model_provider_at(&default_home.join("config.toml"))?;
+
+  // Also clear the most common OpenAI API-key leftovers from ~/.codex/.env.
+  // Custom provider env vars can stay; without model_provider they are inert.
+  let env_path = default_home.join(".env");
+  if let Ok(raw) = read_text(&env_path) {
+    let mut env = parse_env(&raw);
+    let mut changed = false;
+    for stale_key in ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE", "CODEX_API_KEY", "CODEX_BASE_URL"] {
+      if env.remove(stale_key).is_some() {
+        changed = true;
+      }
+    }
+    if changed {
+      write_text(&env_path, &stringify_env(&env))?;
+    }
+  }
+
+  Ok(default_home)
 }
 
 fn profiles_index_path() -> Result<PathBuf, String> {
@@ -654,6 +717,8 @@ pub(crate) fn switch_oauth_profile(body: &Value) -> Result<Value, String> {
     }
   }
 
+  let default_codex_home = activate_profile_in_default_codex_home(&id)?;
+
   // Update active pointer.
   let mut index = read_profiles_index()?;
   if let Some(obj) = index.as_object_mut() {
@@ -663,7 +728,9 @@ pub(crate) fn switch_oauth_profile(body: &Value) -> Result<Value, String> {
 
   Ok(json!({
     "id": id,
-    "codexHome": target_codex_home.to_string_lossy().to_string()
+    "codexHome": default_codex_home.to_string_lossy().to_string(),
+    "profileCodexHome": target_codex_home.to_string_lossy().to_string(),
+    "activatedDefault": true
   }))
 }
 

@@ -58,6 +58,8 @@ import {
   saveOpenCodeConfig,
   saveOpenCodeRawConfig,
   saveConfig,
+  deleteProviderConfig,
+  useOauthConfig,
   saveOpenClawConfig,
   saveRawConfig,
   saveSettings,
@@ -1083,6 +1085,23 @@ export async function startServer() {
       if (!body.providerKey) throw new Error('Provider key is required');
       const result = await saveConfig(body);
       ok(res, { data: result });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+
+  app.post('/api/config/delete-provider', async (req, res) => {
+    try {
+      ok(res, { data: await deleteProviderConfig(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/config/use-oauth', async (req, res) => {
+    try {
+      ok(res, { data: await useOauthConfig(req.body || {}) });
     } catch (error) {
       fail(res, error);
     }
