@@ -17683,6 +17683,7 @@ function openProviderDetail(key) {
   state.providerDetail.testRunning = false;
   state.providerDetail.loading = false;
   state.providerDetail.error = '';
+  state.providerDetail.usageAutoRetried = false;
   const hub = document.getElementById('connectionHub');
   if (hub) hub.classList.add('ch-detail-on');
   const detail = document.getElementById('chDetail');
@@ -17708,15 +17709,21 @@ function openProviderDetail(key) {
 }
 
 async function fetchDashboardMetricsForDetail(force = false) {
-  if (state.dashboardMetrics?.codex && !force) return;
+  // 即便已有 codex metrics，超过 60 秒就当过期重拉。
+  // 用户从详情页切 provider / 重启 dev / 切回 codex 等场景下，
+  // 没新数据 = 旧 providers 数组里可能没他刚用过的那个 key（比如 lucoo）。
+  const fetchedAt = Number(state.dashboardMetricsFetchedAt || 0);
+  const isStale = !fetchedAt || (Date.now() - fetchedAt > 60 * 1000);
+  if (state.dashboardMetrics?.codex && !force && !isStale) return;
   if (typeof refreshDashboardData === 'function') {
     await refreshDashboardData({ force, silent: true, tool: 'codex' });
-    renderProviderDetail();
+    renderProviderDetail({ force: true });
   }
 }
 
 async function actionPdRefreshUsage() {
   state.providerDetail.usageRefreshing = true;
+  state.providerDetail.usageAutoRetried = true; // 用户手动刷过 → 不要再自动 retry
   renderProviderDetail();
   await fetchDashboardMetricsForDetail(true).catch(() => {});
   state.providerDetail.usageRefreshing = false;
@@ -17780,6 +17787,9 @@ function pdComputeRenderSig(row) {
     pd.usageRefreshing ? 'ur' : 'us',
     pd.loading ? 'l' : '',
     state.dashboardMetrics?.codex ? 'dm' : 'dn',
+    // 跟 dashboard 数据相关：providers 数量 + 该 row 是否能匹配上一条 provider 条目
+    Array.isArray(state.dashboardMetrics?.codex?.providers) ? state.dashboardMetrics.codex.providers.length : 0,
+    Number(state.dashboardMetricsFetchedAt || 0),
   ].join('|');
 }
 
@@ -18101,6 +18111,12 @@ function renderPdUsage(row) {
 
   const sessionList = Array.isArray(codexMetrics.sessions) ? codexMetrics.sessions : [];
   const matchedSessions = sessionList.filter((s) => matchProvider(s?.provider));
+
+  // 没匹配上 → 后台静悄悄 force 拉一次最新数据，避免用户手动按"强制刷新"
+  if (!matched && !state.providerDetail.usageAutoRetried) {
+    state.providerDetail.usageAutoRetried = true;
+    fetchDashboardMetricsForDetail(true).catch(() => {});
+  }
 
   // 全局 models 数组用来配价（codex 里 sessions provider 写的不一定带模型聚合，
   // 这里用 sessions 推断这个 provider 主要用了哪些模型）
