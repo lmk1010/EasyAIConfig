@@ -554,7 +554,19 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
     }
   };
 
-  config_object.insert("model_provider".to_string(), json!(provider_key));
+  // 是否在保存时同时把 model_provider 切到这条新 provider。默认 false：
+  // 前端拿到 needsActivation:true 后弹"确认切换"，确认后才再发一次带
+  // activate:true 的请求，避免误触。
+  let activate = object.get("activate").and_then(Value::as_bool).unwrap_or(false);
+  let previous_active_provider = config_object
+    .get("model_provider")
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_string();
+  if activate {
+    config_object.insert("model_provider".to_string(), json!(provider_key));
+  }
   if !model.is_empty() {
     config_object.insert("model".to_string(), json!(model));
   }
@@ -657,7 +669,11 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
       "configPath": paths.config_path.to_string_lossy().to_string(),
       "envPath": paths.env_path.to_string_lossy().to_string(),
     },
-    "activeProvider": provider_key,
+    "activated": activate,
+    "activeProvider": if activate { provider_key.clone() } else { previous_active_provider.clone() },
+    "savedProviderKey": provider_key.clone(),
+    "previousActiveProvider": previous_active_provider.clone(),
+    "needsActivation": !activate && previous_active_provider != provider_key,
     "baseUrl": base_url,
     "envKey": env_key,
     "hints": hints,

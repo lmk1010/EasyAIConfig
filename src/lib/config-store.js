@@ -3670,8 +3670,14 @@ export async function saveConfig(payload) {
   // 不主动告诉用户 URL 被加了 https:// / 去了尾部斜杠之类的纯字面规范化——
   // 那些是无侵入修整，闹腾反而吵。
   const hints = [];
-
-  config.model_provider = providerKey;
+  // 是否在保存时同时把 model_provider 切到这条新 provider。默认 false：
+  // 保存就是保存，UI 拿到 needsActivation:true 后弹窗让用户确认才再发激活请求，
+  // 避免在 list 上点"保存"误把当前活跃 provider 切走。
+  const activate = Boolean(payload.activate);
+  const previousActiveProvider = String(config.model_provider || '').trim();
+  if (activate) {
+    config.model_provider = providerKey;
+  }
   if (model) config.model = model;
   if (approvalPolicy) config.approval_policy = approvalPolicy;
   if (sandboxMode) config.sandbox_mode = sandboxMode;
@@ -3747,7 +3753,11 @@ export async function saveConfig(payload) {
     saved: true,
     backupPath,
     paths,
-    activeProvider: providerKey,
+    activated: activate,
+    activeProvider: activate ? providerKey : previousActiveProvider,
+    savedProviderKey: providerKey,
+    previousActiveProvider,
+    needsActivation: !activate && previousActiveProvider !== providerKey,
     baseUrl,
     envKey,
     hints,

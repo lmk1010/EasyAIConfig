@@ -17511,23 +17511,21 @@ async function saveConfigOnly() {
   // 后端校验失败会把错误信息回传出来，前端只负责转发。
 
   setBusy('saveBtn', true, '保存中...');
+  // 默认不带 activate=true：保存就是保存，后端不会主动切 model_provider
   const saved = await api('/api/config/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, activate: false }),
   });
   setBusy('saveBtn', false);
   if (!saved.ok) return flash(saved.error || '保存失败', 'error');
   flash('配置已保存', 'success');
-  // 显示后端给出的提示（自动补 /v1、清孤儿 env、替换 providerKey 等）
   const hints = saved.data?.hints;
   if (Array.isArray(hints) && hints.length) {
     for (const hint of hints) {
       if (hint?.message) flash(hint.message, 'info');
     }
   }
-  // 保存成功后立刻把输入框对齐到后端 normalize 之后的 URL，
-  // 否则下次再保存可能因为前后端 normalize 结果不一致触发 canUseStored 失效。
   const savedBaseUrl = String(saved.data?.baseUrl || '').trim();
   if (savedBaseUrl) {
     const baseUrlInput = el('baseUrlInput');
@@ -17535,6 +17533,28 @@ async function saveConfigOnly() {
       baseUrlInput.value = savedBaseUrl;
     }
   }
+
+  // 保存的 provider 不是当前活跃的 → 弹一个确认是否切换
+  if (saved.data?.needsActivation) {
+    const newKey = String(saved.data?.savedProviderKey || '').trim();
+    const oldKey = String(saved.data?.previousActiveProvider || '').trim() || '无';
+    const ok = window.confirm(`配置已保存。是否把 Codex 的当前 provider 从「${oldKey}」切换到「${newKey}」？\n\n点"取消"则只保留这条 provider 的配置，但当前会话依然走「${oldKey}」。`);
+    if (ok) {
+      setBusy('saveBtn', true, '切换中...');
+      const activated = await api('/api/config/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, activate: true }),
+      });
+      setBusy('saveBtn', false);
+      if (!activated.ok) {
+        flash(activated.error || '切换失败', 'error');
+      } else {
+        flash(`已切换到 ${newKey}`, 'success');
+      }
+    }
+  }
+
   await loadState({ preserveForm: true });
   await loadBackups();
   loadAppUpdateState();
@@ -21509,7 +21529,10 @@ loadTools();
     } else if (h.checked) {
       dotCls = 'bad'; statusCls = 'bad'; statusTxt = '失败';
     } else if (r.historyOnly) {
-      dotCls = 'muted'; statusCls = 'muted'; statusTxt = '历史';
+      // "本地草稿"= localStorage 里还留着这条 baseUrl 历史，但 ~/.codex/config.toml
+      // 里已经没有 provider 条目了（用户之前删了，或者换了机器）。提示用户：
+      // 重新填一次 Key 保存就能恢复，无需重输 URL。
+      dotCls = 'muted'; statusCls = 'muted'; statusTxt = '本地草稿';
     } else if (!r.hasCredential) {
       dotCls = 'muted'; statusCls = 'warn'; statusTxt = '缺 Key';
     } else {
@@ -21585,7 +21608,7 @@ loadTools();
             ${homeMeta}
           </span>
         </span>
-        <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}">${safeEscape(statusTxt)}</span>` : ''}</span>
+        <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}" title="${safeEscape(r.historyOnly ? '本地草稿：之前在这台机器上配过 baseUrl 但 ~/.codex/config.toml 里已不存在该 provider。重新填一次 API Key 保存即可恢复。' : '')}">${safeEscape(statusTxt)}</span>` : ''}</span>
         <span class="ch-row-actions">${actions}
         </span>
       </div>`;
