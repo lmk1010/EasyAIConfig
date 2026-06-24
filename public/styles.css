@@ -26188,17 +26188,45 @@ body {
   padding: 0 !important;
 }
 .shell-v2 details.cfg-section.cfg-sec-active > .cfg-section-body {
-  max-width: 920px;
-  margin: 0 auto;
+  max-width: 100%;
+  margin: 0;
   padding: 0;
   display: grid;
-  gap: 28px;
+  gap: 22px;
 }
+/* 2 列时每列限宽，避免输入框横向铺到天边 */
 .shell-v2 details.cfg-section.cfg-sec-active .editor-grid,
 .shell-v2 details.cfg-section.cfg-sec-active .dense-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 22px 28px;
+  grid-template-columns: repeat(2, minmax(0, 360px));
+  gap: 20px 36px;
+  justify-content: start;
+}
+@media (max-width: 760px) {
+  .shell-v2 details.cfg-section.cfg-sec-active .editor-grid,
+  .shell-v2 details.cfg-section.cfg-sec-active .dense-grid {
+    grid-template-columns: minmax(0, 360px);
+  }
+}
+/* field-wide 还是 full-width，但封顶 720px */
+.shell-v2 details.cfg-section.cfg-sec-active .field-wide {
+  grid-column: 1 / -1;
+  max-width: 760px;
+}
+/* 输入控件本身也限宽，select/input 不能超过 cell */
+.shell-v2 details.cfg-section.cfg-sec-active .field input[type="text"],
+.shell-v2 details.cfg-section.cfg-sec-active .field input[type="number"],
+.shell-v2 details.cfg-section.cfg-sec-active .field input[type="url"],
+.shell-v2 details.cfg-section.cfg-sec-active .field input[type="search"],
+.shell-v2 details.cfg-section.cfg-sec-active .field select,
+.shell-v2 details.cfg-section.cfg-sec-active .field textarea {
+  width: 100%;
+  max-width: 360px;
+}
+.shell-v2 details.cfg-section.cfg-sec-active .field-wide input,
+.shell-v2 details.cfg-section.cfg-sec-active .field-wide textarea,
+.shell-v2 details.cfg-section.cfg-sec-active .field-wide select {
+  max-width: 760px;
 }
 
 /* field 不再嵌卡片：纯 label + input 排版，靠 gap 撑空间 */
@@ -26318,3 +26346,48 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
 }
+
+/* 子页面底部提示卡：填空白 + 给用户讲解每节作用 */
+.shell-v2 details.cfg-section.cfg-sec-active .cfg-tip-block {
+  margin-top: 6px;
+  padding: 16px 18px;
+  background: linear-gradient(140deg, rgba(91,140,255,0.06), rgba(91,140,255,0.01));
+  border: 1px solid rgba(91,140,255,0.14);
+  border-radius: 12px;
+  max-width: 760px;
+}
+[data-theme="light"] .shell-v2 details.cfg-section.cfg-sec-active .cfg-tip-block { border-color: rgba(91,140,255,0.2); background: linear-gradient(140deg, rgba(91,140,255,0.07), rgba(91,140,255,0.015)); }
+.shell-v2 .cfg-tip-head {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: #8dbdff;
+  margin-bottom: 8px;
+}
+[data-theme="light"] .shell-v2 .cfg-tip-head { color: #3358ff; }
+.shell-v2 .cfg-tip-intro { font-size: 0.74rem; color: var(--s2-text); line-height: 1.6; margin: 0 0 10px; font-weight: 540; }
+.shell-v2 .cfg-tip-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; }
+.shell-v2 .cfg-tip-list li {
+  padding-left: 20px;
+  font-size: 0.7rem;
+  color: var(--s2-muted);
+  line-height: 1.55;
+  position: relative;
+}
+.shell-v2 .cfg-tip-list li::before {
+  content: ''; position: absolute;
+  left: 4px; top: 0.55em;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: rgba(91,140,255,0.55);
+}
+.shell-v2 .cfg-tip-list strong { color: var(--s2-text); font-weight: 660; }
+.shell-v2 .cfg-tip-list em { font-style: normal; color: var(--s2-text); font-weight: 580; }
+.shell-v2 .cfg-tip-list code {
+  font-family: var(--font-mono-ui);
+  font-size: 0.62rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(91,140,255,0.1);
+  color: #8dbdff;
+}
+[data-theme="light"] .shell-v2 .cfg-tip-list code { color: #3358ff; }

@@ -12269,6 +12269,72 @@ function getCfgSectionsForTool(toolId) {
   return Array.from(root.querySelectorAll(':scope > details.cfg-section'));
 }
 
+const CFG_SECTION_TIPS = {
+  '模型与推理': {
+    intro: '这一节决定 codex 启动时默认走哪个模型 / 哪条线路，以及推理深度。',
+    bullets: [
+      '<strong>默认模型</strong>：会话开始时的兜底；运行中可用 <code>/model</code> 临时切换。',
+      '<strong>默认 Provider</strong>：API 线路的 key（来自 <code>~/.codex/config.toml</code> 的 <code>[model_providers]</code>）。OAuth 登录在用时此值被忽略。',
+      '<strong>推理强度</strong>：从 <em>none</em> 到 <em>xhigh</em>。xhigh 在复杂任务里多花 2–4 倍 reasoning token 换更深思考。',
+      '<strong>Plan 推理</strong>：仅当 codex 生成 plan（如 <code>/plan</code>）时使用，跟主回答可以分档。',
+    ],
+  },
+  '行为与审批': {
+    intro: '决定 codex 怎么执行 shell / 工具，以及什么动作要弹审批。',
+    bullets: [
+      '<strong>服务模式</strong>：OpenAI 官方 API 才有效，社区线路通常忽略。',
+      '<strong>审批策略</strong>：<code>untrusted</code> 最严格；<code>on-failure</code> 适合个人本机开发；<code>never</code> 危险但流畅。',
+      '<strong>沙箱模式</strong>：<code>workspace-write</code> 是黄金平衡；<code>danger-full-access</code> 等价于裸跑，慎用。',
+    ],
+  },
+  '上下文与性能': {
+    intro: '调上下文窗口、自动压缩阈值、单工具输出上限。',
+    bullets: [
+      '<strong>上下文大小</strong>：codex 实际可用约为设置值的 95%（≈ 258,400）。',
+      '<strong>自动压缩</strong>：会话 token 超过该阈值时自动 summarize 旧消息。建议 90% 上下文。',
+      '<strong>工具输出上限</strong>：单次工具调用回包的 byte 上限；留空则不限。',
+    ],
+  },
+  '路径与环境': {
+    intro: '指向 codex_home / projects 根目录等本地路径。',
+    bullets: [
+      '改 <code>codex_home</code> 等于切换整个配置仓库（含 sessions / OAuth tokens），慎用。',
+      '路径里可以用 <code>~</code> 代表 home。',
+    ],
+  },
+  '会话恢复': {
+    intro: '配置 codex 退出后下次启动时如何恢复上次会话。',
+    bullets: [
+      '<strong>experimental_resume</strong> 开启后，新启动会自动恢复最近的 session jsonl。',
+      '关闭则每次都是全新对话。',
+    ],
+  },
+  'Provider 与备份': {
+    intro: '管理 model_provider 列表 + 历史备份。',
+    bullets: [
+      '<strong>新增 Provider</strong>：在"连接配置"页面会更顺手。',
+      '配置每次保存自动备份到 <code>~/.codex-config-ui/backups/</code>。',
+    ],
+  },
+  '开关选项': {
+    intro: '一组开关：HUD、推理可见性、shell snapshot、是否关闭响应存储等。',
+    bullets: [
+      '<strong>隐藏推理过程</strong> 适合录屏分享；<strong>显示原始推理</strong> 适合调试 prompt。',
+      '<strong>关闭响应存储</strong> 会让 OpenAI 端不再保留这次 conversation。',
+      '<strong>启用 Shell Snapshot</strong>：开启后 codex 启动更快但首次冷启动慢一截。',
+      '<strong>紧凑提示模式</strong>：把系统提示压短，省 token，代价是部分 instruction 失效。',
+    ],
+  },
+  '指令': {
+    intro: '系统指令 / 基础指令，叠在 codex 自带 prompt 之前。',
+    bullets: [
+      '<strong>系统指令</strong>：全局生效；通常只在你想统一让所有项目走某条规则时填。',
+      '<strong>基础指令</strong>：附加到 codex 内置 instruction 后面；适合写"优先用工具而非 shell"这类项目无关的偏好。',
+      '太长的指令会吃上下文，建议 ≤ 200 字。',
+    ],
+  },
+};
+
 function buildCfgGrid(toolId) {
   const grid = document.getElementById('cfgGrid');
   if (!grid) return;
@@ -12279,6 +12345,27 @@ function buildCfgGrid(toolId) {
   }
   sections.forEach((sec, idx) => {
     if (!sec.id) sec.id = `cfgSec_${toolId}_${idx}`;
+    // 给 section 一次性挂上"关于这一节"的提示卡，子页打开时不会再空荡荡
+    const summary = sec.querySelector(':scope > summary.cfg-section-header');
+    const headingTxt = (summary?.textContent || '').replace(/\s+/g, ' ').trim().split(/[·：:|]/)[0].trim() || '配置';
+    const tip = CFG_SECTION_TIPS[headingTxt];
+    if (tip && !sec.querySelector(':scope > .cfg-section-body > .cfg-tip-block')) {
+      const body = sec.querySelector(':scope > .cfg-section-body');
+      if (body) {
+        const aside = document.createElement('aside');
+        aside.className = 'cfg-tip-block';
+        aside.innerHTML = `
+          <div class="cfg-tip-head">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 6v3M8 4.5h.01"/></svg>
+            关于 ${escapeHtml(headingTxt)}
+          </div>
+          <p class="cfg-tip-intro">${tip.intro}</p>
+          <ul class="cfg-tip-list">
+            ${tip.bullets.map((b) => `<li>${b}</li>`).join('')}
+          </ul>`;
+        body.appendChild(aside);
+      }
+    }
   });
 
   // 顶部 hero：当前关键值速览（模型 / provider / 推理强度 / 启用开关数）
