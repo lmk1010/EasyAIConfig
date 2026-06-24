@@ -17796,7 +17796,6 @@ function renderPdHeader(row) {
   const isCurrent = Boolean(row.isActive);
   const h = row.health || {};
   const summary = state.providerDetail.summary;
-  // 状态：OAuth 没意义，看探测结果优先；否则看缓存 health；最后看 row 标志
   let statusCls = 'muted', statusTxt = '未检测';
   if (isOauth && row.hasCredential) { statusCls = 'ok'; statusTxt = '已认证'; }
   else if (h.loading) { statusCls = 'warn'; statusTxt = '检测中'; }
@@ -17805,9 +17804,33 @@ function renderPdHeader(row) {
   else if (row.historyOnly) { statusCls = 'muted'; statusTxt = '本地草稿'; }
   else if (!row.hasCredential) { statusCls = 'warn'; statusTxt = '缺 Key'; }
   const uptime = summary?.uptimePct;
-  const uptimeChip = uptime != null
-    ? `<span class="pd-up-pill ${uptime >= 99 ? 'is-good' : uptime >= 90 ? 'is-warn' : 'is-bad'}" title="24h 可用率">${esc(`${uptime}%`)}</span>`
-    : '';
+  const upTier = uptime == null ? 'muted' : (uptime >= 99 ? 'is-good' : uptime >= 90 ? 'is-warn' : 'is-bad');
+  const avg = summary?.avgLatencyMs;
+  const p95 = summary?.p95LatencyMs;
+  const sucCount = Number(summary?.success || 0);
+  const failCount = Number(summary?.failure || 0);
+  const model = row.model || state.current?.summary?.model || '';
+
+  // 右侧 live panel：状态环 + 大字号 uptime + latency mini chips
+  const livePanel = `
+    <aside class="pd-head-live">
+      <div class="pd-live-orb ${upTier}">
+        <svg width="68" height="68" viewBox="0 0 68 68" aria-hidden="true">
+          <circle cx="34" cy="34" r="30" stroke="rgba(255,255,255,0.06)" stroke-width="4" fill="none"/>
+          ${uptime != null ? `<circle cx="34" cy="34" r="30" stroke="currentColor" stroke-width="4" fill="none"
+            stroke-dasharray="${(Math.PI * 60).toFixed(2)}" stroke-dashoffset="${(Math.PI * 60 * (1 - uptime / 100)).toFixed(2)}"
+            transform="rotate(-90 34 34)" stroke-linecap="round"/>` : ''}
+        </svg>
+        <div class="pd-live-orb-value">${uptime == null ? '—' : `${uptime}`}<sup>${uptime == null ? '' : '%'}</sup></div>
+      </div>
+      <div class="pd-live-stats">
+        <div class="pd-live-row"><span>24h</span><strong>${esc(String(sucCount))}<em> / ${esc(String(sucCount + failCount))}</em></strong></div>
+        <div class="pd-live-row"><span>平均</span><strong>${esc(fmtLatency(avg))}</strong></div>
+        <div class="pd-live-row"><span>p95</span><strong>${esc(fmtLatency(p95))}</strong></div>
+        ${model ? `<div class="pd-live-row"><span>模型</span><strong class="pd-live-model">${esc(model)}</strong></div>` : ''}
+      </div>
+    </aside>`;
+
   return `
     <header class="pd-head">
       <div class="pd-head-main">
@@ -17815,20 +17838,20 @@ function renderPdHeader(row) {
           <span class="pd-mode ${row.mode}">${esc(isOauth ? 'OAUTH' : 'API KEY')}</span>
           ${isCurrent ? '<span class="pd-current-pill">当前</span>' : ''}
           <span class="pd-status ${statusCls}">${esc(statusTxt)}</span>
-          ${uptimeChip}
         </div>
         <h2 class="pd-name">${esc(row.name || row.key)}</h2>
         ${row.baseUrl ? `<div class="pd-url">${esc(row.baseUrl)}</div>` : ''}
         ${row.homePath ? `<div class="pd-url pd-url-mono">${esc(`${row.homeLabel || 'HOME'}: ${row.homePath}`)}</div>` : ''}
+        <div class="pd-actions">
+          ${isCurrent
+            ? '<button type="button" class="pd-chip-btn is-current" disabled><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5L6.5 12L13 4.5"/></svg>已是当前</button>'
+            : '<button type="button" class="pd-chip-btn is-primary" data-pd-switch><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>切换为当前</button>'}
+          ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-chip-btn" data-pd-edit><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 13.5l3-1L13 5l-2-2-7.5 7.5z"/></svg>编辑</button>' : ''}
+          <button type="button" class="pd-chip-btn" data-pd-test><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l2 2M10 10l2 2M4 12l2-2M10 6l2-2"/></svg>立即重检</button>
+          ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-chip-btn is-danger" data-pd-delete><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M6 4V2.5h4V4M5 4l1 9h4l1-9"/></svg>删除</button>' : ''}
+        </div>
       </div>
-      <div class="pd-actions">
-        ${isCurrent
-          ? '<button type="button" class="pd-btn pd-btn-soft" disabled>已是当前</button>'
-          : '<button type="button" class="pd-btn pd-btn-primary" data-pd-switch>切换为当前</button>'}
-        ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-btn pd-btn-ghost" data-pd-edit>编辑</button>' : ''}
-        ${row.mode === 'codex' && row.tool === 'codex' ? '<button type="button" class="pd-btn pd-btn-ghost" data-pd-launch>启动</button>' : ''}
-        ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-btn pd-btn-ghost pd-btn-danger" data-pd-delete>删除</button>' : ''}
-      </div>
+      ${livePanel}
     </header>`;
 }
 
@@ -17988,6 +18011,10 @@ function renderPdOverview(row) {
     </div>`;
 }
 
+function pdNormalizeProviderKey(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
 function renderPdUsage(row) {
   const esc = escapeHtml;
   const codexMetrics = state.dashboardMetrics?.codex;
@@ -17998,21 +18025,22 @@ function renderPdUsage(row) {
         <p>正在从本地 sessions 聚合 token / 费用 / 模型分布。</p>
       </div>`;
   }
-  const lowerKey = String(row.key || '').toLowerCase();
-  const lowerName = String(row.name || '').toLowerCase();
-  // providers 数组里按 provider 字段匹配 row.key（codex 会话里写的 provider 就是 model_provider key）
+  // 宽松匹配：normalize 掉非字母数字再比，避免 'gpt-5-codex' vs 'gpt5codex' 之类差错；
+  // 同时 row.key 和 row.name 都拿来对比 provider 字段。
+  const normKey = pdNormalizeProviderKey(row.key);
+  const normName = pdNormalizeProviderKey(row.name);
+  const matchProvider = (p) => {
+    const pk = pdNormalizeProviderKey(p);
+    if (!pk) return false;
+    if (normKey && (pk === normKey || pk.includes(normKey) || normKey.includes(pk))) return true;
+    if (normName && (pk === normName || pk.includes(normName) || normName.includes(pk))) return true;
+    return false;
+  };
   const providers = Array.isArray(codexMetrics.providers) ? codexMetrics.providers : [];
-  const matched = providers.find((p) => {
-    const pk = String(p?.provider || '').toLowerCase();
-    return pk === lowerKey || pk.includes(lowerKey) || lowerKey.includes(pk) || (lowerName && pk === lowerName);
-  });
+  const matched = providers.find((p) => matchProvider(p?.provider));
 
-  // sessions 列表用同样规则筛
   const sessionList = Array.isArray(codexMetrics.sessions) ? codexMetrics.sessions : [];
-  const matchedSessions = sessionList.filter((s) => {
-    const sp = String(s?.provider || '').toLowerCase();
-    return sp === lowerKey || sp.includes(lowerKey) || lowerKey.includes(sp);
-  });
+  const matchedSessions = sessionList.filter((s) => matchProvider(s?.provider));
 
   // 全局 models 数组用来配价（codex 里 sessions provider 写的不一定带模型聚合，
   // 这里用 sessions 推断这个 provider 主要用了哪些模型）
@@ -18027,11 +18055,29 @@ function renderPdUsage(row) {
   const primaryPricing = typeof lookupModelPricing === 'function' ? lookupModelPricing(primaryModel) : null;
 
   if (!matched || !matched.totals) {
+    // 没匹配上 → 把本地 sessions 实际见到的 provider 列出来给用户看，
+    // 大概率是 row.key 和 codex 里写的 provider 字段拼写不一致。
+    const providerKeysSeen = providers
+      .map((p) => p?.provider || '')
+      .filter(Boolean)
+      .slice(0, 20);
+    const knownChips = providerKeysSeen.length
+      ? `<div class="pd-empty-known">
+          <div class="pd-empty-known-label">本地 sessions 里出现过的 provider</div>
+          <div class="pd-chip-row">
+            ${providerKeysSeen.map((p) => `<span class="pd-chip pd-chip-soft"><strong>${esc(p)}</strong><em>${esc(String(providers.find((q) => q.provider === p)?.events || 0))}</em></span>`).join('')}
+          </div>
+        </div>`
+      : '';
     return `
       <div class="pd-empty">
-        <div class="pd-empty-title-line">这个 provider 还没用过</div>
-        <p>${esc(row.name || row.key)} 在本地 codex sessions 里没有记录。切到该 provider 后启动 Codex 跑两句话就会有用量。</p>
-        ${row.isActive ? '' : '<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-switch>切换为当前</button>'}
+        <div class="pd-empty-title-line">没匹配到 ${esc(row.name || row.key)} 的会话</div>
+        <p>当前 row.key = <code class="pd-empty-code">${esc(row.key || '')}</code>，但本地 codex sessions 的 provider 字段写的是另一个名字。可能是 OAuth profile 隔离了 CODEX_HOME，也可能是历史会话用了不同的 model_provider key。</p>
+        ${knownChips}
+        <div class="pd-empty-actions">
+          ${row.isActive ? '' : '<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-switch>切换为当前</button>'}
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-test>立即重检</button>
+        </div>
       </div>`;
   }
 
