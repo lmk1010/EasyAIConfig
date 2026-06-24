@@ -25198,16 +25198,24 @@ body {
 .shell-v2 .pd-back-row { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
 .shell-v2 .pd-back {
   display: inline-flex; align-items: center; gap: 6px;
-  height: 32px !important; padding: 0 12px !important;
+  height: 32px !important; padding: 0 14px !important;
   background: rgba(255,255,255,0.04) !important; background-image: none !important;
   border: 1px solid rgba(255,255,255,0.08) !important;
   border-radius: 8px !important;
   color: var(--s2-text) !important;
   font-size: 0.72rem; font-weight: 580;
   cursor: pointer; box-shadow: none !important;
-  transition: background 120ms, transform 100ms;
+  transition: background 120ms, border-color 120ms, color 120ms;
 }
-.shell-v2 .pd-back:hover { background: rgba(91,140,255,0.12) !important; transform: translateX(-2px); }
+/* 整个按钮位移容易被左侧容器截断；改成只让 svg 内位移 */
+.shell-v2 .pd-back:hover {
+  background: rgba(91,140,255,0.12) !important;
+  border-color: rgba(91,140,255,0.3) !important;
+  color: #b5d0ff !important;
+  transform: none !important;
+}
+.shell-v2 .pd-back svg { transition: transform 140ms; }
+.shell-v2 .pd-back:hover svg { transform: translateX(-2px); }
 .shell-v2 .pd-back-crumb { font-size: 0.66rem; color: var(--s2-faint); letter-spacing: 0.04em; }
 .shell-v2 .pd-back-crumb strong { color: var(--s2-text); font-weight: 600; }
 [data-theme="light"] .shell-v2 .pd-back { background: rgba(15,23,42,0.04) !important; border-color: rgba(15,23,42,0.08) !important; color: #1e293b !important; }
@@ -26133,22 +26141,34 @@ body {
 .shell-v2 .cfg-subhead {
   display: flex; align-items: center; gap: 14px;
   margin: 8px 0 14px;
+  padding-left: 4px;   /* 给 back 按钮 hover 时的轻微位移留一点空间 */
 }
 .shell-v2 .cfg-subhead.hide { display: none; }
 .shell-v2 .cfg-back {
   display: inline-flex; align-items: center; gap: 6px;
-  height: 32px; padding: 0 12px;
+  height: 32px; padding: 0 14px;
   background: rgba(255,255,255,0.04); background-image: none;
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 8px;
   color: var(--s2-text);
   font-size: 0.72rem; font-weight: 580;
   cursor: pointer; box-shadow: none;
-  transition: background 120ms, transform 100ms;
+  transition: background 120ms, border-color 120ms, color 120ms;
 }
-.shell-v2 .cfg-back:hover { background: rgba(91,140,255,0.12); transform: translateX(-2px); }
+/* hover 不再用 translateX（会被左侧容器裁），改用色彩反馈 + 左侧 icon 滑入 */
+.shell-v2 .cfg-back:hover {
+  background: rgba(91,140,255,0.12);
+  border-color: rgba(91,140,255,0.32);
+  color: #b5d0ff;
+}
+.shell-v2 .cfg-back svg { transition: transform 140ms; }
+.shell-v2 .cfg-back:hover svg { transform: translateX(-2px); }
 [data-theme="light"] .shell-v2 .cfg-back { background: rgba(15,23,42,0.04); border-color: rgba(15,23,42,0.08); color: #1e293b; }
-[data-theme="light"] .shell-v2 .cfg-back:hover { background: rgba(91,140,255,0.1); }
+[data-theme="light"] .shell-v2 .cfg-back:hover {
+  background: rgba(91,140,255,0.1);
+  border-color: rgba(91,140,255,0.32);
+  color: #3358ff;
+}
 .shell-v2 .cfg-sub-crumb { font-size: 0.7rem; color: var(--s2-faint); letter-spacing: 0.02em; }
 .shell-v2 .cfg-sub-crumb em { font-style: normal; opacity: 0.5; margin: 0 4px; }
 .shell-v2 .cfg-sub-crumb strong { color: var(--s2-text); font-weight: 660; }
