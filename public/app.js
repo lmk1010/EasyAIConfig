@@ -75,6 +75,13 @@ const state = {
   toolLastPage: {},
   consoleTool: 'codex',
   dashboardTool: 'codex',
+  // 全局过滤器：按 provider key / model 名，'all' 表示不限。开关/菜单状态也放这。
+  dashboardFilter: {
+    provider: localStorage.getItem('easyaiconfig_dashboard_filter_provider') || 'all',
+    model: localStorage.getItem('easyaiconfig_dashboard_filter_model') || 'all',
+    providerOpen: false,
+    modelOpen: false,
+  },
   dashboardDays: Number(localStorage.getItem('easyaiconfig_dashboard_days') || 30) || 30,
   // 自定义日期范围（YYYY-MM-DD），null 表示用 dashboardDays。
   // 持久化到 localStorage：format 是 `${from}|${to}`，'|' 分隔。
@@ -6866,6 +6873,104 @@ function renderModelCostRows(models = [], totalTokens = 0) {
   </div>`;
 }
 
+// 按 provider / model 过滤 dashboard 数据。'all' 不过滤。
+// 输入是后端聚合好的 metrics（codex 或 opencode），输出是同样 shape
+// 但 totals/daily/sessions/models/providers 已按 filter 重算的对象。
+function applyDashboardFilter(metrics, filter, tool) {
+  if (!metrics) return metrics;
+  const wantProvider = filter?.provider || 'all';
+  const wantModel = filter?.model || 'all';
+  if (wantProvider === 'all' && wantModel === 'all') return metrics;
+  const sessions = Array.isArray(metrics.sessions) ? metrics.sessions : [];
+  const matchProvider = (p) => {
+    if (wantProvider === 'all') return true;
+    const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    return norm(p) === norm(wantProvider);
+  };
+  const matchModel = (m) => {
+    if (wantModel === 'all') return true;
+    return String(m || '').toLowerCase() === wantModel.toLowerCase();
+  };
+  const filteredSessions = sessions.filter((s) => matchProvider(s?.provider) && matchModel(s?.model));
+  // 重算 totals
+  const totals = { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0 };
+  for (const s of filteredSessions) {
+    totals.input += Number(s.input || 0);
+    totals.output += Number(s.output || 0);
+    totals.reasoning += Number(s.reasoning || 0);
+    totals.cachedInput += Number(s.cachedInput || s.cacheRead || 0);
+    totals.cacheRead += Number(s.cacheRead || 0);
+    totals.cacheCreation += Number(s.cacheCreation || 0);
+    totals.total += Number(s.total || 0);
+  }
+  // 重算 daily：按日期分桶
+  const dailyMap = new Map();
+  for (const s of filteredSessions) {
+    const day = (s.lastActiveAt || s.startedAt || '').slice(0, 10);
+    if (!day) continue;
+    const bucket = dailyMap.get(day) || { date: day, input: 0, output: 0, reasoning: 0, cachedInput: 0, total: 0 };
+    bucket.input += Number(s.input || 0);
+    bucket.output += Number(s.output || 0);
+    bucket.reasoning += Number(s.reasoning || 0);
+    bucket.cachedInput += Number(s.cachedInput || s.cacheRead || 0);
+    bucket.total += Number(s.total || 0);
+    dailyMap.set(day, bucket);
+  }
+  const daily = [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+  // 重算 providers（聚合到当前筛选下还剩谁）
+  const provMap = new Map();
+  for (const s of filteredSessions) {
+    const k = s.provider || 'unknown';
+    const cur = provMap.get(k) || { provider: k, events: 0, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, total: 0 } };
+    cur.events++;
+    cur.totals.input += Number(s.input || 0);
+    cur.totals.output += Number(s.output || 0);
+    cur.totals.reasoning += Number(s.reasoning || 0);
+    cur.totals.cachedInput += Number(s.cachedInput || s.cacheRead || 0);
+    cur.totals.total += Number(s.total || 0);
+    provMap.set(k, cur);
+  }
+  const providers = [...provMap.values()].sort((a, b) => b.totals.total - a.totals.total);
+  // 重算 models
+  const modelMap = new Map();
+  for (const s of filteredSessions) {
+    const k = s.model || 'unknown';
+    const cur = modelMap.get(k) || { model: k, events: 0, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, total: 0 } };
+    cur.events++;
+    cur.totals.input += Number(s.input || 0);
+    cur.totals.output += Number(s.output || 0);
+    cur.totals.reasoning += Number(s.reasoning || 0);
+    cur.totals.cachedInput += Number(s.cachedInput || s.cacheRead || 0);
+    cur.totals.total += Number(s.total || 0);
+    modelMap.set(k, cur);
+  }
+  const models = [...modelMap.values()].sort((a, b) => b.totals.total - a.totals.total);
+  return {
+    ...metrics,
+    totals,
+    daily,
+    providers,
+    sessions: filteredSessions,
+    models,
+    _filtered: true,
+    _filterTool: tool,
+  };
+}
+
+function getDashboardFilterOptions(metrics) {
+  const sessions = Array.isArray(metrics?.sessions) ? metrics.sessions : [];
+  const provSet = new Set();
+  const modelSet = new Set();
+  for (const s of sessions) {
+    if (s.provider) provSet.add(s.provider);
+    if (s.model) modelSet.add(s.model);
+  }
+  return {
+    providers: [...provSet].sort(),
+    models: [...modelSet].sort(),
+  };
+}
+
 function renderDashboardPage() {
   const root = el('dashboardPage');
   if (!root) return;
@@ -6873,8 +6978,11 @@ function renderDashboardPage() {
   const codex = state.current || {};
   const claude = state.claudeCodeState || {};
   const openclaw = state.openclawState || {};
-  const codexMetrics = state.dashboardMetrics.codex || { totals: { input: 0, cachedInput: 0, output: 0, reasoning: 0, total: 0 }, daily: [], providers: [], sessions: [], models: [] };
-  const opencodeMetrics = state.dashboardMetrics.opencode || { totals: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0 }, daily: [], providers: [], sessions: [], models: [] };
+  const codexMetricsRaw = state.dashboardMetrics.codex || { totals: { input: 0, cachedInput: 0, output: 0, reasoning: 0, total: 0 }, daily: [], providers: [], sessions: [], models: [] };
+  const opencodeMetricsRaw = state.dashboardMetrics.opencode || { totals: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0 }, daily: [], providers: [], sessions: [], models: [] };
+  // 过滤后的数据：除 codex / opencode 之外的 tool 不参与过滤
+  const codexMetrics = applyDashboardFilter(codexMetricsRaw, state.dashboardFilter, 'codex');
+  const opencodeMetrics = applyDashboardFilter(opencodeMetricsRaw, state.dashboardFilter, 'opencode');
   const openclawChannels = getOpenClawConsoleChannels(openclaw.config || {});
   const openclawProviders = getOpenClawConsoleProviders(openclaw.config || {});
   const dashboardTool = state.dashboardTool || 'codex';
@@ -7390,6 +7498,8 @@ function renderDashboardPage() {
         </div>
         <div class="db3-toolbar-actions">
           ${dashboardTool === 'claudecode' ? renderClaudeScopeDropdown() : ''}
+          ${(dashboardTool === 'codex' || dashboardTool === 'opencode') ? renderDashboardProviderFilter(dashboardTool === 'codex' ? codexMetricsRaw : opencodeMetricsRaw) : ''}
+          ${(dashboardTool === 'codex' || dashboardTool === 'opencode') ? renderDashboardModelFilter(dashboardTool === 'codex' ? codexMetricsRaw : opencodeMetricsRaw) : ''}
           <span class="db2-period-wrap">
             <div class="db2-period-dropdown ${state.dashboardPeriodOpen ? 'open' : ''}" data-period-dropdown>
               <button type="button" class="db2-period-trigger" data-period-trigger>${escapeHtml(winLabel)} <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
@@ -7412,6 +7522,46 @@ function renderDashboardPage() {
       ${content}
     </div>
   `;
+}
+
+function renderDashboardProviderFilter(metrics) {
+  const opts = getDashboardFilterOptions(metrics);
+  const current = state.dashboardFilter.provider || 'all';
+  const open = Boolean(state.dashboardFilter.providerOpen);
+  if (!opts.providers.length) return '';
+  const label = current === 'all' ? '全部 Provider' : current;
+  return `
+    <span class="db2-period-wrap">
+      <div class="db2-period-dropdown ${open ? 'open' : ''}" data-dashboard-filter="provider">
+        <button type="button" class="db2-period-trigger" data-dashboard-filter-trigger="provider" title="按 provider 筛选 (基于 session.provider 字段)">${escapeHtml(label)}<svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
+        <div class="db2-period-menu" data-dashboard-filter-menu="provider">
+          <div class="db2-period-presets">
+            <button type="button" class="db2-period-option ${current === 'all' ? 'active' : ''}" data-dashboard-filter-value="provider:all">全部 Provider</button>
+            ${opts.providers.map((p) => `<button type="button" class="db2-period-option ${current === p ? 'active' : ''}" data-dashboard-filter-value="provider:${escapeHtml(p)}">${escapeHtml(p)}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+    </span>`;
+}
+
+function renderDashboardModelFilter(metrics) {
+  const opts = getDashboardFilterOptions(metrics);
+  const current = state.dashboardFilter.model || 'all';
+  const open = Boolean(state.dashboardFilter.modelOpen);
+  if (!opts.models.length) return '';
+  const label = current === 'all' ? '全部模型' : current;
+  return `
+    <span class="db2-period-wrap">
+      <div class="db2-period-dropdown ${open ? 'open' : ''}" data-dashboard-filter="model">
+        <button type="button" class="db2-period-trigger" data-dashboard-filter-trigger="model" title="按 model 筛选 (基于 session.model 字段)">${escapeHtml(label)}<svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
+        <div class="db2-period-menu" data-dashboard-filter-menu="model">
+          <div class="db2-period-presets">
+            <button type="button" class="db2-period-option ${current === 'all' ? 'active' : ''}" data-dashboard-filter-value="model:all">全部模型</button>
+            ${opts.models.map((m) => `<button type="button" class="db2-period-option ${current === m ? 'active' : ''}" data-dashboard-filter-value="model:${escapeHtml(m)}">${escapeHtml(m)}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+    </span>`;
 }
 
 // 账号筛选下拉:当 claudecode state 里有 availableScopes(>=2 个账号)时渲染,
@@ -22048,6 +22198,41 @@ function bindEvents() {
         state.rangePicker = null; // 每次打开都按最新 dashboardRange 重置草稿
         ensureRangePicker();
       }
+      state.dashboardFilter.providerOpen = false;
+      state.dashboardFilter.modelOpen = false;
+      renderDashboardPage();
+      return;
+    }
+    // Provider / Model filter 触发器
+    const filterTrigger = e.target.closest('[data-dashboard-filter-trigger]');
+    if (filterTrigger) {
+      const which = filterTrigger.dataset.dashboardFilterTrigger;
+      if (which === 'provider') {
+        state.dashboardFilter.providerOpen = !state.dashboardFilter.providerOpen;
+        state.dashboardFilter.modelOpen = false;
+        state.dashboardPeriodOpen = false;
+      } else if (which === 'model') {
+        state.dashboardFilter.modelOpen = !state.dashboardFilter.modelOpen;
+        state.dashboardFilter.providerOpen = false;
+        state.dashboardPeriodOpen = false;
+      }
+      renderDashboardPage();
+      return;
+    }
+    const filterValue = e.target.closest('[data-dashboard-filter-value]');
+    if (filterValue) {
+      const raw = filterValue.dataset.dashboardFilterValue || '';
+      const [kind, ...rest] = raw.split(':');
+      const value = rest.join(':') || 'all';
+      if (kind === 'provider') {
+        state.dashboardFilter.provider = value;
+        localStorage.setItem('easyaiconfig_dashboard_filter_provider', value);
+        state.dashboardFilter.providerOpen = false;
+      } else if (kind === 'model') {
+        state.dashboardFilter.model = value;
+        localStorage.setItem('easyaiconfig_dashboard_filter_model', value);
+        state.dashboardFilter.modelOpen = false;
+      }
       renderDashboardPage();
       return;
     }
@@ -22133,13 +22318,15 @@ function bindEvents() {
       return;
     }
     // 点菜单/日历本体别冒泡到外部关闭
-    if (e.target.closest('[data-period-menu]')) {
+    if (e.target.closest('[data-period-menu]') || e.target.closest('[data-dashboard-filter-menu]')) {
       return;
     }
     // 点外部 → 关菜单
-    if (state.dashboardPeriodOpen) {
+    if (state.dashboardPeriodOpen || state.dashboardFilter.providerOpen || state.dashboardFilter.modelOpen) {
       state.dashboardPeriodOpen = false;
       state.rangePicker = null;
+      state.dashboardFilter.providerOpen = false;
+      state.dashboardFilter.modelOpen = false;
       renderDashboardPage();
     }
     const refreshBtn = e.target.closest('[data-dashboard-refresh]');
