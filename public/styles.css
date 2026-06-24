@@ -25513,3 +25513,31 @@ body {
 [data-theme="light"] .shell-v2 .ch-row-uptime.is-good { color: #15803d; }
 [data-theme="light"] .shell-v2 .ch-row-uptime.is-bad { color: #b91c1c; }
 [data-theme="light"] .shell-v2 .ch-row-uptime.is-warn { color: #b45309; }
+
+/* ─── Usage tab：费用 hero + Token 构成 ─────────────────────── */
+.shell-v2 .pd-stat-mini-hero {
+  background: linear-gradient(140deg, rgba(91,140,255,0.16), rgba(91,140,255,0.04));
+  border-color: rgba(91,140,255,0.32);
+  box-shadow: 0 6px 18px rgba(91,140,255,0.18);
+}
+.shell-v2 .pd-cost-hero { font-size: 1.4rem !important; color: #8dbdff !important; font-weight: 720 !important; letter-spacing: -0.01em; }
+[data-theme="light"] .shell-v2 .pd-cost-hero { color: #3358ff !important; }
+.shell-v2 .pd-stat-mini-sub { font-size: 0.58rem; color: var(--s2-faint); margin-top: 3px; font-weight: 500; }
+
+.shell-v2 .pd-split-bar { display: grid; gap: 10px; }
+.shell-v2 .pd-split-track {
+  display: flex; height: 14px; border-radius: 999px; overflow: hidden;
+  background: rgba(255,255,255,0.05);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+}
+[data-theme="light"] .shell-v2 .pd-split-track { background: rgba(15,23,42,0.06); }
+.shell-v2 .pd-split-seg { display: block; height: 100%; transition: width 240ms ease; }
+.shell-v2 .pd-split-seg:first-child { border-radius: 999px 0 0 999px; }
+.shell-v2 .pd-split-seg:last-child { border-radius: 0 999px 999px 0; }
+
+.shell-v2 .pd-split-legend { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 16px; }
+.shell-v2 .pd-split-legend-item { display: inline-flex; align-items: baseline; gap: 6px; font-size: 0.66rem; color: var(--s2-text); }
+.shell-v2 .pd-split-legend-item em { font-style: normal; width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex-shrink: 0; transform: translateY(1px); }
+.shell-v2 .pd-split-legend-item strong { font-weight: 600; color: var(--s2-text); }
+.shell-v2 .pd-split-legend-item code { font-family: var(--font-mono-ui); font-size: 0.62rem; color: var(--s2-muted); margin-left: auto; }
+.shell-v2 .pd-split-legend-item i { font-style: normal; font-size: 0.6rem; color: var(--s2-faint); font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }

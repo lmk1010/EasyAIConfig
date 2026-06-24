@@ -17688,12 +17688,28 @@ function openProviderDetail(key) {
   ensureProviderDetailEvents();
   // 先 render 让骨架立刻显示，避免空白闪烁
   renderProviderDetail();
-  // 滑入动画：next frame 加 .open
   requestAnimationFrame(() => requestAnimationFrame(() => detail?.classList.add('is-in')));
-  // 异步拉真数据
+  // 异步拉真数据：probe history + dashboard metrics
   const row = lookupProviderDetailRow();
   if (row && row.mode === 'apikey') {
-    fetchProviderProbeData(row).catch(() => {});
+    (async () => {
+      await fetchProviderProbeData(row).catch(() => {});
+      // 若 24h 内一条探测都没有 → 自动跑一次，让 uptime 不再空白
+      const t = Number(state.providerDetail.summary?.total || 0);
+      if (t === 0 && row.hasCredential && row.baseUrl) {
+        await actionPdRunTest().catch(() => {});
+      }
+    })();
+  }
+  // 用量数据从 dashboard metrics 来，没就拉一次
+  fetchDashboardMetricsForDetail().catch(() => {});
+}
+
+async function fetchDashboardMetricsForDetail() {
+  if (state.dashboardMetrics?.codex) return;
+  if (typeof refreshDashboardData === 'function') {
+    await refreshDashboardData({ force: false, silent: true, tool: 'codex' });
+    renderProviderDetail();
   }
 }
 
@@ -17974,81 +17990,183 @@ function renderPdOverview(row) {
 
 function renderPdUsage(row) {
   const esc = escapeHtml;
-  const stats = window.__consoleV3?.codexStats;
-  const lower = String(row.key || '').toLowerCase();
-  const recent = Array.isArray(stats?.recent) ? stats.recent : [];
-  const matched = recent.filter((r) => {
-    const p = String(r?.provider || '').toLowerCase();
-    return p === lower || p.includes(lower) || lower.includes(p);
-  });
-  if (!stats) {
+  const codexMetrics = state.dashboardMetrics?.codex;
+  if (!codexMetrics) {
     return `
       <div class="pd-empty">
-        <div class="pd-empty-title-line">还没扫描本地会话</div>
-        <p>切到 <strong>运行控制台</strong> 触发一次扫描，回来就能看到 ${esc(row.name || row.key)} 的用量。</p>
+        <div class="pd-empty-title-line">用量数据加载中…</div>
+        <p>正在从本地 sessions 聚合 token / 费用 / 模型分布。</p>
       </div>`;
   }
-  if (matched.length === 0) {
+  const lowerKey = String(row.key || '').toLowerCase();
+  const lowerName = String(row.name || '').toLowerCase();
+  // providers 数组里按 provider 字段匹配 row.key（codex 会话里写的 provider 就是 model_provider key）
+  const providers = Array.isArray(codexMetrics.providers) ? codexMetrics.providers : [];
+  const matched = providers.find((p) => {
+    const pk = String(p?.provider || '').toLowerCase();
+    return pk === lowerKey || pk.includes(lowerKey) || lowerKey.includes(pk) || (lowerName && pk === lowerName);
+  });
+
+  // sessions 列表用同样规则筛
+  const sessionList = Array.isArray(codexMetrics.sessions) ? codexMetrics.sessions : [];
+  const matchedSessions = sessionList.filter((s) => {
+    const sp = String(s?.provider || '').toLowerCase();
+    return sp === lowerKey || sp.includes(lowerKey) || lowerKey.includes(sp);
+  });
+
+  // 全局 models 数组用来配价（codex 里 sessions provider 写的不一定带模型聚合，
+  // 这里用 sessions 推断这个 provider 主要用了哪些模型）
+  const sessionModelCounts = new Map();
+  matchedSessions.forEach((s) => {
+    if (s.model) sessionModelCounts.set(s.model, (sessionModelCounts.get(s.model) || 0) + 1);
+  });
+  const topModels = [...sessionModelCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  const primaryModel = topModels[0]?.[0] || row.model || '';
+  const primaryPricing = typeof lookupModelPricing === 'function' ? lookupModelPricing(primaryModel) : null;
+
+  if (!matched || !matched.totals) {
     return `
       <div class="pd-empty">
-        <div class="pd-empty-title-line">没有匹配的本地会话</div>
-        <p>${esc(row.name || row.key)} 还没在 codex 里跑过会话；切到该 provider 后启动 Codex 就会有记录。</p>
+        <div class="pd-empty-title-line">这个 provider 还没用过</div>
+        <p>${esc(row.name || row.key)} 在本地 codex sessions 里没有记录。切到该 provider 后启动 Codex 跑两句话就会有用量。</p>
         ${row.isActive ? '' : '<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-switch>切换为当前</button>'}
       </div>`;
   }
-  // 计算简单聚合
-  const totalMsgs = matched.reduce((a, r) => a + (Number(r.messageCount) || 0), 0);
-  const models = new Map();
-  matched.forEach((r) => {
-    const m = r.model || 'unknown';
-    models.set(m, (models.get(m) || 0) + 1);
-  });
-  const modelChips = [...models.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([m, c]) => `<span class="pd-chip"><strong>${esc(m)}</strong><em>${esc(String(c))}</em></span>`)
-    .join('');
+
+  const totals = matched.totals || {};
+  const input = Number(totals.input || 0);
+  const cached = Number(totals.cachedInput || totals.cacheRead || 0);
+  const output = Number(totals.output || 0);
+  const reasoning = Number(totals.reasoning || 0);
+  const grandTotal = Number(totals.total || input + output + reasoning);
+  const events = Number(matched.events || 0);
+
+  // 总用量在所有 provider 里占比
+  const allTotal = providers.reduce((a, p) => a + Number(p?.totals?.total || 0), 0);
+  const sharePct = allTotal > 0 ? Math.round(grandTotal / allTotal * 1000) / 10 : 0;
+
+  // 费用：用 primary 模型单价拟合（OpenAI: input 含 cached 要扣）
+  let estCostUsd = null;
+  if (primaryPricing) {
+    const provider = primaryPricing.provider || 'openai';
+    let inCost, outCost, cacheCost = 0, writeCost = 0;
+    if (provider === 'anthropic') {
+      inCost = (input / 1e6) * primaryPricing.input;
+      outCost = ((output + reasoning) / 1e6) * primaryPricing.output;
+      cacheCost = (cached / 1e6) * primaryPricing.cached;
+    } else {
+      const nonCached = Math.max(0, input - cached);
+      inCost = (nonCached / 1e6) * primaryPricing.input;
+      outCost = ((output + reasoning) / 1e6) * primaryPricing.output;
+      cacheCost = (cached / 1e6) * primaryPricing.cached;
+    }
+    estCostUsd = inCost + outCost + cacheCost + writeCost;
+  }
+
+  const fmtM = (v) => (typeof formatDashboardMetric === 'function') ? formatDashboardMetric(v) : String(v);
+  const fmtUsd = (v) => (typeof formatDashboardUsd === 'function') ? formatDashboardUsd(v, { min: 2, max: 2 }) : ('$' + (v || 0).toFixed(2));
+
+  // 模型 chip：用 sessions 推断 + 单价
+  const modelChips = topModels.map(([m, count]) => {
+    const pricing = typeof lookupModelPricing === 'function' ? lookupModelPricing(m) : null;
+    const rate = pricing ? `${fmtUsd(pricing.input)}/${fmtUsd(pricing.output)}` : '—';
+    return `<span class="pd-chip" title="输入 ${rate.split('/')[0]} · 输出 ${rate.split('/')[1]}"><strong>${esc(m)}</strong><em>${esc(String(count))} 次</em></span>`;
+  }).join('');
+
   return `
     <div class="pd-usage">
       <div class="pd-stat-rail">
-        <div class="pd-stat-mini">
-          <div class="pd-stat-mini-label">本地会话</div>
-          <div class="pd-stat-mini-value">${esc(String(matched.length))}</div>
+        <div class="pd-stat-mini pd-stat-mini-hero">
+          <div class="pd-stat-mini-label">预估费用</div>
+          <div class="pd-stat-mini-value pd-cost-hero">${esc(estCostUsd == null ? '—' : fmtUsd(estCostUsd))}</div>
+          <div class="pd-stat-mini-sub">${primaryModel ? `按 ${esc(primaryModel)} 单价拟合` : '缺主模型单价'}</div>
         </div>
         <div class="pd-stat-mini">
-          <div class="pd-stat-mini-label">消息总数</div>
-          <div class="pd-stat-mini-value">${esc(formatDashboardMetric ? formatDashboardMetric(totalMsgs) : String(totalMsgs))}</div>
+          <div class="pd-stat-mini-label">总 Token</div>
+          <div class="pd-stat-mini-value">${esc(fmtM(grandTotal))}</div>
+          <div class="pd-stat-mini-sub">${esc(String(events))} 次调用</div>
         </div>
         <div class="pd-stat-mini">
-          <div class="pd-stat-mini-label">使用模型</div>
-          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(String(models.size))} 种</div>
+          <div class="pd-stat-mini-label">输入 / 缓存</div>
+          <div class="pd-stat-mini-value">${esc(fmtM(input))}</div>
+          <div class="pd-stat-mini-sub">命中缓存 ${esc(fmtM(cached))}</div>
         </div>
         <div class="pd-stat-mini">
-          <div class="pd-stat-mini-label">最近</div>
-          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(formatRelativeTime(matched[0]?.lastActiveAt) || '—')}</div>
+          <div class="pd-stat-mini-label">输出 / 推理</div>
+          <div class="pd-stat-mini-value">${esc(fmtM(output + reasoning))}</div>
+          <div class="pd-stat-mini-sub">${reasoning ? `推理 ${esc(fmtM(reasoning))}` : '占全部 ' + sharePct + '%'}</div>
         </div>
       </div>
-      ${modelChips ? `
-        <div class="pd-section">
-          <div class="pd-section-title">模型分布</div>
-          <div class="pd-chip-row">${modelChips}</div>
-        </div>` : ''}
+
       <div class="pd-section">
         <div class="pd-section-title">
-          <span>最近会话</span>
-          <span class="pd-section-meta">展示前 ${esc(String(Math.min(8, matched.length)))}</span>
+          <span>Token 构成</span>
+          <span class="pd-section-meta">${esc(sharePct + '%')} of all codex</span>
         </div>
-        <div class="pd-session-list">
-          ${matched.slice(0, 8).map((r) => `
-            <div class="pd-session">
-              <div class="pd-session-title">${esc((r.firstMessage || '').trim().slice(0, 140) || '(无用户消息)')}</div>
-              <div class="pd-session-meta">
-                ${r.model ? `<span class="pd-session-model">${esc(r.model)}</span>` : ''}
-                <span>${esc(String(r.messageCount || 0))} 条</span>
-                <span>${esc(formatRelativeTime(r.lastActiveAt))}</span>
-              </div>
-            </div>`).join('')}
-        </div>
+        ${renderPdTokenSplitBar({ input, cached, output, reasoning })}
+      </div>
+
+      ${modelChips ? `
+        <div class="pd-section">
+          <div class="pd-section-title">
+            <span>使用模型</span>
+            <span class="pd-section-meta">单价 USD / 1M tokens</span>
+          </div>
+          <div class="pd-chip-row">${modelChips}</div>
+        </div>` : ''}
+
+      ${matchedSessions.length ? `
+        <div class="pd-section">
+          <div class="pd-section-title">
+            <span>最近会话</span>
+            <span class="pd-section-meta">${esc(String(Math.min(8, matchedSessions.length)))} / ${esc(String(matchedSessions.length))}</span>
+          </div>
+          <div class="pd-session-list">
+            ${matchedSessions.slice(0, 8).map((s) => {
+              const totalTokens = Number(s.total || 0);
+              return `
+              <div class="pd-session">
+                <div class="pd-session-title">${esc((s.firstMessage || '').trim().slice(0, 140) || (s.sessionId ? `session ${s.sessionId}` : '(无标题)'))}</div>
+                <div class="pd-session-meta">
+                  ${s.model ? `<span class="pd-session-model">${esc(s.model)}</span>` : ''}
+                  ${totalTokens ? `<span>${esc(fmtM(totalTokens))} tokens</span>` : ''}
+                  ${s.messageCount ? `<span>${esc(String(s.messageCount))} 条</span>` : ''}
+                  <span>${esc(formatRelativeTime(s.lastActiveAt || s.updatedAt))}</span>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>` : ''}
+    </div>`;
+}
+
+function renderPdTokenSplitBar({ input = 0, cached = 0, output = 0, reasoning = 0 }) {
+  // 防止 input 双计：input_tokens 字段在 OpenAI 是含 cached 的
+  const nonCached = Math.max(0, input - cached);
+  const buckets = [
+    { label: '非缓存输入', value: nonCached, color: '#5b8cff' },
+    { label: '缓存命中',  value: cached,    color: '#22c55e' },
+    { label: '输出',      value: output,    color: '#a855f7' },
+    { label: '推理',      value: reasoning, color: '#fb923c' },
+  ];
+  const sum = buckets.reduce((a, b) => a + b.value, 0) || 1;
+  return `
+    <div class="pd-split-bar">
+      <div class="pd-split-track">
+        ${buckets.map((b) => b.value > 0
+          ? `<span class="pd-split-seg" style="width:${(b.value / sum * 100).toFixed(2)}%; background:${b.color}" title="${escapeHtml(b.label)} ${escapeHtml(formatDashboardMetric ? formatDashboardMetric(b.value) : String(b.value))}"></span>`
+          : '').join('')}
+      </div>
+      <div class="pd-split-legend">
+        ${buckets.map((b) => `
+          <span class="pd-split-legend-item">
+            <em style="background:${b.color}"></em>
+            <strong>${escapeHtml(b.label)}</strong>
+            <code>${escapeHtml(formatDashboardMetric ? formatDashboardMetric(b.value) : String(b.value))}</code>
+            <i>${((b.value / sum) * 100).toFixed(b.value / sum < 0.05 ? 1 : 0)}%</i>
+          </span>`).join('')}
       </div>
     </div>`;
 }
