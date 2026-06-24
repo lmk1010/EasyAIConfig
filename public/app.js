@@ -17732,6 +17732,9 @@ function closeProviderDetail() {
   }
   if (hub) hub.classList.remove('ch-detail-on');
   state.providerDetail.open = false;
+  // 清空缓存签名，确保下次打开走完整 render（否则 sig 命中会跳过 innerHTML）
+  pdLastRenderSig = '';
+  pdLastTab = '';
 }
 
 async function fetchProviderProbeData(row) {
@@ -17755,11 +17758,39 @@ async function fetchProviderProbeData(row) {
   }
 }
 
-function renderProviderDetail() {
+function pdComputeRenderSig(row) {
+  if (!row) return 'empty';
+  const pd = state.providerDetail;
+  const sum = pd.summary;
+  const histLen = Array.isArray(pd.history?.rows) ? pd.history.rows.length : 0;
+  // 这些字段一致就不重画 → 这是去闪烁的关键
+  return [
+    row.key,
+    row.isActive ? 1 : 0,
+    row.hasCredential ? 1 : 0,
+    row.mode,
+    row.health?.ok ? 'h-ok' : row.health?.checked ? 'h-bad' : row.health?.loading ? 'h-load' : 'h-none',
+    pd.tab,
+    sum?.uptimePct ?? '-',
+    sum?.total ?? 0,
+    sum?.avgLatencyMs ?? '-',
+    sum?.p95LatencyMs ?? '-',
+    histLen,
+    pd.testRunning ? 'tr' : (pd.testResult?.ok ? 'tk' : pd.testResult?.error ? 'te' : 'tn'),
+    pd.usageRefreshing ? 'ur' : 'us',
+    pd.loading ? 'l' : '',
+    state.dashboardMetrics?.codex ? 'dm' : 'dn',
+  ].join('|');
+}
+
+let pdLastRenderSig = '';
+let pdLastTab = '';
+function renderProviderDetail(options = {}) {
   const container = document.getElementById('chDetail');
   if (!container) return;
   const row = lookupProviderDetailRow();
   if (!row) {
+    pdLastRenderSig = 'empty';
     container.innerHTML = `
       <div class="pd-back-row">
         <button type="button" class="pd-back" data-pd-back>
@@ -17772,6 +17803,12 @@ function renderProviderDetail() {
       </div>`;
     return;
   }
+  // 计算签名：跟上次一样就跳过整个 innerHTML 重建 → 不闪
+  const sig = pdComputeRenderSig(row);
+  if (!options.force && sig === pdLastRenderSig) return;
+  const tabChanged = state.providerDetail.tab !== pdLastTab;
+  pdLastRenderSig = sig;
+  pdLastTab = state.providerDetail.tab;
   const tab = state.providerDetail.tab || 'overview';
   const tabs = [
     { id: 'overview', label: '概览' },
@@ -17779,6 +17816,8 @@ function renderProviderDetail() {
     { id: 'test',     label: '测试' },
     { id: 'health',   label: '健康' },
   ];
+  // .pd-tab-anim 只在 tab 真切换 / 首次打开时加，平时数据刷新不再播 220ms 动画
+  const animClass = tabChanged ? ' pd-tab-anim' : '';
   container.innerHTML = `
     <div class="pd-back-row">
       <button type="button" class="pd-back" data-pd-back>
@@ -17794,7 +17833,7 @@ function renderProviderDetail() {
           ${escapeHtml(t.label)}
         </button>`).join('')}
     </nav>
-    <section class="pd-tab-content pd-tab-${tab}">
+    <section class="pd-tab-content${animClass} pd-tab-${tab}">
       ${renderPdTab(tab, row)}
     </section>
   `;

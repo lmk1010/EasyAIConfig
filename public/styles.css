@@ -24918,8 +24918,7 @@ body {
 .pd-tab-content::-webkit-scrollbar { width: 8px; }
 .pd-tab-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
 .pd-tab-content::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
-.pd-tab-content > * { animation: pdFadeIn 220ms ease both; }
-@keyframes pdFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.pd-tab-content.pd-tab-anim > * { animation: pdFadeIn 220ms ease both; }
 
 /* Stat grid */
 .pd-stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
@@ -25386,9 +25385,11 @@ body {
 .shell-v2 .pd-tab.is-active::after { content: ''; position: absolute; left: 16px; right: 16px; bottom: -1px; height: 2px; background: linear-gradient(90deg, #6b86ff, #3358ff); border-radius: 2px; box-shadow: 0 2px 8px rgba(91,140,255,0.4); }
 [data-theme="light"] .shell-v2 .pd-tab.is-active { color: #3358ff !important; }
 
-/* Tab content */
+/* Tab content
+   只在切 tab 的瞬间才 fade-in，平时数据刷新不要重播动画——之前
+   "数据回来→重画→重播 220ms 动画" 是闪烁的主因。 */
 .shell-v2 .pd-tab-content { padding: 22px 4px 32px; }
-.shell-v2 .pd-tab-content > * { animation: pdFadeIn 220ms ease both; }
+.shell-v2 .pd-tab-content.pd-tab-anim > * { animation: pdFadeIn 220ms ease both; }
 @keyframes pdFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* Battery bar */
@@ -25445,8 +25446,17 @@ body {
 }
 .shell-v2 .pd-bat-cell.is-empty { background: rgba(255,255,255,0.04); }
 .shell-v2 .pd-bat-cell:hover { transform: scaleY(1.1); }
-[data-theme="light"] .shell-v2 .pd-bat-cell { background: rgba(15,23,42,0.05); }
+/* 浅色：只覆盖未探测格子，保留 is-ok / is-bad 的渐变 */
+[data-theme="light"] .shell-v2 .pd-bat-cell:not(.is-ok):not(.is-bad) { background: rgba(15,23,42,0.06); }
 [data-theme="light"] .shell-v2 .pd-bat-cell.is-empty { background: rgba(15,23,42,0.04); }
+[data-theme="light"] .shell-v2 .pd-bat-cell.is-ok {
+  background: linear-gradient(180deg, #34d399, #15803d) !important;
+  box-shadow: 0 0 0 1px rgba(21,128,61,0.4) inset !important;
+}
+[data-theme="light"] .shell-v2 .pd-bat-cell.is-bad {
+  background: linear-gradient(180deg, #f87171, #b91c1c) !important;
+  box-shadow: 0 0 0 1px rgba(185,28,28,0.4) inset !important;
+}
 
 .shell-v2 .pd-battery-legend { display: flex; justify-content: space-between; font-size: 0.58rem; color: var(--s2-faint); letter-spacing: 0.04em; }
 
