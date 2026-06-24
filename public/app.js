@@ -17659,6 +17659,7 @@ function ensureProviderDetailEvents() {
     if (target.closest('[data-pd-refresh-health]')) { actionPdRefreshHealth(); return; }
     if (target.closest('[data-pd-refresh-usage]')) { actionPdRefreshUsage(); return; }
     if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
+    if (target.closest('[data-pd-copy-cmd]')) { actionPdCopyLaunchCmd(); return; }
   });
 }
 
@@ -17856,7 +17857,9 @@ function renderPdHeader(row) {
             ? '<button type="button" class="pd-chip-btn is-current" disabled><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5L6.5 12L13 4.5"/></svg>已是当前</button>'
             : '<button type="button" class="pd-chip-btn is-primary" data-pd-switch><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>切换为当前</button>'}
           ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-chip-btn" data-pd-edit><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 13.5l3-1L13 5l-2-2-7.5 7.5z"/></svg>编辑</button>' : ''}
-          <button type="button" class="pd-chip-btn" data-pd-test><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v3M8 11v3M2 8h3M11 8h3M4 4l2 2M10 10l2 2M4 12l2-2M10 6l2-2"/></svg>立即重检</button>
+          <button type="button" class="pd-chip-btn" data-pd-test title="向 /models 发一次带鉴权探测，结果落进 24h 历史"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6a6 6 0 0 1 11-2.5L14 5M14 10a6 6 0 0 1-11 2.5L2 11M14 2v3h-3M2 14v-3h3"/></svg>立即重检</button>
+          ${(state.activeTool || 'codex') === 'codex' ? '<button type="button" class="pd-chip-btn" data-pd-copy-cmd title="复制带危险模式参数的 codex 启动命令到剪贴板"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="8" height="9" rx="1.2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-4A1.5 1.5 0 0 0 4 3.5V10"/></svg>复制命令</button>' : ''}
+          ${(state.activeTool || 'codex') === 'codex' && isCurrent ? '<button type="button" class="pd-chip-btn" data-pd-launch title="按当前 provider 启动一次 codex"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9M9 4l4 4-4 4"/></svg>启动</button>' : ''}
           ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-chip-btn is-danger" data-pd-delete><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M6 4V2.5h4V4M5 4l1 9h4l1-9"/></svg>删除</button>' : ''}
         </div>
       </div>
@@ -18404,8 +18407,30 @@ async function actionPdRefreshHealth() {
   if (row) await fetchProviderProbeData(row);
 }
 
+// 复制一条针对当前 row 的 codex 启动命令到剪贴板。
+// 跟 Codex hero 上的"复制命令"面板共用 buildCodexLaunchCommand，
+// 默认拷"危险模式"那一条（用户在 detail 里最常用的）。
 async function actionPdCopyLaunchCmd() {
-  // 占位：未来跟 Codex hero 的命令面板复用一份
+  const row = lookupProviderDetailRow();
+  if (!row) return;
+  const builder = window.__chBuildCodexLaunchCmd;
+  if (typeof builder !== 'function') return;
+  const codexHome = row.homePath || state.current?.codexHome || '';
+  const isOauth = row.mode === 'oauth';
+  const isWindows = String(state.current?.launch?.platform || '').toLowerCase() === 'win32';
+  const cmd = builder({
+    codexHome,
+    isOauth,
+    flags: ['--dangerously-bypass-approvals-and-sandbox'],
+    isWindows,
+    withPrefix: isOauth,
+  });
+  try {
+    await navigator.clipboard.writeText(cmd);
+    flash('已复制启动命令到剪贴板', 'success');
+  } catch (_) {
+    window.prompt('自动复制失败，请手动 Cmd-C：', cmd);
+  }
 }
 
 // ─── Auto-Failover ───────────────────────────────────────────────
@@ -24230,6 +24255,7 @@ loadTools();
   window.__chSwitchRow = switchRow;
   window.__chOpenSlideover = openSlideover;
   window.__chDeleteApiKeyProvider = deleteApiKeyProvider;
+  window.__chBuildCodexLaunchCmd = buildCodexLaunchCommand;
 
   async function initialLoad() {
     wire();
