@@ -26036,3 +26036,168 @@ body {
 .shell-v2 .cfg-sec-hidden { display: none !important; }
 .shell-v2 .cfg-sec-active { animation: cfgSubFade 240ms ease both; }
 @keyframes cfgSubFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ─── 子页面精致化（cfg-sec-active 是被点开的那一节） ────────────── */
+
+/* 隐藏 section 内置头，breadcrumb 已经告诉用户当前在哪了，更干净 */
+.shell-v2 details.cfg-section.cfg-sec-active > summary.cfg-section-header {
+  list-style: none;
+  padding: 6px 0 18px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--s2-faint);
+  cursor: default;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  margin-bottom: 18px;
+  background: transparent !important;
+}
+[data-theme="light"] .shell-v2 details.cfg-section.cfg-sec-active > summary.cfg-section-header { border-bottom-color: rgba(15,23,42,0.05); }
+.shell-v2 details.cfg-section.cfg-sec-active > summary.cfg-section-header::after,
+.shell-v2 details.cfg-section.cfg-sec-active > summary.cfg-section-header > .cfg-section-chevron { display: none !important; }
+.shell-v2 details.cfg-section.cfg-sec-active > summary.cfg-section-header > svg:first-child { color: #8dbdff; }
+[data-theme="light"] .shell-v2 details.cfg-section.cfg-sec-active > summary.cfg-section-header > svg:first-child { color: #3358ff; }
+
+/* section 容器：取消嵌套卡片背景，只留间距，让子项呼吸 */
+.shell-v2 details.cfg-section.cfg-sec-active {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+.shell-v2 details.cfg-section.cfg-sec-active > .cfg-section-body {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0;
+  display: grid;
+  gap: 16px;
+}
+
+/* 网格容器 */
+.shell-v2 details.cfg-section.cfg-sec-active .editor-grid,
+.shell-v2 details.cfg-section.cfg-sec-active .dense-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+/* 每个 field 卡片化 */
+.shell-v2 details.cfg-section.cfg-sec-active .field {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.005));
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 12px;
+  transition: border-color 140ms, background 140ms;
+}
+.shell-v2 details.cfg-section.cfg-sec-active .field:hover { border-color: rgba(91,140,255,0.18); background: linear-gradient(180deg, rgba(91,140,255,0.04), rgba(91,140,255,0.005)); }
+.shell-v2 details.cfg-section.cfg-sec-active .field-wide { grid-column: 1 / -1; }
+[data-theme="light"] .shell-v2 details.cfg-section.cfg-sec-active .field { background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0.4)); border-color: rgba(15,23,42,0.06); }
+
+.shell-v2 details.cfg-section.cfg-sec-active .field > span:first-child {
+  font-size: 0.74rem;
+  font-weight: 660;
+  color: var(--s2-text);
+  letter-spacing: -0.005em;
+}
+
+/* number 控件：输入 + 默认按钮 + 滑杆 + 提示 */
+.shell-v2 details.cfg-section.cfg-sec-active .config-number-control { display: grid; gap: 10px; }
+.shell-v2 details.cfg-section.cfg-sec-active .config-number-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.shell-v2 details.cfg-section.cfg-sec-active .config-number-row input {
+  height: 38px !important;
+  padding: 0 14px !important;
+  font-size: 0.82rem !important;
+  font-variant-numeric: tabular-nums;
+  font-weight: 540;
+}
+
+/* "默认" 重置按钮：tiny ghost pill */
+.shell-v2 details.cfg-section.cfg-sec-active .config-number-row .secondary.tiny-btn,
+.shell-v2 details.cfg-section.cfg-sec-active .secondary.tiny-btn {
+  height: 28px !important;
+  padding: 0 10px !important;
+  font-size: 0.62rem;
+  font-weight: 580;
+  border-radius: 6px !important;
+  background: rgba(255,255,255,0.04) !important;
+  background-image: none !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  color: var(--s2-muted) !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+  letter-spacing: 0.02em;
+}
+.shell-v2 details.cfg-section.cfg-sec-active .secondary.tiny-btn:hover {
+  background: rgba(91,140,255,0.1) !important;
+  color: #8dbdff !important;
+  transform: none !important;
+}
+[data-theme="light"] .shell-v2 details.cfg-section.cfg-sec-active .secondary.tiny-btn {
+  background: rgba(15,23,42,0.04) !important;
+  border-color: rgba(15,23,42,0.08) !important;
+  color: rgba(15,23,42,0.6) !important;
+}
+[data-theme="light"] .shell-v2 details.cfg-section.cfg-sec-active .secondary.tiny-btn:hover { color: #3358ff !important; }
+
+/* range slider 子页强化版 */
+.shell-v2 details.cfg-section.cfg-sec-active .config-range {
+  appearance: none; -webkit-appearance: none;
+  width: 100%; height: 6px;
+  background: linear-gradient(90deg, rgba(91,140,255,0.5), rgba(91,140,255,0.15)) !important;
+  border: 0 !important;
+  border-radius: 999px;
+  padding: 0 !important;
+  outline: none;
+}
+.shell-v2 details.cfg-section.cfg-sec-active .config-range::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #3358ff;
+  box-shadow: 0 4px 12px rgba(51,88,255,0.35);
+  cursor: grab;
+  transition: transform 140ms, box-shadow 140ms;
+}
+.shell-v2 details.cfg-section.cfg-sec-active .config-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 6px 18px rgba(51,88,255,0.45);
+}
+.shell-v2 details.cfg-section.cfg-sec-active .config-range::-webkit-slider-thumb:active { cursor: grabbing; }
+[data-theme="light"] .shell-v2 details.cfg-section.cfg-sec-active .config-range {
+  background: linear-gradient(90deg, rgba(91,140,255,0.55), rgba(91,140,255,0.15)) !important;
+}
+
+/* 提示文字 */
+.shell-v2 details.cfg-section.cfg-sec-active .config-field-hint {
+  font-size: 0.66rem;
+  color: var(--s2-faint);
+  line-height: 1.55;
+  font-style: italic;
+}
+
+/* select 包装 */
+.shell-v2 details.cfg-section.cfg-sec-active .select-wrap {
+  position: relative;
+}
+.shell-v2 details.cfg-section.cfg-sec-active .select-wrap select {
+  width: 100%;
+  height: 38px;
+  font-size: 0.78rem;
+}
+
+/* toggle-grid */
+.shell-v2 details.cfg-section.cfg-sec-active .toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
