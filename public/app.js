@@ -8529,6 +8529,9 @@ window.__consoleV3 = window.__consoleV3 || {
   procsLoading: {},
   codexStats: null,       // { total, today, week, latestMtime, recent, modelDistribution }
   claudeUsage: null,      // { messagesInWindow, windowFirstMessageAt, recent, ... }
+  // 会话详情展开：哪一行当前展开，以及已 fetch 过的 detail 缓存
+  expandedSession: null,  // { tool, sessionId }
+  sessionDetails: {},     // { '<tool>:<sessionId>': { loading, error, data } }
 };
 
 // Persistent preference — lives on disk at
@@ -8655,6 +8658,97 @@ async function loadConsoleProcs(tool) {
     window.__consoleV3.procsLoading[tool] = false;
     if (state.activePage === 'console' && (state.consoleTool || 'codex') === tool) renderToolConsole();
   }
+}
+
+// 会话详情：从 detail map 里拿出当前会话的状态，render 折叠面板。
+// Codex 有 /api/codex/session-detail 真接口；Claude 暂无后端，渲染已知字段。
+function renderSessionDetailPanel(tool, sessionId, fallbackRow = null) {
+  const key = `${tool}:${sessionId}`;
+  const entry = window.__consoleV3.sessionDetails[key] || {};
+  const esc = escapeHtml;
+  if (entry.loading) {
+    return `<div class="cv3-session-detail"><div class="cv3-session-detail-loading">读取会话内容…</div></div>`;
+  }
+  if (entry.error) {
+    return `<div class="cv3-session-detail"><div class="cv3-session-detail-error">读取失败：${esc(entry.error)}</div></div>`;
+  }
+  const data = entry.data;
+  if (!data && tool === 'codex') {
+    return `<div class="cv3-session-detail"><div class="cv3-session-detail-loading">准备读取…</div></div>`;
+  }
+  if (tool === 'claudecode') {
+    const r = fallbackRow || {};
+    const projDisplay = r.project ? String(r.project).replace(/^-+/, '').replace(/-+/g, '/') : '';
+    return `
+      <div class="cv3-session-detail">
+        <div class="cv3-session-detail-grid">
+          ${sessionId ? `<div class="cv3-session-detail-row"><span>会话 ID</span><code>${esc(sessionId)}</code></div>` : ''}
+          ${r.model ? `<div class="cv3-session-detail-row"><span>模型</span><code>${esc(r.model)}</code></div>` : ''}
+          ${projDisplay ? `<div class="cv3-session-detail-row"><span>项目</span><code>${esc(projDisplay)}</code></div>` : ''}
+          ${r.startedAt ? `<div class="cv3-session-detail-row"><span>起始</span><code>${esc(formatRelativeTime(r.startedAt))}</code></div>` : ''}
+          ${r.lastActiveAt ? `<div class="cv3-session-detail-row"><span>最近</span><code>${esc(formatRelativeTime(r.lastActiveAt))}</code></div>` : ''}
+          ${r.path ? `<div class="cv3-session-detail-row"><span>文件</span><code class="cv3-session-detail-path">${esc(r.path)}</code></div>` : ''}
+        </div>
+        <div class="cv3-session-detail-firstmsg">
+          <span class="cv3-session-detail-firstmsg-label">首句</span>
+          <p>${esc((r.firstMessage || '').trim() || '（无用户消息）')}</p>
+        </div>
+      </div>`;
+  }
+  // Codex
+  const summary = data.summary || {};
+  const stats = data.stats || {};
+  const events = Array.isArray(data.recentEvents) ? data.recentEvents : [];
+  const trimmedEvents = events.slice(-20).reverse();
+  const eventsHtml = trimmedEvents.length ? trimmedEvents.map((evt) => {
+    const role = String(evt.role || '').trim();
+    const type = String(evt.type || '').trim();
+    const preview = (evt.preview || '').trim();
+    const meta = [role && `角色 ${role}`, type && `类型 ${type}`].filter(Boolean).join(' · ');
+    return `
+      <div class="cv3-session-event">
+        <div class="cv3-session-event-meta">
+          <span>#${esc(String(evt.line || ''))}</span>
+          ${meta ? `<span>${esc(meta)}</span>` : ''}
+          ${evt.timestamp ? `<span>${esc(formatRelativeTime(evt.timestamp))}</span>` : ''}
+        </div>
+        ${preview ? `<div class="cv3-session-event-body">${esc(preview)}</div>` : ''}
+      </div>`;
+  }).join('') : '<div class="cv3-session-detail-empty">没有可显示的事件</div>';
+  return `
+    <div class="cv3-session-detail">
+      <div class="cv3-session-detail-grid">
+        ${summary.sessionId ? `<div class="cv3-session-detail-row"><span>会话 ID</span><code>${esc(summary.sessionId)}</code></div>` : ''}
+        ${summary.model ? `<div class="cv3-session-detail-row"><span>模型</span><code>${esc(summary.model)}</code></div>` : ''}
+        ${summary.provider && summary.provider !== 'unknown' ? `<div class="cv3-session-detail-row"><span>Provider</span><code>${esc(summary.provider)}</code></div>` : ''}
+        ${summary.cwd ? `<div class="cv3-session-detail-row"><span>CWD</span><code class="cv3-session-detail-path">${esc(summary.cwd)}</code></div>` : ''}
+        <div class="cv3-session-detail-row"><span>事件</span><code>${esc(String(stats.parsedEvents || 0))} / ${esc(String(stats.totalLines || 0))} 行</code></div>
+        ${summary.filePath ? `<div class="cv3-session-detail-row"><span>文件</span><code class="cv3-session-detail-path">${esc(summary.filePath)}</code></div>` : ''}
+      </div>
+      <div class="cv3-session-detail-events">
+        <div class="cv3-session-detail-events-head">最新 ${trimmedEvents.length} 条事件（倒序）</div>
+        ${eventsHtml}
+      </div>
+    </div>`;
+}
+
+async function fetchCodexSessionDetail(sessionId, filePath) {
+  const key = `codex:${sessionId}`;
+  window.__consoleV3.sessionDetails[key] = { loading: true };
+  if (state.activePage === 'console') renderToolConsole();
+  try {
+    const params = new URLSearchParams();
+    if (filePath) params.set('filePath', filePath);
+    const res = await api(`/api/codex/session-detail?${params.toString()}`);
+    if (res?.ok && res.data) {
+      window.__consoleV3.sessionDetails[key] = { loading: false, data: res.data };
+    } else {
+      window.__consoleV3.sessionDetails[key] = { loading: false, error: res?.error || '读取会话详情失败' };
+    }
+  } catch (error) {
+    window.__consoleV3.sessionDetails[key] = { loading: false, error: error?.message || String(error) };
+  }
+  if (state.activePage === 'console') renderToolConsole();
 }
 
 async function loadConsoleCodexStats() {
@@ -9335,13 +9429,18 @@ function renderConsoleV3Usage(tool) {
       </div>` : '';
 
     const recent = Array.isArray(s.recent) ? s.recent : [];
+    const expandedKey = window.__consoleV3?.expandedSession?.tool === 'codex'
+      ? window.__consoleV3.expandedSession.sessionId : '';
     const recentHtml = recent.length ? `
       <div class="cv3-session-list">
         ${recent.map((r) => {
           const modelLabel = formatModelLabel(r.model);
           const preview = (r.firstMessage || '').trim() || '(无用户消息)';
+          const sessionId = String(r.sessionId || '').trim();
+          const isExpanded = expandedKey && sessionId === expandedKey;
+          const detailHtml = isExpanded ? renderSessionDetailPanel('codex', sessionId) : '';
           return `
-          <div class="cv3-session-row">
+          <div class="cv3-session-row ${isExpanded ? 'is-expanded' : ''}" data-cv3-session-tool="codex" data-cv3-session-id="${esc(sessionId)}" data-cv3-session-path="${esc(r.path || '')}" tabindex="0" role="button" aria-expanded="${isExpanded ? 'true' : 'false'}">
             <div class="cv3-session-row-main">
               <div class="cv3-session-title">${esc(preview)}</div>
               <div class="cv3-session-meta">
@@ -9350,7 +9449,9 @@ function renderConsoleV3Usage(tool) {
                 <span class="cv3-session-when">${esc(formatRelativeTime(r.lastActiveAt))}</span>
               </div>
             </div>
-          </div>`;
+            <svg class="cv3-session-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 1.5L7 5L3 8.5"/></svg>
+          </div>
+          ${detailHtml}`;
         }).join('')}
       </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
 
@@ -9396,15 +9497,19 @@ function renderConsoleV3Usage(tool) {
       return hr > 0 ? `${hr}h ${rem}m` : `${rem}m`;
     })();
     const recent = Array.isArray(u.recent) ? u.recent : [];
+    const expandedKey = window.__consoleV3?.expandedSession?.tool === 'claudecode'
+      ? window.__consoleV3.expandedSession.sessionId : '';
     const recentHtml = recent.length ? `
       <div class="cv3-session-list">
         ${recent.map((r) => {
           const modelLabel = formatModelLabel(r.model);
           const preview = (r.firstMessage || '').trim() || '(无用户消息)';
-          // Claude's project slug is a flattened path — unflatten for display.
           const projDisplay = r.project ? r.project.replace(/^-+/, '').replace(/-+/g, '/') : '';
+          const sessionId = String(r.sessionId || '').trim();
+          const isExpanded = expandedKey && sessionId === expandedKey;
+          const detailHtml = isExpanded ? renderSessionDetailPanel('claudecode', sessionId, r) : '';
           return `
-          <div class="cv3-session-row">
+          <div class="cv3-session-row ${isExpanded ? 'is-expanded' : ''}" data-cv3-session-tool="claudecode" data-cv3-session-id="${esc(sessionId)}" data-cv3-session-path="${esc(r.path || '')}" tabindex="0" role="button" aria-expanded="${isExpanded ? 'true' : 'false'}">
             <div class="cv3-session-row-main">
               <div class="cv3-session-title">${esc(preview)}</div>
               <div class="cv3-session-meta">
@@ -9414,7 +9519,9 @@ function renderConsoleV3Usage(tool) {
                 <span class="cv3-session-when">${esc(formatRelativeTime(r.lastActiveAt))}</span>
               </div>
             </div>
-          </div>`;
+            <svg class="cv3-session-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 1.5L7 5L3 8.5"/></svg>
+          </div>
+          ${detailHtml}`;
         }).join('')}
       </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
 
@@ -20096,6 +20203,25 @@ function bindEvents() {
         const tool = state.consoleTool || 'codex';
         if (tool === 'claudecode') { window.__consoleV3.claudeUsage = null; loadConsoleClaudeUsage(); }
         else if (tool === 'codex') { window.__consoleV3.codexStats = null; loadConsoleCodexStats(); }
+        return;
+      }
+      // 点击会话行：展开/收起。Codex 还会去 fetch 详细事件。
+      const sessionRow = t.closest('[data-cv3-session-tool]');
+      if (sessionRow) {
+        const rowTool = sessionRow.dataset.cv3SessionTool;
+        const sessionId = sessionRow.dataset.cv3SessionId || '';
+        const filePath = sessionRow.dataset.cv3SessionPath || '';
+        if (!sessionId) return;
+        const prev = window.__consoleV3.expandedSession;
+        const isSame = prev && prev.tool === rowTool && prev.sessionId === sessionId;
+        window.__consoleV3.expandedSession = isSame ? null : { tool: rowTool, sessionId };
+        if (!isSame && rowTool === 'codex') {
+          const cacheKey = `codex:${sessionId}`;
+          if (!window.__consoleV3.sessionDetails[cacheKey]?.data) {
+            fetchCodexSessionDetail(sessionId, filePath);
+          }
+        }
+        renderToolConsole();
         return;
       }
       if (t.closest('[data-console-v3-terminal-close]')) {

@@ -22525,11 +22525,128 @@ body {
 .shell-v2 .cv3-session-row {
   display: flex;
   align-items: center;
+  gap: 10px;
   padding: 10px 14px;
   border-radius: 8px;
+  cursor: pointer;
+  transition: background 100ms;
 }
-.shell-v2 .cv3-session-row:hover { background: rgba(255, 255, 255, 0.02); }
-[data-theme="light"] .shell-v2 .cv3-session-row:hover { background: rgba(15, 23, 42, 0.03); }
+.shell-v2 .cv3-session-row:hover { background: rgba(255, 255, 255, 0.04); }
+.shell-v2 .cv3-session-row.is-expanded { background: rgba(91,140,255,0.08); }
+.shell-v2 .cv3-session-row.is-expanded .cv3-session-chevron { transform: rotate(90deg); color: #8dbdff; }
+[data-theme="light"] .shell-v2 .cv3-session-row:hover { background: rgba(15, 23, 42, 0.04); }
+[data-theme="light"] .shell-v2 .cv3-session-row.is-expanded { background: rgba(91,140,255,0.1); }
+[data-theme="light"] .shell-v2 .cv3-session-row.is-expanded .cv3-session-chevron { color: #3358ff; }
+.shell-v2 .cv3-session-chevron { color: var(--s2-faint); transition: transform 160ms ease; flex-shrink: 0; }
+
+/* 会话详情折叠面板 */
+.shell-v2 .cv3-session-detail {
+  margin: 0 8px 6px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  display: grid;
+  gap: 12px;
+}
+[data-theme="light"] .shell-v2 .cv3-session-detail { background: rgba(15,23,42,0.025); border-color: rgba(15,23,42,0.06); }
+.shell-v2 .cv3-session-detail-loading,
+.shell-v2 .cv3-session-detail-empty { font-size: 0.7rem; color: var(--s2-faint); padding: 6px 0; }
+.shell-v2 .cv3-session-detail-error { font-size: 0.7rem; color: #f87171; }
+
+.shell-v2 .cv3-session-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px 16px;
+  font-variant-numeric: tabular-nums;
+}
+.shell-v2 .cv3-session-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.66rem;
+  min-width: 0;
+}
+.shell-v2 .cv3-session-detail-row > span {
+  color: var(--s2-faint);
+  flex-shrink: 0;
+  width: 64px;
+}
+.shell-v2 .cv3-session-detail-row code {
+  color: var(--s2-text);
+  font-family: var(--font-mono-ui);
+  font-size: 0.66rem;
+  background: transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+.shell-v2 .cv3-session-detail-path { word-break: break-all; white-space: normal !important; line-height: 1.45; }
+
+.shell-v2 .cv3-session-detail-firstmsg {
+  padding: 8px 0 0;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+[data-theme="light"] .shell-v2 .cv3-session-detail-firstmsg { border-top-color: rgba(15,23,42,0.06); }
+.shell-v2 .cv3-session-detail-firstmsg-label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--s2-faint);
+}
+.shell-v2 .cv3-session-detail-firstmsg p {
+  margin: 4px 0 0;
+  font-size: 0.7rem;
+  color: var(--s2-text);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.shell-v2 .cv3-session-detail-events {
+  display: grid;
+  gap: 4px;
+}
+.shell-v2 .cv3-session-detail-events-head {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--s2-faint);
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+[data-theme="light"] .shell-v2 .cv3-session-detail-events-head { border-top-color: rgba(15,23,42,0.06); }
+.shell-v2 .cv3-session-event {
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(255,255,255,0.05);
+}
+.shell-v2 .cv3-session-event:last-child { border-bottom: 0; }
+[data-theme="light"] .shell-v2 .cv3-session-event { border-bottom-color: rgba(15,23,42,0.05); }
+.shell-v2 .cv3-session-event-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 0.58rem;
+  color: var(--s2-faint);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+.shell-v2 .cv3-session-event-body {
+  margin-top: 3px;
+  font-size: 0.66rem;
+  color: var(--s2-text);
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-height: 6.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
 .shell-v2 .cv3-session-row-main {
   display: flex;
   flex-direction: column;

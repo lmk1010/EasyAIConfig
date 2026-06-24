@@ -54,6 +54,11 @@ fn filter_matches(line: &str, needle: &str, self_pid: u32) -> bool {
   if lower.contains("easyaiconfig") { return false; }
   if lower.contains("codex-config-ui") { return false; }   // our dev repo path
   if lower.contains("config-editor") { return false; }      // our sub-dirs
+  // macOS .app bundles：Codex.app / Claude.app / OpenCode.app / Codex Helper.app 等
+  // 都是 GUI 应用，跟 CLI 是完全两个产品。它们的主二进制 lowercase 后
+  // (e.g. /Applications/Codex.app/Contents/MacOS/Codex → "codex") 会假阳性匹配
+  // Case 1 的 basename 比较，必须在这里整段排除。包括各种 Helper / Renderer 子进程。
+  if lower.contains(".app/contents/") { return false; }
 
   // Column layout from ps -axo pid,pcpu,pmem,etime,command is:
   //   <pid>  <cpu>  <mem>  <etime>  <command...>
