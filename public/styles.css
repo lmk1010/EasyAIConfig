@@ -19088,11 +19088,12 @@ body {
 
 .shell-v2 .ch-cmd-palette-head {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 12px;
 }
+.shell-v2 .ch-cmd-palette-title-wrap { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .shell-v2 .ch-cmd-palette-title {
   font-size: 0.7rem;
   font-weight: 700;
@@ -19100,11 +19101,31 @@ body {
   text-transform: uppercase;
   color: var(--s2-text);
 }
+.shell-v2 .ch-cmd-prefix-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  font-size: 0.65rem;
+  color: var(--s2-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background 100ms, color 100ms;
+}
+.shell-v2 .ch-cmd-prefix-toggle:hover { background: rgba(91,140,255,0.1); color: var(--s2-text); }
+.shell-v2 .ch-cmd-prefix-toggle input { accent-color: #5b8cff; width: 13px; height: 13px; cursor: pointer; }
+.shell-v2 .ch-cmd-prefix-toggle:has(input:checked) { background: rgba(91,140,255,0.16); border-color: rgba(91,140,255,0.4); color: #8dbdff; }
+[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle { background: rgba(15,23,42,0.04); border-color: rgba(15,23,42,0.08); color: rgba(15,23,42,0.55); }
+[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle:hover { background: rgba(91,140,255,0.12); color: #1e293b; }
+[data-theme="light"] .shell-v2 .ch-cmd-prefix-toggle:has(input:checked) { background: rgba(91,140,255,0.14); color: #3358ff; }
 .shell-v2 .ch-cmd-palette-hint {
   font-size: 0.65rem;
   color: var(--s2-faint);
   line-height: 1.55;
-  max-width: 60%;
+  max-width: 40%;
   text-align: right;
 }
 .shell-v2 .ch-cmd-palette-hint code {

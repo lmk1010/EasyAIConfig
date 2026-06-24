@@ -90,6 +90,9 @@ const state = {
   rangePicker: null, // { viewMonth, fromDraft, toDraft }
   // Codex 启动命令面板（hero 下拉开/关）
   codexCmdPaletteOpen: false,
+  // 默认只贴 `codex <flags>`；切到 OAuth profile 时自动打开"环境前缀"
+  // 让命令带上 unset + CODEX_HOME（多账号/IP 残留 env 必须）
+  codexCmdShowPrefix: false,
   dashboardMetrics: { codex: null, opencode: null },
   dashboardLoading: false,
   dashboardRefreshing: false,
@@ -21227,13 +21230,19 @@ loadTools();
     { id: 'oauth-login',      title: 'OAuth 官方登录',             desc: '打开浏览器走 ChatGPT 登录流程',     flags: ['login'] },
   ];
 
-  function buildCodexLaunchCommand({ cwd, codexHome, isOauth, flags = [], isWindows = false }) {
-    const trimmedCwd = String(cwd || '').trim();
+  // 默认输出最短形式：`codex <flags>`。
+  // 当 withPrefix=true 时才补全安全前缀（用于多账号 / OPENAI_API_KEY 残留场景）：
+  //   - OAuth profile：unset OPENAI_API_KEY OPENAI_BASE_URL + 内联 CODEX_HOME
+  //   - API key：仅当 codexHome 不是默认 `~/.codex` 时内联 CODEX_HOME
+  // 永远不带 `cd '...'`，用户自己在终端里管理工作目录。
+  function buildCodexLaunchCommand({ codexHome, isOauth, flags = [], isWindows = false, withPrefix = false }) {
     const trimmedHome = String(codexHome || '').trim();
     const codexCmd = ['codex', ...flags].join(' ');
+    if (!withPrefix) {
+      return codexCmd;
+    }
     if (isWindows) {
       const parts = [];
-      if (trimmedCwd) parts.push(`cd /d ${winCmdQuote(trimmedCwd)}`);
       if (isOauth) {
         parts.push('set "OPENAI_API_KEY="');
         parts.push('set "OPENAI_BASE_URL="');
@@ -21244,9 +21253,7 @@ loadTools();
     }
     // POSIX
     const parts = [];
-    if (trimmedCwd) parts.push(`cd ${posixQuote(trimmedCwd)}`);
     if (isOauth) parts.push('unset OPENAI_API_KEY OPENAI_BASE_URL');
-    // 把 CODEX_HOME 内联到 codex 这一条命令里，不污染外层 shell
     const cmdWithEnv = trimmedHome
       ? `CODEX_HOME=${posixQuote(trimmedHome)} ${codexCmd}`
       : codexCmd;
@@ -21258,10 +21265,10 @@ loadTools();
     if (tool !== 'codex' || !active) return '';
     const isOauth = active.mode === 'oauth';
     const codexHome = active.homePath || state.current?.codexHome || '';
-    const cwd = el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '';
     const isWindows = String(state.current?.launch?.platform || '').toLowerCase() === 'win32';
+    const withPrefix = Boolean(state.codexCmdShowPrefix);
     const items = CODEX_LAUNCH_PRESETS.map((preset, idx) => {
-      const cmd = buildCodexLaunchCommand({ cwd, codexHome, isOauth, flags: preset.flags, isWindows });
+      const cmd = buildCodexLaunchCommand({ codexHome, isOauth, flags: preset.flags, isWindows, withPrefix });
       const danger = preset.danger ? ' is-danger' : '';
       return `
         <div class="ch-cmd-row${danger}" data-cmd-idx="${idx}">
@@ -21277,14 +21284,24 @@ loadTools();
         </div>
       `;
     }).join('');
-    const hint = isOauth
-      ? '前缀里的 <code>unset OPENAI_API_KEY OPENAI_BASE_URL</code> 是为了避免 shell 环境里的旧 key 顶掉 OAuth tokens。'
-      : '内联 <code>CODEX_HOME=...</code> 不会污染外层 shell，多账号切换更稳。';
+    // 切到 OAuth profile 或者 codexHome 不是默认 ~/.codex 时，强烈建议带前缀；
+    // 普通 ~/.codex + API key 场景下其实直接 `codex --flags` 就行。
+    const prefixHint = withPrefix
+      ? (isOauth
+        ? '安全前缀已开：避免 shell 残留的 <code>OPENAI_API_KEY</code> 顶掉 OAuth tokens。'
+        : '安全前缀已开：内联 <code>CODEX_HOME</code>，便于多账号切换。')
+      : '默认输出最短命令。点开"安全前缀"自动加上 <code>unset OPENAI_API_KEY</code> / <code>CODEX_HOME=...</code>。';
     return `
       <div class="ch-cmd-palette ${state.codexCmdPaletteOpen ? 'open' : ''}">
         <div class="ch-cmd-palette-head">
-          <span class="ch-cmd-palette-title">复制启动命令</span>
-          <span class="ch-cmd-palette-hint">${hint}</span>
+          <div class="ch-cmd-palette-title-wrap">
+            <span class="ch-cmd-palette-title">复制启动命令</span>
+            <label class="ch-cmd-prefix-toggle">
+              <input type="checkbox" data-codex-cmd-prefix-toggle ${withPrefix ? 'checked' : ''} />
+              <span>安全前缀（多账号 / 环境残留时打开）</span>
+            </label>
+          </div>
+          <span class="ch-cmd-palette-hint">${prefixHint}</span>
         </div>
         <div class="ch-cmd-list">${items}</div>
       </div>`;
@@ -22594,6 +22611,20 @@ loadTools();
 
     // Hero actions
     const hero = document.getElementById('chHero');
+    // 安全前缀 checkbox 用 change 事件，避免 label-click 导致 state 不同步
+    hero?.addEventListener('change', (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target) return;
+      if (target.matches('[data-codex-cmd-prefix-toggle]')) {
+        state.codexCmdShowPrefix = target.checked;
+        const heroEl = document.getElementById('chHero');
+        if (heroEl) {
+          const rows = buildProviderRows(hubState()?.activeTool || 'codex');
+          const active = rows.find((r) => r.isActive) || null;
+          heroEl.innerHTML = renderHeroHTML(active, hubState()?.activeTool || 'codex');
+        }
+      }
+    });
     hero?.addEventListener('click', (e) => {
       const target = e.target instanceof Element ? e.target : null;
       if (!target) return;
@@ -22627,8 +22658,16 @@ loadTools();
       // Codex 启动命令面板开/关
       const cmdToggle = target.closest('[data-ch-cmd-toggle]');
       if (cmdToggle) {
-        state.codexCmdPaletteOpen = !state.codexCmdPaletteOpen;
-        // 只 re-render hero 块，不动列表/搜索状态
+        const opening = !state.codexCmdPaletteOpen;
+        state.codexCmdPaletteOpen = opening;
+        if (opening) {
+          // 首次打开时按当前 active 给一个合理的默认：
+          //   - OAuth profile（自带非默认 CODEX_HOME）→ 默认 ON（多账号必需）
+          //   - 其他情况 → 默认 OFF，输出最短命令
+          const rowsForDefault = buildProviderRows(hubState()?.activeTool || 'codex');
+          const activeForDefault = rowsForDefault.find((r) => r.isActive);
+          state.codexCmdShowPrefix = Boolean(activeForDefault && activeForDefault.mode === 'oauth' && activeForDefault.homePath);
+        }
         const heroEl = document.getElementById('chHero');
         if (heroEl) {
           const rows = buildProviderRows(hubState()?.activeTool || 'codex');
@@ -22651,11 +22690,11 @@ loadTools();
           return;
         }
         const cmd = buildCodexLaunchCommand({
-          cwd: el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '',
           codexHome: active.homePath || state.current?.codexHome || '',
           isOauth: active.mode === 'oauth',
           flags: preset.flags,
           isWindows: String(state.current?.launch?.platform || '').toLowerCase() === 'win32',
+          withPrefix: Boolean(state.codexCmdShowPrefix),
         });
         navigator.clipboard?.writeText(cmd)
           .then(() => {
