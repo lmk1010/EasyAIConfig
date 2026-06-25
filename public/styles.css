@@ -27498,3 +27498,208 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   transform-origin: 8px 8px;
 }
 @keyframes eaTermSpin { to { transform: rotate(360deg); } }
+
+/* ─── canvas 内嵌"新建会话"页 ─── */
+.shell-v2 .ea-term-launch-page {
+  height: 100%;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 40px 32px;
+  overflow-y: auto;
+}
+.shell-v2 .ea-term-launch-card {
+  width: 100%;
+  max-width: 520px;
+  background: var(--card-bg, rgba(255,255,255,0.6));
+  border: 1px solid rgba(150,165,200,0.18);
+  border-radius: 12px;
+  padding: 14px 16px 12px;
+  box-shadow: 0 8px 24px rgba(40,60,100,0.06);
+}
+[data-theme="dark"] .shell-v2 .ea-term-launch-card {
+  background: rgba(28,32,42,0.55);
+  border-color: rgba(110,130,160,0.22);
+}
+
+.shell-v2 .ea-term-launch-head {
+  display: flex; align-items: center; gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(120,140,180,0.10);
+  margin-bottom: 10px;
+}
+.shell-v2 .ea-term-launch-title {
+  font-size: 12.5px; font-weight: 700;
+  color: var(--text);
+  flex: 1;
+}
+.shell-v2 .ea-term-launch-x {
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--muted); border-radius: 5px;
+}
+.shell-v2 .ea-term-launch-x:hover {
+  background: rgba(120,140,180,0.10); color: var(--text);
+}
+
+.shell-v2 .ea-term-launch-body {
+  display: flex; flex-direction: column;
+  gap: 6px;
+}
+
+.shell-v2 .ea-term-launch-row {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  align-items: center;
+  gap: 10px;
+  min-height: 26px;
+}
+.shell-v2 .ea-term-launch-lab {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* 控件统一：select / input */
+.shell-v2 .ea-term-launch-ctl {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(120,140,180,0.06);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 8px;
+  padding-right: 26px;
+  font: inherit; font-size: 12px;
+  color: var(--text);
+  width: 100%;
+  height: 26px;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.shell-v2 select.ea-term-launch-ctl {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%23889' stroke-width='1.4' stroke-linecap='round'><path d='M2 4l3 3 3-3'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 10px 10px;
+}
+.shell-v2 input.ea-term-launch-ctl { padding-right: 8px; }
+.shell-v2 .ea-term-launch-ctl:hover {
+  background-color: rgba(120,140,180,0.10);
+}
+.shell-v2 .ea-term-launch-ctl:focus {
+  outline: none;
+  background: rgba(255,255,255,0.85);
+  border-color: rgba(91,140,255,0.45);
+  box-shadow: 0 0 0 3px rgba(91,140,255,0.10);
+}
+[data-theme="dark"] .shell-v2 .ea-term-launch-ctl:focus {
+  background: rgba(20,24,32,0.65);
+}
+.shell-v2 .ea-term-launch-mono { font-family: var(--font-mono); font-size: 11.5px; }
+
+/* 分段开关 */
+.shell-v2 .ea-term-launch-seg {
+  display: inline-flex;
+  background: rgba(120,140,180,0.08);
+  border-radius: 6px;
+  padding: 2px;
+  width: 100%;
+  height: 26px;
+}
+.shell-v2 .ea-term-launch-seg button {
+  flex: 1;
+  border: none; background: transparent;
+  font: inherit; font-size: 11.5px; font-weight: 500;
+  color: var(--muted);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.shell-v2 .ea-term-launch-seg button.is-on {
+  background: #fff;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(40,60,100,0.10);
+}
+[data-theme="dark"] .shell-v2 .ea-term-launch-seg button.is-on {
+  background: rgba(120,140,180,0.18);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.30);
+}
+
+/* cwd 行：icon prefix + input + 选择按钮 */
+.shell-v2 .ea-term-launch-cwd-wrap {
+  display: flex; align-items: center; gap: 4px;
+  position: relative;
+  width: 100%;
+}
+.shell-v2 .ea-term-launch-cwd-ico {
+  position: absolute;
+  left: 8px; top: 50%; transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.shell-v2 .ea-term-launch-cwd {
+  padding-left: 26px;
+  flex: 1;
+}
+.shell-v2 .ea-term-launch-pick {
+  font: inherit; font-size: 11px;
+  color: var(--muted);
+  background: rgba(120,140,180,0.08);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 10px;
+  height: 26px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.shell-v2 .ea-term-launch-pick:hover {
+  background: rgba(91,140,255,0.10);
+  color: #5b8cff;
+}
+
+/* 更多参数 折叠 */
+.shell-v2 .ea-term-launch-more {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: transparent; border: none;
+  font: inherit; font-size: 11.5px; color: var(--muted);
+  cursor: pointer; padding: 4px 2px;
+  align-self: flex-start;
+}
+.shell-v2 .ea-term-launch-more:hover { color: var(--text); }
+.shell-v2 .ea-term-launch-more svg { transition: transform 160ms ease; }
+.shell-v2 .ea-term-launch-more svg.is-open { transform: rotate(180deg); }
+.shell-v2 .ea-term-launch-more-body {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 4px 0 0;
+  border-top: 1px dashed rgba(120,140,180,0.18);
+  margin-top: 2px;
+}
+
+/* 底部：提示 + 启动按钮 */
+.shell-v2 .ea-term-launch-foot {
+  display: flex; align-items: center; gap: 12px;
+  padding-top: 10px;
+  margin-top: 8px;
+  border-top: 1px solid rgba(120,140,180,0.10);
+}
+.shell-v2 .ea-term-launch-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.75;
+}
+.shell-v2 .ea-term-launch-go {
+  background: linear-gradient(90deg, #5b8cff, #3358ff);
+  color: #fff;
+  border: none; border-radius: 6px;
+  padding: 0 18px;
+  height: 28px;
+  font: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(51,88,255,0.28);
+  transition: transform 80ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+.shell-v2 .ea-term-launch-go:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(51,88,255,0.42);
+}
+.shell-v2 .ea-term-launch-go:disabled { opacity: 0.65; cursor: progress; }

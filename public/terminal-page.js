@@ -306,14 +306,15 @@ export async function renderTerminalPage() {
     tp.launcher.providerKey = active?.key || allProviders[0]?.key || '';
   }
 
-  // 当前活动 session 是 ghost（上次 app 留下的）→ 不挂 xterm，显示"已退出 + 重启"占位
+  // canvas 三态：launcher 表单 / ghost 会话提示 / 活动 xterm
   const activeSess = tp.sessions.find((s) => s.id === tp.activeSessionId);
-  const showGhost = activeSess?._ghost;
+  const showLauncher = !!tp.launcherOpen;
+  const showGhost = !showLauncher && activeSess?._ghost;
   host.innerHTML = `
     <div class="ea-term-shell">
       ${tp.starting ? '<div class="ea-term-progress" aria-label="启动中"><span class="ea-term-progress-bar"></span></div>' : ''}
       <div class="ea-term-canvas">
-        ${showGhost ? `
+        ${showLauncher ? renderLauncherPage(tp, allProviders) : (showGhost ? `
           <div class="ea-term-ghost">
             <div class="ea-term-ghost-title">这个会话已退出</div>
             <div class="ea-term-ghost-meta">
@@ -329,24 +330,121 @@ export async function renderTerminalPage() {
             `}
             <button type="button" class="ea-term-ghost-btn-secondary" data-eat-forget="${escapeHtml(activeSess.id)}">忘掉这个会话</button>
           </div>
-        ` : `<div class="ea-term-host" id="eaTermHost"></div>`}
-        ${tp.sessions.length ? '' : '<div class="ea-term-empty">左侧点 <kbd>+ 新建会话</kbd> 启动 · 或 <kbd>⌘T</kbd> 配置启动 · <kbd>⌘K</kbd> 命令面板</div>'}
+        ` : `<div class="ea-term-host" id="eaTermHost"></div>`)}
       </div>
       ${renderStatusBar(tp)}
-      ${tp.launcherOpen ? `<div class="ea-term-launcher-scrim" data-eat-launcher-scrim></div>${renderLauncherPopover(tp, allProviders)}` : ''}
     </div>
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
   `;
 
   bindEvents(host);
-  // ghost session 不挂 xterm
+  // ghost / launcher 时不挂 xterm
   const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
-  if (active && !active._ghost) {
+  if (active && !active._ghost && !tp.launcherOpen) {
     mountTerminal(active.id);
   }
   renderTermSidebar();
 }
 
+
+// Canvas 内嵌的"新建会话"页面 — 替代旧 popover。
+// 居中容器 + 项目原生 field 风格 (label 左、控件右、24px 高)
+function renderLauncherPage(tp, providers) {
+  const esc = escapeHtml;
+  const isCodex = tp.launcher.tool === 'codex';
+  const isOfficial = isCodex && tp.launcher.source === 'official';
+  const providerOpts = providers.map((p) => `<option value="${esc(p.key)}" ${p.key === tp.launcher.providerKey ? 'selected' : ''}>${esc(p.name || p.key)}${p.isActive ? ' · 当前' : ''}</option>`).join('');
+  const sandboxOpts = [
+    ['bypass', '完全放开 (--dangerously-bypass)'],
+    ['workspace-write', '工作目录可写'],
+    ['read-only', '只读'],
+    ['none', '不设置'],
+  ];
+  const cwdDisplay = tp.launcher.cwd || '~ ($HOME)';
+  return `
+    <div class="ea-term-launch-page">
+      <div class="ea-term-launch-card">
+        <div class="ea-term-launch-head">
+          <div class="ea-term-launch-title">新建会话</div>
+          <button type="button" class="ea-term-launch-x" data-eat-launcher-close title="关闭 (Esc)" aria-label="关闭">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
+        </div>
+        <div class="ea-term-launch-body">
+          <div class="ea-term-launch-row">
+            <label class="ea-term-launch-lab">工具</label>
+            <div class="ea-term-launch-seg">
+              <button type="button" class="${isCodex ? 'is-on' : ''}" data-eat-launch-set="tool" data-value="codex">Codex</button>
+              <button type="button" class="${!isCodex ? 'is-on' : ''}" data-eat-launch-set="tool" data-value="claudecode">Claude Code</button>
+            </div>
+          </div>
+          ${isCodex ? `
+            <div class="ea-term-launch-row">
+              <label class="ea-term-launch-lab">登录方式</label>
+              <div class="ea-term-launch-seg">
+                <button type="button" class="${isOfficial ? 'is-on' : ''}" data-eat-launch-set="source" data-value="official" title="使用 ~/.codex 官方登录态">官方</button>
+                <button type="button" class="${!isOfficial ? 'is-on' : ''}" data-eat-launch-set="source" data-value="provider" title="使用自管 provider API">自管 Provider</button>
+              </div>
+            </div>
+          ` : ''}
+          ${!isOfficial ? `
+            <div class="ea-term-launch-row">
+              <label class="ea-term-launch-lab">Provider</label>
+              <select class="ea-term-launch-ctl" data-eat-launch="providerKey">
+                ${providerOpts || '<option value="">（无可用 provider）</option>'}
+              </select>
+            </div>
+          ` : ''}
+          <div class="ea-term-launch-row">
+            <label class="ea-term-launch-lab">工作目录</label>
+            <div class="ea-term-launch-cwd-wrap">
+              <span class="ea-term-launch-cwd-ico" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.4l1.2 1.4h5.4A1.5 1.5 0 0 1 14 5.9V11.5A1.5 1.5 0 0 1 12.5 13H3.5A1.5 1.5 0 0 1 2 11.5z"/></svg>
+              </span>
+              <input class="ea-term-launch-ctl ea-term-launch-cwd" type="text" data-eat-launch="cwd" placeholder="~ ($HOME)" value="${esc(tp.launcher.cwd || '')}"/>
+              <button type="button" class="ea-term-launch-pick" data-eat-pick-cwd title="选择目录" aria-label="选择目录">选择</button>
+            </div>
+          </div>
+          ${isCodex ? `
+            <div class="ea-term-launch-row">
+              <label class="ea-term-launch-lab">沙箱模式</label>
+              <select class="ea-term-launch-ctl" data-eat-launch="sandbox">
+                ${sandboxOpts.map(([v, lab]) => `<option value="${v}" ${tp.launcher.sandbox === v ? 'selected' : ''}>${esc(lab)}</option>`).join('')}
+              </select>
+            </div>
+          ` : ''}
+          <button type="button" class="ea-term-launch-more" data-eat-launch-more aria-expanded="${tp.launcher.moreOpen ? 'true' : 'false'}">
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="${tp.launcher.moreOpen ? 'is-open' : ''}"><path d="M4 6l4 4 4-4"/></svg>
+            <span>更多参数</span>
+          </button>
+          ${tp.launcher.moreOpen ? `
+            <div class="ea-term-launch-more-body">
+              <div class="ea-term-launch-row">
+                <label class="ea-term-launch-lab">模型</label>
+                <input class="ea-term-launch-ctl" type="text" data-eat-launch="model" placeholder="留空 = 默认 (例: gpt-5)" value="${esc(tp.launcher.model || '')}"/>
+              </div>
+              ${isCodex ? `
+                <div class="ea-term-launch-row">
+                  <label class="ea-term-launch-lab">Profile</label>
+                  <input class="ea-term-launch-ctl" type="text" data-eat-launch="profile" placeholder="~/.codex/config.toml 里的 profile 名" value="${esc(tp.launcher.profile || '')}"/>
+                </div>
+              ` : ''}
+              <div class="ea-term-launch-row">
+                <label class="ea-term-launch-lab">额外参数</label>
+                <input class="ea-term-launch-ctl ea-term-launch-mono" type="text" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="--flag 值 …"/>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+        <div class="ea-term-launch-foot">
+          <span class="ea-term-launch-hint">${isCodex ? 'codex' : 'claude'} 将在选定目录启动并接管终端</span>
+          <button type="button" class="ea-term-launch-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
+            ${tp.starting ? '启动中…' : '启动'}
+          </button>
+        </div>
+      </div>
+    </div>`;
+}
 
 function renderLauncherPopover(tp, providers) {
   const esc = escapeHtml;
