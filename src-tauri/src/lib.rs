@@ -133,6 +133,19 @@ pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
   fs::create_dir_all(path).map_err(|error| error.to_string())
 }
 
+// Same as ensure_dir but tightens the directory to 0700 on Unix so other
+// local users on a shared Mac/Linux box can't `ls` the backups / secret blobs.
+pub(crate) fn ensure_secret_dir(path: &Path) -> Result<(), String> {
+  fs::create_dir_all(path).map_err(|error| error.to_string())?;
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+      .map_err(|error| error.to_string())?;
+  }
+  Ok(())
+}
+
 pub(crate) fn read_text(path: &Path) -> Result<String, String> {
   match fs::read_to_string(path) {
     Ok(text) => Ok(text),
@@ -145,7 +158,17 @@ pub(crate) fn write_text(path: &Path, content: &str) -> Result<(), String> {
   if let Some(parent) = path.parent() {
     ensure_dir(parent)?;
   }
-  fs::write(path, content).map_err(|error| error.to_string())
+  fs::write(path, content).map_err(|error| error.to_string())?;
+  // 所有 write_text 调用点都是 ~/.codex/.claude/.openclaw 等配置目录里
+  // 可能含 API key / OAuth token 的文件 —— 默认 umask (0644) 在共享机器上
+  // 会让其他本地用户 `cat` 读到秘密，统一收紧到 0600
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+      .map_err(|error| error.to_string())?;
+  }
+  Ok(())
 }
 
 // Write a file containing credentials / refresh tokens. Same as write_text but

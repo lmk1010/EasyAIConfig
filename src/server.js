@@ -996,6 +996,33 @@ export async function startServer() {
   const app = express();
   const localApiToken = createLocalApiToken();
   app.use(express.json({ limit: '1mb' }));
+
+  // 安全头：Web 模式 (npm install -g easyaiconfig) 没有 Tauri 的 webview CSP，
+  // 在浏览器里运行时需要服务端发安全头来防 XSS / clickjack / 跨源请求
+  app.use((_req, res, next) => {
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "img-src 'self' data: blob:",
+        "style-src 'self' 'unsafe-inline'",
+        // 内联脚本是 vanilla-JS 现状所必需的（HTML 里有大量 <script>...</script>）
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+        "connect-src 'self' http://127.0.0.1:* http://localhost:* https://api.github.com",
+        "font-src 'self' data:",
+        "frame-src 'none'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+      ].join('; '),
+    );
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+  });
+
   app.use((req, res, next) => {
     if (!req.path.startsWith('/api/')) return next();
     if (req.path === '/api/bootstrap') return next();

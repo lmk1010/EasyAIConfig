@@ -10,9 +10,9 @@ use crate::provider::{
   reveal_provider_api_key, slugify_provider_key, summarize_providers,
 };
 use crate::{
-  app_home, apply_patch, backups_root, default_codex_home, ensure_dir, expand_home_path, home_dir,
-  normalize_settings_patch, parse_env, parse_json_object, parse_toml_config, read_text,
-  stringify_env, stringify_toml_config, timestamp, write_text,
+  app_home, apply_patch, backups_root, default_codex_home, ensure_dir, ensure_secret_dir,
+  expand_home_path, home_dir, normalize_settings_patch, parse_env, parse_json_object,
+  parse_toml_config, read_text, stringify_env, stringify_toml_config, timestamp, write_secret,
 };
 
 struct ScopePaths {
@@ -122,10 +122,14 @@ fn scope_paths(scope: &str, project_path: &str, codex_home: &Path) -> Result<Sco
 }
 
 fn create_backup(paths: &ScopePaths) -> Result<String, String> {
-  let target_dir = backups_root()?.join(format!("{}-{}", timestamp(), paths.scope));
-  ensure_dir(&target_dir)?;
-  write_text(&target_dir.join("config.toml.bak"), &read_text(&paths.config_path)?)?;
-  write_text(&target_dir.join(".env.bak"), &read_text(&paths.env_path)?)?;
+  // 备份目录与 .env.bak / config.toml.bak 都可能含 API key / OAuth token，
+  // 必须把目录设 0700、文件设 0600，否则共享机上其他用户能 `cat` 到。
+  let backups_root_path = backups_root()?;
+  ensure_secret_dir(&backups_root_path)?;
+  let target_dir = backups_root_path.join(format!("{}-{}", timestamp(), paths.scope));
+  ensure_secret_dir(&target_dir)?;
+  write_secret(&target_dir.join("config.toml.bak"), &read_text(&paths.config_path)?)?;
+  write_secret(&target_dir.join(".env.bak"), &read_text(&paths.env_path)?)?;
   Ok(target_dir.to_string_lossy().to_string())
 }
 
@@ -430,17 +434,19 @@ pub(crate) fn delete_codex_provider(body: &Value) -> Result<Value, String> {
     serde_json::to_string_pretty(&auth_json).unwrap_or_default()
   };
 
-  write_text(&paths.config_path, &new_toml)?;
-  write_text(&paths.env_path, &new_env)?;
+  // config.toml + .env + auth.json 都可能直接含 API key / OAuth token，
+  // 用 write_secret 把权限设成 0600，防止共享机其他用户读取
+  write_secret(&paths.config_path, &new_toml)?;
+  write_secret(&paths.env_path, &new_env)?;
   if new_auth.is_empty() {
     // leave auth.json alone when it'd be literally empty — Codex's login
     // status flow reads this file and treats "missing" and "{}" differently
     // on some branches. Only rewrite when we actually had content.
     if !auth_content.trim().is_empty() {
-      write_text(&auth_path, "{}")?;
+      write_secret(&auth_path, "{}")?;
     }
   } else {
-    write_text(&auth_path, &new_auth)?;
+    write_secret(&auth_path, &new_auth)?;
   }
 
   Ok(json!({
@@ -476,7 +482,7 @@ pub(crate) fn use_oauth_config(body: &Value) -> Result<Value, String> {
     None
   };
   if config_changed {
-    write_text(&paths.config_path, &stringify_toml_config(&config)?)?;
+    write_secret(&paths.config_path, &stringify_toml_config(&config)?)?;
   }
 
   Ok(json!({
@@ -661,10 +667,10 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
     None
   };
   if config_changed {
-    write_text(&paths.config_path, &stringify_toml_config(&config)?)?;
+    write_secret(&paths.config_path, &stringify_toml_config(&config)?)?;
   }
   if env_changed {
-    write_text(&paths.env_path, &stringify_env(&env))?;
+    write_secret(&paths.env_path, &stringify_env(&env))?;
   }
 
   Ok(json!({
@@ -713,7 +719,7 @@ pub(crate) fn save_settings(body: &Value) -> Result<Value, String> {
     None
   };
   if changed {
-    write_text(&paths.config_path, &stringify_toml_config(&config)?)?;
+    write_secret(&paths.config_path, &stringify_toml_config(&config)?)?;
   }
 
   Ok(json!({
@@ -752,7 +758,7 @@ pub(crate) fn save_raw_config(body: &Value) -> Result<Value, String> {
     None
   };
   if changed {
-    write_text(&paths.config_path, &config_toml)?;
+    write_secret(&paths.config_path, &config_toml)?;
   }
 
   let auth_json_raw = get_string(&object, "authJson");
@@ -762,7 +768,7 @@ pub(crate) fn save_raw_config(body: &Value) -> Result<Value, String> {
     let auth_path = assert_allowed_path(&codex_home.join("auth.json"), "authJsonPath")?;
     let current_auth = read_text(&auth_path)?;
     if current_auth != auth_json_raw {
-      write_text(&auth_path, &auth_json_raw)?;
+      write_secret(&auth_path, &auth_json_raw)?;
       auth_changed = true;
     }
   }
@@ -829,8 +835,8 @@ pub(crate) fn restore_backup(body: &Value) -> Result<Value, String> {
 
   let config_content = fs::read_to_string(&config_backup).map_err(|error| error.to_string())?;
   let env_content = fs::read_to_string(&env_backup).map_err(|error| error.to_string())?;
-  write_text(&paths.config_path, &config_content)?;
-  write_text(&paths.env_path, &env_content)?;
+  write_secret(&paths.config_path, &config_content)?;
+  write_secret(&paths.env_path, &env_content)?;
   Ok(json!({
     "restored": true,
     "paths": {
@@ -882,7 +888,7 @@ pub(crate) fn set_default_model(body: &Value) -> Result<Value, String> {
   config.as_object_mut().unwrap().insert("model".to_string(), json!(model));
   let new_content = stringify_toml_config(&config)?;
   if new_content != config_content {
-    write_text(&paths.config_path, &new_content)?;
+    write_secret(&paths.config_path, &new_content)?;
   }
   Ok(json!({ "ok": true, "model": model }))
 }
@@ -903,7 +909,9 @@ pub(crate) fn write_config_file(body: &Value) -> Result<Value, String> {
   let previous = read_text(&file_path)?;
   let changed = previous != content;
   if changed {
-    write_text(&file_path, &content)?;
+    // 写入路径已被 assert_allowed_path 限制到 ~/.codex/.claude/.openclaw 等
+    // 配置目录，里面可能含 key / token —— 一律 0600
+    write_secret(&file_path, &content)?;
   }
 
   Ok(json!({
