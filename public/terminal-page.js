@@ -662,82 +662,105 @@ function mountTerminal(sessionId) {
   const tp = getState().terminalPage;
   const hostEl = document.getElementById('eaTermHost');
   if (!hostEl) return;
-  hostEl.innerHTML = '';
   let inst = tp.instances[sessionId];
+
+  // 已经挂在当前 host：什么都不做，避免每次 renderTerminalPage 都重 attach
+  if (inst && inst.mountedTo === hostEl) {
+    try { inst.term.focus(); } catch (_) {}
+    return;
+  }
+
   if (!inst) {
-    const isDark = isCanvasDark();
-    const term = new Terminal({
-      cursorBlink: true,
-      cursorStyle: isDark ? 'block' : 'bar',
-      fontFamily: '"MesloLGS NF", "JetBrainsMono Nerd Font", "FiraCode Nerd Font Mono", "SF Mono", "Menlo", "Consolas", monospace',
-      fontSize: 12.5,
-      scrollback: 5000,
-      theme: currentTermTheme(),
-      allowProposedApi: true,
-      macOptionIsMeta: true,
-      rightClickSelectsWord: true,
-    });
-    const fit = new FitAddon();
-    const webLinks = new WebLinksAddon((event, uri) => {
-      try {
-        if (typeof window.openExternalUrl === 'function') window.openExternalUrl(uri);
-        else window.open(uri, '_blank');
-      } catch (_) { window.open(uri, '_blank'); }
-    });
-    const search = new SearchAddon();
-    term.loadAddon(fit);
-    term.loadAddon(webLinks);
-    term.loadAddon(search);
-
-    inst = {
-      term, fit, search,
-      cursor: 0,
-      container: hostEl,
-      pollTimer: 0,
-      sentBytes: 0,
-      recvBytes: 0,
-      lastResize: { cols: 120, rows: 32 },
-      webglAddon: null,
-      resizeObserver: null,
-    };
-    tp.instances[sessionId] = inst;
-    term.onData((data) => {
-      inst.sentBytes += data.length;
-      sendInput(sessionId, data).catch(() => {});
-    });
-  } else {
-    // 切回已有 session：主题可能变了（dark/light 切换）
-    try { inst.term.options.theme = currentTermTheme(); } catch (_) {}
-  }
-
-  inst.container = hostEl;
-  inst.term.open(hostEl);
-
-  // 默认 DOM renderer（Neox 做法）— 滚动 / fps 比 WebGL 稳定，
-  // 没有 webview 中 GL context lost 的偶发卡顿/闪烁
-
-  // Fit + 通知后端 resize
-  try { inst.fit.fit(); } catch (_) {}
-  notifyResize(sessionId, inst);
-
-  // ResizeObserver：窗口拉动时同步 cols/rows，rAF 节流避免 jank
-  if (!inst.resizeObserver && typeof ResizeObserver === 'function') {
-    let rafId = 0;
-    inst.resizeObserver = new ResizeObserver(() => {
-      if (rafId) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = 0;
-        try { inst.fit.fit(); } catch (_) {}
-        notifyResize(sessionId, inst);
+    // 等所有 in-flight 字体加载完成再创建，避免 fallback 字体测量错 glyph 宽度
+    const start = () => {
+      if (tp.instances[sessionId]) return; // 已被并发创建
+      const isDark = isCanvasDark();
+      const term = new Terminal({
+        cursorBlink: true,
+        cursorStyle: isDark ? 'block' : 'bar',
+        fontFamily: '"MesloLGS NF", "JetBrainsMono Nerd Font", "FiraCode Nerd Font Mono", "SF Mono", "Menlo", "Consolas", monospace',
+        fontSize: 12.5,
+        scrollback: 5000,
+        theme: currentTermTheme(),
+        allowProposedApi: true,
+        macOptionIsMeta: true,
+        rightClickSelectsWord: true,
       });
-    });
-    inst.resizeObserver.observe(hostEl);
+      const fit = new FitAddon();
+      const webLinks = new WebLinksAddon((event, uri) => {
+        try {
+          if (typeof window.openExternalUrl === 'function') window.openExternalUrl(uri);
+          else window.open(uri, '_blank');
+        } catch (_) { window.open(uri, '_blank'); }
+      });
+      const search = new SearchAddon();
+      term.loadAddon(fit);
+      term.loadAddon(webLinks);
+      term.loadAddon(search);
+
+      const instance = {
+        term, fit, search,
+        cursor: 0,
+        mountedTo: null,
+        pollTimer: 0,
+        sentBytes: 0,
+        recvBytes: 0,
+        lastResize: { cols: 0, rows: 0 },
+        resizeObserver: null,
+        firstChunk: true,
+      };
+      tp.instances[sessionId] = instance;
+
+      const target = document.getElementById('eaTermHost');
+      if (!target) return;
+      term.open(target);
+      instance.mountedTo = target;
+      // 字体 metrics 稳定后再 fit
+      setTimeout(() => {
+        try {
+          // 守卫 0×0（display:none 时容器塌陷会让 PTY cols 设成 0 / 1，shell 排版乱）
+          if (target.clientWidth === 0 || target.clientHeight === 0) return;
+          fit.fit();
+          notifyResize(sessionId, instance);
+        } catch (_) {}
+      }, 0);
+
+      term.onData((data) => {
+        instance.sentBytes += data.length;
+        sendInput(sessionId, data).catch(() => {});
+      });
+
+      // ResizeObserver，rAF coalesce，0×0 直接跳过
+      if (typeof ResizeObserver === 'function') {
+        let rafId = 0;
+        instance.resizeObserver = new ResizeObserver(() => {
+          if (rafId) cancelAnimationFrame(rafId);
+          rafId = requestAnimationFrame(() => {
+            rafId = 0;
+            if (target.clientWidth === 0 || target.clientHeight === 0) return;
+            try { fit.fit(); } catch (_) {}
+            notifyResize(sessionId, instance);
+          });
+        });
+        instance.resizeObserver.observe(target);
+      }
+
+      // 轮询输出
+      instance.pollTimer = setInterval(() => pollOutput(sessionId), POLL_INTERVAL_MS);
+      try { term.focus(); } catch (_) {}
+    };
+    if (document.fonts?.ready) document.fonts.ready.then(start, start);
+    else start();
+    return;
   }
 
-  // 启动轮询输出
-  if (inst.pollTimer) clearInterval(inst.pollTimer);
-  inst.pollTimer = setInterval(() => pollOutput(sessionId), POLL_INTERVAL_MS);
-  inst.term.focus();
+  // 已有实例但 mountedTo 是旧 host（被 innerHTML 替换掉了）→ re-attach 到当前 host
+  // 但 NOT 重新初始化 — buffer / 状态全部保留
+  try { inst.term.options.theme = currentTermTheme(); } catch (_) {}
+  try { inst.term.open(hostEl); } catch (_) {}
+  inst.mountedTo = hostEl;
+  // 不再 fit / 不再 notifyResize（避免 SIGWINCH 让 codex 重画导致内容重复）
+  try { inst.term.focus(); } catch (_) {}
 }
 
 function notifyResize(sessionId, inst) {
@@ -772,13 +795,17 @@ async function pollOutput(sessionId) {
     const params = new URLSearchParams({ sessionId, cursor: String(inst.cursor || 0) });
     const res = await api(`/api/terminal/read?${params.toString()}`);
     if (res?.ok && res.data) {
-      const data = res.data.data || '';
+      let data = res.data.data || '';
+      // 首条数据去掉前导 \n / \r\n（shell rc / starship 习惯先打空行让 prompt 错开行）
+      if (data && inst.firstChunk) {
+        inst.firstChunk = false;
+        data = data.replace(/^(?:\r?\n)+/, '');
+      }
       if (data) {
         inst.term.write(data);
         inst.recvBytes += data.length;
       }
       if (typeof res.data.cursor === 'number') inst.cursor = res.data.cursor;
-      // 更新 running / exit
       const sess = tp.sessions.find((s) => s.id === sessionId);
       if (sess && res.data.session) {
         sess.running = Boolean(res.data.session.running);
