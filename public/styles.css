@@ -26446,13 +26446,14 @@ body {
 /* ─── 内置终端页面 (ea-term-*) ───────────────────────────────────── */
 .shell-v2 .page-view[data-page="terminal"] { padding: 0; overflow: hidden; }
 .shell-v2 .ea-term { height: 100%; min-height: 0; }
-/* 不再分栏：top bar → tab → 终端 → status bar；整片透明融入页面背景 */
+/* 布局：tab → 终端 → status；浮按钮固定右下；popover 覆盖在整片之上 */
 .shell-v2 .ea-term-shell {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
   gap: 0;
   height: 100%;
   background: transparent;
+  position: relative;
 }
 
 /* 顶部 slim 工具栏：彻底融入背景，无 card / 无底色，靠 chip 本身的 border 表达 */
@@ -26804,3 +26805,153 @@ body {
   height: 100% !important;
 }
 .shell-v2 .ea-term-host .xterm-viewport { overflow-y: auto !important; }
+
+/* ─── FAB + 启动配置 popover (终端页面) ─────────────────── */
+.shell-v2 .ea-term-fab {
+  position: absolute;
+  right: 18px; bottom: 38px;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(140deg, #6b86ff, #3358ff) !important;
+  background-image: linear-gradient(140deg, #6b86ff, #3358ff) !important;
+  border: 0 !important;
+  color: #fff !important;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 12px 28px rgba(51,88,255,0.4), 0 4px 10px rgba(51,88,255,0.25);
+  z-index: 60;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 160ms;
+}
+.shell-v2 .ea-term-fab:hover {
+  transform: scale(1.08) translateY(-1px);
+  box-shadow: 0 18px 36px rgba(51,88,255,0.5), 0 6px 14px rgba(51,88,255,0.32);
+}
+.shell-v2 .ea-term-fab.is-open {
+  background: rgba(255,255,255,0.06) !important;
+  background-image: none !important;
+  color: var(--s2-text) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.18);
+}
+[data-theme="light"] .shell-v2 .ea-term-fab.is-open {
+  background: #fff !important;
+  border-color: rgba(15,23,42,0.12) !important;
+  color: #475569 !important;
+}
+
+/* Popover (新建会话的配置卡) */
+.shell-v2 .ea-term-launcher-pop {
+  position: absolute; inset: 0;
+  background: rgba(8,11,20,0.42);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: flex-end; justify-content: flex-end;
+  padding: 12px 76px 90px 16px;   /* 右下角靠近 FAB */
+  z-index: 70;
+  animation: eaTermPopIn 180ms ease both;
+}
+@keyframes eaTermPopIn { from { opacity: 0; } to { opacity: 1; } }
+[data-theme="light"] .shell-v2 .ea-term-launcher-pop { background: rgba(15,23,42,0.16); }
+
+.shell-v2 .ea-term-launcher-card {
+  width: min(420px, 100%);
+  background: linear-gradient(180deg, #141a26, #10141d);
+  border: 1px solid rgba(91,140,255,0.28);
+  border-radius: 14px;
+  box-shadow: 0 24px 56px rgba(0,0,0,0.42);
+  overflow: hidden;
+  transform-origin: bottom right;
+  animation: eaTermCardIn 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+[data-theme="light"] .shell-v2 .ea-term-launcher-card {
+  background: #fff;
+  border-color: rgba(91,140,255,0.32);
+  box-shadow: 0 24px 56px rgba(15,23,42,0.18);
+}
+@keyframes eaTermCardIn { from { opacity: 0; transform: scale(0.92) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+.shell-v2 .ea-term-launcher-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px 8px;
+}
+.shell-v2 .ea-term-launcher-eyebrow {
+  font-size: 0.56rem; font-weight: 700; letter-spacing: 0.18em;
+  color: var(--s2-faint);
+}
+.shell-v2 .ea-term-launcher-close {
+  width: 22px; height: 22px; padding: 0;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--s2-muted) !important;
+  font-size: 1.1rem; line-height: 1;
+  cursor: pointer; border-radius: 5px !important;
+  box-shadow: none !important;
+}
+.shell-v2 .ea-term-launcher-close:hover { background: rgba(255,255,255,0.08) !important; color: var(--s2-text) !important; }
+
+.shell-v2 .ea-term-launcher-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+  padding: 4px 16px 12px;
+}
+.shell-v2 .ea-term-launcher-field { display: grid; gap: 4px; min-width: 0; }
+.shell-v2 .ea-term-launcher-field-wide { grid-column: 1 / -1; }
+.shell-v2 .ea-term-launcher-field > span {
+  font-size: 0.55rem; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--s2-faint);
+}
+.shell-v2 .ea-term-launcher-field input,
+.shell-v2 .ea-term-launcher-field select {
+  height: 34px !important; padding: 0 10px !important;
+  font-size: 0.74rem !important;
+  background: rgba(255,255,255,0.04) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  border-radius: 7px !important;
+  color: var(--s2-text) !important;
+}
+[data-theme="light"] .shell-v2 .ea-term-launcher-field input,
+[data-theme="light"] .shell-v2 .ea-term-launcher-field select {
+  background: rgba(248,250,255,0.9) !important;
+  border-color: rgba(15,23,42,0.1) !important;
+  color: #0f172a !important;
+}
+
+.shell-v2 .ea-term-launcher-foot {
+  padding: 0 16px 14px;
+  display: flex; justify-content: flex-end;
+}
+.shell-v2 .ea-term-launcher-go {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 36px; padding: 0 22px;
+  background: linear-gradient(140deg, #6b86ff, #3358ff) !important;
+  background-image: linear-gradient(140deg, #6b86ff, #3358ff) !important;
+  color: #fff !important;
+  border: 0 !important;
+  border-radius: 9px !important;
+  font-size: 0.78rem; font-weight: 660;
+  box-shadow: 0 6px 14px rgba(51,88,255,0.32) !important;
+  cursor: pointer;
+  transition: transform 100ms;
+}
+.shell-v2 .ea-term-launcher-go:hover:not(:disabled) { transform: translateY(-1px); }
+.shell-v2 .ea-term-launcher-go.is-busy { opacity: 0.7; cursor: progress; }
+
+/* 顶 tab 新建按钮 */
+.shell-v2 .ea-term-tab-new {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  color: var(--s2-muted);
+  cursor: pointer; box-shadow: none;
+  margin-left: 4px;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.shell-v2 .ea-term-tab-new:hover {
+  background: rgba(91,140,255,0.14);
+  color: #8dbdff;
+  border-color: rgba(91,140,255,0.32);
+}
+[data-theme="light"] .shell-v2 .ea-term-tab-new { border-color: rgba(15,23,42,0.1); color: #475569; }
+[data-theme="light"] .shell-v2 .ea-term-tab-new:hover { color: #3358ff; }
