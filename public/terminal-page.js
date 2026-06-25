@@ -304,13 +304,24 @@ export async function renderTerminalPage() {
   // 首次进来 / 回到 terminal 页都重新拉一次现有 sessions
   if (!tp._loadedOnce) {
     tp._loadedOnce = true;
-    // (a) 先把 localStorage 里的元数据加载（含上次 app 关掉时的"幽灵"session）
+    // (a) 从 SQLite 拉持久化元数据（关 app / 重启 dev 都不丢）
     try {
-      const raw = localStorage.getItem('ea-term-sessions-meta');
-      const meta = raw ? JSON.parse(raw) : [];
-      for (const m of (meta || [])) {
-        if (!m?.id) continue;
-        tp.sessions.push({ ...m, running: false, _ghost: true });
+      const pres = await api('/api/terminal/persisted');
+      const persisted = pres?.ok && Array.isArray(pres.data?.rows) ? pres.data.rows : [];
+      for (const p of persisted) {
+        tp.sessions.push({
+          id: p.sessionId,
+          tool: p.tool,
+          title: p.title,
+          command: p.command,
+          cwd: p.cwd,
+          program: p.program,
+          args: p.args,
+          env: p.env,
+          createdAt: p.createdAtMs ? new Date(p.createdAtMs).toISOString() : new Date().toISOString(),
+          running: false,
+          _ghost: true,
+        });
       }
     } catch (_) {}
     // (b) 拉 Rust 当前活的 sessions，覆盖/合并
@@ -609,22 +620,35 @@ function listProviderRows(tool) {
   } catch (_) { return []; }
 }
 
-function persistSessionsMeta() {
+// 用 Rust SQLite 落盘单个 session 元数据 (写入 ~/.codex-config-ui/cache/terminals.db)
+// localStorage 在 Tauri webview 缓存清理 / dev rebuild 时会丢，SQLite 才真持久
+async function persistOneSession(s) {
+  if (!s?.id) return;
   try {
-    const tp = getState()?.terminalPage;
-    if (!tp) return;
-    const meta = tp.sessions.map((s) => ({
-      id: s.id,
-      tool: s.tool,
-      title: s.title,
-      command: s.command,
-      cwd: s.cwd,
-      program: s.program,
-      args: s.args,
-      env: s.env,
-      createdAt: s.createdAt,
-    }));
-    localStorage.setItem('ea-term-sessions-meta', JSON.stringify(meta));
+    await api('/api/terminal/persist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: s.id,
+        tool: s.tool || '',
+        title: s.title || '',
+        command: s.command || '',
+        cwd: s.cwd || '',
+        program: s.program || '',
+        args: s.args || [],
+        env: s.env || {},
+      }),
+    });
+  } catch (_) {}
+}
+async function forgetPersistedSession(sessionId) {
+  if (!sessionId) return;
+  try {
+    await api('/api/terminal/forget', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
   } catch (_) {}
 }
 
@@ -993,7 +1017,7 @@ async function spawnSession() {
       tp.sessions.unshift(session);
       tp.activeSessionId = session.id;
       tp.launcherOpen = false; // 启动后自动收 popover
-      persistSessionsMeta();
+      persistOneSession(session);
       flash(`已启动 ${bin}`, 'success');
     } else {
       flash(`启动失败: ${res?.error || '未知'}`, 'error');
@@ -1031,7 +1055,9 @@ async function restartGhostSession(sessionId) {
       if (idx >= 0) tp.sessions[idx] = fresh;
       else tp.sessions.unshift(fresh);
       tp.activeSessionId = fresh.id;
-      persistSessionsMeta();
+      // SQLite 里把旧 ghost id 删了再写新 id（活的 session id 跟着）
+      forgetPersistedSession(sessionId);
+      persistOneSession(fresh);
       flash('已重启会话', 'success');
     } else {
       flash(`重启失败: ${res?.error || '未知'}`, 'error');
@@ -1046,7 +1072,7 @@ function forgetGhostSession(sessionId) {
   const tp = getState().terminalPage;
   tp.sessions = tp.sessions.filter((s) => s.id !== sessionId);
   if (tp.activeSessionId === sessionId) tp.activeSessionId = tp.sessions[0]?.id || '';
-  persistSessionsMeta();
+  forgetPersistedSession(sessionId);
   renderTerminalPage();
 }
 
@@ -1070,7 +1096,8 @@ async function closeSession(sessionId) {
   if (tp.activeSessionId === sessionId) {
     tp.activeSessionId = tp.sessions[0]?.id || '';
   }
-  persistSessionsMeta();
+  // 用户手动 close = 完全删，SQLite 里也清掉
+  forgetPersistedSession(sessionId);
   renderTerminalPage();
 }
 
