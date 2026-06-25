@@ -12,6 +12,21 @@ import {
   detectProvider,
 } from './lib/provider-check.js';
 import {
+  listOauthProfiles as listCodexOauthProfiles,
+  saveCurrentOauthProfile as saveCurrentCodexOauthProfile,
+  createOauthProfile as createCodexOauthProfile,
+  switchOauthProfile as switchCodexOauthProfile,
+  renameOauthProfile as renameCodexOauthProfile,
+  deleteOauthProfile as deleteCodexOauthProfile,
+} from './lib/codex-oauth-profiles.js';
+import {
+  listClaudecodeOauthProfiles,
+  createClaudecodeOauthProfile,
+  switchClaudecodeOauthProfile,
+  renameClaudecodeOauthProfile,
+  deleteClaudecodeOauthProfile,
+} from './lib/claudecode-oauth-profiles.js';
+import {
   checkSetupEnvironment,
   getProviderSecret,
   getProviderExtras,
@@ -1271,6 +1286,38 @@ export async function startServer() {
     }
   });
 
+  // ─── Codex OAuth profiles (multi-account, P0 #2) ──────────────
+  app.get('/api/codex/oauth/profiles', async (req, res) => {
+    try {
+      ok(res, { data: await listCodexOauthProfiles({ codexHome: req.query.codexHome }) });
+    } catch (error) { fail(res, error); }
+  });
+  app.post('/api/codex/oauth/profiles/save-current', async (req, res) => {
+    try {
+      ok(res, { data: await saveCurrentCodexOauthProfile(req.body || {}) });
+    } catch (error) { fail(res, error); }
+  });
+  app.post('/api/codex/oauth/profiles/create', async (req, res) => {
+    try {
+      ok(res, { data: await createCodexOauthProfile(req.body || {}) });
+    } catch (error) { fail(res, error); }
+  });
+  app.post('/api/codex/oauth/profiles/switch', async (req, res) => {
+    try {
+      ok(res, { data: await switchCodexOauthProfile(req.body || {}) });
+    } catch (error) { fail(res, error); }
+  });
+  app.post('/api/codex/oauth/profiles/rename', async (req, res) => {
+    try {
+      ok(res, { data: await renameCodexOauthProfile(req.body || {}) });
+    } catch (error) { fail(res, error); }
+  });
+  app.post('/api/codex/oauth/profiles/delete', async (req, res) => {
+    try {
+      ok(res, { data: await deleteCodexOauthProfile(req.body || {}) });
+    } catch (error) { fail(res, error); }
+  });
+
 app.get('/api/codex/sessions', async (req, res) => {
     try {
       const cwd = validatePathOrThrow(req.query.cwd, 'cwd');
@@ -1421,6 +1468,28 @@ app.get('/api/dashboard/opencode-usage', async (req, res) => {
     } catch (error) {
       fail(res, error);
     }
+  });
+
+  // ─── Claude Code OAuth profiles (multi-account, P0 #2) ──────────
+  app.get('/api/claudecode/oauth/profiles', async (_req, res) => {
+    try { ok(res, { data: await listClaudecodeOauthProfiles() }); }
+    catch (error) { fail(res, error); }
+  });
+  app.post('/api/claudecode/oauth/profiles/create', async (req, res) => {
+    try { ok(res, { data: await createClaudecodeOauthProfile(req.body || {}) }); }
+    catch (error) { fail(res, error); }
+  });
+  app.post('/api/claudecode/oauth/profiles/switch', async (req, res) => {
+    try { ok(res, { data: await switchClaudecodeOauthProfile(req.body || {}) }); }
+    catch (error) { fail(res, error); }
+  });
+  app.post('/api/claudecode/oauth/profiles/rename', async (req, res) => {
+    try { ok(res, { data: await renameClaudecodeOauthProfile(req.body || {}) }); }
+    catch (error) { fail(res, error); }
+  });
+  app.post('/api/claudecode/oauth/profiles/delete', async (req, res) => {
+    try { ok(res, { data: await deleteClaudecodeOauthProfile(req.body || {}) }); }
+    catch (error) { fail(res, error); }
   });
 
   app.get('/api/opencode/state', async (req, res) => {

@@ -4468,13 +4468,13 @@ export async function launchCodex({ cwd, terminalProfile = 'auto' } = {}) {
   return { ok: true, cwd: targetCwd, message };
 }
 
-export async function loginCodex({ cwd, terminalProfile = 'auto' } = {}) {
+export async function loginCodex({ cwd, terminalProfile = 'auto', codexHome = '' } = {}) {
   const targetCwd = resolveLaunchCwd(cwd);
-  const codexHome = defaultCodexHome();
-  const authPath = path.join(codexHome, 'auth.json');
+  const resolvedHome = String(codexHome || '').trim() || defaultCodexHome();
+  const authPath = path.join(resolvedHome, 'auth.json');
   const authRaw = await readText(authPath);
   if (authRaw.trim()) {
-    await preserveCodexAuthJsonEntriesToEnv({ codexHome, authRaw });
+    await preserveCodexAuthJsonEntriesToEnv({ codexHome: resolvedHome, authRaw });
     await backupCodexAuthJson(authRaw);
   }
   const codexBinary = findCodexBinary();
@@ -4482,12 +4482,16 @@ export async function loginCodex({ cwd, terminalProfile = 'auto' } = {}) {
     throw new Error(describeCodexInstallError());
   }
 
+  // 给目标 profile 注入 CODEX_HOME，让 codex login 把 auth.json 写到 profile dir 而不是默认 ~/.codex
+  const extraEnv = resolvedHome !== defaultCodexHome() ? { CODEX_HOME: resolvedHome } : {};
+
   const message = launchTerminalCommand(targetCwd, {
     binaryPath: codexBinary.path,
     binaryName: 'codex',
     toolLabel: 'Codex 登录',
     commandText: buildCodexSessionCommand(codexBinary, ['login']),
     terminalProfile,
+    extraEnv,
   });
   return { ok: true, cwd: targetCwd, message };
 }
@@ -5099,6 +5103,12 @@ export async function launchClaudeCode({ cwd } = {}) {
     throw new Error('Claude Code 尚未安装，请先点击安装');
   }
   const extraEnv = await getClaudeActiveProviderProxyEnv();
+  // 如果当前激活了某个 OAuth profile，注入 CLAUDE_CONFIG_DIR 让 Claude 用对应账号
+  try {
+    const { activeClaudecodeConfigDir } = await import('./claudecode-oauth-profiles.js');
+    const dir = await activeClaudecodeConfigDir();
+    if (dir) extraEnv.CLAUDE_CONFIG_DIR = dir;
+  } catch (_) { /* swallow */ }
   const message = launchTerminalCommand(targetCwd, {
     binaryPath: binary.path,
     binaryName: 'claude',
@@ -5108,18 +5118,31 @@ export async function launchClaudeCode({ cwd } = {}) {
   return { ok: true, cwd: targetCwd, message };
 }
 
-export async function loginClaudeCode({ cwd } = {}) {
+export async function loginClaudeCode({ cwd, profileId = '' } = {}) {
   const targetCwd = resolveLaunchCwd(cwd);
   const binary = findToolBinary('claudecode');
   if (!binary.installed) {
     throw new Error('Claude Code 尚未安装，请先点击安装');
   }
   const binaryPath = String(binary.path || 'claude');
+  // 如果指定了 profileId，把 CLAUDE_CONFIG_DIR 指到 profile dir，让 claude auth login 把 token 写到 profile 里
+  const extraEnv = {};
+  const cleanProfileId = String(profileId || '').trim();
+  if (cleanProfileId) {
+    try {
+      const home = process.env.CODEX_CONFIG_UI_HOME || path.join(os.homedir(), APP_HOME_DIRNAME);
+      const dir = path.join(home, 'claudecode-oauth-profiles', cleanProfileId);
+      if (!cleanProfileId.includes('/') && !cleanProfileId.includes('\\') && !cleanProfileId.includes('..')) {
+        extraEnv.CLAUDE_CONFIG_DIR = dir;
+      }
+    } catch (_) {}
+  }
   const message = launchTerminalCommand(targetCwd, {
     commandText: process.platform === 'win32'
       ? buildWindowsBinaryCommand(binaryPath, ['auth', 'login'], 'claude')
       : `${quotePosixShellArg(binaryPath)} auth login`,
     toolLabel: 'Claude Code OAuth 登录',
+    extraEnv,
   });
   return { ok: true, cwd: targetCwd, message };
 }
