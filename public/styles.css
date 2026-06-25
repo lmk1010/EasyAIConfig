@@ -28241,11 +28241,16 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 }
 .pd-models-card {
   position: relative;
+  width: 100%;
   background: var(--card-bg, rgba(255,255,255,0.6));
   border: 1px solid rgba(120,140,180,0.18);
   border-radius: 10px;
-  padding: 14px 14px 10px;
+  padding: 12px 14px 36px;       /* 底部留空间放 CTA */
+  text-align: left;
+  cursor: pointer;
+  font: inherit; color: inherit;
   transition: all 160ms ease;
+  display: block;
 }
 [data-theme="dark"] .pd-models-card {
   background: rgba(28,32,42,0.55);
@@ -28262,8 +28267,11 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 [data-theme="dark"] .pd-models-card.is-default {
   background: linear-gradient(135deg, rgba(91,140,255,0.10), rgba(91,140,255,0.02));
 }
-.pd-models-card-badge {
+.pd-models-card-tags {
   position: absolute; top: 10px; right: 36px;
+  display: flex; gap: 4px;
+}
+.pd-models-card-badge {
   font-size: 9.5px; font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.06em;
   background: linear-gradient(90deg, #5b8cff, #3358ff);
@@ -28272,7 +28280,6 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   border-radius: 999px;
 }
 .pd-models-card-live {
-  position: absolute; top: 10px; right: 36px;
   font-size: 9.5px; font-weight: 700;
   letter-spacing: 0.06em;
   background: rgba(34,197,94,0.14);
@@ -28313,11 +28320,30 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   cursor: pointer;
   opacity: 0;
   transition: all 120ms ease;
+  z-index: 2;
 }
 .pd-models-card:hover .pd-models-card-remove { opacity: 1; }
 .pd-models-card-remove:hover {
   background: rgba(248,113,113,0.12);
   color: #ef4444;
+}
+
+/* CTA：底部悬浮提示 "点击设为默认" */
+.pd-models-card-cta {
+  position: absolute;
+  left: 14px; right: 14px; bottom: 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  text-align: left;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.pd-models-card:hover .pd-models-card-cta { opacity: 0.85; }
+.pd-models-card.is-default .pd-models-card-cta {
+  opacity: 1;
+  color: #3358ff;
 }
 
 /* 空状态 */
@@ -28372,10 +28398,13 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   border-radius: 8px;
   padding: 0 12px;
   height: 40px;
+  min-height: 40px; max-height: 40px;
+  box-sizing: border-box;
   font: inherit; font-size: 13px;
   color: var(--text);
   cursor: pointer;
   text-align: left;
+  overflow: hidden;
   transition: all 120ms ease;
 }
 .model-multi-trigger:hover { border-color: rgba(120,140,180,0.40); }
@@ -28386,8 +28415,12 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 .model-multi-summary {
   flex: 1; min-width: 0;
   display: flex; align-items: center; gap: 4px;
-  flex-wrap: wrap;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex-wrap: nowrap;             /* 强制单行 */
+  overflow: hidden;
+  white-space: nowrap;
+}
+.model-multi-summary > * {
+  flex-shrink: 0;
 }
 .model-multi-summary.is-empty { color: var(--muted); opacity: 0.65; }
 .model-multi-tag {

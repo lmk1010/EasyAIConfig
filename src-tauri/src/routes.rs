@@ -23,7 +23,7 @@ use crate::codex::{
 };
 use crate::config::{
   delete_codex_provider, get_provider_secret, list_backups, load_state, pick_directory,
-  read_config_file, restore_backup, save_config, save_raw_config, save_settings,
+  read_config_file, restore_backup, save_config, save_raw_config, save_settings, set_default_model,
   test_saved_provider, use_oauth_config, write_config_file,
 };
 
@@ -60,6 +60,7 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/config/read-file", "GET") => read_config_file(query),
     ("/api/config/write-file", "POST") => write_config_file(body),
     ("/api/config/save", "POST") => save_config(body),
+    ("/api/config/set-default-model", "POST") => set_default_model(body),
     ("/api/config/delete-provider", "POST") => delete_codex_provider(body),
     ("/api/config/use-oauth", "POST") => use_oauth_config(body),
     ("/api/config/raw-save", "POST") => save_raw_config(body),

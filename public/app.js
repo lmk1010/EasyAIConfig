@@ -18904,15 +18904,19 @@ function renderPdModels(row) {
     const meta = catalogIndex[m] || { label: '', group: '自定义' };
     const isLive = liveSet.has(m);
     const isDefault = m === currentModel;
+    const title = isDefault ? '当前默认 · 点击其他卡片切换' : '点击设为默认模型';
     return `
-      <div class="pd-models-card ${isDefault ? 'is-default' : ''}" data-pd-model-card="${esc(m)}">
-        ${isDefault ? '<span class="pd-models-card-badge">默认</span>' : ''}
-        ${isLive && !isDefault ? '<span class="pd-models-card-live">LIVE</span>' : ''}
+      <button type="button" class="pd-models-card ${isDefault ? 'is-default' : ''}" data-pd-model-card="${esc(m)}" data-pd-model-set-default="${esc(m)}" title="${esc(title)}">
+        <div class="pd-models-card-tags">
+          ${isDefault ? '<span class="pd-models-card-badge">默认</span>' : ''}
+          ${isLive ? '<span class="pd-models-card-live">LIVE</span>' : ''}
+        </div>
         <div class="pd-models-card-id">${esc(m)}</div>
         <div class="pd-models-card-label">${esc(meta.label || '自定义模型')}</div>
         ${meta.group ? `<div class="pd-models-card-group">${esc(meta.group)}</div>` : ''}
-        <button type="button" class="pd-models-card-remove" data-pd-model-remove="${esc(m)}" title="移除">×</button>
-      </div>`;
+        <span class="pd-models-card-cta">${isDefault ? '✓ 默认' : '点击设为默认'}</span>
+        <span class="pd-models-card-remove" data-pd-model-remove="${esc(m)}" title="移除">×</span>
+      </button>`;
   }).join('');
   return `
     <div class="pd-models-page">
@@ -18991,9 +18995,10 @@ async function bindPdModelsEvents() {
     } catch (err) { flash(`保存异常: ${err.message || err}`, 'error'); }
   }
 
-  root.addEventListener('click', (e) => {
+  root.addEventListener('click', async (e) => {
     const remove = e.target.closest('[data-pd-model-remove]');
     if (remove) {
+      e.stopPropagation();
       const m = remove.dataset.pdModelRemove;
       const cur = (state.providerSavedModels?.[providerKey]) || [];
       persistSet(cur.filter((x) => x !== m));
@@ -19001,6 +19006,34 @@ async function bindPdModelsEvents() {
     }
     if (e.target.closest('[data-pd-models-add]')) {
       openPdModelsPicker(providerKey, persistSet);
+      return;
+    }
+    // 卡片整体点击 → 设为默认模型
+    const setDefault = e.target.closest('[data-pd-model-set-default]');
+    if (setDefault) {
+      const m = setDefault.dataset.pdModelSetDefault;
+      const row = lookupProviderDetailRow();
+      const curDefault = row?.model || state.current?.summary?.model || '';
+      if (m === curDefault) return;
+      const codexHome = state.current?.codexHome || '';
+      try {
+        const res = await api('/api/config/set-default-model', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ codexHome, model: m }),
+        });
+        if (res?.ok) {
+          if (state.current?.summary) state.current.summary.model = m;
+          if (row) row.model = m;
+          flash(`已切换默认为 ${m}`, 'success');
+          renderProviderDetail({ force: true });
+          // 触发上层 hub 重新 build rows 让 row.model 同步
+          if (typeof window.__chBuildRows === 'function') {
+            try { state.detected = state.detected || {}; } catch (_) {}
+          }
+        } else {
+          flash(`切换失败: ${res?.error || '未知'}`, 'error');
+        }
+      } catch (err) { flash(`切换异常: ${err.message || err}`, 'error'); }
       return;
     }
   });
