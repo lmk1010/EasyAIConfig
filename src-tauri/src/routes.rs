@@ -86,6 +86,8 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/terminal/persisted", "GET") => crate::terminal_persist::list_persisted(query),
     ("/api/terminal/persist", "POST") => crate::terminal_persist::persist_session(body),
     ("/api/terminal/forget", "POST") => crate::terminal_persist::forget_session(body),
+    ("/api/provider/saved-models", "GET") => crate::provider_models::list_saved_models(query),
+    ("/api/provider/saved-models", "POST") => crate::provider_models::save_provider_models(body),
     ("/api/codex/sessions", "GET") => list_codex_sessions(query),
     ("/api/codex/session-detail", "GET") => get_codex_session_detail(query),
     ("/api/codex/resume", "POST") => resume_codex_session(body),

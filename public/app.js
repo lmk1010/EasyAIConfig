@@ -17172,6 +17172,104 @@ const CODEX_DEFAULT_MODELS = [
 ];
 
 /** Render default GPT model options into a <select> when no detection has been run. */
+// ─── Model browse modal: 多选浏览全部 catalog 模型 ─────────────
+// state.modelBrowse = { open, search, checked: Set, savedSet: Set }
+function getCurrentProviderEditKey() {
+  // 编辑时 slideover 用 hubState().editingKey 或类似；安全 fallback
+  try { return window.__chHubState?.()?.editingKey || ''; } catch (_) { return ''; }
+}
+async function openModelBrowseModal() {
+  state.modelBrowse = state.modelBrowse || {};
+  const providerKey = getCurrentProviderEditKey();
+  state.modelBrowse.providerKey = providerKey;
+  state.modelBrowse.search = '';
+  // 先拉已保存的，作为初始勾选
+  let saved = [];
+  if (providerKey) {
+    try {
+      const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
+      const res = await api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`);
+      if (res?.ok) saved = res.data?.models || [];
+    } catch (_) {}
+  }
+  state.modelBrowse.checked = new Set(saved);
+  state.modelBrowse.savedSet = new Set(saved);
+  // 显示 modal
+  const modal = el('modelBrowseModal');
+  if (modal) { modal.classList.remove('hide'); modal.setAttribute('aria-hidden', 'false'); }
+  renderModelBrowseBody();
+  setTimeout(() => el('modelBrowseSearch')?.focus(), 60);
+}
+function closeModelBrowseModal() {
+  const modal = el('modelBrowseModal');
+  if (modal) { modal.classList.add('hide'); modal.setAttribute('aria-hidden', 'true'); }
+}
+function renderModelBrowseBody() {
+  const body = el('modelBrowseBody');
+  const searchInput = el('modelBrowseSearch');
+  const count = el('modelBrowseSelCount');
+  if (!body) return;
+  const filter = (searchInput?.value || '').trim().toLowerCase();
+  const checked = state.modelBrowse?.checked || new Set();
+  let html = '';
+  for (const group of CODEX_MODEL_PRESETS) {
+    const matched = group.options.filter((o) =>
+      !filter ||
+      o.value.toLowerCase().includes(filter) ||
+      String(o.label || '').toLowerCase().includes(filter)
+    );
+    if (!matched.length) continue;
+    html += `<div class="model-browse-group"><div class="model-browse-group-label">${escapeHtml(group.label)} <span class="model-browse-group-count">${matched.length}</span></div><div class="model-browse-group-options">`;
+    for (const o of matched) {
+      const isChecked = checked.has(o.value);
+      html += `<label class="model-browse-opt ${isChecked ? 'is-on' : ''}">
+        <input type="checkbox" data-mb-model="${escapeHtml(o.value)}" ${isChecked ? 'checked' : ''} />
+        <span class="model-browse-opt-info">
+          <span class="model-browse-opt-id">${escapeHtml(o.value)}</span>
+          <span class="model-browse-opt-label">${escapeHtml(o.label)}</span>
+        </span>
+      </label>`;
+    }
+    html += `</div></div>`;
+  }
+  if (!html) html = `<div class="model-browse-empty">没有匹配的模型</div>`;
+  body.innerHTML = html;
+  if (count) count.textContent = String(checked.size);
+  body.querySelectorAll('input[data-mb-model]').forEach((cb) => {
+    cb.addEventListener('change', (e) => {
+      const v = e.target.dataset.mbModel;
+      if (e.target.checked) checked.add(v); else checked.delete(v);
+      e.target.closest('.model-browse-opt')?.classList.toggle('is-on', e.target.checked);
+      if (count) count.textContent = String(checked.size);
+    });
+  });
+}
+async function saveModelBrowseSelection() {
+  const providerKey = state.modelBrowse?.providerKey || '';
+  if (!providerKey) { flash('当前不在编辑 provider', 'warning'); return; }
+  const models = Array.from(state.modelBrowse?.checked || []);
+  const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
+  try {
+    const res = await api('/api/provider/saved-models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerKey, codexHome, models }),
+    });
+    if (res?.ok) {
+      flash(`已保存 ${res.data?.count || models.length} 个模型`, 'success');
+      // 同步本地 cache 让 renderModelOptions 立刻看到
+      state.providerSavedModels = state.providerSavedModels || {};
+      state.providerSavedModels[providerKey] = models;
+      closeModelBrowseModal();
+      try { renderModelOptions(state.detected?.models || [], el('modelSelect')?.value || ''); } catch (_) {}
+    } else {
+      flash(`保存失败: ${res?.error || '未知'}`, 'error');
+    }
+  } catch (err) {
+    flash(`保存异常: ${err.message || err}`, 'error');
+  }
+}
+
 function renderDefaultCodexModels(selectEl, currentModel) {
   if (!selectEl) return;
   let html = '<option value="">选择默认模型</option>';
@@ -17192,20 +17290,34 @@ function renderModelOptions(models = state.detected?.models || [], preferred = '
   const selected = preferred || el('modelSelect').value || state.current?.summary?.model || '';
   const detected = [...new Set([selected, state.detected?.recommendedModel, ...models].filter(Boolean))];
 
-  // 把 provider 返回的模型 + 项目内置 catalog 合并去重 — 用户始终有完整选择
-  // 内置 CODEX_MODEL_PRESETS 提供 OpenAI/Anthropic/Gemini/Qwen 等所有当前主流
+  // 用户在浏览 modal 里勾选保存的"此 Provider 支持的模型"
+  // 来自 /api/provider/saved-models，缓存到 state.providerSavedModels[providerKey]
+  const editKey = getCurrentProviderEditKey();
+  const savedModels = (state.providerSavedModels && state.providerSavedModels[editKey]) || [];
+
+  // 把 provider 返回的模型 + 已保存"支持"模型 + 内置 catalog 合并去重
   const detectedSet = new Set(detected);
+  const savedSet = new Set(savedModels);
   let html = '';
   if (detected.length) {
-    html += '<optgroup label="来自当前 Provider">';
+    html += '<optgroup label="来自当前 Provider /v1/models">';
     for (const m of detected) {
       html += `<option value="${escapeHtml(m)}" ${m === selected ? 'selected' : ''}>${escapeHtml(m)}</option>`;
     }
     html += '</optgroup>';
   }
-  // 内置 catalog 分组
+  // 用户在浏览模态里勾的（saved）放在 detected 后面，醒目
+  const savedExtras = savedModels.filter((m) => !detectedSet.has(m));
+  if (savedExtras.length) {
+    html += '<optgroup label="已加入此 Provider (用户保存)">';
+    for (const m of savedExtras) {
+      html += `<option value="${escapeHtml(m)}" ${m === selected ? 'selected' : ''}>${escapeHtml(m)}</option>`;
+    }
+    html += '</optgroup>';
+  }
+  // 内置 catalog 分组（已 detected / 已 saved 的都跳过避免重复）
   for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
-    const extras = group.options.filter((o) => !detectedSet.has(o.value));
+    const extras = group.options.filter((o) => !detectedSet.has(o.value) && !savedSet.has(o.value));
     if (!extras.length) continue;
     html += `<optgroup label="${escapeHtml(group.label)}">`;
     for (const o of extras) {
@@ -21145,6 +21257,15 @@ function bindEvents() {
       flash('Codex 登录状态已刷新', 'success');
     }
   });
+
+  // Model browse button → open the multi-select modal
+  el('modelBrowseBtn')?.addEventListener('click', () => openModelBrowseModal());
+  // close handlers
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-model-browse-close]')) closeModelBrowseModal();
+  });
+  el('modelBrowseSearch')?.addEventListener('input', () => renderModelBrowseBody());
+  el('modelBrowseSaveBtn')?.addEventListener('click', () => saveModelBrowseSelection());
 
   // Model refresh button (inline, next to model select)
   el('modelRefreshBtn')?.addEventListener('click', () => {

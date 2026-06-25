@@ -348,6 +348,7 @@ mod processes;
 mod usage_stats;
 mod app_settings;
 mod provider_health;
+mod provider_models;
 mod shell_integration;
 mod terminal;
 mod terminal_persist;
