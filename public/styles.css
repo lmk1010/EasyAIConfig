@@ -2502,9 +2502,11 @@ button.running {
   display: flex;
   gap: 8px;
   align-items: stretch;
+  width: 100%;
+  min-width: 0;
 }
 .pdb-cwd-input {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   padding: 8px 12px;
   font-family: ui-monospace, monospace;
@@ -2519,6 +2521,15 @@ button.running {
 .pdb-cwd-input:focus {
   border-color: var(--accent, #3b82f6);
   background: rgba(127, 127, 127, 0.02);
+}
+/* 选择按钮：跟输入框等高、不被 flex 挤变形、内容不换行 */
+.pdb-cwd-row .pd-chip-btn {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+  height: 36px !important;
+  padding: 0 14px !important;
+  font-size: 0.8rem !important;
 }
 .pdb-ok    { color: #16a34a; }
 .pdb-warn  { color: #d97706; }

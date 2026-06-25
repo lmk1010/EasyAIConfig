@@ -19429,7 +19429,7 @@ function renderPdBinding(row) {
         <div class="pd-section-title">项目目录</div>
         <div class="pdb-cwd-row">
           <input type="text" id="pdbCwdInput" class="pdb-cwd-input" placeholder="/Users/you/some/project" value="${esc(currentCwd)}" autocomplete="off" spellcheck="false" />
-          ${showPickerBtn ? '<button type="button" class="pd-chip-btn" data-pdb-pick-dir>选择…</button>' : ''}
+          ${showPickerBtn ? '<button type="button" class="pd-chip-btn" data-pdb-pick-dir>选择目录</button>' : ''}
         </div>
         <div class="pd-info-grid" style="margin-top:10px;">
           ${statusRow}
