@@ -138,10 +138,10 @@ function escapeHtml(v) { return typeof window.escapeHtml === 'function' ? window
 
 function renderTermSidebar() {
   const tp = getState()?.terminalPage;
-  if (!tp) return;
+  if (!tp) { console.warn('[ea-term] renderTermSidebar: tp missing'); return; }
   const listEl = document.getElementById('eaTermSecList');
   const countEl = document.getElementById('eaTermSecCount');
-  if (!listEl) return;
+  if (!listEl) { console.warn('[ea-term] renderTermSidebar: #eaTermSecList missing in DOM'); return; }
   if (countEl) countEl.textContent = String(tp.sessions.length);
   const esc = escapeHtml;
   const toolAccent = (tool) => tool === 'codex'
@@ -183,6 +183,8 @@ function renderTermSidebar() {
       </button>`;
   }).join('');
   listEl.innerHTML = newSessionRow + sessionRows;
+  // 一次性诊断：让用户能直接看 listEl 实际状态
+  console.log('[ea-term] sidebar wrote', listEl.children.length, 'items, first 100 chars:', listEl.innerHTML.slice(0, 100));
   // 状态栏的实时用量也同步刷新
   renderTermStatus();
 }
