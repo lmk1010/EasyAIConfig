@@ -105,12 +105,19 @@ async function installTermEventListeners() {
       total: Number(payload.total || 0),
       contextWindow: Number(payload.contextWindow || 0),
     };
-    console.log('[terminal-tokens]', sessionId.slice(0, 8), tokens);
+    const allIds = tp.sessions.map((s) => s.id);
+    const matched = allIds.includes(sessionId);
+    console.log('[terminal-tokens]', sessionId.slice(0, 8), 'matched=', matched, 'activeId=', tp.activeSessionId?.slice(0, 8), 'allIds=', allIds.map(i => i.slice(0, 8)));
     // 1) 写到 session 对象（一定存在，即便 instance 还没 mount / 已 unmount）
     const sess = tp.sessions.find((s) => s.id === sessionId);
     if (sess) {
       sess.tokens = tokens;
       sess.tokensUpdatedAt = Date.now();
+    } else {
+      // sessionId 不在 tp.sessions 里 — 仍然存到 pending，等会话被 list/spawn 添加进来
+      window.__eaPendingTokens = window.__eaPendingTokens || {};
+      window.__eaPendingTokens[sessionId] = payload;
+      console.warn('[ea-term] sessionId NOT in tp.sessions, pending it. ids:', allIds);
     }
     // 2) instance 上同步一份（已 mount 时 status bar 也会从这取）
     const inst = tp.instances?.[sessionId];
@@ -118,18 +125,9 @@ async function installTermEventListeners() {
       inst.tokens = tokens;
       inst.tokensUpdatedAt = Date.now();
     }
-    // 3) rAF 刷 UI
-    const raf = sess?._tokRaf || inst?._sidebarRaf;
-    if (!raf) {
-      const r = requestAnimationFrame(() => {
-        if (sess) sess._tokRaf = 0;
-        if (inst) inst._sidebarRaf = 0;
-        renderTermSidebar();
-        renderTermStatus();
-      });
-      if (sess) sess._tokRaf = r;
-      if (inst) inst._sidebarRaf = r;
-    }
+    // 3) 立即刷 — token 数据频率不高（每轮 codex 调用一次），不用 rAF 节流
+    try { renderTermStatus(); } catch (e) { console.warn('[ea-term] renderTermStatus throw', e); }
+    try { renderTermSidebar(); } catch (e) { console.warn('[ea-term] renderTermSidebar throw', e); }
   });
   await listen('terminal-exit', (event) => {
     const { sessionId, exitCode } = event.payload || {};
