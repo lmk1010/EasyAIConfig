@@ -1,11 +1,18 @@
 {
   "name": "easyaiconfig",
-  "version": "1.0.53",
+  "version": "1.0.54",
   "description": "EasyAIConfig desktop and local UI for configuring Codex providers, models, and common settings.",
   "type": "module",
   "bin": {
     "easyaiconfig": "bin/easyaiconfig.js"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "public/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node ./bin/easyaiconfig.js",
     "check": "node --check ./src/server.js && node --check ./src/lib/config-store.js && node --check ./src/lib/provider-check.js && node --check ./public/config-store-guides-codex.js && node --check ./public/config-store-guides-openclaw.js && node --check ./public/config-store-guides.js && node --check ./public/config-store-engine.js && node --check ./public/config-store-recipes-codex.js && node --check ./public/config-store-recipes-openclaw-channels.js && node --check ./public/config-store-recipes-openclaw-providers.js && node --check ./public/config-store-recipes-openclaw-runtime.js && node --check ./public/config-store-recipes-openclaw-system.js && node --check ./public/config-store-recipes-openclaw.js && node --check ./public/config-store-recipes.js && node --check ./public/app.js",
