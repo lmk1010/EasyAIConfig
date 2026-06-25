@@ -860,6 +860,33 @@ pub(crate) fn read_config_file(query: &Value) -> Result<Value, String> {
   }))
 }
 
+/// POST /api/config/set-default-model
+/// 单独改 codex config.toml 里的 `model` 字段，不动其它任何东西。
+/// body: { codexHome?, scope?, projectPath?, model }
+pub(crate) fn set_default_model(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let model = get_string(&object, "model");
+  if model.trim().is_empty() {
+    return Err("model 不能为空".to_string());
+  }
+  let codex_home = {
+    let input = get_string(&object, "codexHome");
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
+  };
+  let scope = get_string(&object, "scope");
+  let project_path = get_string(&object, "projectPath");
+  let paths = scope_paths(if scope.is_empty() { "global" } else { &scope }, &project_path, &codex_home)?;
+  let config_content = read_text(&paths.config_path)?;
+  let mut config = parse_toml_config(&config_content)?;
+  if !config.is_object() { config = json!({}); }
+  config.as_object_mut().unwrap().insert("model".to_string(), json!(model));
+  let new_content = stringify_toml_config(&config)?;
+  if new_content != config_content {
+    write_text(&paths.config_path, &new_content)?;
+  }
+  Ok(json!({ "ok": true, "model": model }))
+}
+
 pub(crate) fn write_config_file(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let file_path_str = get_string(&object, "filePath");
