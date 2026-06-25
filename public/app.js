@@ -11948,13 +11948,16 @@ function setPage(page = 'quick') {
   // Render tasks page on navigate
   if (page !== 'dashboard') stopDashboardAutoRefresh();
   if (page !== 'console') disposeEmbeddedTerminalInstance();
+  if (page !== 'terminal' && typeof window.disposeTerminalInstances === 'function') {
+    try { window.disposeTerminalInstances(); } catch (_) {}
+  }
   if (page === 'terminal') {
-    // 给独立模块 terminal-page.js 暴露必要的全局
     try {
       window.state = state;
       window.api = api;
       window.flash = flash;
       window.escapeHtml = escapeHtml;
+      window.openExternalUrl = openExternalUrl;
     } catch (_) {}
     try {
       if (typeof window.renderTerminalPage === 'function') {

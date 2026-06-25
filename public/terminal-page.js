@@ -12,6 +12,10 @@
 
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { FitAddon } from './vendor/xterm/addon-fit.mjs';
+import { WebglAddon } from './vendor/xterm/addon-webgl.mjs';
+import { Unicode11Addon } from './vendor/xterm/addon-unicode11.mjs';
+import { WebLinksAddon } from './vendor/xterm/addon-web-links.mjs';
+import { SearchAddon } from './vendor/xterm/addon-search.mjs';
 
 const POLL_INTERVAL_MS = 220;
 
@@ -283,20 +287,124 @@ function onInput(e) {
 function onGlobalKey(e) {
   const st = getState();
   if (!st.terminalPage) return;
-  // 只有当前在 terminal 页才生效
   if (st.activePage !== 'terminal') return;
   const meta = e.metaKey || e.ctrlKey;
+  // ⌘K 命令面板
   if (meta && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     st.terminalPage.paletteOpen = !st.terminalPage.paletteOpen;
     renderTerminalPage();
     return;
   }
-  if (e.key === 'Escape' && st.terminalPage.paletteOpen) {
-    st.terminalPage.paletteOpen = false;
-    renderTerminalPage();
+  // ⌘F 搜索（针对当前 active session）
+  if (meta && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    openSearch();
+    return;
+  }
+  // ⌘+/⌘- 字号微调
+  if (meta && (e.key === '=' || e.key === '+')) {
+    e.preventDefault(); bumpFontSize(+1); return;
+  }
+  if (meta && e.key === '-') {
+    e.preventDefault(); bumpFontSize(-1); return;
+  }
+  if (e.key === 'Escape') {
+    if (st.terminalPage.paletteOpen) { st.terminalPage.paletteOpen = false; renderTerminalPage(); return; }
+    closeSearch();
   }
 }
+
+function openSearch() {
+  let bar = document.getElementById('eaTermSearch');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'eaTermSearch';
+    bar.className = 'ea-term-search';
+    bar.innerHTML = `
+      <input type="text" id="eaTermSearchInput" placeholder="搜索 (Esc 关 · Enter 下一个 · Shift+Enter 上一个)" />
+      <button type="button" data-eat-search-prev title="上一个 (Shift+Enter)">↑</button>
+      <button type="button" data-eat-search-next title="下一个 (Enter)">↓</button>
+      <button type="button" data-eat-search-close title="关闭 (Esc)">×</button>`;
+    document.body.appendChild(bar);
+    bar.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest('[data-eat-search-close]')) { closeSearch(); return; }
+      const tp = getState().terminalPage;
+      const inst = tp.instances[tp.activeSessionId];
+      if (!inst?.search) return;
+      const q = document.getElementById('eaTermSearchInput')?.value || '';
+      if (t.closest('[data-eat-search-prev]')) inst.search.findPrevious(q);
+      if (t.closest('[data-eat-search-next]')) inst.search.findNext(q);
+    });
+    const input = bar.querySelector('input');
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); closeSearch(); return; }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const tp = getState().terminalPage;
+        const inst = tp.instances[tp.activeSessionId];
+        if (!inst?.search) return;
+        const q = input.value || '';
+        if (e.shiftKey) inst.search.findPrevious(q);
+        else inst.search.findNext(q);
+      }
+    });
+  }
+  bar.classList.add('is-open');
+  document.getElementById('eaTermSearchInput')?.focus();
+}
+
+function closeSearch() {
+  const bar = document.getElementById('eaTermSearch');
+  if (bar) bar.classList.remove('is-open');
+  const tp = getState().terminalPage;
+  const inst = tp?.instances?.[tp.activeSessionId];
+  try { inst?.search?.clearDecorations(); } catch (_) {}
+  try { inst?.term?.focus(); } catch (_) {}
+}
+
+function bumpFontSize(delta) {
+  const tp = getState().terminalPage;
+  const inst = tp.instances[tp.activeSessionId];
+  if (!inst) return;
+  const next = Math.max(10, Math.min(22, Number(inst.term.options.fontSize || 13) + delta));
+  inst.term.options.fontSize = next;
+  try { inst.fit.fit(); } catch (_) {}
+  notifyResize(tp.activeSessionId, inst);
+}
+
+// 监听主题切换，同步所有已挂 instance 的 theme
+(function bindThemeWatcher() {
+  if (window.__eaTermThemeBound) return;
+  window.__eaTermThemeBound = true;
+  const apply = () => {
+    const tp = getState?.()?.terminalPage;
+    if (!tp) return;
+    const theme = currentTermTheme();
+    Object.values(tp.instances || {}).forEach((inst) => {
+      try { inst.term.options.theme = theme; } catch (_) {}
+    });
+  };
+  const observer = new MutationObserver(apply);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+})();
+
+// 离开 terminal 页面时清理（disposeAll）
+export function disposeTerminalInstances() {
+  const tp = getState()?.terminalPage;
+  if (!tp) return;
+  for (const inst of Object.values(tp.instances || {})) {
+    try { clearInterval(inst.pollTimer); } catch (_) {}
+    try { inst.resizeObserver?.disconnect(); } catch (_) {}
+    try { inst.webglAddon?.dispose(); } catch (_) {}
+    try { inst.term?.dispose(); } catch (_) {}
+  }
+  tp.instances = {};
+  closeSearch();
+}
+window.disposeTerminalInstances = disposeTerminalInstances;
 
 function handlePaletteAction(act) {
   const tp = getState().terminalPage;
@@ -381,40 +489,165 @@ async function closeSession(sessionId) {
   renderTerminalPage();
 }
 
+// Termius 级深色主题（精选拉满对比度，cursor / selection 都按品牌蓝）
+const TERM_THEME_DARK = {
+  background: '#0b1020',
+  foreground: '#e6ecf5',
+  cursor: '#8dbdff',
+  cursorAccent: '#0b1020',
+  selectionBackground: 'rgba(91,140,255,0.36)',
+  selectionForeground: '#ffffff',
+  // ANSI 16 色：调成 Termius "One Dark" 风格
+  black:        '#1a1f2e',
+  red:          '#ff6b6d',
+  green:        '#5dd39e',
+  yellow:       '#ffd166',
+  blue:         '#5b8cff',
+  magenta:      '#c084fc',
+  cyan:         '#5eead4',
+  white:        '#c9d1d9',
+  brightBlack:  '#3d4452',
+  brightRed:    '#ff8085',
+  brightGreen:  '#7bf1b8',
+  brightYellow: '#ffe085',
+  brightBlue:   '#7da6ff',
+  brightMagenta:'#d4b0ff',
+  brightCyan:   '#80f0d6',
+  brightWhite:  '#f6f8fa',
+};
+const TERM_THEME_LIGHT = {
+  background: '#fafbfc',
+  foreground: '#1f2937',
+  cursor: '#3358ff',
+  cursorAccent: '#fafbfc',
+  selectionBackground: 'rgba(51,88,255,0.22)',
+  selectionForeground: '#1f2937',
+  black:        '#0f172a',
+  red:          '#dc2626',
+  green:        '#16a34a',
+  yellow:       '#ca8a04',
+  blue:         '#2563eb',
+  magenta:      '#9333ea',
+  cyan:         '#0891b2',
+  white:        '#475569',
+  brightBlack:  '#475569',
+  brightRed:    '#ef4444',
+  brightGreen:  '#22c55e',
+  brightYellow: '#eab308',
+  brightBlue:   '#3b82f6',
+  brightMagenta:'#a855f7',
+  brightCyan:   '#06b6d4',
+  brightWhite:  '#0f172a',
+};
+
+function currentTermTheme() {
+  return document.documentElement.dataset.theme === 'light' ? TERM_THEME_LIGHT : TERM_THEME_DARK;
+}
+
 function mountTerminal(sessionId) {
   const tp = getState().terminalPage;
   const hostEl = document.getElementById('eaTermHost');
   if (!hostEl) return;
-  // 清空，重新挂当前 instance（multi-session 用 DOM 重挂代替 detach/reattach）
   hostEl.innerHTML = '';
   let inst = tp.instances[sessionId];
   if (!inst) {
     const term = new Terminal({
       cursorBlink: true,
-      fontFamily: 'SF Mono, Menlo, Consolas, monospace',
+      cursorStyle: 'bar',
+      cursorWidth: 2,
+      // SF Mono / JetBrains Mono / 系统等宽 fallback
+      fontFamily: 'JetBrains Mono, SF Mono, Menlo, Consolas, "Liberation Mono", monospace',
       fontSize: 13,
-      theme: {
-        background: '#0b0f1a',
-        foreground: '#e6e8eb',
-        cursor: '#8dbdff',
-        cursorAccent: '#0b0f1a',
-        selectionBackground: 'rgba(91,140,255,0.32)',
-      },
+      lineHeight: 1.18,
+      letterSpacing: 0,
+      scrollback: 5000,
+      drawBoldTextInBrightColors: false,
+      smoothScrollDuration: 80,
+      theme: currentTermTheme(),
       allowProposedApi: true,
+      // 让 codex/claude 内的复杂 TUI 控件正常工作
+      windowsMode: false,
+      allowTransparency: false,
+      macOptionIsMeta: true,
+      rightClickSelectsWord: true,
+      convertEol: false,
     });
     const fit = new FitAddon();
+    const unicode11 = new Unicode11Addon();
+    const webLinks = new WebLinksAddon((event, uri) => {
+      // 用 Tauri opener 而不是 window.open（避免 webview 内导航）
+      try {
+        if (typeof window.openExternalUrl === 'function') window.openExternalUrl(uri);
+        else window.open(uri, '_blank');
+      } catch (_) { window.open(uri, '_blank'); }
+    });
+    const search = new SearchAddon();
     term.loadAddon(fit);
-    inst = { term, fit, cursor: 0, container: hostEl, pollTimer: 0, sentBytes: 0, recvBytes: 0, lastResize: { cols: 120, rows: 32 } };
+    term.loadAddon(unicode11);
+    term.unicode.activeVersion = '11';
+    term.loadAddon(webLinks);
+    term.loadAddon(search);
+
+    inst = {
+      term, fit, search,
+      cursor: 0,
+      container: hostEl,
+      pollTimer: 0,
+      sentBytes: 0,
+      recvBytes: 0,
+      lastResize: { cols: 120, rows: 32 },
+      webglAddon: null,
+      resizeObserver: null,
+    };
     tp.instances[sessionId] = inst;
     term.onData((data) => {
       inst.sentBytes += data.length;
       sendInput(sessionId, data).catch(() => {});
     });
+  } else {
+    // 切回已有 session：主题可能变了（dark/light 切换）
+    try { inst.term.options.theme = currentTermTheme(); } catch (_) {}
   }
+
   inst.container = hostEl;
   inst.term.open(hostEl);
+
+  // 挂 WebGL renderer（必须 open 之后才能挂）
+  if (!inst.webglAddon) {
+    try {
+      const webgl = new WebglAddon();
+      // 浏览器 context lost 时自动 dispose，掉回 canvas renderer
+      webgl.onContextLoss(() => {
+        try { webgl.dispose(); inst.webglAddon = null; } catch (_) {}
+      });
+      inst.term.loadAddon(webgl);
+      inst.webglAddon = webgl;
+    } catch (err) {
+      // WebGL 不可用（罕见），xterm 自动退回 canvas，不影响功能
+      console.warn('[ea-term] WebGL renderer unavailable, falling back', err);
+    }
+  }
+
+  // Fit + 通知后端 resize
   try { inst.fit.fit(); } catch (_) {}
-  // 通知后端按当前 fit 的 cols/rows resize
+  notifyResize(sessionId, inst);
+
+  // ResizeObserver：窗口拉动时同步 cols/rows
+  if (!inst.resizeObserver && typeof ResizeObserver === 'function') {
+    inst.resizeObserver = new ResizeObserver(() => {
+      try { inst.fit.fit(); } catch (_) {}
+      notifyResize(sessionId, inst);
+    });
+    inst.resizeObserver.observe(hostEl);
+  }
+
+  // 启动轮询输出
+  if (inst.pollTimer) clearInterval(inst.pollTimer);
+  inst.pollTimer = setInterval(() => pollOutput(sessionId), POLL_INTERVAL_MS);
+  inst.term.focus();
+}
+
+function notifyResize(sessionId, inst) {
   try {
     const cols = inst.term.cols, rows = inst.term.rows;
     if (cols && rows && (cols !== inst.lastResize.cols || rows !== inst.lastResize.rows)) {
@@ -425,10 +658,6 @@ function mountTerminal(sessionId) {
       }).catch(() => {});
     }
   } catch (_) {}
-  // 启动轮询输出
-  if (inst.pollTimer) clearInterval(inst.pollTimer);
-  inst.pollTimer = setInterval(() => pollOutput(sessionId), POLL_INTERVAL_MS);
-  inst.term.focus();
 }
 
 async function sendInput(sessionId, data) {
