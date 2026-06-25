@@ -152,6 +152,112 @@ fn build_command_preview(program: &str, args: &[String]) -> String {
   parts.join(" ")
 }
 
+/// 找出 spawn 之后产生的 codex session jsonl，然后 tail 它解 token_count 事件。
+/// codex 启动后会在 ~/.codex/sessions/YYYY/MM/DD/ 新写一个 jsonl，我们等几百毫秒
+/// 让它出现，找 mtime > spawn_time 的最新一个，从头读，每读到一个 token_count
+/// emit "terminal-tokens" 给前端。
+fn watch_codex_session_tokens(session: &Arc<TerminalSession>, spawn_time: std::time::SystemTime) {
+  let session_id = session.id.clone();
+  let codex_home = match crate::default_codex_home() {
+    Ok(p) => p,
+    Err(_) => return,
+  };
+  let sessions_root = codex_home.join("sessions");
+  if !sessions_root.is_dir() { return; }
+
+  // 等最多 12 秒找到新的 jsonl（codex 启动慢 + skills loading 等）
+  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+  let mut target: Option<PathBuf> = None;
+  while std::time::Instant::now() < deadline {
+    if let Some(path) = find_latest_codex_jsonl_after(&sessions_root, spawn_time) {
+      target = Some(path);
+      break;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+  }
+  let Some(target) = target else { return; };
+
+  // tail 该 jsonl：每 500ms 轮询新行，遇到 token_count → emit
+  let mut cursor: u64 = 0;
+  loop {
+    // 主进程退出则收线程
+    {
+      let runtime = session.runtime.lock();
+      let still_running = runtime.map(|r| r.running).unwrap_or(false);
+      if !still_running { break; }
+    }
+    if let Ok(meta) = std::fs::metadata(&target) {
+      let size = meta.len();
+      if size > cursor {
+        if let Ok(mut file) = std::fs::File::open(&target) {
+          use std::io::{Read, Seek, SeekFrom};
+          let _ = file.seek(SeekFrom::Start(cursor));
+          let mut buf = Vec::new();
+          if file.read_to_end(&mut buf).is_ok() {
+            cursor = size;
+            for line in buf.split(|b| *b == b'\n') {
+              if line.is_empty() { continue; }
+              let Ok(text) = std::str::from_utf8(line) else { continue; };
+              let Ok(v) = serde_json::from_str::<Value>(text) else { continue; };
+              let p = v.get("payload");
+              let kind = p.and_then(|p| p.get("type")).and_then(Value::as_str).unwrap_or("");
+              if kind != "token_count" { continue; }
+              let info = p.and_then(|p| p.get("info"));
+              let total = info.and_then(|i| i.get("total_token_usage"));
+              if let Some(total) = total {
+                if let Some(app) = APP_HANDLE.get() {
+                  let context_window = info
+                    .and_then(|i| i.get("model_context_window"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                  let _ = app.emit(
+                    "terminal-tokens",
+                    json!({
+                      "sessionId": session_id,
+                      "input": total.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+                      "cached": total.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
+                      "output": total.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+                      "reasoning": total.get("reasoning_output_tokens").and_then(Value::as_u64).unwrap_or(0),
+                      "total": total.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
+                      "contextWindow": context_window,
+                    }),
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+  }
+}
+
+fn find_latest_codex_jsonl_after(sessions_root: &Path, after: std::time::SystemTime) -> Option<PathBuf> {
+  use std::fs;
+  let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+  fn walk(dir: &Path, after: std::time::SystemTime, best: &mut Option<(std::time::SystemTime, PathBuf)>) {
+    let Ok(entries) = fs::read_dir(dir) else { return; };
+    for entry in entries.flatten() {
+      let path = entry.path();
+      let meta = match entry.metadata() { Ok(m) => m, Err(_) => continue };
+      if meta.is_dir() {
+        walk(&path, after, best);
+      } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+        if let Ok(mtime) = meta.modified() {
+          if mtime > after {
+            if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+              *best = Some((mtime, path));
+            }
+          }
+        }
+      }
+    }
+  }
+  walk(sessions_root, after, &mut best);
+  best.map(|(_, p)| p)
+}
+
 pub(crate) fn spawn_embedded_terminal(
   cwd: &Path,
   title: &str,
@@ -204,6 +310,13 @@ pub(crate) fn spawn_embedded_terminal(
       exit_code: None,
     }),
   });
+
+  // 若是 codex 会话，启动一个 jsonl watcher 抓 token_count 事件
+  if tool.eq_ignore_ascii_case("codex") {
+    let session_for_watch = Arc::clone(&session);
+    let spawn_time = std::time::SystemTime::now();
+    std::thread::spawn(move || watch_codex_session_tokens(&session_for_watch, spawn_time));
+  }
 
   let session_for_reader = Arc::clone(&session);
   std::thread::spawn(move || {
