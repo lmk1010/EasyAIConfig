@@ -235,6 +235,16 @@ export function initTerminalPageState() {
 }
 
 export async function renderTerminalPage() {
+  console.log('[ea-term] renderTerminalPage: called');
+  try {
+    return await _renderTerminalPageInner();
+  } catch (e) {
+    console.error('[ea-term] renderTerminalPage THREW:', e);
+    throw e;
+  }
+}
+async function _renderTerminalPageInner() {
+  console.log('[ea-term] _inner step=initState');
   initTerminalPageState();
   // 把还没拿到 tp 时缓存住的 token 事件灌回 session
   const pending = window.__eaPendingTokens || {};
@@ -257,6 +267,7 @@ export async function renderTerminalPage() {
     window.__eaPendingTokens = {};
   }
   const host = document.getElementById('eaTerminalPage');
+  console.log('[ea-term] _inner step=findHost', !!host);
   if (!host) return;
   const st = getState();
   const tp = st.terminalPage;
@@ -332,6 +343,7 @@ export async function renderTerminalPage() {
       && !tp.providerModelsLoading[tp.launcher.providerKey]) {
     fetchProviderModels(tp.launcher.providerKey, tp.launcher.tool);
   }
+  console.log('[ea-term] _inner step=preHostInnerHTML showLauncher=', showLauncher, 'showGhost=', showGhost, 'sessions=', tp.sessions.length);
   host.innerHTML = `
     <div class="ea-term-shell">
       ${tp.starting ? '<div class="ea-term-progress" aria-label="启动中"><span class="ea-term-progress-bar"></span></div>' : ''}
@@ -359,12 +371,14 @@ export async function renderTerminalPage() {
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
   `;
 
+  console.log('[ea-term] _inner step=postInnerHTML, about to bindEvents');
   bindEvents(host);
   // ghost / launcher 时不挂 xterm
   const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
   if (active && !active._ghost && !tp.launcherOpen) {
     mountTerminal(active.id);
   }
+  console.log('[ea-term] _inner step=callRenderTermSidebar');
   renderTermSidebar();
 }
 
