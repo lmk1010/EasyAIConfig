@@ -209,6 +209,7 @@ export function initTerminalPageState() {
       tool: 'codex',
       source: 'provider',          // codex: 'official' (用 ~/.codex 登录态) | 'provider' (走自管 provider)
       providerKey: '',
+      officialProfileId: '',        // codex official 时选哪个 oauth 账号
       cwd: '',
       model: '',                    // 可空：传 --model
       profile: '',                  // codex 可空：--profile
@@ -216,6 +217,9 @@ export function initTerminalPageState() {
       flags: '',                    // 额外参数
       moreOpen: false,
     },
+    officialProfiles: [],            // [{id, name, email, plan, codexHome, ...}]
+    officialActiveId: '',
+    officialProfilesLoadedAt: 0,
     paletteOpen: false,
     instances: {},           // sessionId -> { term, fit, cursor, container, pollTimer, sentBytes, recvBytes }
     sidebarOpen: true,
@@ -310,6 +314,10 @@ export async function renderTerminalPage() {
   const activeSess = tp.sessions.find((s) => s.id === tp.activeSessionId);
   const showLauncher = !!tp.launcherOpen;
   const showGhost = !showLauncher && activeSess?._ghost;
+  // launcher 打开 + codex + official → 异步拉账号列表（30s 缓存自动）
+  if (showLauncher && tp.launcher.tool === 'codex' && tp.launcher.source === 'official') {
+    loadOfficialProfiles();
+  }
   host.innerHTML = `
     <div class="ea-term-shell">
       ${tp.starting ? '<div class="ea-term-progress" aria-label="启动中"><span class="ea-term-progress-bar"></span></div>' : ''}
@@ -346,6 +354,31 @@ export async function renderTerminalPage() {
   renderTermSidebar();
 }
 
+
+// 拉 codex 官方 OAuth 账号列表（缓存 30 秒）
+async function loadOfficialProfiles(force) {
+  const tp = getState()?.terminalPage;
+  if (!tp) return;
+  if (!force && tp.officialProfilesLoadedAt && Date.now() - tp.officialProfilesLoadedAt < 30000) return;
+  try {
+    const res = await api('/api/codex/oauth/profiles');
+    if (res?.ok) {
+      tp.officialProfiles = Array.isArray(res.data?.profiles) ? res.data.profiles : [];
+      tp.officialActiveId = res.data?.active || '';
+      tp.officialProfilesLoadedAt = Date.now();
+      // 默认选 active
+      if (!tp.launcher.officialProfileId && tp.officialActiveId) {
+        tp.launcher.officialProfileId = tp.officialActiveId;
+      } else if (!tp.launcher.officialProfileId && tp.officialProfiles[0]) {
+        tp.launcher.officialProfileId = tp.officialProfiles[0].id;
+      }
+      // 重渲让 select 显示
+      if (tp.launcherOpen && getState()?.activePage === 'terminal') {
+        renderTerminalPage();
+      }
+    }
+  } catch (_) {}
+}
 
 // Canvas 内嵌的"新建会话"页面 — 替代旧 popover。
 // 居中容器 + 项目原生 field 风格 (label 左、控件右、24px 高)
@@ -394,7 +427,22 @@ function renderLauncherPage(tp, providers) {
                 ${providerOpts || '<option value="">（无可用 provider）</option>'}
               </select>
             </div>
-          ` : ''}
+          ` : `
+            <div class="ea-term-launch-row">
+              <label class="ea-term-launch-lab">账号</label>
+              ${tp.officialProfiles.length ? `
+                <select class="ea-term-launch-ctl" data-eat-launch="officialProfileId">
+                  ${tp.officialProfiles.map((p) => {
+                    const lab = p.email || p.name || p.id;
+                    const tag = p.id === tp.officialActiveId ? ' · 当前' : '';
+                    return `<option value="${esc(p.id)}" ${p.id === tp.launcher.officialProfileId ? 'selected' : ''}>${esc(lab)}${esc(tag)}</option>`;
+                  }).join('')}
+                </select>
+              ` : `
+                <div class="ea-term-launch-empty">还没有保存的 codex 账号 · <a href="#" data-eat-goto-oauth>去管理</a></div>
+              `}
+            </div>
+          `}
           <div class="ea-term-launch-row">
             <label class="ea-term-launch-lab">工作目录</label>
             <div class="ea-term-launch-cwd-wrap">
@@ -1086,6 +1134,14 @@ async function spawnSession() {
   const isCodex = tp.launcher.tool === 'codex';
   const isOfficial = isCodex && tp.launcher.source === 'official';
   if (!isOfficial && !tp.launcher.providerKey) { flash('请先选 provider', 'warning'); return; }
+  // official 模式：必须选一个账号 + 用它的 codexHome 当 CODEX_HOME env
+  let officialEnv = null;
+  if (isOfficial) {
+    if (!tp.launcher.officialProfileId) { flash('请先选 codex 账号', 'warning'); return; }
+    const prof = tp.officialProfiles.find((p) => p.id === tp.launcher.officialProfileId);
+    if (!prof?.codexHome) { flash('选中账号缺 codexHome', 'error'); return; }
+    officialEnv = { CODEX_HOME: prof.codexHome };
+  }
   const bin = TOOL_LAUNCH_BIN[tp.launcher.tool] || tp.launcher.tool;
   // 组装 args：sandbox + model + profile + 额外 flags
   const args = [];
@@ -1114,6 +1170,7 @@ async function spawnSession() {
         program: bin,
         args,
         cwd: tp.launcher.cwd || '',
+        env: officialEnv || undefined,
         title,
         commandPreview,
         cols: 120,
