@@ -597,59 +597,65 @@ async function closeSession(sessionId) {
   renderTerminalPage();
 }
 
-// 终端跟随 app 主题：dark / light 各一套完整 palette
-const TERM_THEME_DARK = {
-  background: '#0b1020',
-  foreground: '#e6ecf5',
-  cursor: '#8dbdff',
-  cursorAccent: '#0b1020',
-  selectionBackground: 'rgba(91,140,255,0.36)',
-  selectionForeground: '#ffffff',
-  // ANSI 16 色：调成 Termius "One Dark" 风格
-  black:        '#1a1f2e',
-  red:          '#ff6b6d',
-  green:        '#5dd39e',
-  yellow:       '#ffd166',
-  blue:         '#5b8cff',
-  magenta:      '#c084fc',
-  cyan:         '#5eead4',
-  white:        '#c9d1d9',
-  brightBlack:  '#3d4452',
-  brightRed:    '#ff8085',
-  brightGreen:  '#7bf1b8',
-  brightYellow: '#ffe085',
-  brightBlue:   '#7da6ff',
-  brightMagenta:'#d4b0ff',
-  brightCyan:   '#80f0d6',
-  brightWhite:  '#f6f8fa',
-};
-const TERM_THEME_LIGHT = {
-  background: '#fafbfc',
-  foreground: '#1f2937',
-  cursor: '#3358ff',
-  cursorAccent: '#ffffff',
-  selectionBackground: 'rgba(51,88,255,0.22)',
-  selectionForeground: '#0f172a',
-  black:        '#0f172a',
-  red:          '#dc2626',
-  green:        '#15803d',
-  yellow:       '#b45309',
-  blue:         '#2563eb',
-  magenta:      '#7c3aed',
-  cyan:         '#0e7490',
-  white:        '#475569',
-  brightBlack:  '#64748b',
-  brightRed:    '#ef4444',
-  brightGreen:  '#16a34a',
-  brightYellow: '#ca8a04',
-  brightBlue:   '#3b82f6',
-  brightMagenta:'#9333ea',
-  brightCyan:   '#0891b2',
-  brightWhite:  '#0f172a',
-};
-
+// xterm theme — 抄 Neox 的方法：动态读 page 真实 bg 色给 xterm，
+// 终端跟 page 完全一色，无视觉边界。
+function readCssVar(name, fallback) {
+  if (typeof window === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+function parseColorLuminance(color) {
+  const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color);
+  if (hex) return parseInt(hex[1], 16) * 0.299 + parseInt(hex[2], 16) * 0.587 + parseInt(hex[3], 16) * 0.114;
+  const rgb = /^rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)/.exec(color);
+  if (rgb) return parseInt(rgb[1]) * 0.299 + parseInt(rgb[2]) * 0.587 + parseInt(rgb[3]) * 0.114;
+  return null;
+}
+// 取真实背景：优先读 app 的权威 --bg 变量；fallback 到 host / body 计算 bg
+function resolveRealBgColor() {
+  if (typeof document === 'undefined') return '#0b1020';
+  const bgVar = readCssVar('--bg', '');
+  if (bgVar && parseColorLuminance(bgVar) !== null) return bgVar;
+  const host = document.getElementById('eaTermHost');
+  for (const el of [host, document.body, document.documentElement]) {
+    if (!el) continue;
+    const bg = getComputedStyle(el).backgroundColor;
+    if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+      if (parseColorLuminance(bg) !== null) return bg;
+    }
+  }
+  return document.documentElement.dataset.theme === 'light' ? '#f5f7fa' : '#090c12';
+}
+function isCanvasDark() {
+  const lum = parseColorLuminance(resolveRealBgColor());
+  return lum != null ? lum < 128 : true;
+}
 function currentTermTheme() {
-  return document.documentElement.dataset.theme === 'light' ? TERM_THEME_LIGHT : TERM_THEME_DARK;
+  const bg = resolveRealBgColor();
+  const isDark = isCanvasDark();
+  const fg = isDark ? readCssVar('--s2-text', '#e6ecf5') : readCssVar('--s2-text', '#0f172a');
+  if (isDark) {
+    return {
+      background: bg, foreground: fg,
+      cursor: '#8dbdff', cursorAccent: bg,
+      selectionBackground: 'rgba(91,140,255,0.36)',
+      black: '#1a1f2e', red: '#ff6b6d', green: '#5dd39e', yellow: '#ffd166',
+      blue: '#5b8cff', magenta: '#c084fc', cyan: '#5eead4', white: '#c9d1d9',
+      brightBlack: '#3d4452', brightRed: '#ff8085', brightGreen: '#7bf1b8',
+      brightYellow: '#ffe085', brightBlue: '#7da6ff', brightMagenta: '#d4b0ff',
+      brightCyan: '#80f0d6', brightWhite: '#f6f8fa',
+    };
+  }
+  return {
+    background: bg, foreground: fg,
+    cursor: '#3358ff', cursorAccent: bg,
+    selectionBackground: 'rgba(51,88,255,0.22)',
+    black: '#0f172a', red: '#D63A3A', green: '#1F8C4D', yellow: '#B27800',
+    blue: '#2563EB', magenta: '#7C3AED', cyan: '#0E7490', white: '#3A3F4D',
+    brightBlack: '#6B7080', brightRed: '#E04545', brightGreen: '#28A75F',
+    brightYellow: '#C28800', brightBlue: '#3B7BFA', brightMagenta: '#9755F0',
+    brightCyan: '#1A8DA8', brightWhite: '#141824',
+  };
 }
 
 function mountTerminal(sessionId) {
@@ -659,30 +665,20 @@ function mountTerminal(sessionId) {
   hostEl.innerHTML = '';
   let inst = tp.instances[sessionId];
   if (!inst) {
+    const isDark = isCanvasDark();
     const term = new Terminal({
       cursorBlink: true,
-      cursorStyle: 'bar',
-      cursorWidth: 2,
-      // SF Mono / JetBrains Mono / 系统等宽 fallback
-      fontFamily: 'JetBrains Mono, SF Mono, Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
-      lineHeight: 1.18,
-      letterSpacing: 0,
+      cursorStyle: isDark ? 'block' : 'bar',
+      fontFamily: '"MesloLGS NF", "JetBrainsMono Nerd Font", "FiraCode Nerd Font Mono", "SF Mono", "Menlo", "Consolas", monospace',
+      fontSize: 12.5,
       scrollback: 5000,
-      drawBoldTextInBrightColors: false,
-      smoothScrollDuration: 80,
       theme: currentTermTheme(),
       allowProposedApi: true,
-      windowsMode: false,
-      allowTransparency: false,
       macOptionIsMeta: true,
       rightClickSelectsWord: true,
-      convertEol: false,
     });
     const fit = new FitAddon();
-    const unicode11 = new Unicode11Addon();
     const webLinks = new WebLinksAddon((event, uri) => {
-      // 用 Tauri opener 而不是 window.open（避免 webview 内导航）
       try {
         if (typeof window.openExternalUrl === 'function') window.openExternalUrl(uri);
         else window.open(uri, '_blank');
@@ -690,8 +686,6 @@ function mountTerminal(sessionId) {
     });
     const search = new SearchAddon();
     term.loadAddon(fit);
-    term.loadAddon(unicode11);
-    term.unicode.activeVersion = '11';
     term.loadAddon(webLinks);
     term.loadAddon(search);
 
@@ -719,21 +713,8 @@ function mountTerminal(sessionId) {
   inst.container = hostEl;
   inst.term.open(hostEl);
 
-  // 挂 WebGL renderer（必须 open 之后才能挂）
-  if (!inst.webglAddon) {
-    try {
-      const webgl = new WebglAddon();
-      // 浏览器 context lost 时自动 dispose，掉回 canvas renderer
-      webgl.onContextLoss(() => {
-        try { webgl.dispose(); inst.webglAddon = null; } catch (_) {}
-      });
-      inst.term.loadAddon(webgl);
-      inst.webglAddon = webgl;
-    } catch (err) {
-      // WebGL 不可用（罕见），xterm 自动退回 canvas，不影响功能
-      console.warn('[ea-term] WebGL renderer unavailable, falling back', err);
-    }
-  }
+  // 默认 DOM renderer（Neox 做法）— 滚动 / fps 比 WebGL 稳定，
+  // 没有 webview 中 GL context lost 的偶发卡顿/闪烁
 
   // Fit + 通知后端 resize
   try { inst.fit.fit(); } catch (_) {}
