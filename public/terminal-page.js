@@ -125,9 +125,22 @@ async function installTermEventListeners() {
       inst.tokens = tokens;
       inst.tokensUpdatedAt = Date.now();
     }
-    // 3) 立即刷 — token 数据频率不高（每轮 codex 调用一次），不用 rAF 节流
-    try { renderTermStatus(); } catch (e) { console.warn('[ea-term] renderTermStatus throw', e); }
-    try { renderTermSidebar(); } catch (e) { console.warn('[ea-term] renderTermSidebar throw', e); }
+    // 3) 立即刷 — 直接在这里 inline 更新 DOM，避免任何中间层
+    console.error('[ea-term] TOKEN WRITE OK input=', tokens.input, 'output=', tokens.output, 'sess?', !!sess);
+    try {
+      // 状态栏内部 HTML 直接重渲染
+      const host = document.getElementById('eaTermPage');
+      const statusEl = host?.querySelector('.ea-term-status');
+      if (statusEl) {
+        statusEl.innerHTML = renderStatusBarInner(tp);
+        console.error('[ea-term] status DOM rewritten, first 100 chars:', statusEl.innerHTML.slice(0, 100));
+      } else {
+        console.error('[ea-term] CANNOT FIND .ea-term-status in DOM', host);
+      }
+      renderTermSidebar();
+    } catch (e) {
+      console.error('[ea-term] render throw', e);
+    }
   });
   await listen('terminal-exit', (event) => {
     const { sessionId, exitCode } = event.payload || {};
