@@ -48,6 +48,7 @@ async function installTermEventListeners() {
   }
   console.warn('[ea-term] listen ok, registering 3 listeners');
   __eaTermListenersBound = true;
+  window.__eaTermDiag = { ...(window.__eaTermDiag || {}), listenOk: true, listenAt: Date.now() };
   await listen('terminal-data', (event) => {
     const { sessionId, data } = event.payload || {};
     if (!sessionId || !data) return;
@@ -79,6 +80,7 @@ async function installTermEventListeners() {
   // 注意：token 必须存在 session 上（永远存在），不能依赖 instance（mount/unmount 会丢）
   await listen('terminal-tokens', (event) => {
     console.warn('[ea-term] terminal-tokens event ARRIVED', event?.payload);
+    window.__eaTermDiag = { ...(window.__eaTermDiag || {}), lastTokenEventAt: Date.now(), lastTokenPayload: event?.payload };
     const payload = event.payload || {};
     const { sessionId } = payload;
     if (!sessionId) { console.warn('[ea-term] no sessionId in payload'); return; }
@@ -428,17 +430,21 @@ function renderStatusBarInner(tp) {
   // 上下文用量条：累计 input vs context window
   const usedPct = ctxWindow > 0 ? Math.min(100, (input / ctxWindow) * 100) : 0;
   const cachePctOfInput = input > 0 ? Math.min(100, (cached / input) * 100) : 0;
-  // 诊断 chip：tokens 是 0 时就显示状态（接口是否回 / 路径是不是有 / pid 多少）
-  const diag = tp._lastDiag;
+  // 诊断 chip：精确告诉你卡在哪一步
   const allZero = input === 0 && cached === 0 && output === 0;
   let diagChip = '';
-  if (allZero && diag) {
-    if (!diag.ok) {
-      diagChip = `<span class="ea-term-status-diag is-bad" title="token-snapshot 接口未连通 - 可能需要 npm run desktop:dev 重新构建 Rust\n${esc(diag.error || '')}">✗ ${esc((diag.error || 'no rust').slice(0, 32))}</span>`;
-    } else if (!diag.path) {
-      diagChip = `<span class="ea-term-status-diag is-warn" title="找不到 codex jsonl - pid=${esc(String(diag.pid || '?'))} ${esc(diag.reason || '')}">⚠ 找不到 jsonl (pid ${esc(String(diag.pid || '?'))})</span>`;
-    } else if (!diag.tokens) {
-      diagChip = `<span class="ea-term-status-diag is-warn" title="找到 ${esc(diag.path || '')}，但还没有 token_count 事件">⏳ 等首条 token_count</span>`;
+  if (allZero) {
+    const d = window.__eaTermDiag || {};
+    if (!d.listenOk) {
+      diagChip = `<span class="ea-term-status-diag is-bad" title="Tauri event listener 未注册 (window.__TAURI__ 没注入或拒绝)">✗ listener 未启</span>`;
+    } else if (!d.lastTokenEventAt) {
+      diagChip = `<span class="ea-term-status-diag is-warn" title="listener 已注册但 Rust 还没 emit 任何 terminal-tokens 事件。Console.app 里看 [token-watcher] 日志">⏳ 等 Rust emit (listener ✓)</span>`;
+    } else if (Date.now() - d.lastTokenEventAt > 30000) {
+      const ago = Math.round((Date.now() - d.lastTokenEventAt) / 1000);
+      diagChip = `<span class="ea-term-status-diag is-warn" title="最近一次 token 事件: ${ago}s 前 sessionId=${esc(d.lastTokenPayload?.sessionId || '?')}">⏳ 上次 ${esc(String(ago))}s 前</span>`;
+    } else {
+      const sid = String(d.lastTokenPayload?.sessionId || '?').slice(0, 8);
+      diagChip = `<span class="ea-term-status-diag is-warn" title="刚收到 token 事件但 sessionId 不匹配本会话: ${esc(sid)}">⚠ sid 不匹配 (${esc(sid)})</span>`;
     }
   }
   return `
