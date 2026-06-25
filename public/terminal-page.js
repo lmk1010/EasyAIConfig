@@ -372,12 +372,26 @@ function renderStatusBarInner(tp) {
   // 上下文用量条：累计 input vs context window
   const usedPct = ctxWindow > 0 ? Math.min(100, (input / ctxWindow) * 100) : 0;
   const cachePctOfInput = input > 0 ? Math.min(100, (cached / input) * 100) : 0;
+  // 诊断 chip：tokens 是 0 时就显示状态（接口是否回 / 路径是不是有 / pid 多少）
+  const diag = tp._lastDiag;
+  const allZero = input === 0 && cached === 0 && output === 0;
+  let diagChip = '';
+  if (allZero && diag) {
+    if (!diag.ok) {
+      diagChip = `<span class="ea-term-status-diag is-bad" title="token-snapshot 接口未连通 - 可能需要 npm run desktop:dev 重新构建 Rust\n${esc(diag.error || '')}">✗ ${esc((diag.error || 'no rust').slice(0, 32))}</span>`;
+    } else if (!diag.path) {
+      diagChip = `<span class="ea-term-status-diag is-warn" title="找不到 codex jsonl - pid=${esc(String(diag.pid || '?'))} ${esc(diag.reason || '')}">⚠ 找不到 jsonl (pid ${esc(String(diag.pid || '?'))})</span>`;
+    } else if (!diag.tokens) {
+      diagChip = `<span class="ea-term-status-diag is-warn" title="找到 ${esc(diag.path || '')}，但还没有 token_count 事件">⏳ 等首条 token_count</span>`;
+    }
+  }
   return `
     <span class="ea-term-status-dot ${session.running ? 'is-on' : 'is-off'}"></span>
     <span class="ea-term-status-text">${esc(session.title || session.command || '')}</span>
     <span class="ea-term-status-sep">·</span>
     <span class="ea-term-status-text-faint">${esc(session.running ? '运行中' : '已退出')}</span>
     ${session.cwd ? `<span class="ea-term-status-sep">·</span><span class="ea-term-status-text-faint ea-term-status-cwd" title="${esc(session.cwd)}">${esc(session.cwd)}</span>` : ''}
+    ${diagChip}
     <span class="ea-term-status-spacer"></span>
     ${ctxWindow > 0 ? `
       <span class="ea-term-status-ctx" title="上下文：${esc(fmt(input))} / ${esc(fmt(ctxWindow))} · 缓存 ${esc(fmt(cached))}">
@@ -752,7 +766,15 @@ function startTokenPollLoop() {
       if (!s.running) continue;
       try {
         const res = await api(`/api/terminal/token-snapshot?sessionId=${encodeURIComponent(s.id)}`);
-        const tokens = res?.ok && res.data?.tokens;
+        // 调试日志：开 DevTools console 就能看到接口返回值
+        console.log('[token-poll]', s.id.slice(0, 8), res);
+        if (!res?.ok) {
+          tp._lastDiag = { ok: false, error: res?.error || 'endpoint missing', at: Date.now() };
+          continue;
+        }
+        const data = res.data || {};
+        tp._lastDiag = { ok: true, pid: data.pid, path: data.path, tokens: data.tokens, reason: data.reason, at: Date.now() };
+        const tokens = data.tokens;
         if (tokens && Number.isFinite(tokens.input)) {
           const inst = tp.instances?.[s.id];
           if (!inst) continue;
@@ -766,8 +788,13 @@ function startTokenPollLoop() {
             });
           }
         }
-      } catch (_) {}
+      } catch (err) {
+        const tp = getState()?.terminalPage;
+        if (tp) tp._lastDiag = { ok: false, error: String(err?.message || err), at: Date.now() };
+      }
     }
+    // 触发 rAF 刷状态栏（即使 token 没拿到也要更新诊断指示器）
+    renderTermStatus();
   }, 3000);
 }
 startTokenPollLoop();

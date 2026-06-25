@@ -27194,3 +27194,17 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   0% { left: -30%; }
   100% { left: 100%; }
 }
+
+/* 状态栏诊断 chip：tokens=0 时显示具体原因 */
+.shell-v2 .ea-term-status-diag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px; border-radius: 999px;
+  font-size: 0.56rem; font-weight: 600;
+  font-family: var(--font-mono-ui);
+  max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: help;
+}
+.shell-v2 .ea-term-status-diag.is-bad { background: rgba(248,113,113,0.14); color: #f87171; }
+.shell-v2 .ea-term-status-diag.is-warn { background: rgba(251,191,36,0.18); color: #fbbf24; }
+[data-theme="light"] .shell-v2 .ea-term-status-diag.is-bad { color: #b91c1c; }
+[data-theme="light"] .shell-v2 .ea-term-status-diag.is-warn { color: #b45309; }
