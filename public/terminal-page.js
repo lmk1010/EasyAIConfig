@@ -226,14 +226,16 @@ function renderTermSidebar() {
   renderTermStatus();
 }
 
-// 单独刷状态栏（每次 token / 字节变化都调；rAF 节流确保不超 60fps）
+// 单独刷状态栏
 function renderTermStatus() {
   const tp = getState()?.terminalPage;
-  if (!tp) return;
+  if (!tp) { console.warn('[ea-term] renderTermStatus: tp missing'); return; }
   const host = document.getElementById('eaTermPage');
-  if (!host) return;
+  if (!host) { console.warn('[ea-term] renderTermStatus: host missing'); return; }
   const statusEl = host.querySelector('.ea-term-status');
-  if (!statusEl) return;
+  if (!statusEl) { console.warn('[ea-term] renderTermStatus: .ea-term-status missing'); return; }
+  const sess = tp.sessions.find((s) => s.id === tp.activeSessionId);
+  console.log('[ea-term] renderTermStatus tokens=', sess?.tokens);
   statusEl.innerHTML = renderStatusBarInner(tp);
 }
 
