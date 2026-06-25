@@ -15971,6 +15971,11 @@ async function saveConfigEditor() {
   setBusy('saveConfigEditorBtn', false);
   if (!json.ok) return flash(json.error || '配置保存失败', 'error');
   flash('当前配置已保存', 'success');
+  // 把后端 hints（cn_provider_adapter_applied / provider_key_replaced 等）也展示给用户
+  const hints = Array.isArray(json.data?.hints) ? json.data.hints : [];
+  for (const h of hints) {
+    if (h?.message) flash(h.message, h.code === 'cn_provider_adapter_applied' ? 'info' : 'info');
+  }
   await loadState({ preserveForm: true });
   populateConfigEditor();
 }

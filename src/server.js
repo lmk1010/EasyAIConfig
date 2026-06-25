@@ -34,6 +34,10 @@ import {
   summarizeBindingsForCwd,
 } from './lib/project-bindings.js';
 import {
+  listAdapters as listCnProviderAdapters,
+  getAdapterForBaseUrl,
+} from './lib/cn-provider-adapters.js';
+import {
   checkSetupEnvironment,
   getProviderSecret,
   getProviderExtras,
@@ -1216,6 +1220,27 @@ export async function startServer() {
     try {
       const cwd = String(req.query.cwd || '').trim();
       ok(res, { data: await summarizeBindingsForCwd(cwd) });
+    } catch (error) { fail(res, error); }
+  });
+
+  // ─── 国产 API 适配器（P1 #5） ─────────────────────────────────
+  app.get('/api/cn-provider-adapters', async (_req, res) => {
+    try { ok(res, { data: { adapters: listCnProviderAdapters() } }); }
+    catch (error) { fail(res, error); }
+  });
+  app.get('/api/cn-provider-adapter/match', async (req, res) => {
+    try {
+      const baseUrl = String(req.query.baseUrl || '').trim();
+      const adapter = getAdapterForBaseUrl(baseUrl);
+      ok(res, { data: { adapter: adapter ? {
+        slug: adapter.slug,
+        name: adapter.name,
+        wireApi: adapter.wireApi,
+        defaultModel: adapter.defaultModel,
+        envKey: adapter.envKey,
+        hint: adapter.hint,
+        knownModels: [...adapter.knownModels],
+      } : null } });
     } catch (error) { fail(res, error); }
   });
 

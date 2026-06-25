@@ -10,6 +10,7 @@ import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import TOML from '@iarna/toml';
 import { detectProvider, readDiag } from './provider-check.js';
+import { applyAdapterToProvider } from './cn-provider-adapters.js';
 
 const APP_HOME_DIRNAME = '.codex-config-ui';
 const BACKUPS_DIRNAME = 'backups';
@@ -3907,6 +3908,25 @@ export async function saveConfig(payload) {
     base_url: baseUrl,
     env_key: envKey,
   };
+  // P1 #5：先看是不是国产 OpenAI 兼容 API，命中就用 chat 协议（不是 responses）
+  // 避免用户保存 DeepSeek / 智谱 / Kimi 等后第一次跑就 4xx。已有 wire_api 不动。
+  const adapterResult = applyAdapterToProvider(nextProvider, baseUrl);
+  let adapterHint = null;
+  if (adapterResult.applied && adapterResult.providerBlock) {
+    Object.assign(nextProvider, adapterResult.providerBlock);
+    if (adapterResult.adapter) {
+      adapterHint = {
+        slug: adapterResult.adapter.slug,
+        name: adapterResult.adapter.name,
+        wireApi: adapterResult.adapter.wireApi,
+        hint: adapterResult.adapter.hint,
+      };
+      hints.push({
+        code: 'cn_provider_adapter_applied',
+        message: `检测到 ${adapterResult.adapter.name}，已自动设置 wire_api = "${adapterResult.adapter.wireApi}"（${adapterResult.adapter.hint}）`,
+      });
+    }
+  }
   if (!nextProvider.wire_api) {
     nextProvider.wire_api = 'responses';
   }
