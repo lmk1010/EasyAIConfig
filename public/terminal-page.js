@@ -330,10 +330,9 @@ export async function renderTerminalPage() {
             <button type="button" class="ea-term-ghost-btn-secondary" data-eat-forget="${escapeHtml(activeSess.id)}">忘掉这个会话</button>
           </div>
         ` : `<div class="ea-term-host" id="eaTermHost"></div>`}
-        ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 点右下角 <kbd>+</kbd> 新建 · 或 <kbd>⌘T</kbd> 配置启动 · <kbd>⌘K</kbd> 命令面板</div>'}
+        ${tp.sessions.length ? '' : '<div class="ea-term-empty">左侧点 <kbd>+ 新建会话</kbd> 启动 · 或 <kbd>⌘T</kbd> 配置启动 · <kbd>⌘K</kbd> 命令面板</div>'}
       </div>
       ${renderStatusBar(tp)}
-      ${renderFab(tp)}
       ${tp.launcherOpen ? `<div class="ea-term-launcher-scrim" data-eat-launcher-scrim></div>${renderLauncherPopover(tp, allProviders)}` : ''}
     </div>
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
@@ -348,15 +347,6 @@ export async function renderTerminalPage() {
   renderTermSidebar();
 }
 
-function renderFab(tp) {
-  const open = Boolean(tp.launcherOpen);
-  return `
-    <button type="button" class="ea-term-fab ${open ? 'is-open' : ''}" data-eat-fab title="新建终端 / 配置启动参数">
-      ${open
-        ? '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>'
-        : '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M2 8h12"/></svg>'}
-    </button>`;
-}
 
 function renderLauncherPopover(tp, providers) {
   const esc = escapeHtml;
@@ -696,7 +686,7 @@ function onClick(e) {
   if (!(t instanceof Element)) return;
   const tp = getState().terminalPage;
   if (t.closest('[data-eat-spawn]')) { spawnSession(); return; }
-  if (t.closest('[data-eat-fab]') || t.closest('[data-eat-tab-new]')) {
+  if (t.closest('[data-eat-tab-new]')) {
     tp.launcherOpen = !tp.launcherOpen;
     renderTerminalPage();
     return;
