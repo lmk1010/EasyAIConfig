@@ -26704,3 +26704,51 @@ body {
 }
 .shell-v2 .ea-term-palette-item:hover { background: rgba(91,140,255,0.12) !important; }
 .shell-v2 .ea-term-palette-item em { font-style: normal; color: var(--s2-faint); font-size: 0.66rem; }
+
+/* 内置终端搜索栏：⌘F 触发 */
+.shell-v2 .ea-term-search {
+  position: fixed;
+  bottom: 20px; right: 24px;
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px;
+  background: rgba(16, 22, 36, 0.96);
+  border: 1px solid rgba(91,140,255,0.32);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+  z-index: 2900;
+  opacity: 0; transform: translateY(8px) scale(0.96);
+  pointer-events: none;
+  transition: opacity 160ms, transform 160ms;
+}
+.shell-v2 .ea-term-search.is-open {
+  opacity: 1; transform: translateY(0) scale(1); pointer-events: auto;
+}
+[data-theme="light"] .shell-v2 .ea-term-search { background: #fff; box-shadow: 0 12px 32px rgba(15,23,42,0.16); }
+.shell-v2 .ea-term-search input {
+  width: 280px; height: 28px;
+  padding: 0 10px;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--s2-text) !important;
+  font-size: 0.74rem;
+}
+.shell-v2 .ea-term-search input:focus { outline: none !important; }
+.shell-v2 .ea-term-search button {
+  width: 26px; height: 26px;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--s2-muted) !important;
+  border-radius: 5px !important;
+  cursor: pointer;
+  font-size: 0.78rem;
+  box-shadow: none !important;
+}
+.shell-v2 .ea-term-search button:hover { background: rgba(91,140,255,0.14) !important; color: #8dbdff !important; }
+
+/* xterm.css 引用：确保 fit / viewport 大小正确 */
+.shell-v2 .ea-term-host .xterm,
+.shell-v2 .ea-term-host .xterm-viewport,
+.shell-v2 .ea-term-host .xterm-screen {
+  height: 100% !important;
+}
+.shell-v2 .ea-term-host .xterm-viewport { overflow-y: auto !important; }
