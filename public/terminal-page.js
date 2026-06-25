@@ -32,9 +32,21 @@ function getState() { return window.state; }
 // Rust reader 线程读到一段就 emit 一次 — 真 push 流，60fps 取决于 PTY 实际产出
 let __eaTermListenersBound = false;
 async function installTermEventListeners() {
+  console.warn('[ea-term] installTermEventListeners called', { bound: __eaTermListenersBound, tauri: !!window.__TAURI__ });
   if (__eaTermListenersBound) return;
-  const listen = window.__TAURI__?.event?.listen;
-  if (typeof listen !== 'function') return;
+  let listen = window.__TAURI__?.event?.listen;
+  // Tauri inject 有时晚于 module 加载；最多重试 30 次 × 100ms
+  let tries = 0;
+  while (typeof listen !== 'function' && tries < 30) {
+    await new Promise((r) => setTimeout(r, 100));
+    listen = window.__TAURI__?.event?.listen;
+    tries++;
+  }
+  if (typeof listen !== 'function') {
+    console.warn('[ea-term] listen unavailable after', tries, 'tries');
+    return;
+  }
+  console.warn('[ea-term] listen ok, registering 3 listeners');
   __eaTermListenersBound = true;
   await listen('terminal-data', (event) => {
     const { sessionId, data } = event.payload || {};
@@ -66,11 +78,18 @@ async function installTermEventListeners() {
   // 真实 token 事件来自 codex jsonl watcher（terminal-tokens）
   // 注意：token 必须存在 session 上（永远存在），不能依赖 instance（mount/unmount 会丢）
   await listen('terminal-tokens', (event) => {
+    console.warn('[ea-term] terminal-tokens event ARRIVED', event?.payload);
     const payload = event.payload || {};
     const { sessionId } = payload;
-    if (!sessionId) return;
+    if (!sessionId) { console.warn('[ea-term] no sessionId in payload'); return; }
     const tp = getState()?.terminalPage;
-    if (!tp) return;
+    if (!tp) {
+      // state.terminalPage 还没初始化 — 先把数据存全局 buffer，等用户进入 terminal 页时回灌
+      window.__eaPendingTokens = window.__eaPendingTokens || {};
+      window.__eaPendingTokens[sessionId] = payload;
+      console.warn('[ea-term] no tp yet, buffered');
+      return;
+    }
     const tokens = {
       input: Number(payload.input || 0),
       cached: Number(payload.cached || 0),
@@ -236,6 +255,26 @@ export function initTerminalPageState() {
 
 export async function renderTerminalPage() {
   initTerminalPageState();
+  // 把还没拿到 tp 时缓存住的 token 事件灌回 session
+  const pending = window.__eaPendingTokens || {};
+  const stPending = getState()?.terminalPage;
+  if (stPending && Object.keys(pending).length) {
+    for (const sid of Object.keys(pending)) {
+      const p = pending[sid];
+      const sess = stPending.sessions.find((s) => s.id === sid);
+      if (sess) {
+        sess.tokens = {
+          input: Number(p.input || 0),
+          cached: Number(p.cached || 0),
+          output: Number(p.output || 0),
+          reasoning: Number(p.reasoning || 0),
+          total: Number(p.total || 0),
+          contextWindow: Number(p.contextWindow || 0),
+        };
+      }
+    }
+    window.__eaPendingTokens = {};
+  }
   const host = document.getElementById('eaTerminalPage');
   if (!host) return;
   const st = getState();
