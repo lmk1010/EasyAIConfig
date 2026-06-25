@@ -27000,3 +27000,105 @@ body {
 body[data-page="terminal"] .shell-v2 .workspace { padding: 0 !important; }
 body[data-page="terminal"] .shell-v2 .workspace-topbar { display: none !important; }
 body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin: 0 !important; }
+
+/* ─── 终端页面左侧 sidebar：sessions + 实时用量 ───────────────── */
+.shell-v2 .ea-term-sec-empty {
+  padding: 14px;
+  font-size: 0.66rem;
+  color: var(--s2-faint);
+  line-height: 1.6;
+  text-align: center;
+}
+.shell-v2 .ea-term-sec-item {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 11px;
+  margin: 0 0 4px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid transparent;
+  border-radius: 9px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--s2-text);
+  box-shadow: none;
+  transition: background 120ms, border-color 120ms;
+}
+.shell-v2 .ea-term-sec-item:hover { background: rgba(91,140,255,0.06); border-color: rgba(91,140,255,0.16); }
+.shell-v2 .ea-term-sec-item.is-active { background: rgba(91,140,255,0.12); border-color: rgba(91,140,255,0.32); }
+[data-theme="light"] .shell-v2 .ea-term-sec-item { background: rgba(15,23,42,0.025); }
+[data-theme="light"] .shell-v2 .ea-term-sec-item:hover { background: rgba(91,140,255,0.08); }
+[data-theme="light"] .shell-v2 .ea-term-sec-item.is-active { background: rgba(91,140,255,0.12); }
+
+.shell-v2 .ea-term-sec-tool {
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.04);
+  color: #8dbdff;
+}
+.shell-v2 .ea-term-sec-item--codex .ea-term-sec-tool { background: rgba(255,140,90,0.16); color: #ff8c5a; }
+.shell-v2 .ea-term-sec-item--claudecode .ea-term-sec-tool { background: rgba(224,122,63,0.14); color: #e07a3f; }
+[data-theme="light"] .shell-v2 .ea-term-sec-tool { background: rgba(15,23,42,0.05); }
+
+.shell-v2 .ea-term-sec-body { display: grid; gap: 2px; min-width: 0; }
+.shell-v2 .ea-term-sec-title {
+  font-size: 0.72rem; font-weight: 600;
+  color: var(--s2-text); letter-spacing: -0.005em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shell-v2 .ea-term-sec-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 0.6rem; color: var(--s2-faint); }
+.shell-v2 .ea-term-sec-meta em { font-style: normal; }
+.shell-v2 .ea-term-sec-meta i {
+  font-style: normal; font-weight: 600;
+  color: #8dbdff; padding: 0 5px; border-radius: 3px;
+  background: rgba(91,140,255,0.1); font-variant-numeric: tabular-nums;
+}
+[data-theme="light"] .shell-v2 .ea-term-sec-meta i { color: #3358ff; }
+
+.shell-v2 .ea-term-sec-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--s2-faint); }
+.shell-v2 .ea-term-sec-dot.is-on {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74,222,128,0.55);
+  animation: eaTermBreathe 1.6s ease-in-out infinite;
+}
+
+/* 实时用量 */
+.shell-v2 .ea-term-sec-usage { padding: 0; }
+.shell-v2 .ea-term-sec-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.shell-v2 .ea-term-sec-usage-cell {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  border-left: 2px solid var(--c, #5b8cff);
+}
+[data-theme="light"] .shell-v2 .ea-term-sec-usage-cell { background: rgba(15,23,42,0.03); }
+.shell-v2 .ea-term-sec-usage-label {
+  font-size: 0.54rem; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--s2-faint);
+}
+.shell-v2 .ea-term-sec-usage-value {
+  font-size: 0.86rem; font-weight: 660;
+  color: var(--s2-text); margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.shell-v2 .ea-term-sec-flow {
+  padding-top: 8px;
+  border-top: 1px dashed rgba(255,255,255,0.06);
+  display: grid; gap: 4px;
+}
+[data-theme="light"] .shell-v2 .ea-term-sec-flow { border-top-color: rgba(15,23,42,0.06); }
+.shell-v2 .ea-term-sec-flow-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 0.62rem; color: var(--s2-faint);
+}
+.shell-v2 .ea-term-sec-flow-row strong { color: var(--s2-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.shell-v2 .ea-term-sec-flow-hint { font-size: 0.56rem; color: var(--s2-faint); margin-top: 6px; line-height: 1.4; font-style: italic; }

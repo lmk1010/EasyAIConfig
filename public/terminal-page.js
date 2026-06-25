@@ -51,6 +51,18 @@ async function installTermEventListeners() {
     inst.term.write(chunk);
     inst.recvBytes += chunk.length;
     inst.cursor += chunk.length;
+
+    // 解析 codex / claude 的 token 行 — 大部分 TUI 会 inline 打印
+    // "input: 12,345 ▴ cached: 8,200 ▴ output: 423" 这种格式
+    parseTokenChunk(inst, chunk);
+    // 抓取最近一次"输入"内容（粗略）
+    // 节流 sidebar 重渲染 (rAF)
+    if (!inst._sidebarRaf) {
+      inst._sidebarRaf = requestAnimationFrame(() => {
+        inst._sidebarRaf = 0;
+        renderTermSidebar();
+      });
+    }
   });
   await listen('terminal-exit', (event) => {
     const { sessionId, exitCode } = event.payload || {};
@@ -68,6 +80,113 @@ installTermEventListeners().catch(() => {});
 function api(path, opts) { return window.api(path, opts); }
 function flash(msg, type) { return typeof window.flash === 'function' ? window.flash(msg, type) : console.log(`[flash:${type || ''}] ${msg}`); }
 function escapeHtml(v) { return typeof window.escapeHtml === 'function' ? window.escapeHtml(v) : String(v ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c] || c)); }
+
+// ANSI escape codes 去掉，再正则抓 token 数字
+function stripAnsi(text) {
+  return String(text).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+}
+
+function parseTokenChunk(inst, chunk) {
+  const clean = stripAnsi(chunk);
+  // 形如 "input: 12,345" / "cached: 8,200" / "output: 423" 或 "tokens: ..."
+  // Codex / Claude TUI 通常一行打印 status-line。这里全部抓最后命中的值，作为"最新值"
+  const matchNum = (label) => {
+    const re = new RegExp(`${label}\\s*[:：]?\\s*([\\d,]+)`, 'gi');
+    let m, last = null;
+    while ((m = re.exec(clean)) !== null) last = m[1];
+    return last ? parseInt(last.replace(/,/g, ''), 10) : null;
+  };
+  const t = inst.tokens || {};
+  const fields = [
+    ['input', /input/],
+    ['cached', /cache|cached/],
+    ['output', /output/],
+    ['reasoning', /reasoning|thinking/],
+    ['total', /total/],
+  ];
+  let touched = false;
+  for (const [key, kw] of fields) {
+    const v = matchNum(kw.source);
+    if (v != null && Number.isFinite(v)) {
+      t[key] = v;
+      touched = true;
+    }
+  }
+  if (touched) {
+    inst.tokens = t;
+    inst.tokensUpdatedAt = Date.now();
+  }
+}
+
+function renderTermSidebar() {
+  const tp = getState()?.terminalPage;
+  if (!tp) return;
+  const listEl = document.getElementById('eaTermSecList');
+  const usageEl = document.getElementById('eaTermSecUsage');
+  const countEl = document.getElementById('eaTermSecCount');
+  if (!listEl || !usageEl) return;
+  if (countEl) countEl.textContent = String(tp.sessions.length);
+  if (!tp.sessions.length) {
+    listEl.innerHTML = '<div class="ea-term-sec-empty">还没有会话<br/>点右下角 + 新建</div>';
+    usageEl.innerHTML = '';
+    return;
+  }
+  const esc = escapeHtml;
+  const toolIcon = (tool) => {
+    if (tool === 'codex') return '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M5 8h6M8 5v6"/></svg>';
+    if (tool === 'claudecode') return '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1l6 4v6l-6 4-6-4V5z"/></svg>';
+    return '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg>';
+  };
+  const toolLabel = (tool) => tool === 'codex' ? 'Codex' : tool === 'claudecode' ? 'Claude Code' : tool || 'Shell';
+  const fmt = (n) => (n || 0).toLocaleString();
+  listEl.innerHTML = tp.sessions.map((s) => {
+    const inst = tp.instances?.[s.id];
+    const isActive = s.id === tp.activeSessionId;
+    const tokens = inst?.tokens || {};
+    const t = tokens.total || ((tokens.input || 0) + (tokens.output || 0));
+    return `
+      <button type="button" class="ea-term-sec-item ${isActive ? 'is-active' : ''} ${s.running ? 'is-running' : 'is-stopped'} ea-term-sec-item--${esc(s.tool || 'shell')}" data-eat-sec-tab="${esc(s.id)}">
+        <span class="ea-term-sec-tool" title="${esc(toolLabel(s.tool))}">${toolIcon(s.tool)}</span>
+        <span class="ea-term-sec-body">
+          <span class="ea-term-sec-title">${esc(s.title || s.command || s.id.slice(0,8))}</span>
+          <span class="ea-term-sec-meta">
+            <span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>
+            <em>${esc(toolLabel(s.tool))}</em>
+            ${t ? `<i>${esc(fmt(t))} tok</i>` : ''}
+          </span>
+        </span>
+      </button>`;
+  }).join('');
+  // 当前 session 的实时用量
+  const cur = tp.sessions.find((s) => s.id === tp.activeSessionId);
+  const inst = cur ? tp.instances?.[cur.id] : null;
+  const tokens = inst?.tokens || {};
+  const recv = inst?.recvBytes || 0;
+  const sent = inst?.sentBytes || 0;
+  const approxOut = tokens.output ?? Math.round(recv / 4);
+  const cells = [
+    { label: '输入', value: tokens.input, color: '#5b8cff' },
+    { label: '缓存', value: tokens.cached, color: '#22c55e' },
+    { label: '输出', value: tokens.output ?? Math.round(recv / 4), color: '#a855f7' },
+    { label: '推理', value: tokens.reasoning, color: '#fb923c' },
+  ];
+  const haveLive = cells.some((c) => c.value != null && c.value > 0);
+  usageEl.innerHTML = `
+    <div class="ea-term-sec-usage-grid">
+      ${cells.map((c) => `
+        <div class="ea-term-sec-usage-cell" style="--c:${c.color}">
+          <div class="ea-term-sec-usage-label">${esc(c.label)}</div>
+          <div class="ea-term-sec-usage-value">${esc(fmt(c.value || 0))}</div>
+        </div>`).join('')}
+    </div>
+    <div class="ea-term-sec-flow">
+      <div class="ea-term-sec-flow-row"><span>已写入</span><strong>${esc(fmtBytes(sent))}</strong></div>
+      <div class="ea-term-sec-flow-row"><span>已读取</span><strong>${esc(fmtBytes(recv))}</strong></div>
+      ${haveLive ? '' : '<div class="ea-term-sec-flow-hint">codex/claude 打印 token 行后自动捕获</div>'}
+    </div>`;
+}
+
+window.renderTermSidebar = renderTermSidebar;
 
 export function initTerminalPageState() {
   const st = getState();
@@ -137,6 +256,7 @@ export async function renderTerminalPage() {
   if (active) {
     mountTerminal(active.id);
   }
+  renderTermSidebar();
 }
 
 function renderFab(tp) {
@@ -329,16 +449,25 @@ function normalizeSession(s) {
 }
 
 function bindEvents(host) {
-  // 一次性 wire（避免每次 render 重复绑）
   if (host.dataset.eatBound === '1') return;
   host.dataset.eatBound = '1';
   host.addEventListener('click', onClick);
   host.addEventListener('change', onChange);
   host.addEventListener('input', onInput);
-  // 全局 Cmd+K
+  // 全局 Cmd+K + sidebar 点击（在 host 外，document 级监听）
   if (!window.__eaTermKeyBound) {
     window.__eaTermKeyBound = true;
     window.addEventListener('keydown', onGlobalKey);
+    document.addEventListener('click', (e) => {
+      const tp = getState()?.terminalPage;
+      if (!tp) return;
+      const target = e.target instanceof Element ? e.target : null;
+      const secTab = target?.closest('[data-eat-sec-tab]');
+      if (secTab) {
+        tp.activeSessionId = secTab.dataset.eatSecTab;
+        renderTerminalPage();
+      }
+    });
   }
 }
 
@@ -369,6 +498,8 @@ function onClick(e) {
   if (tabClose) { e.stopPropagation(); closeSession(tabClose.dataset.eatTabClose); return; }
   const tab = t.closest('[data-eat-tab]');
   if (tab) { tp.activeSessionId = tab.dataset.eatTab; renderTerminalPage(); return; }
+  const secTab = t.closest('[data-eat-sec-tab]');
+  if (secTab) { tp.activeSessionId = secTab.dataset.eatSecTab; renderTerminalPage(); return; }
   const action = t.closest('[data-eat-action]');
   if (action) { handleSidebarAction(action.dataset.eatAction); return; }
 }
