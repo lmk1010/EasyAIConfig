@@ -65,6 +65,32 @@ async function installTermEventListeners() {
       });
     }
   });
+  // 真实 token 事件来自 codex jsonl watcher（terminal-tokens）
+  await listen('terminal-tokens', (event) => {
+    const payload = event.payload || {};
+    const { sessionId } = payload;
+    if (!sessionId) return;
+    const tp = getState()?.terminalPage;
+    if (!tp) return;
+    const inst = tp.instances?.[sessionId];
+    if (!inst) return;
+    inst.tokens = {
+      input: Number(payload.input || 0),
+      cached: Number(payload.cached || 0),
+      output: Number(payload.output || 0),
+      reasoning: Number(payload.reasoning || 0),
+      total: Number(payload.total || 0),
+      contextWindow: Number(payload.contextWindow || 0),
+    };
+    inst.tokensUpdatedAt = Date.now();
+    if (!inst._sidebarRaf) {
+      inst._sidebarRaf = requestAnimationFrame(() => {
+        inst._sidebarRaf = 0;
+        renderTermSidebar();
+        renderTermStatus();
+      });
+    }
+  });
   await listen('terminal-exit', (event) => {
     const { sessionId, exitCode } = event.payload || {};
     const tp = getState()?.terminalPage;
@@ -332,16 +358,17 @@ function renderStatusBarInner(tp) {
     return `<span class="ea-term-status-faint">没有运行中的会话</span>`;
   }
   const inst = tp.instances[session.id];
-  const recv = inst?.recvBytes || 0;
-  const sent = inst?.sentBytes || 0;
   const tokens = inst?.tokens || {};
   const input = Number(tokens.input || 0);
   const cached = Number(tokens.cached || 0);
-  const output = Number(tokens.output || Math.round(recv / 4));
+  const output = Number(tokens.output || 0);
   const reasoning = Number(tokens.reasoning || 0);
-  const total = input + cached + output + reasoning || 1;
-  const seg = (v) => `${(v / total * 100).toFixed(1)}%`;
+  const total = Number(tokens.total || (input + output + reasoning));
+  const ctxWindow = Number(tokens.contextWindow || 0);
   const fmt = (n) => (n || 0).toLocaleString();
+  // 上下文用量条：累计 input vs context window
+  const usedPct = ctxWindow > 0 ? Math.min(100, (input / ctxWindow) * 100) : 0;
+  const cachePctOfInput = input > 0 ? Math.min(100, (cached / input) * 100) : 0;
   return `
     <span class="ea-term-status-dot ${session.running ? 'is-on' : 'is-off'}"></span>
     <span class="ea-term-status-text">${esc(session.title || session.command || '')}</span>
@@ -349,12 +376,16 @@ function renderStatusBarInner(tp) {
     <span class="ea-term-status-text-faint">${esc(session.running ? '运行中' : '已退出')}</span>
     ${session.cwd ? `<span class="ea-term-status-sep">·</span><span class="ea-term-status-text-faint ea-term-status-cwd" title="${esc(session.cwd)}">${esc(session.cwd)}</span>` : ''}
     <span class="ea-term-status-spacer"></span>
-    <span class="ea-term-status-bar" title="输入 ${esc(fmt(input))} · 缓存 ${esc(fmt(cached))} · 输出 ${esc(fmt(output))} · 推理 ${esc(fmt(reasoning))}">
-      <span class="ea-term-status-bar-seg is-input" style="width:${seg(input)}"></span>
-      <span class="ea-term-status-bar-seg is-cached" style="width:${seg(cached)}"></span>
-      <span class="ea-term-status-bar-seg is-output" style="width:${seg(output)}"></span>
-      <span class="ea-term-status-bar-seg is-reasoning" style="width:${seg(reasoning)}"></span>
-    </span>
+    ${ctxWindow > 0 ? `
+      <span class="ea-term-status-ctx" title="上下文：${esc(fmt(input))} / ${esc(fmt(ctxWindow))} · 缓存 ${esc(fmt(cached))}">
+        <span class="ea-term-status-ctx-label">上下文</span>
+        <span class="ea-term-status-ctx-bar">
+          <span class="ea-term-status-ctx-fill" style="width:${usedPct.toFixed(1)}%"></span>
+          <span class="ea-term-status-ctx-cache" style="width:${(usedPct * cachePctOfInput / 100).toFixed(1)}%"></span>
+        </span>
+        <span class="ea-term-status-ctx-num">${esc(fmt(input))} / ${esc(fmt(ctxWindow))}</span>
+      </span>
+    ` : ''}
     <span class="ea-term-status-pill" title="输入 token">输入 ${esc(fmt(input))}</span>
     <span class="ea-term-status-pill" title="缓存命中 token">缓存 ${esc(fmt(cached))}</span>
     <span class="ea-term-status-pill ea-term-status-pill-tokens" title="输出 token">输出 ${esc(fmt(output))}</span>

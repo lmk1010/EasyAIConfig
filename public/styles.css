@@ -27139,3 +27139,38 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   color: var(--s2-faint);
   line-height: 1.6;
 }
+
+/* 上下文用量条：base 浅灰 / fill 蓝渐变 / cache 绿色叠加 */
+.shell-v2 .ea-term-status-ctx {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-right: 6px;
+}
+.shell-v2 .ea-term-status-ctx-label {
+  font-size: 0.54rem; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--s2-faint);
+}
+.shell-v2 .ea-term-status-ctx-bar {
+  position: relative;
+  width: 120px; height: 7px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  overflow: hidden;
+}
+[data-theme="light"] .shell-v2 .ea-term-status-ctx-bar { background: rgba(15,23,42,0.06); }
+.shell-v2 .ea-term-status-ctx-fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, #5b8cff, #3358ff);
+  border-radius: 999px;
+  transition: width 200ms ease;
+}
+.shell-v2 .ea-term-status-ctx-cache {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, #22c55e, #15803d);
+  border-radius: 999px;
+  transition: width 200ms ease;
+  mix-blend-mode: screen;
+}
+.shell-v2 .ea-term-status-ctx-num {
+  font-size: 0.58rem; color: var(--s2-text);
+  font-variant-numeric: tabular-nums; font-weight: 600;
+}
