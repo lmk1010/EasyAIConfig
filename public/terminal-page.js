@@ -64,15 +64,14 @@ async function installTermEventListeners() {
     }
   });
   // 真实 token 事件来自 codex jsonl watcher（terminal-tokens）
+  // 注意：token 必须存在 session 上（永远存在），不能依赖 instance（mount/unmount 会丢）
   await listen('terminal-tokens', (event) => {
     const payload = event.payload || {};
     const { sessionId } = payload;
     if (!sessionId) return;
     const tp = getState()?.terminalPage;
     if (!tp) return;
-    const inst = tp.instances?.[sessionId];
-    if (!inst) return;
-    inst.tokens = {
+    const tokens = {
       input: Number(payload.input || 0),
       cached: Number(payload.cached || 0),
       output: Number(payload.output || 0),
@@ -80,13 +79,30 @@ async function installTermEventListeners() {
       total: Number(payload.total || 0),
       contextWindow: Number(payload.contextWindow || 0),
     };
-    inst.tokensUpdatedAt = Date.now();
-    if (!inst._sidebarRaf) {
-      inst._sidebarRaf = requestAnimationFrame(() => {
-        inst._sidebarRaf = 0;
+    console.log('[terminal-tokens]', sessionId.slice(0, 8), tokens);
+    // 1) 写到 session 对象（一定存在，即便 instance 还没 mount / 已 unmount）
+    const sess = tp.sessions.find((s) => s.id === sessionId);
+    if (sess) {
+      sess.tokens = tokens;
+      sess.tokensUpdatedAt = Date.now();
+    }
+    // 2) instance 上同步一份（已 mount 时 status bar 也会从这取）
+    const inst = tp.instances?.[sessionId];
+    if (inst) {
+      inst.tokens = tokens;
+      inst.tokensUpdatedAt = Date.now();
+    }
+    // 3) rAF 刷 UI
+    const raf = sess?._tokRaf || inst?._sidebarRaf;
+    if (!raf) {
+      const r = requestAnimationFrame(() => {
+        if (sess) sess._tokRaf = 0;
+        if (inst) inst._sidebarRaf = 0;
         renderTermSidebar();
         renderTermStatus();
       });
+      if (sess) sess._tokRaf = r;
+      if (inst) inst._sidebarRaf = r;
     }
   });
   await listen('terminal-exit', (event) => {
@@ -361,7 +377,8 @@ function renderStatusBarInner(tp) {
     return `<span class="ea-term-status-faint">没有运行中的会话</span>`;
   }
   const inst = tp.instances[session.id];
-  const tokens = inst?.tokens || {};
+  // session 是数据真源（不依赖 xterm 是否 mount）；instance 上的是同步副本
+  const tokens = session.tokens || inst?.tokens || {};
   const input = Number(tokens.input || 0);
   const cached = Number(tokens.cached || 0);
   const output = Number(tokens.output || 0);
