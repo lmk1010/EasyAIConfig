@@ -42,12 +42,18 @@ fn open_db() -> Result<Connection, String> {
         program TEXT,
         args_json TEXT,
         env_json TEXT,
+        codex_session_id TEXT,
         created_at_ms INTEGER NOT NULL,
         updated_at_ms INTEGER NOT NULL
       )",
       [],
     )
     .map_err(|error| error.to_string())?;
+  // 老库迁移：缺 codex_session_id 列就加上（ALTER TABLE 失败说明已存在，忽略）
+  let _ = connection.execute(
+    "ALTER TABLE terminal_sessions_meta ADD COLUMN codex_session_id TEXT",
+    [],
+  );
   Ok(connection)
 }
 
@@ -68,6 +74,7 @@ pub(crate) fn persist_session(body: &Value) -> Result<Value, String> {
   let program = get_string(&object, "program");
   let args_json = body.get("args").map(|v| v.to_string()).unwrap_or_else(|| "[]".to_string());
   let env_json = body.get("env").map(|v| v.to_string()).unwrap_or_else(|| "{}".to_string());
+  let codex_session_id = get_string(&object, "codexSessionId");
 
   let connection = open_db()?;
   let now = now_ms();
@@ -75,8 +82,8 @@ pub(crate) fn persist_session(body: &Value) -> Result<Value, String> {
   connection
     .execute(
       "INSERT INTO terminal_sessions_meta
-         (session_id, tool, title, command, cwd, program, args_json, env_json, created_at_ms, updated_at_ms)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+         (session_id, tool, title, command, cwd, program, args_json, env_json, codex_session_id, created_at_ms, updated_at_ms)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
        ON CONFLICT(session_id) DO UPDATE SET
          tool = excluded.tool,
          title = excluded.title,
@@ -85,8 +92,9 @@ pub(crate) fn persist_session(body: &Value) -> Result<Value, String> {
          program = excluded.program,
          args_json = excluded.args_json,
          env_json = excluded.env_json,
+         codex_session_id = COALESCE(NULLIF(excluded.codex_session_id, ''), terminal_sessions_meta.codex_session_id),
          updated_at_ms = excluded.updated_at_ms",
-      params![session_id, tool, title, command, cwd, program, args_json, env_json, now],
+      params![session_id, tool, title, command, cwd, program, args_json, env_json, codex_session_id, now],
     )
     .map_err(|error| error.to_string())?;
   Ok(json!({ "ok": true }))
@@ -98,7 +106,7 @@ pub(crate) fn list_persisted(_query: &Value) -> Result<Value, String> {
   let connection = open_db()?;
   let mut stmt = connection
     .prepare(
-      "SELECT session_id, tool, title, command, cwd, program, args_json, env_json, created_at_ms, updated_at_ms
+      "SELECT session_id, tool, title, command, cwd, program, args_json, env_json, codex_session_id, created_at_ms, updated_at_ms
        FROM terminal_sessions_meta
        ORDER BY updated_at_ms DESC
        LIMIT 50",
@@ -119,8 +127,9 @@ pub(crate) fn list_persisted(_query: &Value) -> Result<Value, String> {
         "program": row.get::<_, String>(5).unwrap_or_default(),
         "args": args,
         "env": env,
-        "createdAtMs": row.get::<_, i64>(8).unwrap_or(0),
-        "updatedAtMs": row.get::<_, i64>(9).unwrap_or(0),
+        "codexSessionId": row.get::<_, String>(8).unwrap_or_default(),
+        "createdAtMs": row.get::<_, i64>(9).unwrap_or(0),
+        "updatedAtMs": row.get::<_, i64>(10).unwrap_or(0),
       }))
     })
     .map_err(|error| error.to_string())?;
