@@ -5,7 +5,7 @@
 <h1 align="center">EasyAIConfig</h1>
 
 <p align="center">
-  <strong>Codex 配置助手 — 让 AI 编程工具的配置简单到一键搞定</strong>
+  <strong>Codex / Claude Code / OpenCode / OpenClaw 一站式配置助手 — 让 AI 编程工具的配置简单到一键搞定</strong>
 </p>
 
 <p align="center">
@@ -22,45 +22,71 @@
 
 ## [Core] 已支持功能（当前版本）
 
-### [What's New] v1.0.41
+### [What's New] v1.0.53
 
-- 新增：Codex 官方登录（OAuth）与 API Key 双路径快速配置
-- 新增：官方登录场景支持一键设为默认 `OpenAI Provider`
-- 优化：`官方 + 中转 API Key` 共存时，Provider 切换更顺滑
-- 新增：Codex 会话恢复能力（最近会话浏览 / 一键恢复 / 导出）
+- 新增：**支持的模型** 卡片化管理 — Provider 详情页一行一个模型，点击即可设为默认，悬停删除
+- 新增：**Live 模型自动入库** — `从 Provider 拉取 (/v1/models)` 检测到的模型自动加入「支持的模型」
+- 新增：**模型预设大扩展** — Kimi K2.7 Code / GLM 5.x / DeepSeek V4 / Qwen3 全系列 / 豆包 1.5 / 混元 / MiniMax / Llama 4 等近百个最新模型，涵盖国内外主流厂商
+- 新增：内置终端（Codex / Claude / OpenCode 会话浏览 + 实时输出）
+- 新增：会话恢复（Codex 最近会话浏览 / 一键恢复 / 导出）
 - 新增：独立 Codex App 的一键安装与打开入口
+- 优化：编辑抽屉表单 — 全部控件统一 32px 高度、像素级垂直居中、文字不再被裁切
+- 优化：「支持的模型」抽屉多选 — 单行摘要显示，无嵌套卡片
+- 优化：静态资源 no-cache + 版本化加载，桌面端 reload 永远拿最新版本
+- 优化：官方登录 + 中转 API Key 共存场景 Provider 切换更顺滑
 
 ### 核心能力
 
 | 状态 | 功能 | 说明 |
 |------|------|------|
 | 已支持 | **Provider 管理** | 一键配置 Base URL + API Key，自动写入配置文件 |
-| 已支持 | **官方登录模式** | 自动识别 Codex/ChatGPT OAuth 登录态，可直接设为默认 OpenAI Provider |
-| 已支持 | **模型检测** | 自动发现可用模型并推荐可用版本 |
+| 已支持 | **官方登录模式** | 自动识别 Codex / ChatGPT OAuth 登录态，可直接设为默认 OpenAI Provider |
+| 已支持 | **模型检测** | 自动发现可用模型（live /v1/models），自动入库到「支持的模型」 |
+| 已支持 | **支持的模型管理** | 卡片化展示 / 点击设为默认 / 悬停删除 / 内置近百模型预设可勾选 |
 | 已支持 | **多 Provider 切换** | 支持保存多套 Provider 并快速切换 |
-| 已支持 | **配置编辑器** | 可视化编辑 + 原始配置编辑（TOML / JSON） |
+| 已支持 | **配置编辑器** | 可视化分类编辑（模型与推理 / 行为与审计 / 上下文 / 路径 / 会话恢复 / Provider 与备份 / 开关 / 指令）+ 原始 TOML / JSON |
 | 已支持 | **备份与恢复** | 保存前自动备份，支持一键回滚 |
-| 已支持 | **数据看板** | Codex / Claude 用量与费用估算，OpenClaw 运行状态监控 |
-| 已支持 | **桌面客户端** | Web + Tauri 桌面端当前更适合 macOS 用户，Windows 暂不支持 |
+| 已支持 | **数据看板** | Codex / Claude Code 用量与费用估算，按模型 / 按日 / P95 时延、缓存率分析 |
+| 已支持 | **内置终端** | Codex / Claude / OpenCode 会话浏览 + 实时输出 + 多会话切换 |
+| 已支持 | **会话恢复** | Codex 最近会话浏览 / 一键 resume / 复制命令 / 导出 |
+| 已支持 | **工具安装管理** | Codex CLI / Claude Code / OpenCode / OpenClaw / Codex App / VS Code & Cursor 扩展 一键安装 / 更新 / 卸载 |
+| 已支持 | **桌面客户端** | Tauri 桌面端（macOS aarch64 / x64，Linux .deb / .AppImage） |
 | 已支持 | **自动更新（桌面版）** | Tauri 桌面端支持 GitHub Releases 自动检查与安装更新 |
 
 ### 工具支持矩阵
 
-| 工具 | 安装/更新/卸载 | 启动 | 登录/初始化 | 配置管理 | 运行状态 |
+| 工具 | 安装 / 更新 / 卸载 | 启动 | 登录 / 初始化 | 配置管理 | 运行状态 |
 |------|----------------|------|-------------|----------|----------|
 | **Codex CLI** | 已支持 | 已支持 | 已支持 (`codex login`) | 已支持 (`~/.codex/config.toml` + `.env`) | 已支持 |
 | **Claude Code** | 已支持 | 已支持 | 已支持 (OAuth 登录) | 已支持 (`~/.claude/settings.json`) | 已支持 |
 | **OpenClaw** | 已支持（一键 / WSL / 脚本） | 已支持（Gateway 启动） | 已支持 (`onboard`) | 已支持 (`~/.openclaw/openclaw.json`) | 已支持 |
 | **OpenCode** | 已支持（官方脚本 / Homebrew / npm / Scoop / Chocolatey） | 已支持 | 规划中 | 规划中 | 规划中 |
 
-## [Todo] 未来功能待办（Roadmap）
+### 内置模型预设（覆盖主流厂商）
 
-> 以下为计划项，按优先级逐步推进。
+| 厂商 | 代表模型 |
+|------|---------|
+| **OpenAI** | GPT-5.5 / 5.4 / 5.3 Codex / 5.2 / 5.1 Codex Max / o4-mini / o3 Pro |
+| **Anthropic** | Claude Fable 5 / Opus 4.8 / Sonnet 4.6 / Haiku 4.5 |
+| **Google** | Gemini 3 Pro / 3 Pro Thinking / 2.5 Pro / Flash |
+| **xAI** | Grok 4.1 / 4 Fast / Code Fast 1 |
+| **DeepSeek** | V4 / V4 Coder / V4 Thinking / V3.3 / R2 / R1 / Coder V3 |
+| **Qwen (阿里)** | Qwen3 Max / Coder Plus / 235B-A22B / QwQ 32B / Qwen-VL Max |
+| **Kimi / Moonshot** | K2.7 Code / K2.5 / K2 / K2 Thinking / Moonshot V1 128K |
+| **GLM / 智谱** | GLM 5.2 / 5.1 / 5 / 4.6 / Z1 Air / Z1 32B / 4V Plus / CodeGeeX 4 |
+| **豆包 / 字节** | 1.5 Pro 256K / Lite / Thinking Pro / Vision Pro |
+| **腾讯混元** | Turbo S / Pro / Large 389B / T1 |
+| **MiniMax / 阶跃 / 其他** | MiniMax M2 / Step 2 / Baichuan / Yi Lightning / 星火 4.0 / 文心 4.5 |
+| **开源 / 海外** | Llama 4 Maverick / Scout / Behemoth / Mistral Large 2.5 / Codestral 2 / Command R+ / Perplexity Sonar |
+
+> 找不到你的模型？直接在「支持的模型 → 添加模型」里输入自定义 slug，或点「从 Provider 拉取」让工具自动入库 live 检测到的模型。
+
+## [Todo] 未来功能待办（Roadmap）
 
 | 优先级 | 待办项 | 状态 |
 |--------|--------|------|
 | P1 | 启动失败一键诊断（自动收集环境与命令日志） | 规划中 |
-| P1 | 配置导入/导出（跨机器迁移） | 规划中 |
+| P1 | 配置导入 / 导出（跨机器迁移） | 规划中 |
 | P1 | Provider 可用性定时巡检与告警提示 | 规划中 |
 | P2 | Dashboard 自定义统计维度与时间范围 | 规划中 |
 | P2 | 多语言界面（中文 / English） | 规划中 |
@@ -68,15 +94,69 @@
 
 ## [UI] 截图预览
 
-<p align="center">
-  <img src="assets/dashboard-codex.png" width="100%" alt="Codex Dashboard — Token 用量趋势、费用估算、模型分布" />
-</p>
-<p align="center"><em>Codex 数据看板 — 实时 Token 趋势、费用估算与模型分布</em></p>
+### 一键配置 · Provider 列表
 
 <p align="center">
-  <img src="assets/dashboard-claude-code.png" width="100%" alt="Claude Code Dashboard — 模型分布、Token 分布与消耗明细" />
+  <img src="assets/screenshot-providers.png" width="100%" alt="Provider 一键配置 — Codex 连接配置，多 Provider 切换" />
 </p>
-<p align="center"><em>Claude Code 数据看板 — 多模型统计、Token 分布与消耗分析</em></p>
+<p align="center"><em>Codex / Claude / OpenCode / OpenClaw 一站式配置 · OAuth + API Key 共存 · 自动检测可用性</em></p>
+
+### Provider 详情 · 概览 / 用量 / 模型支持
+
+<p align="center">
+  <img src="assets/screenshot-provider-overview.png" width="100%" alt="Provider 详情 · 概览 — 24H 上线率、平均/P95 时延、默认模型" />
+</p>
+<p align="center"><em>Provider 详情 · 概览 — 24H 上线率 / 平均·P95 时延 / 默认模型一目了然</em></p>
+
+<p align="center">
+  <img src="assets/screenshot-provider-usage.png" width="100%" alt="Provider 详情 · 用量 — 预估费用、Token 构成、按模型拆分" />
+</p>
+<p align="center"><em>Provider 详情 · 用量 — 预估费用 / Token 构成 / 按使用模型拆分</em></p>
+
+### 数据看板 · Codex / Claude Code
+
+<p align="center">
+  <img src="assets/screenshot-dashboard-codex.png" width="100%" alt="Codex Dashboard — Token 用量趋势、费用估算、模型分布" />
+</p>
+<p align="center"><em>Codex 数据看板 — 实时 Token 趋势、费用估算与按模型计费明细</em></p>
+
+<p align="center">
+  <img src="assets/screenshot-dashboard-claude.png" width="100%" alt="Claude Code Dashboard — 模型分布、Token 分布与消耗明细" />
+</p>
+<p align="center"><em>Claude Code 数据看板 — 多模型统计、Token 分布与按日消耗趋势</em></p>
+
+### 配置编辑器 · 分类可视化
+
+<p align="center">
+  <img src="assets/screenshot-config-editor.png" width="100%" alt="Codex 配置编辑器 — 模型 / 行为 / 上下文 / 路径 / 会话恢复 分类" />
+</p>
+<p align="center"><em>Codex 配置编辑 — 8 大分类卡片化展示，支持原始 TOML / JSON 切换</em></p>
+
+### 内置终端 · 多会话 + 实时输出
+
+<p align="center">
+  <img src="assets/screenshot-terminal-list.png" width="100%" alt="内置终端 — 多会话列表 + 实时输出" />
+</p>
+<p align="center"><em>内置终端 — Codex / Claude / OpenCode 多会话列表 · token 实时监控</em></p>
+
+<p align="center">
+  <img src="assets/screenshot-terminal-session.png" width="100%" alt="内置终端 — Codex 会话详情" />
+</p>
+<p align="center"><em>内置终端 — Codex 会话详情 · 模型 / 目录 / 权限 一览</em></p>
+
+### 会话恢复 · 最近 Codex 会话
+
+<p align="center">
+  <img src="assets/screenshot-session-restore.png" width="100%" alt="会话恢复 — 最近 Codex 会话浏览 / resume / 导出" />
+</p>
+<p align="center"><em>会话恢复 — 最近 Codex 会话浏览 · 一键 resume · 导出 / 复制命令</em></p>
+
+### 工具安装与管理
+
+<p align="center">
+  <img src="assets/screenshot-tools.png" width="100%" alt="工具安装与管理 — Codex / Claude / OpenCode / OpenClaw / VS Code / Cursor" />
+</p>
+<p align="center"><em>工具一键安装 / 更新 / 卸载 — Codex CLI / Claude Code / OpenCode / OpenClaw / Codex App / VS Code & Cursor 扩展</em></p>
 
 ## [Install] 安装
 
@@ -111,7 +191,7 @@ easyaiconfig
 1. **选择认证方式** — 可直接用 `官方登录`（OAuth）或切换 `API Key` 模式
 2. **官方登录路径** — 点击「设为默认 OpenAI Provider」后直接保存并启动
 3. **API Key 路径** — 输入 Base URL + API Key，自动识别 Provider 和环境变量
-4. **检测模型** — 一键发现可用模型并推荐默认项
+4. **检测模型** — 一键发现可用模型并推荐默认项；live 检测到的模型自动入库到「支持的模型」
 5. **保存并启动** — 写入 `~/.codex/config.toml` + `.env`，并直接启动 Codex
 
 ## [Dev] 开发
@@ -148,9 +228,9 @@ npm run desktop:build
 ├── public/            # 前端静态文件（HTML / CSS / JS）
 │   ├── index.html     # 主页面
 │   ├── styles.css     # 样式
-│   └── app.js         # 前端逻辑
+│   └── app.js         # 前端逻辑 + 模型预设 catalog
 ├── src/
-│   ├── server.js      # Express 后端（Web 模式）
+│   ├── server.js      # Express 后端（Web 模式 + Tauri 共用）
 │   └── lib/
 │       ├── config-store.js   # 配置读写核心
 │       └── provider-check.js # Provider 连通性检测
@@ -161,6 +241,7 @@ npm run desktop:build
 │   │   ├── provider.rs # Provider 逻辑
 │   │   └── routes.rs  # API 路由
 │   └── icons/         # 应用图标
+├── assets/            # README 截图与 logo
 └── .github/workflows/ # CI/CD
 ```
 
@@ -192,9 +273,17 @@ npx tauri signer generate -w ~/.tauri/easyaiconfig.key
 推送 tag 即可触发自动构建与发布：
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.53
+git push origin v1.0.53
 ```
+
+## [Contributing] 贡献
+
+欢迎 PR / Issue。重点欢迎的方向：
+- 新模型 slug 入库（在 `public/app.js` 的 `CODEX_MODEL_PRESETS` 里加）
+- 新工具集成（Codex / Claude / OpenCode / OpenClaw 之外的）
+- 国际化（English UI）
+- Windows 适配
 
 ## License
 

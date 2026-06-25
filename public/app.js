@@ -10842,30 +10842,121 @@ const CODEX_MODEL_PRESETS = [
   {
     label: 'DeepSeek',
     options: [
+      { value: 'deepseek-v4', label: 'DeepSeek V4 (最新旗舰)' },
+      { value: 'deepseek-v4-coder', label: 'DeepSeek V4 Coder' },
+      { value: 'deepseek-v4-thinking', label: 'DeepSeek V4 Thinking (推理)' },
+      { value: 'deepseek-v3.3', label: 'DeepSeek V3.3' },
       { value: 'deepseek-v3.2', label: 'DeepSeek V3.2' },
       { value: 'deepseek-v3.1', label: 'DeepSeek V3.1' },
+      { value: 'deepseek-r2', label: 'DeepSeek R2 (推理)' },
       { value: 'deepseek-r1', label: 'DeepSeek R1' },
+      { value: 'deepseek-r1-lite', label: 'DeepSeek R1 Lite' },
       { value: 'deepseek-coder-v3', label: 'DeepSeek Coder V3' },
+      { value: 'deepseek-chat', label: 'DeepSeek Chat (通用别名)' },
+      { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner (推理别名)' },
     ],
   },
   {
     label: 'Qwen (阿里)',
     options: [
       { value: 'qwen3-max', label: 'Qwen3 Max' },
-      { value: 'qwen3-coder', label: 'Qwen3 Coder' },
+      { value: 'qwen3-max-preview', label: 'Qwen3 Max Preview' },
       { value: 'qwen3-coder-plus', label: 'Qwen3 Coder Plus' },
+      { value: 'qwen3-coder', label: 'Qwen3 Coder' },
+      { value: 'qwen3-235b-a22b', label: 'Qwen3 235B A22B (MoE)' },
       { value: 'qwen3-72b', label: 'Qwen3 72B' },
+      { value: 'qwen3-32b', label: 'Qwen3 32B' },
+      { value: 'qwen3-14b', label: 'Qwen3 14B' },
+      { value: 'qwen3-8b', label: 'Qwen3 8B' },
+      { value: 'qwq-32b', label: 'QwQ 32B (推理)' },
+      { value: 'qwen-vl-max', label: 'Qwen VL Max (多模态)' },
+      { value: 'qwen-vl-plus', label: 'Qwen VL Plus' },
+      { value: 'qwen-turbo', label: 'Qwen Turbo' },
     ],
   },
   {
-    label: '其他 / 国内',
+    label: 'Kimi / Moonshot (月之暗面)',
     options: [
-      { value: 'glm-4.6', label: 'GLM 4.6 (智谱)' },
-      { value: 'kimi-k2', label: 'Kimi K2 (月之暗面)' },
-      { value: 'moonshot-v3', label: 'Moonshot V3' },
-      { value: 'doubao-pro-1.5', label: '豆包 Pro 1.5' },
-      { value: 'baichuan-4-turbo', label: '百川 4 Turbo' },
-      { value: 'yi-lightning', label: 'Yi Lightning' },
+      { value: 'kimi-k2.7-code', label: 'Kimi K2.7 Code (代码旗舰)' },
+      { value: 'kimi-k2.5', label: 'Kimi K2.5' },
+      { value: 'kimi-k2', label: 'Kimi K2' },
+      { value: 'kimi-k2-thinking', label: 'Kimi K2 Thinking (推理)' },
+      { value: 'kimi-k1.5', label: 'Kimi K1.5' },
+      { value: 'moonshot-v1-128k', label: 'Moonshot V1 128K' },
+      { value: 'moonshot-v1-32k', label: 'Moonshot V1 32K' },
+      { value: 'moonshot-v1-8k', label: 'Moonshot V1 8K' },
+    ],
+  },
+  {
+    label: 'GLM / 智谱',
+    options: [
+      { value: 'glm-5.2', label: 'GLM 5.2 (最新旗舰)' },
+      { value: 'glm-5.1', label: 'GLM 5.1' },
+      { value: 'glm-5', label: 'GLM 5' },
+      { value: 'glm-4.6', label: 'GLM 4.6' },
+      { value: 'glm-z1-air', label: 'GLM Z1 Air (推理)' },
+      { value: 'glm-z1-32b', label: 'GLM Z1 32B (推理)' },
+      { value: 'glm-4v-plus', label: 'GLM 4V Plus (多模态)' },
+      { value: 'codegeex-4', label: 'CodeGeeX 4 (代码)' },
+    ],
+  },
+  {
+    label: '豆包 / Doubao (字节)',
+    options: [
+      { value: 'doubao-1.5-pro-256k', label: '豆包 1.5 Pro 256K' },
+      { value: 'doubao-1.5-pro-32k', label: '豆包 1.5 Pro 32K' },
+      { value: 'doubao-1.5-lite-32k', label: '豆包 1.5 Lite 32K' },
+      { value: 'doubao-1.5-thinking-pro', label: '豆包 1.5 Thinking Pro' },
+      { value: 'doubao-1.5-vision-pro', label: '豆包 1.5 Vision Pro' },
+      { value: 'doubao-pro-128k', label: '豆包 Pro 128K' },
+      { value: 'doubao-pro-32k', label: '豆包 Pro 32K' },
+    ],
+  },
+  {
+    label: '腾讯混元 / Hunyuan',
+    options: [
+      { value: 'hunyuan-turbo-s', label: '混元 Turbo S' },
+      { value: 'hunyuan-turbo', label: '混元 Turbo' },
+      { value: 'hunyuan-pro', label: '混元 Pro' },
+      { value: 'hunyuan-large', label: '混元 Large (389B MoE)' },
+      { value: 'hunyuan-standard', label: '混元 Standard' },
+      { value: 'hunyuan-code', label: '混元 Code' },
+      { value: 'hunyuan-t1', label: '混元 T1 (推理)' },
+    ],
+  },
+  {
+    label: 'MiniMax / 阶跃星辰 / 其他国产',
+    options: [
+      { value: 'minimax-m2', label: 'MiniMax M2' },
+      { value: 'minimax-m1', label: 'MiniMax M1' },
+      { value: 'abab7-chat-preview', label: 'abab7 Chat Preview' },
+      { value: 'abab6.5s-chat', label: 'abab6.5s Chat' },
+      { value: 'step-2-16k', label: 'Step 2 16K (阶跃)' },
+      { value: 'step-1v-32k', label: 'Step 1V 32K' },
+      { value: 'baichuan4-turbo', label: '百川 4 Turbo' },
+      { value: 'baichuan4-air', label: '百川 4 Air' },
+      { value: 'yi-lightning', label: 'Yi Lightning (零一万物)' },
+      { value: 'yi-large', label: 'Yi Large' },
+      { value: 'spark-4.0-ultra', label: '星火 4.0 Ultra (科大讯飞)' },
+      { value: 'ernie-4.5-turbo', label: '文心 4.5 Turbo (百度)' },
+      { value: 'ernie-x1-turbo', label: '文心 X1 Turbo (推理)' },
+    ],
+  },
+  {
+    label: '开源 / 海外其他',
+    options: [
+      { value: 'llama-4-maverick', label: 'Llama 4 Maverick (Meta)' },
+      { value: 'llama-4-scout', label: 'Llama 4 Scout' },
+      { value: 'llama-4-behemoth', label: 'Llama 4 Behemoth' },
+      { value: 'llama-3.3-70b', label: 'Llama 3.3 70B' },
+      { value: 'mistral-large-2.5', label: 'Mistral Large 2.5' },
+      { value: 'mistral-medium-3', label: 'Mistral Medium 3' },
+      { value: 'mistral-small-3', label: 'Mistral Small 3' },
+      { value: 'codestral-2', label: 'Codestral 2' },
+      { value: 'command-r-plus', label: 'Command R+ (Cohere)' },
+      { value: 'command-a', label: 'Command A' },
+      { value: 'perplexity-sonar-pro', label: 'Perplexity Sonar Pro' },
+      { value: 'perplexity-sonar-reasoning', label: 'Perplexity Sonar Reasoning' },
     ],
   },
 ];
@@ -17198,6 +17289,55 @@ function initModelSupportedMulti(providerKey) {
   if (!wrap._msInit) {
     wrap._msInit = true;
     const trigger = el('modelSupportedTrigger');
+    // 用 setProperty(important) — 内联 !important 是 CSS 优先级最高的，
+    // 任何外部 !important 规则都无法覆盖
+    const setImp = (el, kvs) => {
+      if (!el) return;
+      for (const [k, v] of Object.entries(kvs)) el.style.setProperty(k, v, 'important');
+    };
+    if (trigger) {
+      setImp(trigger, {
+        position: 'relative',
+        height: '32px',
+        'min-height': '32px',
+        'max-height': '32px',
+        'box-sizing': 'border-box',
+        display: 'block',
+        padding: '0',
+        margin: '0',
+        'text-align': 'left',
+      });
+      const summary = trigger.querySelector('.model-multi-summary');
+      setImp(summary, {
+        position: 'absolute',
+        top: '50%',
+        left: '12px',
+        right: '32px',
+        transform: 'translateY(-50%)',
+        overflow: 'hidden',
+        'text-overflow': 'ellipsis',
+        'white-space': 'nowrap',
+        // line-height 1.5 给 g / p / y descender 充足空间
+        'line-height': '1.5',
+        'font-size': '12.5px',
+        color: 'var(--text)',
+        'font-family': 'var(--font-mono)',
+        display: 'block',
+        // 重置 .model-multi-summary 的 flex / gap / align-items
+        'flex-wrap': 'unset',
+        gap: '0',
+        'align-items': 'unset',
+      });
+      const caret = trigger.querySelector('.model-multi-caret');
+      setImp(caret, {
+        position: 'absolute',
+        top: '50%',
+        right: '10px',
+        transform: 'translateY(-50%)',
+        width: '10px',
+        height: '10px',
+      });
+    }
     trigger?.addEventListener('click', (e) => {
       e.preventDefault();
       const isOpen = wrap.classList.toggle('is-open');
@@ -17232,11 +17372,12 @@ function renderModelSupportedSummary() {
     return;
   }
   summary.classList.remove('is-empty');
-  // 显示前 3 个 id + "+N 更多"
+  // 极简：纯文字摘要，无 pill
   const arr = Array.from(checked);
-  const head = arr.slice(0, 3).map((m) => `<span class="model-multi-tag">${escapeHtml(m)}</span>`).join('');
-  const rest = arr.length > 3 ? ` <span class="model-multi-more">+${arr.length - 3}</span>` : '';
-  summary.innerHTML = head + rest;
+  const preview = arr.slice(0, 2).map((m) => escapeHtml(m)).join('、');
+  const tail = arr.length > 2 ? ` 等 ${n} 项` : '';
+  summary.textContent = '';
+  summary.textContent = preview + tail;
 }
 
 function renderModelSupportedPopBody() {
@@ -18900,71 +19041,47 @@ function renderPdModels(row) {
   for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
     for (const o of group.options) catalogIndex[o.value] = { label: o.label, group: group.label };
   }
-  const cards = saved.map((m) => {
+  const rows = saved.map((m) => {
     const meta = catalogIndex[m] || { label: '', group: '自定义' };
     const isLive = liveSet.has(m);
     const isDefault = m === currentModel;
-    const title = isDefault ? '当前默认 · 点击其他卡片切换' : '点击设为默认模型';
+    const title = isDefault ? '当前默认模型' : '点击设为默认模型';
     return `
-      <button type="button" class="pd-models-card ${isDefault ? 'is-default' : ''}" data-pd-model-card="${esc(m)}" data-pd-model-set-default="${esc(m)}" title="${esc(title)}">
-        <div class="pd-models-card-tags">
-          ${isDefault ? '<span class="pd-models-card-badge">默认</span>' : ''}
-          ${isLive ? '<span class="pd-models-card-live">LIVE</span>' : ''}
-        </div>
-        <div class="pd-models-card-id">${esc(m)}</div>
-        <div class="pd-models-card-label">${esc(meta.label || '自定义模型')}</div>
-        ${meta.group ? `<div class="pd-models-card-group">${esc(meta.group)}</div>` : ''}
-        <span class="pd-models-card-cta">${isDefault ? '✓ 默认' : '点击设为默认'}</span>
-        <span class="pd-models-card-remove" data-pd-model-remove="${esc(m)}" title="移除">×</span>
-      </button>`;
+      <div class="pdm-row ${isDefault ? 'is-default' : ''}" data-pd-model-card="${esc(m)}" data-pd-model-set-default="${esc(m)}" title="${esc(title)}" role="button" tabindex="0">
+        <span class="pdm-row-dot" aria-hidden="true"></span>
+        <span class="pdm-row-id">${esc(m)}</span>
+        <span class="pdm-row-label">${esc(meta.label || '自定义模型')}</span>
+        <span class="pdm-row-tags">
+          ${isDefault ? '<span class="pdm-tag pdm-tag-default">默认</span>' : ''}
+          ${isLive ? '<span class="pdm-tag pdm-tag-live">LIVE</span>' : ''}
+        </span>
+        <button type="button" class="pdm-row-remove" data-pd-model-remove="${esc(m)}" title="移除" aria-label="移除">×</button>
+      </div>`;
   }).join('');
   return `
     <div class="pd-models-page">
-      <div class="pd-models-summary">
-        <div class="pd-models-summary-row">
-          <div class="pd-models-summary-block">
-            <div class="pd-models-summary-label">当前默认模型</div>
-            <div class="pd-models-summary-value">
-              ${currentModel ? `<code>${esc(currentModel)}</code>` : '<span class="muted">未设置</span>'}
-              <span class="pd-models-summary-hint">在 概览 / 编辑 里切换默认</span>
-            </div>
-          </div>
-          <div class="pd-models-summary-block">
-            <div class="pd-models-summary-label">Live 检测（/v1/models）</div>
-            <div class="pd-models-summary-value">
-              ${liveModels.length ? `<span class="pd-models-count">${liveModels.length} 个</span>` : '<span class="muted">尚未检测</span>'}
-              <button type="button" class="pd-models-refresh-btn" data-pd-models-refetch ${loading ? 'disabled' : ''}>${loading ? '检测中…' : '从 Provider 拉取'}</button>
-            </div>
-          </div>
+      <div class="pdm-bar">
+        <div class="pdm-bar-item">
+          <span class="pdm-bar-label">当前默认</span>
+          ${currentModel ? `<code class="pdm-bar-model">${esc(currentModel)}</code>` : '<span class="pdm-bar-none">未设置</span>'}
         </div>
-        ${liveModels.length ? `<div class="pd-models-live-list">${liveModels.map((m) => `<span class="pd-models-live-chip">${esc(m)}</span>`).join('')}</div>` : ''}
+        <div class="pdm-bar-item pdm-bar-right">
+          ${liveModels.length ? `<span class="pdm-bar-live">Live 已检测 ${liveModels.length}</span>` : '<span class="pdm-bar-none">Live 未检测</span>'}
+          <button type="button" class="pdm-link-btn" data-pd-models-refetch ${loading ? 'disabled' : ''}>${loading ? '检测中…' : '从 Provider 拉取'}</button>
+        </div>
       </div>
 
-      <div class="pd-models-section-head">
-        <div class="pd-models-section-title">
-          支持的模型
-          <span class="pd-models-section-count">${saved.length}</span>
-        </div>
-        <button type="button" class="pd-models-add-btn" data-pd-models-add>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-          添加模型
-        </button>
+      <div class="pdm-list-head">
+        <div class="pdm-list-title">支持的模型 <em>${saved.length}</em></div>
+        <button type="button" class="pdm-link-btn pdm-add-btn" data-pd-models-add>＋ 添加模型</button>
       </div>
+
       ${saved.length ? `
-        <div class="pd-models-cards-grid">
-          ${cards}
-        </div>
+        <div class="pdm-list">${rows}</div>
       ` : `
-        <div class="pd-models-empty">
-          <div class="pd-models-empty-icon">
-            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.4"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>
-          </div>
-          <div class="pd-models-empty-title">还没添加支持的模型</div>
-          <div class="pd-models-empty-sub">点击右上「添加模型」从内置 catalog 里多选</div>
-          <button type="button" class="pd-models-empty-cta" data-pd-models-add>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-            添加模型
-          </button>
+        <div class="pdm-empty">
+          <div class="pdm-empty-text">还没有添加支持的模型</div>
+          <button type="button" class="pdm-link-btn pdm-add-btn" data-pd-models-add>＋ 添加模型</button>
         </div>
       `}
     </div>`;
@@ -24331,6 +24448,47 @@ loadTools();
     so.setAttribute('aria-hidden', 'false');
     document.body.classList.add('ch-so-active');
     const title = document.getElementById('chSlideoverTitle');
+
+    // 内联 !important — CSS 优先级最高，无视任何遗留 !important 规则
+    const setImp2 = (e, kvs) => {
+      if (!e) return;
+      for (const [k, v] of Object.entries(kvs)) e.style.setProperty(k, v, 'important');
+    };
+    const lockBox = (id, extra = {}) => {
+      const e = document.getElementById(id);
+      if (!e) return;
+      setImp2(e, {
+        height: '32px',
+        'min-height': '32px',
+        'max-height': '32px',
+        'box-sizing': 'border-box',
+        'padding-top': '0',
+        'padding-bottom': '0',
+        margin: '0',
+        'vertical-align': 'middle',
+        'line-height': 'normal',
+        ...extra,
+      });
+    };
+    lockBox('baseUrlInput', { 'padding-left': '12px', 'padding-right': '12px' });
+    lockBox('apiKeyInput', { 'padding-left': '12px', 'padding-right': '36px' });
+    lockBox('modelSelect', { 'padding-left': '12px', 'padding-right': '28px' });
+    lockBox('modelRefreshBtn', {
+      width: '32px', padding: '0',
+      display: 'inline-flex',
+      'align-items': 'center',
+      'justify-content': 'center',
+    });
+
+    // password 眼睛按钮也居中
+    setImp2(document.querySelector('.password-toggle-btn'), {
+      position: 'absolute',
+      top: '50%',
+      right: '4px',
+      transform: 'translateY(-50%)',
+      width: '24px',
+      height: '24px',
+    });
 
     if (mode === 'edit' && providerKey) {
       const provider = loadProviderIntoForm(providerKey);
