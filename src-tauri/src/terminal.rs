@@ -16,6 +16,13 @@ use crate::provider::get_string;
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 pub(crate) fn install(handle: &AppHandle) {
   let _ = APP_HANDLE.set(handle.clone());
+  // 自检：3 秒后 emit 一次测试事件 — 前端有听到说明 bridge 通
+  let h = handle.clone();
+  std::thread::spawn(move || {
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let r = h.emit("terminal-self-test", serde_json::json!({"at": chrono::Utc::now().to_rfc3339()}));
+    log::info!("[terminal] self-test emit result: {r:?}");
+  });
 }
 
 const DEFAULT_COLS: u16 = 120;
@@ -264,8 +271,16 @@ fn watch_codex_session_tokens(
                     "total": total.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
                     "contextWindow": context_window,
                   });
-                  log::info!("[token-watcher] emit {payload}");
-                  let _ = app.emit("terminal-tokens", payload);
+                  // emit_to main 窗口（avoid Tauri 2 webview-label edge case）+ 同步广播
+                  match app.emit("terminal-tokens", payload.clone()) {
+                    Ok(_) => log::info!("[token-watcher] emit ok: {payload}"),
+                    Err(e) => log::warn!("[token-watcher] emit ERROR: {e} payload={payload}"),
+                  }
+                  if let Err(e) = app.emit_to("main", "terminal-tokens", payload.clone()) {
+                    log::warn!("[token-watcher] emit_to(main) ERROR: {e}");
+                  }
+                } else {
+                  log::warn!("[token-watcher] APP_HANDLE not set!");
                 }
               }
             }
