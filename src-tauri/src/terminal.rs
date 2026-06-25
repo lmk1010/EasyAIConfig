@@ -12,17 +12,10 @@ use tauri::{AppHandle, Emitter};
 use crate::{home_dir, parse_json_object};
 use crate::provider::get_string;
 
-// 全局 app handle，install() 时塞入；reader 线程拿它 emit 数据事件
+// 全局 app handle，install() 时塞入；后台线程拿它 emit 事件
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 pub(crate) fn install(handle: &AppHandle) {
   let _ = APP_HANDLE.set(handle.clone());
-  // 自检：3 秒后 emit 一次测试事件 — 前端有听到说明 bridge 通
-  let h = handle.clone();
-  std::thread::spawn(move || {
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    let r = h.emit("terminal-self-test", serde_json::json!({"at": chrono::Utc::now().to_rfc3339()}));
-    log::info!("[terminal] self-test emit result: {r:?}");
-  });
 }
 
 const DEFAULT_COLS: u16 = 120;
@@ -186,15 +179,9 @@ fn watch_codex_session_tokens(
 ) {
   let session_id = session.id.clone();
   let our_cwd = session.cwd.clone();
-  let codex_home = match crate::default_codex_home() {
-    Ok(p) => p,
-    Err(error) => { log::warn!("[token-watcher] no codex_home: {error}"); return; }
-  };
+  let Ok(codex_home) = crate::default_codex_home() else { return; };
   let sessions_root = codex_home.join("sessions");
-  if !sessions_root.is_dir() {
-    log::warn!("[token-watcher] sessions_root not a dir: {sessions_root:?}");
-    return;
-  }
+  if !sessions_root.is_dir() { return; }
 
   // 锁定阶段：只接受
   //   - spawn_time 之后才 modified 的（mtime 不能早于 spawn_time - 5s）
@@ -210,7 +197,6 @@ fn watch_codex_session_tokens(
   while std::time::Instant::now() < deadline {
     if let Some(path) = find_unclaimed_session_jsonl(&sessions_root, &our_cwd, claim_floor) {
       if try_claim_jsonl(&path) {
-        log::info!("[token-watcher] CLAIMED {path:?} for our session={session_id} cwd={our_cwd}");
         if let Ok(mut slot) = session.jsonl_path.lock() {
           *slot = Some(path.clone());
         }
@@ -220,10 +206,7 @@ fn watch_codex_session_tokens(
     }
     std::thread::sleep(std::time::Duration::from_millis(300));
   }
-  let Some(target) = target else {
-    log::warn!("[token-watcher] could not claim a jsonl for session {session_id} within 45s. cwd={our_cwd}");
-    return;
-  };
+  let Some(target) = target else { return; };
 
   // tail 阶段：200ms 监视这一份独占文件，size 增加才读，模拟"事件触发"
   // codex 每次完成一轮 HTTP 请求才 append token_count，所以 size 变化 = HTTP 事件
@@ -287,16 +270,7 @@ fn watch_codex_session_tokens(
                     "total": total.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
                     "contextWindow": context_window,
                   });
-                  // emit_to main 窗口（avoid Tauri 2 webview-label edge case）+ 同步广播
-                  match app.emit("terminal-tokens", payload.clone()) {
-                    Ok(_) => log::info!("[token-watcher] emit ok: {payload}"),
-                    Err(e) => log::warn!("[token-watcher] emit ERROR: {e} payload={payload}"),
-                  }
-                  if let Err(e) = app.emit_to("main", "terminal-tokens", payload.clone()) {
-                    log::warn!("[token-watcher] emit_to(main) ERROR: {e}");
-                  }
-                } else {
-                  log::warn!("[token-watcher] APP_HANDLE not set!");
+                  let _ = app.emit("terminal-tokens", payload);
                 }
               }
             }
@@ -307,7 +281,6 @@ fn watch_codex_session_tokens(
     std::thread::sleep(std::time::Duration::from_millis(200));
   }
   release_jsonl(&target);
-  log::info!("[token-watcher] released {target:?} for session {session_id}");
 }
 
 /// 找一份"未被任何 session 认领、cwd 完全匹配、spawn 之后 modified"的 codex jsonl。

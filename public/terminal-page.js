@@ -28,34 +28,23 @@ const TOOL_LAUNCH_BIN = {
 
 function getState() { return window.state; }
 
-// 一次性挂全局 Tauri 事件监听：terminal-data / terminal-exit
-// Rust reader 线程读到一段就 emit 一次 — 真 push 流，60fps 取决于 PTY 实际产出
+// 全局 Tauri 事件监听：terminal-data / terminal-tokens / terminal-exit
+// Rust reader 线程每读到一段 PTY 输出就 emit 一次（真 push 流），
+// codex jsonl watcher 每检测到一条 token_count 也 emit。
 let __eaTermListenersBound = false;
 async function installTermEventListeners() {
-  console.warn('[ea-term] installTermEventListeners called', { bound: __eaTermListenersBound, tauri: !!window.__TAURI__ });
   if (__eaTermListenersBound) return;
   let listen = window.__TAURI__?.event?.listen;
-  // Tauri inject 有时晚于 module 加载；最多重试 30 次 × 100ms
+  // Tauri 全局注入有时晚于 module 加载；最多重试 30 × 100ms
   let tries = 0;
   while (typeof listen !== 'function' && tries < 30) {
     await new Promise((r) => setTimeout(r, 100));
     listen = window.__TAURI__?.event?.listen;
     tries++;
   }
-  if (typeof listen !== 'function') {
-    console.warn('[ea-term] listen unavailable after', tries, 'tries');
-    return;
-  }
-  console.warn('[ea-term] listen ok, registering 4 listeners');
+  if (typeof listen !== 'function') return;
   __eaTermListenersBound = true;
-  window.__eaTermDiag = { ...(window.__eaTermDiag || {}), listenOk: true, listenAt: Date.now() };
-  // 自检事件 — Rust install() 3 秒后会 emit 一次。收到 → bridge 完全通
-  await listen('terminal-self-test', (event) => {
-    console.warn('[ea-term] SELF-TEST event arrived', event?.payload);
-    window.__eaTermDiag = { ...(window.__eaTermDiag || {}), selfTestAt: Date.now(), selfTestPayload: event?.payload };
-  });
   await listen('terminal-data', (event) => {
-    window.__eaTermDiag = { ...(window.__eaTermDiag || {}), lastDataEventAt: Date.now() };
     const { sessionId, data } = event.payload || {};
     if (!sessionId || !data) return;
     const tp = getState()?.terminalPage;
@@ -83,19 +72,16 @@ async function installTermEventListeners() {
     }
   });
   // 真实 token 事件来自 codex jsonl watcher（terminal-tokens）
-  // 注意：token 必须存在 session 上（永远存在），不能依赖 instance（mount/unmount 会丢）
+  // token 写到 session 而不是 instance — instance 在 mount/unmount 时会丢
   await listen('terminal-tokens', (event) => {
-    console.warn('[ea-term] terminal-tokens event ARRIVED', event?.payload);
-    window.__eaTermDiag = { ...(window.__eaTermDiag || {}), lastTokenEventAt: Date.now(), lastTokenPayload: event?.payload };
     const payload = event.payload || {};
     const { sessionId } = payload;
-    if (!sessionId) { console.warn('[ea-term] no sessionId in payload'); return; }
+    if (!sessionId) return;
     const tp = getState()?.terminalPage;
     if (!tp) {
-      // state.terminalPage 还没初始化 — 先把数据存全局 buffer，等用户进入 terminal 页时回灌
+      // 用户还没进入 terminal 页：缓存 payload，renderTerminalPage 启动时回灌
       window.__eaPendingTokens = window.__eaPendingTokens || {};
       window.__eaPendingTokens[sessionId] = payload;
-      console.warn('[ea-term] no tp yet, buffered');
       return;
     }
     const tokens = {
@@ -106,10 +92,6 @@ async function installTermEventListeners() {
       total: Number(payload.total || 0),
       contextWindow: Number(payload.contextWindow || 0),
     };
-    const allIds = tp.sessions.map((s) => s.id);
-    const matched = allIds.includes(sessionId);
-    console.log('[terminal-tokens]', sessionId.slice(0, 8), 'matched=', matched, 'activeId=', tp.activeSessionId?.slice(0, 8), 'allIds=', allIds.map(i => i.slice(0, 8)));
-    // 1) 写到 session 对象（一定存在，即便 instance 还没 mount / 已 unmount）
     const sess = tp.sessions.find((s) => s.id === sessionId);
     if (sess) {
       sess.tokens = tokens;
@@ -120,33 +102,22 @@ async function installTermEventListeners() {
         persistOneSession(sess);
       }
     } else {
-      // sessionId 不在 tp.sessions 里 — 仍然存到 pending，等会话被 list/spawn 添加进来
+      // 会话还没出现在 tp.sessions（race condition）— 缓存等出现
       window.__eaPendingTokens = window.__eaPendingTokens || {};
       window.__eaPendingTokens[sessionId] = payload;
-      console.warn('[ea-term] sessionId NOT in tp.sessions, pending it. ids:', allIds);
     }
-    // 2) instance 上同步一份（已 mount 时 status bar 也会从这取）
     const inst = tp.instances?.[sessionId];
     if (inst) {
       inst.tokens = tokens;
       inst.tokensUpdatedAt = Date.now();
     }
-    // 3) 立即刷 — 直接在这里 inline 更新 DOM，避免任何中间层
-    console.error('[ea-term] TOKEN WRITE OK input=', tokens.input, 'output=', tokens.output, 'sess?', !!sess);
+    // 直接 inline 刷状态栏 — token 频率低（每轮对话一次），不需要 rAF 节流
     try {
-      // 状态栏内部 HTML 直接重渲染
       const host = document.getElementById('eaTerminalPage');
       const statusEl = host?.querySelector('.ea-term-status');
-      if (statusEl) {
-        statusEl.innerHTML = renderStatusBarInner(tp);
-        console.error('[ea-term] status DOM rewritten, first 100 chars:', statusEl.innerHTML.slice(0, 100));
-      } else {
-        console.error('[ea-term] CANNOT FIND .ea-term-status in DOM', host);
-      }
+      if (statusEl) statusEl.innerHTML = renderStatusBarInner(tp);
       renderTermSidebar();
-    } catch (e) {
-      console.error('[ea-term] render throw', e);
-    }
+    } catch (_) {}
   });
   await listen('terminal-exit', (event) => {
     const { sessionId, exitCode } = event.payload || {};
@@ -164,43 +135,6 @@ installTermEventListeners().catch(() => {});
 function api(path, opts) { return window.api(path, opts); }
 function flash(msg, type) { return typeof window.flash === 'function' ? window.flash(msg, type) : console.log(`[flash:${type || ''}] ${msg}`); }
 function escapeHtml(v) { return typeof window.escapeHtml === 'function' ? window.escapeHtml(v) : String(v ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c] || c)); }
-
-// ANSI escape codes 去掉，再正则抓 token 数字
-function stripAnsi(text) {
-  return String(text).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
-}
-
-function parseTokenChunk(inst, chunk) {
-  const clean = stripAnsi(chunk);
-  // 形如 "input: 12,345" / "cached: 8,200" / "output: 423" 或 "tokens: ..."
-  // Codex / Claude TUI 通常一行打印 status-line。这里全部抓最后命中的值，作为"最新值"
-  const matchNum = (label) => {
-    const re = new RegExp(`${label}\\s*[:：]?\\s*([\\d,]+)`, 'gi');
-    let m, last = null;
-    while ((m = re.exec(clean)) !== null) last = m[1];
-    return last ? parseInt(last.replace(/,/g, ''), 10) : null;
-  };
-  const t = inst.tokens || {};
-  const fields = [
-    ['input', /input/],
-    ['cached', /cache|cached/],
-    ['output', /output/],
-    ['reasoning', /reasoning|thinking/],
-    ['total', /total/],
-  ];
-  let touched = false;
-  for (const [key, kw] of fields) {
-    const v = matchNum(kw.source);
-    if (v != null && Number.isFinite(v)) {
-      t[key] = v;
-      touched = true;
-    }
-  }
-  if (touched) {
-    inst.tokens = t;
-    inst.tokensUpdatedAt = Date.now();
-  }
-}
 
 function renderTermSidebar() {
   const tp = getState()?.terminalPage;
@@ -245,17 +179,14 @@ function renderTermSidebar() {
   renderTermStatus();
 }
 
-// 单独刷状态栏
+// 单独刷状态栏（terminal-data / terminal-tokens 触发）
 function renderTermStatus() {
   const tp = getState()?.terminalPage;
-  if (!tp) { console.warn('[ea-term] renderTermStatus: tp missing'); return; }
+  if (!tp) return;
   const host = document.getElementById('eaTerminalPage');
-  if (!host) { console.warn('[ea-term] renderTermStatus: host missing'); return; }
+  if (!host) return;
   const statusEl = host.querySelector('.ea-term-status');
-  if (!statusEl) { console.warn('[ea-term] renderTermStatus: .ea-term-status missing'); return; }
-  const sess = tp.sessions.find((s) => s.id === tp.activeSessionId);
-  console.log('[ea-term] renderTermStatus tokens=', sess?.tokens);
-  statusEl.innerHTML = renderStatusBarInner(tp);
+  if (statusEl) statusEl.innerHTML = renderStatusBarInner(tp);
 }
 
 window.renderTermSidebar = renderTermSidebar;
@@ -528,45 +459,31 @@ function renderStatusBarInner(tp) {
   // 上下文用量条：累计 input vs context window
   const usedPct = ctxWindow > 0 ? Math.min(100, (input / ctxWindow) * 100) : 0;
   const cachePctOfInput = input > 0 ? Math.min(100, (cached / input) * 100) : 0;
-  // 诊断 chip：精确告诉你卡在哪一步
-  const allZero = input === 0 && cached === 0 && output === 0;
-  let diagChip = '';
-  if (allZero) {
-    const d = window.__eaTermDiag || {};
-    if (!d.listenOk) {
-      diagChip = `<span class="ea-term-status-diag is-bad" title="Tauri event listener 未注册 (window.__TAURI__ 没注入或拒绝)">✗ listener 未启</span>`;
-    } else if (!d.selfTestAt && !d.lastTokenEventAt && !d.lastDataEventAt) {
-      diagChip = `<span class="ea-term-status-diag is-bad" title="Tauri event bridge 不通：没收到 self-test / token / data 任何 Rust 推送">✗ bridge 断开</span>`;
-    } else if (!d.lastTokenEventAt) {
-      diagChip = `<span class="ea-term-status-diag is-warn" title="bridge 通了（self-test ✓）但 Rust 还没 emit terminal-tokens。Console.app 看 [token-watcher] 日志">⏳ 等 token emit (bridge ✓)</span>`;
-    } else if (Date.now() - d.lastTokenEventAt > 30000) {
-      const ago = Math.round((Date.now() - d.lastTokenEventAt) / 1000);
-      diagChip = `<span class="ea-term-status-diag is-warn" title="最近一次 token 事件: ${ago}s 前 sessionId=${esc(d.lastTokenPayload?.sessionId || '?')}">⏳ 上次 ${esc(String(ago))}s 前</span>`;
-    } else {
-      const sid = String(d.lastTokenPayload?.sessionId || '?').slice(0, 8);
-      diagChip = `<span class="ea-term-status-diag is-warn" title="刚收到 token 事件但 sessionId 不匹配本会话: ${esc(sid)}">⚠ sid 不匹配 (${esc(sid)})</span>`;
-    }
-  }
+  // 还没有任何 token 数据时显示"等待…"，避免视觉上跟真实 0 token 难分
+  const noTokens = ctxWindow === 0 && input === 0 && cached === 0 && output === 0;
   return `
     <span class="ea-term-status-dot ${session.running ? 'is-on' : 'is-off'}"></span>
     <span class="ea-term-status-text" title="${esc(titleRaw)}">${esc(titleShort)}</span>
     <span class="ea-term-status-sep">·</span>
     <span class="ea-term-status-text-faint">${esc(session.running ? '运行中' : '已退出')}</span>
-    ${diagChip}
     <span class="ea-term-status-spacer"></span>
-    ${ctxWindow > 0 ? `
-      <span class="ea-term-status-ctx" title="上下文 ${fmt(input)} / ${fmt(ctxWindow)} · 缓存 ${fmt(cached)}">
-        <span class="ea-term-status-ctx-label">上下文</span>
-        <span class="ea-term-status-ctx-bar">
-          <span class="ea-term-status-ctx-fill" style="width:${usedPct.toFixed(1)}%"></span>
-          <span class="ea-term-status-ctx-cache" style="width:${(usedPct * cachePctOfInput / 100).toFixed(1)}%"></span>
+    ${noTokens ? `
+      <span class="ea-term-status-pill ea-term-status-pill-faint" title="正在等待 codex 写入第一条 token_count 事件">等待 token…</span>
+    ` : `
+      ${ctxWindow > 0 ? `
+        <span class="ea-term-status-ctx" title="上下文 ${fmt(input)} / ${fmt(ctxWindow)} · 缓存 ${fmt(cached)}">
+          <span class="ea-term-status-ctx-label">上下文</span>
+          <span class="ea-term-status-ctx-bar">
+            <span class="ea-term-status-ctx-fill" style="width:${usedPct.toFixed(1)}%"></span>
+            <span class="ea-term-status-ctx-cache" style="width:${(usedPct * cachePctOfInput / 100).toFixed(1)}%"></span>
+          </span>
+          <span class="ea-term-status-ctx-num">${esc(fmtShort(input))}/${esc(fmtShort(ctxWindow))}</span>
         </span>
-        <span class="ea-term-status-ctx-num">${esc(fmtShort(input))}/${esc(fmtShort(ctxWindow))}</span>
-      </span>
-    ` : ''}
-    <span class="ea-term-status-pill" title="输入 token: ${fmt(input)}">入 ${esc(fmtShort(input))}</span>
-    <span class="ea-term-status-pill" title="缓存命中 token: ${fmt(cached)} (节省 ${input > 0 ? (cached / input * 100).toFixed(0) : 0}%)">缓 ${esc(fmtShort(cached))}</span>
-    <span class="ea-term-status-pill ea-term-status-pill-tokens" title="输出 token: ${fmt(output)}">出 ${esc(fmtShort(output))}</span>
+      ` : ''}
+      <span class="ea-term-status-pill" title="输入 token: ${fmt(input)}">入 ${esc(fmtShort(input))}</span>
+      <span class="ea-term-status-pill" title="缓存命中 token: ${fmt(cached)} (节省 ${input > 0 ? (cached / input * 100).toFixed(0) : 0}%)">缓 ${esc(fmtShort(cached))}</span>
+      <span class="ea-term-status-pill ea-term-status-pill-tokens" title="输出 token: ${fmt(output)}">出 ${esc(fmtShort(output))}</span>
+    `}
   `;
 }
 
@@ -954,9 +871,10 @@ async function pickCwd() {
   }
 }
 
-// Token 兜底 poll：自适应频率 + 仅当 terminal 页可见时才跑（性能）
-// - 未拿到 token 时 2 秒一次（快速发现）
-// - 已拿到 token 时 6 秒一次（节流，避免狂 lsof）
+// Token 兜底 poll：terminal-tokens push 是主源，poll 是 fallback。
+// 自适应频率 + 仅 terminal 页可见时才跑：
+//   - 当前会话还没 token 数据：2 秒/次（快速发现）
+//   - 已拿到 token：6 秒/次（节流，避免狂打 lsof）
 let __eaTermTokenPollTimer = 0;
 function startTokenPollLoop() {
   if (__eaTermTokenPollTimer) return;
@@ -964,43 +882,25 @@ function startTokenPollLoop() {
     try {
       const tp = getState()?.terminalPage;
       if (!tp) return;
-      // 不在 terminal 页时跳过（节省 CPU / 不打扰别处）
       if (getState()?.activePage !== 'terminal') return;
       let interval = 6000;
       for (const s of tp.sessions) {
         if (!s.running) continue;
         try {
           const res = await api(`/api/terminal/token-snapshot?sessionId=${encodeURIComponent(s.id)}`);
-          if (!res?.ok) {
-            tp._lastDiag = { ok: false, error: res?.error || 'endpoint missing', at: Date.now() };
-            interval = 2000;
-            continue;
-          }
-          const data = res.data || {};
-          tp._lastDiag = { ok: true, pid: data.pid, path: data.path, tokens: data.tokens, source: data.source, reason: data.reason, at: Date.now() };
-          const tokens = data.tokens;
+          if (!res?.ok) { interval = 2000; continue; }
+          const tokens = res.data?.tokens;
           if (tokens && Number.isFinite(tokens.input) && tokens.input > 0) {
+            s.tokens = tokens;
+            s.tokensUpdatedAt = Date.now();
             const inst = tp.instances?.[s.id];
-            if (!inst) continue;
-            inst.tokens = tokens;
-            inst.tokensUpdatedAt = Date.now();
-            if (!inst._sidebarRaf) {
-              inst._sidebarRaf = requestAnimationFrame(() => {
-                inst._sidebarRaf = 0;
-                renderTermSidebar();
-                renderTermStatus();
-              });
-            }
+            if (inst) { inst.tokens = tokens; inst.tokensUpdatedAt = Date.now(); }
           } else {
-            interval = 2000; // 还没拿到，下次快点
+            interval = 2000;
           }
-        } catch (err) {
-          if (tp) tp._lastDiag = { ok: false, error: String(err?.message || err), at: Date.now() };
-          interval = 2000;
-        }
+        } catch (_) { interval = 2000; }
       }
       renderTermStatus();
-      // 调整下次间隔
       if (__eaTermTokenPollTimer) clearTimeout(__eaTermTokenPollTimer);
       __eaTermTokenPollTimer = setTimeout(tick, interval);
     } catch (_) {
@@ -1311,7 +1211,7 @@ function mountTerminal(sessionId) {
             : data;
           term.write(bytes);
           instance.cursor = res.data.cursor || bytes.length;
-        } catch (e) { console.warn('[ea-term] buffer restore fail', e); }
+        } catch (_) {}
       }).catch(() => {});
 
       term.onData((data) => {
