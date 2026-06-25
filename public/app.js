@@ -19026,7 +19026,22 @@ async function bindPdModelsEvents() {
       if (res?.ok && models.length) {
         detail.detected = detail.detected || {};
         detail.detected[providerKey] = { models, at: Date.now() };
-        flash(`检测到 ${models.length} 个模型`, 'success');
+        // 自动并入支持列表：live 模型默认就是这个 provider 支持的，加进去再 persist
+        state.providerSavedModels = state.providerSavedModels || {};
+        const existingSaved = state.providerSavedModels[providerKey] || [];
+        const merged = Array.from(new Set([...existingSaved, ...models]));
+        const addedCount = merged.length - existingSaved.length;
+        state.providerSavedModels[providerKey] = merged;
+        // 静默落库（用户后续可以手动取消勾选）
+        if (addedCount > 0) {
+          try {
+            await api('/api/provider/saved-models', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ providerKey, codexHome, models: merged }),
+            });
+          } catch (_) {}
+        }
+        flash(`检测到 ${models.length} 个模型${addedCount > 0 ? ` · 自动加入 ${addedCount} 个` : ''}`, 'success');
         // 注意：renderProviderDetail 有签名缓存防闪屏，detected 不在签名里
         // 必须 force:true 才会真重渲染，否则 sig 一样就 skip
         renderProviderDetail({ force: true });
