@@ -19324,9 +19324,8 @@ function renderPdTab(tab, row) {
   return '';
 }
 
-// "📌 项目绑定" tab — 让 Provider 跟项目目录关联起来
-// 场景：A 项目用便宜的中转站，B 项目用官方账号，C 项目临时用 DeepSeek。
-// 切换时无感：从对应目录启动 Codex 自动切到绑定的 provider。
+// "📌 项目绑定" tab — Provider 跟项目目录关联。从绑定的目录启动 Codex 时
+// 自动切到这个 Provider。
 function renderPdBinding(row) {
   const esc = escapeHtml;
   const currentCwd = (el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '').trim();
@@ -19338,13 +19337,11 @@ function renderPdBinding(row) {
     ? ((state.current?.providers || []).find((p) => p.key === binding.providerKey)?.name || binding.providerKey)
     : '';
 
-  // 列出所有已存在的绑定（先拿 state.allProjectBindings，没有就先空显示，背后异步拉）
   const allBindings = Array.isArray(state.allProjectBindings) ? state.allProjectBindings : [];
   const myBindings = allBindings.filter((b) => {
     return Object.entries(b.tools || {}).some(([t, v]) => t === 'codex' && v?.providerKey === row.key);
   });
 
-  // 立刻触发一次后台拉取，下次 render 就有数据
   if (!state._allProjectBindingsFetching) {
     state._allProjectBindingsFetching = true;
     api('/api/project-bindings', { method: 'GET' }).then((res) => {
@@ -19357,109 +19354,72 @@ function renderPdBinding(row) {
   }
 
   if (!isApiKey) {
-    return `
-      <div class="pd-binding">
-        <div class="pd-binding-empty">
-          <p>📌 项目绑定目前只对 <strong>API Key</strong> 类型的 Provider 生效。</p>
-          <p>OAuth 账号本身就是「整机一份」，按账号切换更直接。</p>
-        </div>
-      </div>`;
+    return `<div class="pd-empty"><p>项目绑定只对 API Key 类型 Provider 生效。OAuth 账号是整机一份的。</p></div>`;
+  }
+  if (row.historyOnly) {
+    return `<div class="pd-empty"><p>本 Provider 仅在本地草稿，先保存后再绑定。</p></div>`;
   }
 
-  if (row.historyOnly) {
-    return `
-      <div class="pd-binding">
-        <div class="pd-binding-empty">
-          <p>本条 Provider 仅在本地草稿中存在，<code>~/.codex/config.toml</code> 已没有它。</p>
-          <p>请先保存（重新填一次 Key）后再绑定。</p>
+  // 状态卡：三种情况
+  let statusCard = '';
+  if (!currentCwd) {
+    statusCard = `
+      <div class="pd-section">
+        <div class="pd-section-title">当前项目目录</div>
+        <div class="pd-info-grid"><div class="pd-info-row"><span>未设置</span><code>在顶部「启动 Codex」处填绝对路径</code></div></div>
+      </div>`;
+  } else if (isBoundToThisProvider) {
+    statusCard = `
+      <div class="pd-section">
+        <div class="pd-section-title">绑定状态</div>
+        <div class="pd-info-grid">
+          <div class="pd-info-row"><span>项目目录</span><code>${esc(currentCwd)}</code></div>
+          <div class="pd-info-row"><span>状态</span><code class="pdb-ok">已绑定到本 Provider</code></div>
         </div>
+        <div class="pd-binding-actions"><button type="button" class="pd-chip-btn is-danger" data-pd-unbind>解绑当前项目</button></div>
+      </div>`;
+  } else if (hasOtherBinding) {
+    statusCard = `
+      <div class="pd-section">
+        <div class="pd-section-title">绑定状态</div>
+        <div class="pd-info-grid">
+          <div class="pd-info-row"><span>项目目录</span><code>${esc(currentCwd)}</code></div>
+          <div class="pd-info-row"><span>当前绑定</span><code class="pdb-warn">${esc(otherProviderName)}</code></div>
+        </div>
+        <div class="pd-binding-actions"><button type="button" class="pd-chip-btn is-primary" data-pd-bind>改绑到本 Provider</button></div>
+      </div>`;
+  } else {
+    statusCard = `
+      <div class="pd-section">
+        <div class="pd-section-title">绑定状态</div>
+        <div class="pd-info-grid">
+          <div class="pd-info-row"><span>项目目录</span><code>${esc(currentCwd)}</code></div>
+          <div class="pd-info-row"><span>状态</span><code>未绑定</code></div>
+        </div>
+        <div class="pd-binding-actions"><button type="button" class="pd-chip-btn is-primary" data-pd-bind>绑定到当前项目</button></div>
       </div>`;
   }
 
   return `
-    <div class="pd-binding">
-      <div class="pd-binding-explainer">
-        <h3>这是干嘛用的？</h3>
-        <p>把<strong>项目目录</strong>绑定到这个 Provider 之后，下次从该目录启动 Codex 时，
-        EasyAIConfig 会<strong>自动把 active provider 切到这个</strong>。像
-        <code>.nvmrc</code> / <code>.python-version</code> 那样按项目管理 AI 后端。</p>
-
-        <div class="pd-binding-scenarios">
-          <div class="pd-binding-scenario">
-            <span class="pd-binding-scenario-num">1</span>
-            <div>
-              <strong>多项目分账号 / 分配额</strong><br>
-              <span class="pd-meta-text">公司项目用付费中转站，个人项目用官方 OpenAI，开源项目用 DeepSeek 免费额度</span>
-            </div>
-          </div>
-          <div class="pd-binding-scenario">
-            <span class="pd-binding-scenario-num">2</span>
-            <div>
-              <strong>避免上下文污染</strong><br>
-              <span class="pd-meta-text">项目 A 用 Claude，项目 B 用 GPT — 在 UI 来回切换会忘，绑定后再也不会发错</span>
-            </div>
-          </div>
-          <div class="pd-binding-scenario">
-            <span class="pd-binding-scenario-num">3</span>
-            <div>
-              <strong>团队成员共用一台机器</strong><br>
-              <span class="pd-meta-text">每个项目跑自己的 provider，互不影响 — cc-switch 全局单例做不到</span>
-            </div>
-          </div>
-        </div>
+    <div class="pd-overview">
+      <div class="pd-section">
+        <div class="pd-section-title">说明</div>
+        <div class="pdb-note">绑定后，从该目录启动 Codex 时自动用本 Provider。同 <code>.nvmrc</code> / <code>.python-version</code> 的项目级路由思路。</div>
       </div>
 
-      <div class="pd-binding-current">
-        <div class="pd-binding-current-head">当前 launchCwd</div>
-        ${currentCwd
-          ? `<code class="pd-binding-cwd">${esc(currentCwd)}</code>`
-          : '<div class="pd-binding-warn">⚠️ 还没填项目目录。请先在顶栏的「启动 Codex」cwd 输入框里填一个绝对路径。</div>'}
-      </div>
-
-      ${currentCwd ? `
-        <div class="pd-binding-action ${isBoundToThisProvider ? 'is-bound' : ''}">
-          ${isBoundToThisProvider ? `
-            <div class="pd-binding-status">
-              <span class="pd-binding-status-pin">📌</span>
-              <div>
-                <strong>已绑定到当前项目</strong>
-                <div class="pd-meta-text">下次从 ${esc(currentCwd)} 启动 Codex 时会自动用此 Provider</div>
-              </div>
-            </div>
-            <button type="button" class="pd-chip-btn is-danger" data-pd-unbind>✖ 解绑当前项目</button>
-          ` : hasOtherBinding ? `
-            <div class="pd-binding-status pd-binding-warn-row">
-              <span class="pd-binding-status-pin">⚠️</span>
-              <div>
-                <strong>当前项目已绑定到 ${esc(otherProviderName)}</strong>
-                <div class="pd-meta-text">点下面按钮可改绑到本 Provider</div>
-              </div>
-            </div>
-            <button type="button" class="pd-chip-btn is-primary" data-pd-bind>📌 改绑到此 Provider</button>
-          ` : `
-            <div class="pd-binding-status">
-              <span class="pd-binding-status-pin pd-muted">○</span>
-              <div>
-                <strong>当前项目尚未绑定</strong>
-                <div class="pd-meta-text">点下面按钮把本 Provider 绑定到 ${esc(currentCwd)}</div>
-              </div>
-            </div>
-            <button type="button" class="pd-chip-btn is-primary" data-pd-bind>📌 绑定到当前项目</button>
-          `}
-        </div>
-      ` : ''}
+      ${statusCard}
 
       ${myBindings.length ? `
-        <div class="pd-binding-existing">
-          <div class="pd-binding-existing-head">该 Provider 已绑定的所有项目（${myBindings.length}）</div>
-          <ul class="pd-binding-list">
+        <div class="pd-section">
+          <div class="pd-section-title">本 Provider 已绑定的项目 <span class="pd-section-meta">${myBindings.length} 个</span></div>
+          <div class="pd-info-grid">
             ${myBindings.map((b) => `
-              <li class="${b.cwd === currentCwd ? 'is-current' : ''}">
+              <div class="pd-info-row pdb-row">
+                <span>${b.cwd === currentCwd ? '当前' : '目录'}</span>
                 <code>${esc(b.cwd)}</code>
-                ${b.cwd === currentCwd ? '<span class="pd-binding-list-tag">当前</span>' : ''}
-                <button type="button" class="pd-binding-list-del" data-pd-unbind-cwd="${esc(b.cwd)}" title="解绑此目录">✖</button>
-              </li>`).join('')}
-          </ul>
+                <button type="button" class="pdb-del" data-pd-unbind-cwd="${esc(b.cwd)}" title="解绑此目录">✕</button>
+              </div>`).join('')}
+          </div>
         </div>
       ` : ''}
     </div>`;
