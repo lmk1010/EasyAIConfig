@@ -211,7 +211,9 @@ export function initTerminalPageState() {
       providerKey: '',
       officialProfileId: '',        // codex official 时选哪个 oauth 账号
       cwd: '',
-      model: '',                    // 可空：传 --model
+      model: '',                    // '' = 默认；'custom' = modelCustom 文本
+      modelCustom: '',
+      reasoningEffort: '',          // codex: '' | minimal | low | medium | high | xhigh
       profile: '',                  // codex 可空：--profile
       sandbox: 'bypass',            // bypass | workspace-write | read-only | none
       flags: '',                    // 额外参数
@@ -419,6 +421,35 @@ function renderLauncherPage(tp, providers) {
     ['read-only', '只读'],
     ['none', '不设置'],
   ];
+  // 工具特定的模型列表
+  const codexModelOpts = [
+    { value: '', label: '默认 (账号/profile 设定)' },
+    { value: 'gpt-5-codex', label: 'gpt-5-codex' },
+    { value: 'gpt-5', label: 'gpt-5' },
+    { value: 'gpt-5-mini', label: 'gpt-5-mini' },
+    { value: 'o3', label: 'o3' },
+    { value: 'o3-mini', label: 'o3-mini' },
+    { value: 'custom', label: '自定义…' },
+  ];
+  const claudeModelOpts = [
+    { value: '', label: '默认' },
+    { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
+    { value: 'claude-opus-4-8', label: 'claude-opus-4-8' },
+    { value: 'claude-opus-4-7', label: 'claude-opus-4-7 (1M)' },
+    { value: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
+    { value: 'claude-fable-5', label: 'claude-fable-5' },
+    { value: 'custom', label: '自定义…' },
+  ];
+  const reasoningOpts = [
+    { value: '', label: '默认 (跟 profile)' },
+    { value: 'xhigh', label: 'xhigh · 极致推理' },
+    { value: 'high', label: 'high · 深度思考' },
+    { value: 'medium', label: 'medium · 平衡' },
+    { value: 'low', label: 'low · 快速' },
+    { value: 'minimal', label: 'minimal · 最低' },
+  ];
+  const modelOpts = isCodex ? codexModelOpts : claudeModelOpts;
+  const isCustomModel = tp.launcher.model === 'custom';
   const cwdDisplay = tp.launcher.cwd || '~ ($HOME)';
   return `
     <div class="ea-term-launch-page">
@@ -479,7 +510,21 @@ function renderLauncherPage(tp, providers) {
               <button type="button" class="ea-term-launch-pick" data-eat-pick-cwd title="选择目录" aria-label="选择目录">选择</button>
             </div>
           </div>
+          <div class="ea-term-launch-row">
+            <label class="ea-term-launch-lab">模型</label>
+            ${renderLaunchSelect('model', modelOpts, tp.launcher.model)}
+          </div>
+          ${isCustomModel ? `
+            <div class="ea-term-launch-row">
+              <label class="ea-term-launch-lab"></label>
+              <input class="ea-term-launch-ctl ea-term-launch-mono" type="text" data-eat-launch="modelCustom" placeholder="模型名（如 gpt-5-pro / claude-opus-4-x）" value="${esc(tp.launcher.modelCustom || '')}"/>
+            </div>
+          ` : ''}
           ${isCodex ? `
+            <div class="ea-term-launch-row">
+              <label class="ea-term-launch-lab">推理强度</label>
+              ${renderLaunchSelect('reasoningEffort', reasoningOpts, tp.launcher.reasoningEffort)}
+            </div>
             <div class="ea-term-launch-row">
               <label class="ea-term-launch-lab">沙箱模式</label>
               ${renderLaunchSelect('sandbox',
@@ -493,10 +538,6 @@ function renderLauncherPage(tp, providers) {
           </button>
           ${tp.launcher.moreOpen ? `
             <div class="ea-term-launch-more-body">
-              <div class="ea-term-launch-row">
-                <label class="ea-term-launch-lab">模型</label>
-                <input class="ea-term-launch-ctl" type="text" data-eat-launch="model" placeholder="留空 = 默认 (例: gpt-5)" value="${esc(tp.launcher.model || '')}"/>
-              </div>
               ${isCodex ? `
                 <div class="ea-term-launch-row">
                   <label class="ea-term-launch-lab">Profile</label>
@@ -520,7 +561,7 @@ function renderLauncherPage(tp, providers) {
     </div>`;
 }
 
-function renderLauncherPopover(tp, providers) {
+function renderLauncherPopover_DEPRECATED(tp, providers) {
   const esc = escapeHtml;
   const isCodex = tp.launcher.tool === 'codex';
   const isOfficial = isCodex && tp.launcher.source === 'official';
@@ -1195,16 +1236,23 @@ async function spawnSession() {
     officialEnv = { CODEX_HOME: prof.codexHome };
   }
   const bin = TOOL_LAUNCH_BIN[tp.launcher.tool] || tp.launcher.tool;
-  // 组装 args：sandbox + model + profile + 额外 flags
+  // 组装 args：sandbox + model + reasoning + profile + 额外 flags
   const args = [];
+  // model：'custom' → modelCustom 文本；其它非空 → 直接传
+  const finalModel = tp.launcher.model === 'custom'
+    ? (tp.launcher.modelCustom || '').trim()
+    : tp.launcher.model;
   if (isCodex) {
     const sb = tp.launcher.sandbox;
     if (sb === 'bypass') args.push('--dangerously-bypass-approvals-and-sandbox');
     else if (sb === 'workspace-write') args.push('--sandbox', 'workspace-write');
     else if (sb === 'read-only') args.push('--sandbox', 'read-only');
     if (tp.launcher.profile) args.push('--profile', tp.launcher.profile);
+    if (tp.launcher.reasoningEffort) {
+      args.push('-c', `model_reasoning_effort="${tp.launcher.reasoningEffort}"`);
+    }
   }
-  if (tp.launcher.model) args.push('--model', tp.launcher.model);
+  if (finalModel) args.push('--model', finalModel);
   // 额外 raw 参数最后追
   const rawFlags = (tp.launcher.flags || '').trim().split(/\s+/).filter(Boolean);
   args.push(...rawFlags);
