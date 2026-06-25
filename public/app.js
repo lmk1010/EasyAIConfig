@@ -11958,6 +11958,7 @@ function setPage(page = 'quick') {
       window.flash = flash;
       window.escapeHtml = escapeHtml;
       window.openExternalUrl = openExternalUrl;
+      window.pickDirectoryPath = pickDirectoryPath;
     } catch (_) {}
     try {
       if (typeof window.renderTerminalPage === 'function') {

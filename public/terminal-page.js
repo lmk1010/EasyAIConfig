@@ -86,7 +86,7 @@ export async function renderTerminalPage() {
       </div>
       ${renderStatusBar(tp)}
       ${renderFab(tp)}
-      ${tp.launcherOpen ? renderLauncherPopover(tp, allProviders) : ''}
+      ${tp.launcherOpen ? `<div class="ea-term-launcher-scrim" data-eat-launcher-scrim></div>${renderLauncherPopover(tp, allProviders)}` : ''}
     </div>
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
   `;
@@ -112,40 +112,44 @@ function renderFab(tp) {
 function renderLauncherPopover(tp, providers) {
   const esc = escapeHtml;
   const opts = providers.map((p) => `<option value="${esc(p.key)}" ${p.key === tp.launcher.providerKey ? 'selected' : ''}>${p.isActive ? '● ' : ''}${esc(p.name || p.key)}</option>`).join('');
+  // 没有 scrim — 直接锚定 FAB 右上方的浮卡（点外面有外部 listener 关，下面会接）
   return `
-    <div class="ea-term-launcher-pop" data-eat-launcher-scrim>
-      <div class="ea-term-launcher-card">
-        <div class="ea-term-launcher-head">
-          <span class="ea-term-launcher-eyebrow">NEW SESSION</span>
-          <button type="button" class="ea-term-launcher-close" data-eat-launcher-close title="关闭 (Esc)">×</button>
-        </div>
-        <div class="ea-term-launcher-body">
-          <label class="ea-term-launcher-field">
-            <span>工具</span>
-            <select data-eat-launch="tool">
-              <option value="codex" ${tp.launcher.tool === 'codex' ? 'selected' : ''}>Codex</option>
-              <option value="claudecode" ${tp.launcher.tool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
-            </select>
-          </label>
-          <label class="ea-term-launcher-field">
-            <span>Provider</span>
-            <select data-eat-launch="providerKey">${opts || '<option value="">无可用 provider</option>'}</select>
-          </label>
-          <label class="ea-term-launcher-field ea-term-launcher-field-wide">
-            <span>工作目录</span>
+    <div class="ea-term-launcher-card" data-eat-launcher-card>
+      <div class="ea-term-launcher-head">
+        <span class="ea-term-launcher-eyebrow">NEW SESSION</span>
+        <button type="button" class="ea-term-launcher-close" data-eat-launcher-close title="关闭 (Esc)">×</button>
+      </div>
+      <div class="ea-term-launcher-body">
+        <label class="ea-term-launcher-field">
+          <span>工具</span>
+          <select data-eat-launch="tool">
+            <option value="codex" ${tp.launcher.tool === 'codex' ? 'selected' : ''}>Codex</option>
+            <option value="claudecode" ${tp.launcher.tool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
+          </select>
+        </label>
+        <label class="ea-term-launcher-field">
+          <span>Provider</span>
+          <select data-eat-launch="providerKey">${opts || '<option value="">无可用 provider</option>'}</select>
+        </label>
+        <div class="ea-term-launcher-field ea-term-launcher-field-wide">
+          <span>工作目录</span>
+          <div class="ea-term-launcher-cwd">
             <input type="text" data-eat-launch="cwd" placeholder="默认 = $HOME" value="${esc(tp.launcher.cwd || '')}"/>
-          </label>
-          <label class="ea-term-launcher-field ea-term-launcher-field-wide">
-            <span>启动参数</span>
-            <input type="text" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="--flag …"/>
-          </label>
+            <button type="button" class="ea-term-launcher-pick" data-eat-pick-cwd title="浏览…">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.4l1.2 1.4h5.4A1.5 1.5 0 0 1 14 5.9V11.5A1.5 1.5 0 0 1 12.5 13H3.5A1.5 1.5 0 0 1 2 11.5z"/></svg>
+            </button>
+          </div>
         </div>
-        <div class="ea-term-launcher-foot">
-          <button type="button" class="ea-term-launcher-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v12l10-6z"/></svg>
-            ${tp.starting ? '启动中…' : '启动'}
-          </button>
-        </div>
+        <label class="ea-term-launcher-field ea-term-launcher-field-wide">
+          <span>启动参数</span>
+          <input type="text" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="--flag …"/>
+        </label>
+      </div>
+      <div class="ea-term-launcher-foot">
+        <button type="button" class="ea-term-launcher-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v12l10-6z"/></svg>
+          ${tp.starting ? '启动中…' : '启动'}
+        </button>
       </div>
     </div>`;
 }
@@ -309,9 +313,10 @@ function onClick(e) {
     return;
   }
   if (t.closest('[data-eat-launcher-close]')) { tp.launcherOpen = false; renderTerminalPage(); return; }
-  if (t.closest('[data-eat-launcher-scrim]') && !t.closest('.ea-term-launcher-card')) {
+  if (t.closest('[data-eat-launcher-scrim]')) {
     tp.launcherOpen = false; renderTerminalPage(); return;
   }
+  if (t.closest('[data-eat-pick-cwd]')) { pickCwd(); return; }
   if (t.closest('[data-eat-launcher-toggle]')) { tp.launcherOpen = !tp.launcherOpen; renderTerminalPage(); return; }
   if (t.closest('[data-eat-search]')) { openSearch(); return; }
   if (t.closest('[data-eat-palette]')) { tp.paletteOpen = true; renderTerminalPage(); return; }
@@ -504,6 +509,28 @@ function handleSidebarAction(act) {
   }
 }
 
+async function pickCwd() {
+  try {
+    const tp = getState().terminalPage;
+    const initialPath = tp.launcher.cwd || '';
+    const res = await api('/api/path/pick-directory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '选择工作目录', initialPath }),
+    });
+    if (res?.ok && res.data?.path) {
+      tp.launcher.cwd = res.data.path;
+      renderTerminalPage();
+    } else if (res?.ok && !res.data?.path) {
+      // 用户取消，不报错
+    } else {
+      flash(res?.error || '打开目录选择器失败', 'error');
+    }
+  } catch (err) {
+    flash(`选择目录失败: ${err.message || err}`, 'error');
+  }
+}
+
 async function spawnSession() {
   const tp = getState().terminalPage;
   if (tp.starting) return;
@@ -570,10 +597,9 @@ async function closeSession(sessionId) {
   renderTerminalPage();
 }
 
-// Termius 级深色主题（精选拉满对比度，cursor / selection 都按品牌蓝）
-// 注意 background 透明 (rgba 0/0/0/0) 让 page 渐变透出，不再有"白卡"
+// Termius / electerm 风格：终端永远深色（dark surface），跟 app 主题解耦
 const TERM_THEME_DARK = {
-  background: 'rgba(0,0,0,0)',
+  background: '#0b1020',
   foreground: '#e6ecf5',
   cursor: '#8dbdff',
   cursorAccent: '#0b1020',
@@ -598,8 +624,8 @@ const TERM_THEME_DARK = {
   brightWhite:  '#f6f8fa',
 };
 const TERM_THEME_LIGHT = {
-  background: 'rgba(0,0,0,0)',
-  foreground: '#1f2937',
+  background: '#0e1322',
+  foreground: '#e6ecf5',
   cursor: '#3358ff',
   cursorAccent: '#fafbfc',
   selectionBackground: 'rgba(51,88,255,0.22)',
@@ -648,7 +674,7 @@ function mountTerminal(sessionId) {
       theme: currentTermTheme(),
       allowProposedApi: true,
       windowsMode: false,
-      allowTransparency: true,    // 让 page 渐变透出来，无白卡
+      allowTransparency: false,
       macOptionIsMeta: true,
       rightClickSelectsWord: true,
       convertEol: false,

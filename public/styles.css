@@ -26522,11 +26522,11 @@ body {
 [data-theme="light"] .shell-v2 .ea-term-mini-btn { border-color: rgba(15,23,42,0.1); color: #475569; }
 [data-theme="light"] .shell-v2 .ea-term-mini-btn-ghost { background: rgba(255,255,255,0.65); }
 
-/* Tab strip */
+/* Tab strip：透明 0 padding，没有 card 感 */
 .shell-v2 .ea-term-tabs {
-  display: flex; gap: 2px; padding: 4px 10px 0;
-  background: rgba(255,255,255,0.018);
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  display: flex; gap: 2px; padding: 6px 8px 0;
+  background: transparent;
+  border-bottom: 0;
   overflow-x: auto;
 }
 .shell-v2 .ea-term-tabs-empty { min-height: 0; padding: 0; }
@@ -26573,11 +26573,12 @@ body {
 }
 .shell-v2 .ea-term-tab-close:hover { background: rgba(248,113,113,0.18); color: #f87171; }
 
-/* Canvas：透明，让 page bg / 渐变 透出来，没有白色卡 */
+/* Canvas：终端深色面板（匹配 xterm theme.bg #0b1020）；和外面 page bg 形成
+   一个明显的"嵌入式终端"效果，跟 chrome 解耦 */
 .shell-v2 .ea-term-canvas {
   position: relative;
-  background: transparent;
-  padding: 4px 12px 0;
+  background: #0b1020;
+  padding: 0;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -26603,16 +26604,16 @@ body {
 }
 [data-theme="light"] .shell-v2 .ea-term-empty kbd { background: rgba(91,140,255,0.16); color: #3358ff; }
 
-/* Status bar：薄薄一行，没有底色 / 边框，直接浮在 page bg 上 */
+/* Status bar：完全融入，没有 padding-x 让它真正贴边 */
 .shell-v2 .ea-term-status {
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 16px 10px;
+  padding: 4px 12px;
   background: transparent;
   border-top: 0;
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   color: var(--s2-faint);
   font-variant-numeric: tabular-nums;
-  min-height: 22px;
+  min-height: 18px;
 }
 .shell-v2 .ea-term-status-dot {
   width: 7px; height: 7px; border-radius: 50%;
@@ -26839,33 +26840,33 @@ body {
   color: #475569 !important;
 }
 
-/* Popover (新建会话的配置卡) */
-.shell-v2 .ea-term-launcher-pop {
+/* 透明 scrim：只捕获点击，绝不画底色 */
+.shell-v2 .ea-term-launcher-scrim {
   position: absolute; inset: 0;
-  background: rgba(8,11,20,0.42);
-  backdrop-filter: blur(3px);
-  display: flex; align-items: flex-end; justify-content: flex-end;
-  padding: 12px 76px 90px 16px;   /* 右下角靠近 FAB */
-  z-index: 70;
-  animation: eaTermPopIn 180ms ease both;
+  background: transparent;
+  z-index: 65;
 }
-@keyframes eaTermPopIn { from { opacity: 0; } to { opacity: 1; } }
-[data-theme="light"] .shell-v2 .ea-term-launcher-pop { background: rgba(15,23,42,0.16); }
 
+/* Popover 锚定 FAB 上方，从 FAB 弹出 */
 .shell-v2 .ea-term-launcher-card {
-  width: min(420px, 100%);
-  background: linear-gradient(180deg, #141a26, #10141d);
+  position: absolute;
+  right: 18px; bottom: 92px;
+  width: min(380px, calc(100% - 36px));
+  background: rgba(20,26,38,0.95);
   border: 1px solid rgba(91,140,255,0.28);
   border-radius: 14px;
-  box-shadow: 0 24px 56px rgba(0,0,0,0.42);
+  box-shadow: 0 18px 44px rgba(0,0,0,0.4), 0 6px 14px rgba(0,0,0,0.2);
   overflow: hidden;
   transform-origin: bottom right;
   animation: eaTermCardIn 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  z-index: 75;
 }
 [data-theme="light"] .shell-v2 .ea-term-launcher-card {
-  background: #fff;
+  background: rgba(255,255,255,0.92);
   border-color: rgba(91,140,255,0.32);
-  box-shadow: 0 24px 56px rgba(15,23,42,0.18);
+  box-shadow: 0 18px 44px rgba(15,23,42,0.16), 0 6px 14px rgba(15,23,42,0.08);
 }
 @keyframes eaTermCardIn { from { opacity: 0; transform: scale(0.92) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 
@@ -26955,3 +26956,31 @@ body {
 }
 [data-theme="light"] .shell-v2 .ea-term-tab-new { border-color: rgba(15,23,42,0.1); color: #475569; }
 [data-theme="light"] .shell-v2 .ea-term-tab-new:hover { color: #3358ff; }
+
+/* CWD 输入 + 浏览目录按钮 */
+.shell-v2 .ea-term-launcher-cwd {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: stretch;
+}
+.shell-v2 .ea-term-launcher-pick {
+  width: 34px; height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(91,140,255,0.12) !important;
+  border: 1px solid rgba(91,140,255,0.28) !important;
+  border-radius: 7px !important;
+  color: #8dbdff !important;
+  cursor: pointer;
+  box-shadow: none !important;
+  transition: background 120ms, transform 100ms;
+}
+.shell-v2 .ea-term-launcher-pick:hover { background: rgba(91,140,255,0.22) !important; transform: translateY(-1px); }
+[data-theme="light"] .shell-v2 .ea-term-launcher-pick { color: #3358ff !important; }
+
+/* page-view[data-page=terminal] 不要有任何 padding，page bg 直接贴边 */
+.shell-v2 .page-view[data-page="terminal"] { padding: 0 !important; margin: 0 !important; }
+/* 终端页：去掉 workspace 的 22/24/20 padding + 顶栏，让终端真贴边 */
+body[data-page="terminal"] .shell-v2 .workspace { padding: 0 !important; }
+body[data-page="terminal"] .shell-v2 .workspace-topbar { display: none !important; }
+body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin: 0 !important; }
