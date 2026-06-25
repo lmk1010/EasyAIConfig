@@ -18889,7 +18889,7 @@ function renderPdModels(row) {
         if (res?.ok) {
           state.providerSavedModels = state.providerSavedModels || {};
           state.providerSavedModels[providerKey] = res.data?.models || [];
-          if (state.providerDetail?.tab === 'models') renderProviderDetail();
+          if (state.providerDetail?.tab === 'models') renderProviderDetail({ force: true });
         }
       }).catch(() => {});
   }
@@ -18984,7 +18984,7 @@ async function bindPdModelsEvents() {
       if (res?.ok) {
         state.providerSavedModels = state.providerSavedModels || {};
         state.providerSavedModels[providerKey] = newList;
-        renderProviderDetail();
+        renderProviderDetail({ force: true });
       } else {
         flash(`保存失败: ${res?.error || '未知'}`, 'error');
       }
@@ -19027,7 +19027,9 @@ async function bindPdModelsEvents() {
         detail.detected = detail.detected || {};
         detail.detected[providerKey] = { models, at: Date.now() };
         flash(`检测到 ${models.length} 个模型`, 'success');
-        renderProviderDetail();  // 唯一一次 render，避免 race
+        // 注意：renderProviderDetail 有签名缓存防闪屏，detected 不在签名里
+        // 必须 force:true 才会真重渲染，否则 sig 一样就 skip
+        renderProviderDetail({ force: true });
         return;
       }
       flash(`拉取失败: ${res?.error || res?.data?.error || (res?.ok ? '响应里没有模型列表' : '未知')}`, 'warning');
