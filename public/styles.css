@@ -28197,245 +28197,227 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* ─── Provider 详情 · 模型支持 (卡片版) ─── */
-.pd-models-section-head {
-  display: flex; align-items: center;
-  margin-top: 4px; margin-bottom: 2px;
-  gap: 12px;
+/* ─── Provider 详情 · 模型支持 (极简列表版) ─── */
+/* 顶部：当前默认 + Live 拉取，纯文字行，无卡片包裹 */
+.pdm-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  padding: 2px 2px 12px;
+  border-bottom: 1px solid rgba(120,140,180,0.14);
 }
-.pd-models-section-title {
-  flex: 1;
-  font-size: 13px; font-weight: 700;
-  color: var(--text);
+.pdm-bar-item {
   display: flex; align-items: center; gap: 8px;
+  min-width: 0;
 }
-.pd-models-section-count {
-  background: rgba(91,140,255,0.10);
+.pdm-bar-right { gap: 12px; }
+.pdm-bar-label {
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.pdm-bar-model {
+  font-family: var(--font-mono);
+  font-size: 12.5px; font-weight: 600;
   color: #3358ff;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
 }
-.pd-models-add-btn {
-  display: inline-flex; align-items: center; gap: 5px;
-  background: linear-gradient(90deg, #5b8cff, #3358ff);
-  color: #fff;
-  border: none; border-radius: 6px;
-  padding: 6px 14px;
-  font: inherit; font-size: 12px; font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(51,88,255,0.28);
-  transition: all 120ms ease;
+.pdm-bar-none { font-size: 12.5px; color: var(--muted); opacity: 0.7; }
+.pdm-bar-live { font-size: 12px; color: var(--muted); }
+
+/* 文字按钮 — 拉取 / 添加，无填充。!important 用于压制全局 button 渐变 */
+.pdm-link-btn,
+.pd-models-page .pdm-link-btn {
+  background: transparent !important;
+  background-image: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 2px 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  font: inherit !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  color: #3358ff !important;
+  cursor: pointer !important;
+  transform: none !important;
+  transition: opacity 120ms ease !important;
 }
-.pd-models-add-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(51,88,255,0.42);
+.pdm-link-btn:hover:not(:disabled) { opacity: 0.7 !important; transform: none !important; }
+.pdm-link-btn:disabled { color: var(--muted) !important; cursor: progress !important; opacity: 0.6 !important; }
+
+.pdm-list-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 2px 2px 0;
+}
+.pdm-list-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+}
+.pdm-list-title em {
+  font-style: normal; color: var(--muted); font-weight: 500;
+  margin-left: 2px;
 }
 
-/* 卡片网格：每行 2-4 个 (响应 minmax 240) */
-.pd-models-cards-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
+/* 列表：行之间细分隔线，无卡片、无嵌套 */
+.pdm-list {
+  display: flex; flex-direction: column;
+  border-top: 1px solid rgba(120,140,180,0.12);
 }
-.pd-models-card {
-  position: relative;
-  width: 100%;
-  background: var(--card-bg, rgba(255,255,255,0.6));
-  border: 1px solid rgba(120,140,180,0.18);
-  border-radius: 10px;
-  padding: 12px 14px 36px;       /* 底部留空间放 CTA */
-  text-align: left;
+.pdm-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 8px;
+  border-bottom: 1px solid rgba(120,140,180,0.10);
   cursor: pointer;
-  font: inherit; color: inherit;
-  transition: all 160ms ease;
-  display: block;
+  transition: background 120ms ease;
 }
-[data-theme="dark"] .pd-models-card {
-  background: rgba(28,32,42,0.55);
+.pdm-row:hover { background: rgba(120,140,180,0.06); }
+.pdm-row:focus-visible { outline: 2px solid rgba(91,140,255,0.5); outline-offset: -2px; }
+.pdm-row-dot {
+  flex: 0 0 8px; width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(120,140,180,0.45);
+  box-sizing: border-box;
+  transition: all 120ms ease;
 }
-.pd-models-card:hover {
-  border-color: rgba(91,140,255,0.35);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(40,60,100,0.08);
+.pdm-row.is-default .pdm-row-dot {
+  border-color: #3358ff;
+  background: #3358ff;
+  box-shadow: 0 0 0 3px rgba(51,88,255,0.14);
 }
-.pd-models-card.is-default {
-  border-color: rgba(91,140,255,0.50);
-  background: linear-gradient(135deg, rgba(91,140,255,0.06), rgba(91,140,255,0.02));
-}
-[data-theme="dark"] .pd-models-card.is-default {
-  background: linear-gradient(135deg, rgba(91,140,255,0.10), rgba(91,140,255,0.02));
-}
-.pd-models-card-tags {
-  position: absolute; top: 10px; right: 36px;
-  display: flex; gap: 4px;
-}
-.pd-models-card-badge {
-  font-size: 9.5px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.06em;
-  background: linear-gradient(90deg, #5b8cff, #3358ff);
-  color: #fff;
-  padding: 2px 7px;
-  border-radius: 999px;
-}
-.pd-models-card-live {
-  font-size: 9.5px; font-weight: 700;
-  letter-spacing: 0.06em;
-  background: rgba(34,197,94,0.14);
-  color: #16a34a;
-  padding: 2px 7px;
-  border-radius: 999px;
-}
-.pd-models-card-id {
+.pdm-row-id {
   font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13px; font-weight: 500;
   color: var(--text);
-  margin-bottom: 4px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  padding-right: 24px;
-}
-.pd-models-card-label {
-  font-size: 11.5px;
-  color: var(--muted);
-  margin-bottom: 6px;
+  flex: 0 1 auto;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.pd-models-card-group {
-  font-size: 10px;
-  color: var(--muted);
-  opacity: 0.65;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-weight: 500;
+.pdm-row.is-default .pdm-row-id { color: #3358ff; font-weight: 600; }
+.pdm-row-label {
+  flex: 1 1 auto;
+  font-size: 11.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
 }
-.pd-models-card-remove {
-  position: absolute; top: 8px; right: 8px;
-  width: 20px; height: 20px;
+.pdm-row-tags { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.pdm-tag {
+  font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 7px; border-radius: 999px;
+}
+.pdm-tag-default {
+  background: rgba(91,140,255,0.12);
+  color: #3358ff;
+}
+.pdm-tag-live {
+  background: rgba(34,197,94,0.12);
+  color: #16a34a;
+}
+[data-theme="dark"] .pdm-tag-live { color: #4ade80; }
+.pdm-row-remove {
+  flex: 0 0 auto;
+  width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent;
   color: var(--muted); border-radius: 5px;
-  font-size: 16px;
+  font-size: 16px; line-height: 1;
   cursor: pointer;
   opacity: 0;
   transition: all 120ms ease;
-  z-index: 2;
 }
-.pd-models-card:hover .pd-models-card-remove { opacity: 1; }
-.pd-models-card-remove:hover {
+.pdm-row:hover .pdm-row-remove { opacity: 0.55; }
+.pdm-row-remove:hover {
+  opacity: 1;
   background: rgba(248,113,113,0.12);
   color: #ef4444;
 }
 
-/* CTA：底部悬浮提示 "点击设为默认" */
-.pd-models-card-cta {
-  position: absolute;
-  left: 14px; right: 14px; bottom: 10px;
-  font-size: 10.5px;
-  color: var(--muted);
-  opacity: 0;
-  transition: opacity 120ms ease;
-  text-align: left;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-.pd-models-card:hover .pd-models-card-cta { opacity: 0.85; }
-.pd-models-card.is-default .pd-models-card-cta {
-  opacity: 1;
-  color: #3358ff;
-}
-
-/* 空状态 */
-.pd-models-empty {
+/* 空状态 — 极简 */
+.pdm-empty {
   display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  padding: 48px 24px;
+  align-items: center; gap: 12px;
+  padding: 40px 24px;
   text-align: center;
-  background: var(--card-bg, rgba(255,255,255,0.4));
-  border: 1px dashed rgba(120,140,180,0.30);
-  border-radius: 12px;
 }
-.pd-models-empty-icon {
-  color: var(--muted);
-  margin-bottom: 12px;
-}
-.pd-models-empty-title {
-  font-size: 13px; font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-.pd-models-empty-sub {
-  font-size: 11.5px; color: var(--muted);
-  margin-bottom: 16px;
-}
-.pd-models-empty-cta {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: linear-gradient(90deg, #5b8cff, #3358ff);
-  color: #fff;
-  border: none; border-radius: 6px;
-  padding: 8px 18px;
-  font: inherit; font-size: 12.5px; font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(51,88,255,0.32);
-  transition: all 120ms ease;
-}
-.pd-models-empty-cta:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(51,88,255,0.45);
-}
+.pdm-empty-text { font-size: 12.5px; color: var(--muted); }
 
 /* ─── slideover 内嵌"支持的模型"多选 ─── */
 .model-multi {
   position: relative;
   width: 100%;
 }
-.model-multi-trigger {
-  width: 100%;
-  display: flex; align-items: center; gap: 8px;
-  background: transparent;
-  border: 1px solid rgba(120,140,180,0.20);
-  border-radius: 8px;
-  padding: 0 12px;
-  height: 40px;
-  min-height: 40px; max-height: 40px;
+.model-multi-trigger,
+.model-multi .model-multi-trigger {
+  width: 100% !important;
+  display: flex !important; align-items: center; gap: 8px;
+  background: transparent !important;
+  background-image: none !important;
+  border: 1px solid rgba(120,140,180,0.20) !important;
+  border-radius: 8px !important;
+  padding: 0 12px !important;
+  height: 40px !important;
+  min-height: 40px !important; max-height: 40px !important;
   box-sizing: border-box;
-  font: inherit; font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-  text-align: left;
+  box-shadow: none !important;
+  font: inherit !important; font-size: 13px !important;
+  font-weight: 500 !important;
+  color: var(--text) !important;
+  cursor: pointer !important;
+  text-align: left !important;
   overflow: hidden;
+  transform: none !important;
   transition: all 120ms ease;
 }
+.model-multi-trigger:hover { transform: none !important; }
 .model-multi-trigger:hover { border-color: rgba(120,140,180,0.40); }
 .model-multi.is-open .model-multi-trigger {
   border-color: rgba(91,140,255,0.55);
   box-shadow: 0 0 0 3px rgba(91,140,255,0.10);
 }
 .model-multi-summary {
-  flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 4px;
-  flex-wrap: nowrap;             /* 强制单行 */
-  overflow: hidden;
-  white-space: nowrap;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  display: flex !important; align-items: center !important; gap: 8px !important;
+  flex-wrap: nowrap !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  font-size: 12.5px !important;
+  line-height: 1.2 !important;
 }
 .model-multi-summary > * {
-  flex-shrink: 0;
+  flex-shrink: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  height: auto !important;
+  line-height: 1.2 !important;
 }
-.model-multi-summary.is-empty { color: var(--muted); opacity: 0.65; }
-.model-multi-tag {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  background: rgba(91,140,255,0.10);
-  color: #3358ff;
-  padding: 1px 7px;
-  border-radius: 5px;
-  white-space: nowrap;
+.model-multi-summary.is-empty { color: var(--muted) !important; opacity: 0.65 !important; }
+.model-multi-summary-count {
+  font-size: 11px !important;
+  color: #3358ff !important;
+  background: rgba(91,140,255,0.10) !important;
+  padding: 2px 8px !important;
+  border-radius: 999px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
 }
+.model-multi-summary-text {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  color: var(--muted) !important;
+  display: inline-block !important;
+}
+/* 旧 chip 样式留作兼容但不再被渲染 */
+.model-multi-tag,
 .model-multi-more {
-  font-size: 11px; color: var(--muted);
-  background: rgba(120,140,180,0.10);
-  padding: 1px 7px; border-radius: 5px;
+  display: inline-flex; align-items: center;
+  height: auto; line-height: 1.2;
+  flex-shrink: 0;
 }
 .model-multi-caret {
   flex: 0 0 10px;
@@ -28528,11 +28510,19 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   border: 1px solid transparent;
   transition: all 100ms ease;
 }
-.model-multi-opt:hover { background: rgba(91,140,255,0.06); }
-.model-multi-opt.is-on {
-  background: rgba(91,140,255,0.10);
-  border-color: rgba(91,140,255,0.30);
+.model-multi-opt:hover { background: rgba(120,140,180,0.07) !important; }
+.model-multi-opt,
+.model-multi .model-multi-opt {
+  background-image: none !important;
 }
+.model-multi-opt.is-on,
+.model-multi .model-multi-opt.is-on {
+  background: rgba(91,140,255,0.08) !important;
+  background-image: none !important;
+  border-color: transparent !important;
+  color: var(--text) !important;
+}
+.model-multi-opt.is-on .model-multi-opt-id { color: #3358ff !important; }
 .model-multi-opt input[type="checkbox"] {
   width: 14px; height: 14px;
   accent-color: #3358ff;
@@ -28557,4 +28547,222 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   text-align: center;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Slideover · 编辑 抽屉 — 字段高度 / 垂直居中硬约束
+ * 全部 4 个字段（BASE URL / API KEY / 当前默认模型 / 支持的模型）统一 40px 行高，
+ * box-sizing: border-box，line-height 不继承外层大行距，避免文字偏上。
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.shell-v2 .ch-so-body .flow-grid {
+  gap: 12px !important;
+  row-gap: 12px !important;
+}
+.shell-v2 .ch-so-body .field,
+.shell-v2 .ch-so-body .field-wide,
+.shell-v2 .ch-so-body .flow-grid > .field,
+.shell-v2 .ch-so-body .flow-grid > .field-wide {
+  gap: 6px !important;
+}
+.shell-v2 .ch-so-body .field > span,
+.shell-v2 .ch-so-body .field-wide > span {
+  margin-bottom: 0 !important;
+  line-height: 1.2 !important;
+}
+
+/* 统一 40px 控件高度 + box-border + 居中 line-height */
+.shell-v2 .ch-so-body input:not([type=radio]):not([type=checkbox]),
+.shell-v2 .ch-so-body select,
+.shell-v2 .ch-so-body .select-wrap,
+.shell-v2 .ch-so-body .select-wrap select,
+.shell-v2 .ch-so-body .model-multi-trigger,
+.shell-v2 .ch-so-body .model-refresh-btn {
+  height: 40px !important;
+  min-height: 40px !important;
+  max-height: 40px !important;
+  box-sizing: border-box !important;
+  line-height: 38px !important;
+  vertical-align: middle !important;
+}
+
+/* select-wrap 是包装 div，内部 select 才需要 line-height — wrap 自己用 flex 居中 */
+.shell-v2 .ch-so-body .select-wrap {
+  display: flex !important;
+  align-items: center !important;
+  line-height: 1 !important;
+}
+.shell-v2 .ch-so-body .select-wrap select {
+  line-height: 38px !important;
+}
+
+/* 多选 trigger 内部用 flex 居中，line-height 不影响 */
+.shell-v2 .ch-so-body .model-multi-trigger {
+  display: flex !important;
+  align-items: center !important;
+  line-height: 1.2 !important;
+}
+
+/* 当前默认模型那一行 — select + 刷新按钮 在同一基线对齐 */
+.shell-v2 .ch-so-body .model-select-row {
+  display: flex !important;
+  align-items: stretch !important;
+  gap: 8px !important;
+}
+.shell-v2 .ch-so-body .model-refresh-btn {
+  width: 40px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* ─── 最终一锤：抽屉里所有 4 个表单控件统一 40px，不许更高 ─── */
+.shell-v2 .ch-so-body .field input[type="text"],
+.shell-v2 .ch-so-body .field input[type="password"],
+.shell-v2 .ch-so-body .field input:not([type]),
+.shell-v2 .ch-so-body .field-wide input,
+.shell-v2 .ch-so-body .field-wide select,
+.shell-v2 .ch-so-body .field-wide .select-wrap,
+.shell-v2 .ch-so-body .field-wide .model-multi-trigger,
+.shell-v2 .ch-so-body .field-wide .password-field,
+.shell-v2 .ch-so-body .field-wide .password-field input,
+.shell-v2 .ch-so-body .field-wide .model-select-row,
+.shell-v2 .ch-so-body .field-wide .model-select-row > .select-wrap,
+.shell-v2 .ch-so-body .field-wide .model-select-row > .model-refresh-btn {
+  height: 40px !important;
+  min-height: 40px !important;
+  max-height: 40px !important;
+  box-sizing: border-box !important;
+}
+
+/* 文本输入：line-height 等于 box 高度 = 完美居中 */
+.shell-v2 .ch-so-body .field input[type="text"],
+.shell-v2 .ch-so-body .field input[type="password"],
+.shell-v2 .ch-so-body .field input:not([type]),
+.shell-v2 .ch-so-body .field-wide input,
+.shell-v2 .ch-so-body .field-wide .password-field input {
+  line-height: 38px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  vertical-align: middle !important;
+  display: block !important;
+}
+
+/* flex 容器（trigger / select-row / select-wrap）用 align-items: center */
+.shell-v2 .ch-so-body .field-wide .model-multi-trigger,
+.shell-v2 .ch-so-body .field-wide .select-wrap,
+.shell-v2 .ch-so-body .field-wide .model-select-row {
+  display: flex !important;
+  align-items: center !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* select 元素自己 */
+.shell-v2 .ch-so-body .field-wide select {
+  line-height: 38px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* 包含 password / model-multi 的外层 label-text gap 收紧 */
+.shell-v2 .ch-so-body .password-field {
+  display: block !important;
+  position: relative !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 终极 ID 锁 — 用 #id 选择器把高度/居中钉死，谁都覆盖不了
+ * (双 ID + 元素名 把特异性拉到最高，跟所有 .shell-v2 .ch-so-body 都不冲突)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+#chSlideover #baseUrlInput,
+#chSlideover #apiKeyInput,
+#chSlideover #modelSelect,
+#chSlideover #modelSupportedTrigger,
+#chSlideover #modelRefreshBtn,
+button#modelSupportedTrigger,
+button#modelRefreshBtn {
+  height: 36px !important;
+  min-height: 36px !important;
+  max-height: 36px !important;
+  line-height: 36px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  padding-block: 0 !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+  vertical-align: middle !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+}
+
+/* trigger 是 grid，summary（一行 flex）+ caret 两列；align-items center 保证垂直居中 */
+#modelSupportedTrigger {
+  display: grid !important;
+  grid-template-columns: 1fr auto !important;
+  align-items: center !important;
+  column-gap: 8px !important;
+  line-height: 1 !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+#modelSupportedSummary {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  line-height: 1 !important;
+  height: auto !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+}
+#modelSupportedSummary > .mms-pill {
+  flex: 0 0 auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 22px !important;
+  line-height: 1 !important;
+  padding: 0 8px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: #3358ff !important;
+  background: rgba(91,140,255,0.10) !important;
+  border-radius: 999px !important;
+  white-space: nowrap !important;
+}
+#modelSupportedSummary > .mms-text {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  display: block !important;
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  color: var(--muted) !important;
+  line-height: 1 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.model-multi-caret {
+  flex: 0 0 auto !important;
+  width: 10px !important;
+  height: 10px !important;
+  color: var(--muted) !important;
+}
+
+/* 文本输入 line-height 等于高度直接居中 */
+#baseUrlInput,
+#apiKeyInput {
+  line-height: 38px !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+#apiKeyInput {
+  padding-right: 40px !important;
+}
+
+/* select 同样 */
+#modelSelect {
+  line-height: 1 !important;
+  padding-left: 12px !important;
+  padding-right: 28px !important;
 }

@@ -1006,7 +1006,17 @@ export async function startServer() {
     }
     next();
   });
-  app.use(express.static(publicDir));
+  // no-store on html/css/js so the embedded webview (WKWebView caches very
+  // aggressively and ignores max-age=0) always picks up fresh assets on reload
+  app.use(express.static(publicDir, {
+    etag: true,
+    lastModified: true,
+    setHeaders(res, filePath) {
+      if (/\.(html|css|js)$/i.test(filePath)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      }
+    },
+  }));
 
   app.get('/api/bootstrap', (_req, res) => {
     ok(res, {
