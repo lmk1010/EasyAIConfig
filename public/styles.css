@@ -2412,6 +2412,32 @@ button.running {
 .pdc-status-loading { color: #fbbf24; }
 .pdc-status-muted { color: var(--muted); }
 
+/* ─── Per-project binding pin（P0 #3） ─── */
+.pdc-bound-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  background: linear-gradient(135deg, rgba(96,165,250,0.18), rgba(167,139,250,0.18));
+  color: #c7d2fe;
+  border: 1px solid rgba(167,139,250,0.4);
+  cursor: help;
+  font-weight: 600;
+}
+.provider-card.is-project-bound {
+  outline: 1px solid rgba(167,139,250,0.35);
+  outline-offset: -1px;
+}
+.tiny-btn.is-bound {
+  background: linear-gradient(135deg, rgba(96,165,250,0.18), rgba(167,139,250,0.22)) !important;
+  color: #ddd6fe !important;
+  border-color: rgba(167,139,250,0.4) !important;
+}
+
 .provider-pill.ok {
   color: #dff8ee;
 }

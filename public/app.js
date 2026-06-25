@@ -30,6 +30,10 @@ const state = {
   claudeProviderHealth: {},
   claudeProviderModels: {},
   openCodeProviderHealth: {},
+  // P0 #3 Per-project provider binding for current launchCwd. Shape:
+  // { cwd, tool, providerKey, matchedDir?, isExactMatch?, savedAt? }
+  // null = no binding probed yet (boot state); { cwd, tool, providerKey: '' } = 已查、未绑定
+  projectBinding: null,
   providerSecrets: {},
   claudeSelectedProviderKey: '',
   claudeProviderDetailKey: '',
@@ -17708,6 +17712,76 @@ function renderModelOptions(models = state.detected?.models || [], preferred = '
   el('modelChips').classList.toggle('hide', detected.length === 0);
 }
 
+// 当前 launchCwd 下绑定的 codex provider key。
+// renderProviders 调用一次 → 在卡片上用 📌 标记是该绑定的 provider。
+// 缓存在 state.projectBinding，避免每次 renderProviders 都重新 fetch。
+function currentBoundProviderKey() {
+  const bd = state.projectBinding;
+  if (!bd || !bd.cwd) return '';
+  return String(bd.providerKey || '');
+}
+
+async function refreshProjectBindingForCurrentCwd() {
+  try {
+    const cwd = el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '';
+    if (!cwd) {
+      state.projectBinding = null;
+      return;
+    }
+    const tool = (state.activeTool || 'codex');
+    const json = await api(`/api/project-binding?cwd=${encodeURIComponent(cwd)}&tool=${encodeURIComponent(tool)}`, { method: 'GET' });
+    if (json?.ok && json.data?.binding) {
+      state.projectBinding = { cwd, tool, ...json.data.binding };
+    } else {
+      state.projectBinding = { cwd, tool, providerKey: '' };
+    }
+  } catch (err) {
+    console.warn('[project-binding] refresh failed:', err);
+    state.projectBinding = null;
+  }
+}
+
+async function setProjectBindingFor(providerKey) {
+  const cwd = el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '';
+  if (!cwd) {
+    if (typeof flash === 'function') flash('请先在上面填一个绝对路径作为项目目录', 'warning');
+    return false;
+  }
+  const tool = (state.activeTool || 'codex');
+  const res = await api('/api/project-binding', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cwd, tool, providerKey }),
+  });
+  if (!res?.ok) {
+    if (typeof flash === 'function') flash(res?.error || '绑定失败', 'error');
+    return false;
+  }
+  await refreshProjectBindingForCurrentCwd();
+  renderProviders();
+  if (typeof flash === 'function') flash(`已把项目 ${cwd} 绑定到 Provider「${providerKey}」`, 'success');
+  return true;
+}
+
+async function clearProjectBindingFor() {
+  const cwd = el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '';
+  if (!cwd) return;
+  const tool = (state.activeTool || 'codex');
+  const res = await api('/api/project-binding', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cwd, tool }),
+  });
+  if (!res?.ok) {
+    if (typeof flash === 'function') flash(res?.error || '解绑失败', 'error');
+    return false;
+  }
+  await refreshProjectBindingForCurrentCwd();
+  renderProviders();
+  if (typeof flash === 'function') flash('已解绑当前项目', 'info');
+  return true;
+}
+
 function describeHealthDot(provider) {
   const h = state.providerHealth?.[provider.key];
   if (provider.historyOnly) return { tone: 'muted', label: '历史草稿', tip: '此 Provider 仅在历史中存在，需先切换并保存到当前配置后才能检测' };
@@ -17735,16 +17809,24 @@ function describeHealthDot(provider) {
 
 function renderProviders() {
   const providers = state.current?.providers || [];
+  const boundKey = currentBoundProviderKey();
   el('savedProviders').innerHTML = providers.length ? providers.map((provider) => {
     const dot = describeHealthDot(provider);
+    const isBound = boundKey && provider.key === boundKey;
+    const bindTip = isBound
+      ? `已绑定到当前项目 (${state.projectBinding?.cwd || ''})\n点击解绑`
+      : '把当前项目绑定到这个 Provider — 之后从该目录启动 Codex 时自动用它';
+    const bindBtnLabel = isBound ? '📌 已绑定' : '📌 绑定项目';
+    const bindBtnAction = isBound ? 'unbind' : 'bind';
     return `
-    <div class="provider-card ${provider.isActive ? 'active' : ''}">
+    <div class="provider-card ${provider.isActive ? 'active' : ''} ${isBound ? 'is-project-bound' : ''}">
       <div class="provider-main">
         <div class="provider-title-row">
           <div class="provider-title-left">
             <span class="pdc-dot pdc-dot-${dot.tone}" title="${escapeHtml(dot.tip)}" aria-label="${escapeHtml(dot.label)}"></span>
             <strong>${escapeHtml(provider.name || provider.key)}</strong>
             <span class="pdc-status pdc-status-${dot.tone}" title="${escapeHtml(dot.tip)}">${escapeHtml(dot.label)}</span>
+            ${isBound ? '<span class="pdc-bound-pin" title="该项目已绑定到此 Provider，启动 Codex 时会自动切到这里">📌 本项目</span>' : ''}
           </div>
           <div class="provider-tag-row">
             ${provider.historyOnly ? '<span class="provider-pill muted">历史</span>' : ''}
@@ -17756,6 +17838,7 @@ function renderProviders() {
       <div class="provider-actions-row">
         <button class="secondary tiny-btn" data-load-provider="${escapeHtml(provider.key)}">切换</button>
         <button class="secondary tiny-btn" data-check-provider="${escapeHtml(provider.key)}">检测</button>
+        <button class="secondary tiny-btn ${isBound ? 'is-bound' : ''}" data-bind-provider="${escapeHtml(provider.key)}" data-bind-action="${bindBtnAction}" title="${escapeHtml(bindTip)}">${bindBtnLabel}</button>
       </div>
     </div>
   `;
@@ -18403,6 +18486,8 @@ async function loadState({ preserveForm = true } = {}) {
   // Seed from disk (provider-health.json) so列表上一打开就有红绿灯，
   // 不用等 refreshProviderHealth 跑完 ping。后台 ping 完会盖掉。
   void seedProviderHealthFromDisk();
+  // P0 #3：拉当前 cwd 的 project binding，让 renderProviders 能高亮"本项目"卡片
+  void refreshProjectBindingForCurrentCwd();
   state.codexTerminalProfiles = Array.isArray(state.current?.launch?.terminalProfiles) ? state.current.launch.terminalProfiles : [];
   fillAdvancedFromState();
   renderCodexTerminalPicker();
@@ -22322,7 +22407,11 @@ function bindEvents() {
     renderCodexResumeSessions();
     loadCodexResumeSessions({ silent: true });
   });
-  el('launchCwdInput')?.addEventListener('blur', () => loadCodexResumeSessions({ silent: true }));
+  el('launchCwdInput')?.addEventListener('blur', () => {
+    loadCodexResumeSessions({ silent: true });
+    // P0 #3：cwd 变了 → 重查 binding → 重画 provider 卡片
+    refreshProjectBindingForCurrentCwd().then(() => renderProviders());
+  });
   el('codexHomeInput')?.addEventListener('blur', () => loadCodexResumeSessions({ silent: true }));
   el('codexTerminalMenu')?.addEventListener('click', async (event) => {
     const option = event.target.closest('[data-codex-terminal-launch]');
@@ -22536,6 +22625,18 @@ function bindEvents() {
       const result = await testCodexProviderConnectivity(provider, { delayMs: 420 });
       if (!result.ok) flash(result.error || '检测失败', 'error');
       else flash(`Provider「${provider.name || provider.key}」已连通`, 'success');
+      return;
+    }
+    const bindBtn = event.target.closest('[data-bind-provider]');
+    if (bindBtn) {
+      event.preventDefault();
+      const providerKey = bindBtn.dataset.bindProvider;
+      const action = bindBtn.dataset.bindAction || 'bind';
+      if (action === 'unbind') {
+        await clearProjectBindingFor();
+      } else {
+        await setProjectBindingFor(providerKey);
+      }
       return;
     }
     const button = event.target.closest('[data-load-provider]');

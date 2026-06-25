@@ -27,6 +27,13 @@ import {
   deleteClaudecodeOauthProfile,
 } from './lib/claudecode-oauth-profiles.js';
 import {
+  getProjectBinding,
+  setProjectBinding,
+  removeProjectBinding,
+  listProjectBindings,
+  summarizeBindingsForCwd,
+} from './lib/project-bindings.js';
+import {
   checkSetupEnvironment,
   getProviderSecret,
   getProviderExtras,
@@ -1183,6 +1190,33 @@ export async function startServer() {
     } catch (error) {
       fail(res, error);
     }
+  });
+
+  // ─── Per-project Provider bindings (P0 #3 ⭐) ────────────────────
+  app.get('/api/project-binding', async (req, res) => {
+    try {
+      const cwd = String(req.query.cwd || '').trim();
+      const tool = String(req.query.tool || '').trim();
+      ok(res, { data: { binding: await getProjectBinding(cwd, tool) } });
+    } catch (error) { fail(res, error); }
+  });
+  app.post('/api/project-binding', async (req, res) => {
+    try { ok(res, { data: await setProjectBinding(req.body || {}) }); }
+    catch (error) { fail(res, error); }
+  });
+  app.delete('/api/project-binding', async (req, res) => {
+    try { ok(res, { data: await removeProjectBinding(req.body || {}) }); }
+    catch (error) { fail(res, error); }
+  });
+  app.get('/api/project-bindings', async (_req, res) => {
+    try { ok(res, { data: { bindings: await listProjectBindings() } }); }
+    catch (error) { fail(res, error); }
+  });
+  app.get('/api/project-binding/summary', async (req, res) => {
+    try {
+      const cwd = String(req.query.cwd || '').trim();
+      ok(res, { data: await summarizeBindingsForCwd(cwd) });
+    } catch (error) { fail(res, error); }
   });
 
   app.post('/api/config/save', async (req, res) => {

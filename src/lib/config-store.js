@@ -4450,12 +4450,44 @@ async function getCodexActiveProviderProxyEnv(codexHome = defaultCodexHome()) {
   }
 }
 
-export async function launchCodex({ cwd, terminalProfile = 'auto' } = {}) {
+// Per-project provider binding：launch 前查 cwd → 切 model_provider 到绑定的
+// provider（如果当前 active 不匹配）。不写日志、不弹窗，让用户感受到"项目自动切"。
+async function applyProjectBindingForLaunch({ cwd, tool, codexHome }) {
+  try {
+    const { getProjectBinding } = await import('./project-bindings.js');
+    const binding = await getProjectBinding(cwd, tool);
+    if (!binding?.providerKey) return null;
+
+    if (tool === 'codex') {
+      const home = codexHome || defaultCodexHome();
+      const configPath = path.join(home, 'config.toml');
+      const raw = await readText(configPath);
+      const config = parseToml(raw);
+      const currentActive = String(config.model_provider || '').trim();
+      if (currentActive === binding.providerKey) return { tool, providerKey: binding.providerKey, changed: false };
+      // 目标 provider 必须已存在于 model_providers 才允许切（避免引用空 provider）
+      if (!config.model_providers || !config.model_providers[binding.providerKey]) return null;
+      config.model_provider = binding.providerKey;
+      await writeText(configPath, stringifyToml(config));
+      return { tool, providerKey: binding.providerKey, changed: true, matchedDir: binding.matchedDir };
+    }
+    // Claude / OpenCode 的 per-project 绑定在 launchClaudeCode / launchOpenCode 里单独处理
+    return null;
+  } catch (err) {
+    console.warn('[project-binding] apply skipped:', err?.message || err);
+    return null;
+  }
+}
+
+export async function launchCodex({ cwd, terminalProfile = 'auto', codexHome = '' } = {}) {
   const targetCwd = resolveLaunchCwd(cwd);
   const codexBinary = findCodexBinary();
   if (!codexBinary.installed) {
     throw new Error(describeCodexInstallError());
   }
+
+  // P0 #3：如果当前 cwd 有 codex 绑定，silent switch 到绑定的 provider
+  const bindingApplied = await applyProjectBindingForLaunch({ cwd: targetCwd, tool: 'codex', codexHome });
 
   const extraEnv = await getCodexActiveProviderProxyEnv();
   const message = launchTerminalCommand(targetCwd, {
@@ -4465,7 +4497,7 @@ export async function launchCodex({ cwd, terminalProfile = 'auto' } = {}) {
     terminalProfile,
     extraEnv,
   });
-  return { ok: true, cwd: targetCwd, message };
+  return { ok: true, cwd: targetCwd, message, projectBinding: bindingApplied };
 }
 
 export async function loginCodex({ cwd, terminalProfile = 'auto', codexHome = '' } = {}) {
