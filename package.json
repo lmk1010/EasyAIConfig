@@ -1,6 +1,6 @@
 {
   "name": "easyaiconfig",
-  "version": "1.0.54",
+  "version": "1.0.55",
   "description": "EasyAIConfig desktop and local UI for configuring Codex providers, models, and common settings.",
   "type": "module",
   "bin": {
@@ -29,7 +29,15 @@
     "newapi",
     "openai-compatible"
   ],
-  "author": "",
+  "author": "lmk1010",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lmk1010/EasyAIConfig.git"
+  },
+  "homepage": "https://github.com/lmk1010/EasyAIConfig",
+  "bugs": {
+    "url": "https://github.com/lmk1010/EasyAIConfig/issues"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=18"

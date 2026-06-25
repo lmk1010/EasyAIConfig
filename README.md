@@ -22,11 +22,13 @@
 
 ## [Core] 已支持功能（当前版本）
 
-### [What's New] v1.0.54
+### [What's New] v1.0.55
 
 - 安全：npm 发包瘦身 — 加 `files` 字段，tarball 从 11.3MB / 140 文件 → 1.3MB / 34 文件
 - 安全：Tauri CSP 收紧 — `'self' + tauri: + 仅 GitHub/api.github.com 出站`，关闭 XSS / 远程脚本面
+- 安全：去除源码注释里的私人 provider 名残留
 - 清理：`.idea/` `.neox/` 不再入 git；测试脚本 .txt 全部清空
+- 补全：加 MIT LICENSE 与 package.json author / repository / homepage / bugs
 
 ### [What's New] v1.0.53
 
@@ -100,69 +102,7 @@
 
 ## [UI] 截图预览
 
-### 一键配置 · Provider 列表
-
-<p align="center">
-  <img src="assets/screenshot-providers.png" width="100%" alt="Provider 一键配置 — Codex 连接配置，多 Provider 切换" />
-</p>
-<p align="center"><em>Codex / Claude / OpenCode / OpenClaw 一站式配置 · OAuth + API Key 共存 · 自动检测可用性</em></p>
-
-### Provider 详情 · 概览 / 用量 / 模型支持
-
-<p align="center">
-  <img src="assets/screenshot-provider-overview.png" width="100%" alt="Provider 详情 · 概览 — 24H 上线率、平均/P95 时延、默认模型" />
-</p>
-<p align="center"><em>Provider 详情 · 概览 — 24H 上线率 / 平均·P95 时延 / 默认模型一目了然</em></p>
-
-<p align="center">
-  <img src="assets/screenshot-provider-usage.png" width="100%" alt="Provider 详情 · 用量 — 预估费用、Token 构成、按模型拆分" />
-</p>
-<p align="center"><em>Provider 详情 · 用量 — 预估费用 / Token 构成 / 按使用模型拆分</em></p>
-
-### 数据看板 · Codex / Claude Code
-
-<p align="center">
-  <img src="assets/screenshot-dashboard-codex.png" width="100%" alt="Codex Dashboard — Token 用量趋势、费用估算、模型分布" />
-</p>
-<p align="center"><em>Codex 数据看板 — 实时 Token 趋势、费用估算与按模型计费明细</em></p>
-
-<p align="center">
-  <img src="assets/screenshot-dashboard-claude.png" width="100%" alt="Claude Code Dashboard — 模型分布、Token 分布与消耗明细" />
-</p>
-<p align="center"><em>Claude Code 数据看板 — 多模型统计、Token 分布与按日消耗趋势</em></p>
-
-### 配置编辑器 · 分类可视化
-
-<p align="center">
-  <img src="assets/screenshot-config-editor.png" width="100%" alt="Codex 配置编辑器 — 模型 / 行为 / 上下文 / 路径 / 会话恢复 分类" />
-</p>
-<p align="center"><em>Codex 配置编辑 — 8 大分类卡片化展示，支持原始 TOML / JSON 切换</em></p>
-
-### 内置终端 · 多会话 + 实时输出
-
-<p align="center">
-  <img src="assets/screenshot-terminal-list.png" width="100%" alt="内置终端 — 多会话列表 + 实时输出" />
-</p>
-<p align="center"><em>内置终端 — Codex / Claude / OpenCode 多会话列表 · token 实时监控</em></p>
-
-<p align="center">
-  <img src="assets/screenshot-terminal-session.png" width="100%" alt="内置终端 — Codex 会话详情" />
-</p>
-<p align="center"><em>内置终端 — Codex 会话详情 · 模型 / 目录 / 权限 一览</em></p>
-
-### 会话恢复 · 最近 Codex 会话
-
-<p align="center">
-  <img src="assets/screenshot-session-restore.png" width="100%" alt="会话恢复 — 最近 Codex 会话浏览 / resume / 导出" />
-</p>
-<p align="center"><em>会话恢复 — 最近 Codex 会话浏览 · 一键 resume · 导出 / 复制命令</em></p>
-
-### 工具安装与管理
-
-<p align="center">
-  <img src="assets/screenshot-tools.png" width="100%" alt="工具安装与管理 — Codex / Claude / OpenCode / OpenClaw / VS Code / Cursor" />
-</p>
-<p align="center"><em>工具一键安装 / 更新 / 卸载 — Codex CLI / Claude Code / OpenCode / OpenClaw / Codex App / VS Code & Cursor 扩展</em></p>
+> 高清匿名版截图正在准备中。先看核心能力一览（见上方功能矩阵 + 模型预设矩阵），桌面端下载安装后可直接体验全部界面。
 
 ## [Install] 安装
 
@@ -279,8 +219,8 @@ npx tauri signer generate -w ~/.tauri/easyaiconfig.key
 推送 tag 即可触发自动构建与发布：
 
 ```bash
-git tag v1.0.54
-git push origin v1.0.54
+git tag v1.0.55
+git push origin v1.0.55
 ```
 
 ## [Contributing] 贡献
