@@ -380,6 +380,32 @@ async function loadOfficialProfiles(force) {
   } catch (_) {}
 }
 
+// 自定义下拉：避开 macOS 原生 select 蓝色高亮 popup
+// options: [{value, label, hint?}]
+function renderLaunchSelect(name, options, value) {
+  const esc = escapeHtml;
+  const open = (getState()?.terminalPage?._lcsOpen === name);
+  const current = options.find((o) => o.value === value) || options[0] || { label: '' };
+  return `
+    <div class="ea-term-lcs ${open ? 'is-open' : ''}" data-eat-lcs="${esc(name)}">
+      <button type="button" class="ea-term-lcs-btn" data-eat-lcs-toggle="${esc(name)}" aria-haspopup="listbox" aria-expanded="${open ? 'true' : 'false'}">
+        <span class="ea-term-lcs-val">${esc(current.label || '')}${current.hint ? `<span class="ea-term-lcs-hint">${esc(current.hint)}</span>` : ''}</span>
+        <svg class="ea-term-lcs-caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4l3 3 3-3"/></svg>
+      </button>
+      ${open ? `
+        <div class="ea-term-lcs-pop" role="listbox">
+          ${options.map((o) => `
+            <button type="button" role="option" class="ea-term-lcs-opt ${o.value === value ? 'is-on' : ''}" data-eat-lcs-pick="${esc(name)}" data-value="${esc(o.value)}">
+              ${o.value === value ? '<svg class="ea-term-lcs-tick" width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5l2.5 2.5 5-5"/></svg>' : '<span class="ea-term-lcs-tick-space"></span>'}
+              <span class="ea-term-lcs-opt-lab">${esc(o.label)}</span>
+              ${o.hint ? `<span class="ea-term-lcs-opt-hint">${esc(o.hint)}</span>` : ''}
+            </button>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>`;
+}
+
 // Canvas 内嵌的"新建会话"页面 — 替代旧 popover。
 // 居中容器 + 项目原生 field 风格 (label 左、控件右、24px 高)
 function renderLauncherPage(tp, providers) {
@@ -423,22 +449,22 @@ function renderLauncherPage(tp, providers) {
           ${!isOfficial ? `
             <div class="ea-term-launch-row">
               <label class="ea-term-launch-lab">Provider</label>
-              <select class="ea-term-launch-ctl" data-eat-launch="providerKey">
-                ${providerOpts || '<option value="">（无可用 provider）</option>'}
-              </select>
+              ${renderLaunchSelect('providerKey',
+                providers.length
+                  ? providers.map((p) => ({ value: p.key, label: p.name || p.key, hint: p.isActive ? '当前' : '' }))
+                  : [{ value: '', label: '（无可用 provider）' }],
+                tp.launcher.providerKey)}
             </div>
           ` : `
             <div class="ea-term-launch-row">
               <label class="ea-term-launch-lab">账号</label>
-              ${tp.officialProfiles.length ? `
-                <select class="ea-term-launch-ctl" data-eat-launch="officialProfileId">
-                  ${tp.officialProfiles.map((p) => {
-                    const lab = p.email || p.name || p.id;
-                    const tag = p.id === tp.officialActiveId ? ' · 当前' : '';
-                    return `<option value="${esc(p.id)}" ${p.id === tp.launcher.officialProfileId ? 'selected' : ''}>${esc(lab)}${esc(tag)}</option>`;
-                  }).join('')}
-                </select>
-              ` : `
+              ${tp.officialProfiles.length ? renderLaunchSelect('officialProfileId',
+                tp.officialProfiles.map((p) => ({
+                  value: p.id,
+                  label: p.email || p.name || p.id,
+                  hint: p.id === tp.officialActiveId ? '当前' : '',
+                })),
+                tp.launcher.officialProfileId) : `
                 <div class="ea-term-launch-empty">还没有保存的 codex 账号 · <a href="#" data-eat-goto-oauth>去管理</a></div>
               `}
             </div>
@@ -456,9 +482,9 @@ function renderLauncherPage(tp, providers) {
           ${isCodex ? `
             <div class="ea-term-launch-row">
               <label class="ea-term-launch-lab">沙箱模式</label>
-              <select class="ea-term-launch-ctl" data-eat-launch="sandbox">
-                ${sandboxOpts.map(([v, lab]) => `<option value="${v}" ${tp.launcher.sandbox === v ? 'selected' : ''}>${esc(lab)}</option>`).join('')}
-              </select>
+              ${renderLaunchSelect('sandbox',
+                sandboxOpts.map(([v, lab]) => ({ value: v, label: lab })),
+                tp.launcher.sandbox)}
             </div>
           ` : ''}
           <button type="button" class="ea-term-launch-more" data-eat-launch-more aria-expanded="${tp.launcher.moreOpen ? 'true' : 'false'}">
@@ -854,6 +880,32 @@ function onClick(e) {
   if (tabClose) { e.stopPropagation(); closeSession(tabClose.dataset.eatTabClose); return; }
   const resume = t.closest('[data-eat-resume]');
   if (resume) { resumeGhostSession(resume.dataset.eatResume); return; }
+  // 自定义下拉：toggle / pick / outside-close
+  const lcsToggle = t.closest('[data-eat-lcs-toggle]');
+  if (lcsToggle) {
+    const tp = getState().terminalPage;
+    const name = lcsToggle.dataset.eatLcsToggle;
+    tp._lcsOpen = (tp._lcsOpen === name) ? '' : name;
+    renderTerminalPage();
+    return;
+  }
+  const lcsPick = t.closest('[data-eat-lcs-pick]');
+  if (lcsPick) {
+    const tp = getState().terminalPage;
+    const name = lcsPick.dataset.eatLcsPick;
+    const val = lcsPick.dataset.value || '';
+    tp.launcher[name] = val;
+    tp._lcsOpen = '';
+    renderTerminalPage();
+    return;
+  }
+  // 点 launch page 内但不在下拉内 → 关下拉
+  const tpForClose = getState()?.terminalPage;
+  if (tpForClose?._lcsOpen && !t.closest('.ea-term-lcs')) {
+    tpForClose._lcsOpen = '';
+    renderTerminalPage();
+    // 不 return — 继续走其它分支
+  }
   // launcher 分段开关：工具 / 登录方式
   const segBtn = t.closest('[data-eat-launch-set]');
   if (segBtn) {
