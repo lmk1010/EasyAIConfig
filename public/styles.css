@@ -27537,7 +27537,7 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 
 .shell-v2 .ea-term-launch-body {
   display: flex; flex-direction: column;
-  gap: 6px;
+  gap: 14px;                        /* 行间距加大 — 之前 6px 看着糊一起 */
 }
 
 .shell-v2 .ea-term-launch-row {
@@ -27545,7 +27545,7 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   grid-template-columns: 76px 1fr;
   align-items: center;
   gap: 10px;
-  min-height: 26px;
+  min-height: 28px;
 }
 .shell-v2 .ea-term-launch-lab {
   font-size: 11.5px;
@@ -27563,9 +27563,13 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   padding: 0 10px;
   padding-right: 28px;
   font: inherit; font-size: 12px;
+  line-height: 1;
   color: var(--text);
   width: 100%;
-  height: 26px;
+  height: 28px;                     /* 严格 28px — box-sizing 防 padding 撑大 */
+  min-height: 28px;
+  max-height: 28px;
+  box-sizing: border-box;
   transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 .shell-v2 select.ea-term-launch-ctl {
@@ -27590,7 +27594,7 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   display: inline-flex;
   gap: 6px;
   width: 100%;
-  height: 26px;
+  height: 28px;
 }
 .shell-v2 .ea-term-launch-seg button {
   flex: 1;
@@ -27600,6 +27604,8 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   color: var(--muted);
   border-radius: 6px;
   cursor: pointer;
+  height: 28px;
+  box-sizing: border-box;
   transition: all 120ms ease;
 }
 .shell-v2 .ea-term-launch-seg button:hover:not(.is-on) {
@@ -27640,7 +27646,8 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   border: 1px solid rgba(120,140,180,0.20);
   border-radius: 6px;
   padding: 0 12px;
-  height: 26px;
+  height: 28px;
+  box-sizing: border-box;
   cursor: pointer;
   transition: all 120ms ease;
   white-space: nowrap;
