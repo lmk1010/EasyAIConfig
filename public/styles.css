@@ -26589,11 +26589,18 @@ body {
   overflow: hidden;
 }
 /* 占位兜底：若 xterm 还没绘制，用 page bg 同色，避免一瞬间的"暗块"闪烁 */
-/* host 用 app 的 --bg 实色，xterm 读取后跟 page 一色（无白条 / 无 dark strip） */
+/* host：1) bg = app --bg 实色 防 xterm 内部 inline #fff 漏底色
+        2) min-height/width 确保 ResizeObserver 不会触到 0×0 */
 .shell-v2 .ea-term-host {
   width: 100%; height: 100%; min-height: 0;
   background: var(--bg);
+  display: block;
 }
+/* xterm DOM elements 兜底：scrollable / viewport / screen 都覆 100% 高度 */
+.shell-v2 .ea-term-host .xterm,
+.shell-v2 .ea-term-host .xterm-viewport,
+.shell-v2 .ea-term-host .xterm-screen { height: 100% !important; background: var(--bg) !important; }
+.shell-v2 .ea-term-host .xterm-viewport { overflow-y: auto !important; }
 .shell-v2 .ea-term-empty {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
