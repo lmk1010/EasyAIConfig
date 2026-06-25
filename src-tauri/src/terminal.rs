@@ -160,24 +160,38 @@ fn watch_codex_session_tokens(session: &Arc<TerminalSession>, spawn_time: std::t
   let session_id = session.id.clone();
   let codex_home = match crate::default_codex_home() {
     Ok(p) => p,
-    Err(_) => return,
+    Err(error) => {
+      log::warn!("[token-watcher] no codex_home: {error}");
+      return;
+    }
   };
   let sessions_root = codex_home.join("sessions");
-  if !sessions_root.is_dir() { return; }
+  if !sessions_root.is_dir() {
+    log::warn!("[token-watcher] sessions_root not a dir: {sessions_root:?}");
+    return;
+  }
 
-  // 等最多 12 秒找到新的 jsonl（codex 启动慢 + skills loading 等）
-  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+  // 等最多 30 秒找新 jsonl（skills/MCP 慢；codex 可能在 spawn 后 10s 才写第一行）
+  // mtime 比较留 60s 容忍：跨进程文件系统时钟可能有偏差，宁可匹配近一分钟内动过的
+  let watch_cutoff = spawn_time
+    .checked_sub(std::time::Duration::from_secs(60))
+    .unwrap_or(spawn_time);
+  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
   let mut target: Option<PathBuf> = None;
   while std::time::Instant::now() < deadline {
-    if let Some(path) = find_latest_codex_jsonl_after(&sessions_root, spawn_time) {
+    if let Some(path) = find_latest_codex_jsonl_after(&sessions_root, watch_cutoff) {
       target = Some(path);
       break;
     }
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    std::thread::sleep(std::time::Duration::from_millis(400));
   }
-  let Some(target) = target else { return; };
+  let Some(target) = target else {
+    log::warn!("[token-watcher] no jsonl found for session {session_id} after 30s under {sessions_root:?}");
+    return;
+  };
+  log::info!("[token-watcher] tailing {target:?} for session {session_id}");
 
-  // tail 该 jsonl：每 500ms 轮询新行，遇到 token_count → emit
+  // tail 该 jsonl：每 400ms 轮询新行
   let mut cursor: u64 = 0;
   loop {
     // 主进程退出则收线程
@@ -203,25 +217,27 @@ fn watch_codex_session_tokens(session: &Arc<TerminalSession>, spawn_time: std::t
               let kind = p.and_then(|p| p.get("type")).and_then(Value::as_str).unwrap_or("");
               if kind != "token_count" { continue; }
               let info = p.and_then(|p| p.get("info"));
-              let total = info.and_then(|i| i.get("total_token_usage"));
+              // info 可能是 null（首条 token_count 是空的）；跳过即可
+              let Some(info) = info else { continue; };
+              if info.is_null() { continue; }
+              let total = info.get("total_token_usage");
               if let Some(total) = total {
                 if let Some(app) = APP_HANDLE.get() {
                   let context_window = info
-                    .and_then(|i| i.get("model_context_window"))
+                    .get("model_context_window")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
-                  let _ = app.emit(
-                    "terminal-tokens",
-                    json!({
-                      "sessionId": session_id,
-                      "input": total.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
-                      "cached": total.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
-                      "output": total.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
-                      "reasoning": total.get("reasoning_output_tokens").and_then(Value::as_u64).unwrap_or(0),
-                      "total": total.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
-                      "contextWindow": context_window,
-                    }),
-                  );
+                  let payload = json!({
+                    "sessionId": session_id,
+                    "input": total.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+                    "cached": total.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
+                    "output": total.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+                    "reasoning": total.get("reasoning_output_tokens").and_then(Value::as_u64).unwrap_or(0),
+                    "total": total.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
+                    "contextWindow": context_window,
+                  });
+                  log::info!("[token-watcher] emit {payload}");
+                  let _ = app.emit("terminal-tokens", payload);
                 }
               }
             }
