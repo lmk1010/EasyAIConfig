@@ -56,11 +56,12 @@ async function installTermEventListeners() {
     // "input: 12,345 ▴ cached: 8,200 ▴ output: 423" 这种格式
     parseTokenChunk(inst, chunk);
     // 抓取最近一次"输入"内容（粗略）
-    // 节流 sidebar 重渲染 (rAF)
+    // 节流 sidebar + 状态栏重渲染 (rAF)
     if (!inst._sidebarRaf) {
       inst._sidebarRaf = requestAnimationFrame(() => {
         inst._sidebarRaf = 0;
         renderTermSidebar();
+        renderTermStatus();
       });
     }
   });
@@ -122,68 +123,54 @@ function renderTermSidebar() {
   const tp = getState()?.terminalPage;
   if (!tp) return;
   const listEl = document.getElementById('eaTermSecList');
-  const usageEl = document.getElementById('eaTermSecUsage');
   const countEl = document.getElementById('eaTermSecCount');
-  if (!listEl || !usageEl) return;
+  if (!listEl) return;
   if (countEl) countEl.textContent = String(tp.sessions.length);
   if (!tp.sessions.length) {
-    listEl.innerHTML = '<div class="ea-term-sec-empty">还没有会话<br/>点右下角 + 新建</div>';
-    usageEl.innerHTML = '';
+    listEl.innerHTML = '<div class="sec-empty">还没有会话 · 点右下角 + 新建</div>';
     return;
   }
   const esc = escapeHtml;
+  const toolAccent = (tool) => tool === 'codex'
+    ? '--accent-a:#ffd0a8;--accent-b:#ff8c5a'
+    : tool === 'claudecode'
+      ? '--accent-a:#ffc69a;--accent-b:#e07a3f'
+      : '--accent-a:#a0c8ff;--accent-b:#5b8cff';
   const toolIcon = (tool) => {
-    if (tool === 'codex') return '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M5 8h6M8 5v6"/></svg>';
-    if (tool === 'claudecode') return '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1l6 4v6l-6 4-6-4V5z"/></svg>';
-    return '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg>';
+    if (tool === 'codex') {
+      return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" opacity="0.5"/><path d="M12 12l9-5M12 12v10M12 12L3 7"/></svg>';
+    }
+    if (tool === 'claudecode') {
+      return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>';
+    }
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>';
   };
   const toolLabel = (tool) => tool === 'codex' ? 'Codex' : tool === 'claudecode' ? 'Claude Code' : tool || 'Shell';
-  const fmt = (n) => (n || 0).toLocaleString();
   listEl.innerHTML = tp.sessions.map((s) => {
-    const inst = tp.instances?.[s.id];
     const isActive = s.id === tp.activeSessionId;
-    const tokens = inst?.tokens || {};
-    const t = tokens.total || ((tokens.input || 0) + (tokens.output || 0));
     return `
-      <button type="button" class="ea-term-sec-item ${isActive ? 'is-active' : ''} ${s.running ? 'is-running' : 'is-stopped'} ea-term-sec-item--${esc(s.tool || 'shell')}" data-eat-sec-tab="${esc(s.id)}">
-        <span class="ea-term-sec-tool" title="${esc(toolLabel(s.tool))}">${toolIcon(s.tool)}</span>
-        <span class="ea-term-sec-body">
-          <span class="ea-term-sec-title">${esc(s.title || s.command || s.id.slice(0,8))}</span>
-          <span class="ea-term-sec-meta">
-            <span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>
-            <em>${esc(toolLabel(s.tool))}</em>
-            ${t ? `<i>${esc(fmt(t))} tok</i>` : ''}
-          </span>
+      <button type="button" class="sec-item ${isActive ? 'active' : ''}" data-eat-sec-tab="${esc(s.id)}" style="${toolAccent(s.tool)}">
+        <span class="sec-ico">${toolIcon(s.tool)}</span>
+        <span class="sec-text">
+          <span class="sec-name">${esc(s.title || s.command || s.id.slice(0,8))}</span>
+          <span class="sec-subtitle"><span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>${esc(toolLabel(s.tool))}${s.running ? '' : ' · 已退出'}</span>
         </span>
+        <span class="sec-chev" aria-hidden="true">›</span>
       </button>`;
   }).join('');
-  // 当前 session 的实时用量
-  const cur = tp.sessions.find((s) => s.id === tp.activeSessionId);
-  const inst = cur ? tp.instances?.[cur.id] : null;
-  const tokens = inst?.tokens || {};
-  const recv = inst?.recvBytes || 0;
-  const sent = inst?.sentBytes || 0;
-  const approxOut = tokens.output ?? Math.round(recv / 4);
-  const cells = [
-    { label: '输入', value: tokens.input, color: '#5b8cff' },
-    { label: '缓存', value: tokens.cached, color: '#22c55e' },
-    { label: '输出', value: tokens.output ?? Math.round(recv / 4), color: '#a855f7' },
-    { label: '推理', value: tokens.reasoning, color: '#fb923c' },
-  ];
-  const haveLive = cells.some((c) => c.value != null && c.value > 0);
-  usageEl.innerHTML = `
-    <div class="ea-term-sec-usage-grid">
-      ${cells.map((c) => `
-        <div class="ea-term-sec-usage-cell" style="--c:${c.color}">
-          <div class="ea-term-sec-usage-label">${esc(c.label)}</div>
-          <div class="ea-term-sec-usage-value">${esc(fmt(c.value || 0))}</div>
-        </div>`).join('')}
-    </div>
-    <div class="ea-term-sec-flow">
-      <div class="ea-term-sec-flow-row"><span>已写入</span><strong>${esc(fmtBytes(sent))}</strong></div>
-      <div class="ea-term-sec-flow-row"><span>已读取</span><strong>${esc(fmtBytes(recv))}</strong></div>
-      ${haveLive ? '' : '<div class="ea-term-sec-flow-hint">codex/claude 打印 token 行后自动捕获</div>'}
-    </div>`;
+  // 状态栏的实时用量也同步刷新
+  renderTermStatus();
+}
+
+// 单独刷状态栏（每次 token / 字节变化都调；rAF 节流确保不超 60fps）
+function renderTermStatus() {
+  const tp = getState()?.terminalPage;
+  if (!tp) return;
+  const host = document.getElementById('eaTermPage');
+  if (!host) return;
+  const statusEl = host.querySelector('.ea-term-status');
+  if (!statusEl) return;
+  statusEl.innerHTML = renderStatusBarInner(tp);
 }
 
 window.renderTermSidebar = renderTermSidebar;
@@ -335,27 +322,43 @@ function renderTopBar(tp, providers) {
 }
 
 function renderStatusBar(tp) {
+  return `<div class="ea-term-status">${renderStatusBarInner(tp)}</div>`;
+}
+
+function renderStatusBarInner(tp) {
   const esc = escapeHtml;
   const session = tp.sessions.find((s) => s.id === tp.activeSessionId);
   if (!session) {
-    return `<div class="ea-term-status"><span class="ea-term-status-faint">没有运行中的会话</span></div>`;
+    return `<span class="ea-term-status-faint">没有运行中的会话</span>`;
   }
   const inst = tp.instances[session.id];
   const recv = inst?.recvBytes || 0;
   const sent = inst?.sentBytes || 0;
-  const approxTokens = Math.round(recv / 4);
+  const tokens = inst?.tokens || {};
+  const input = Number(tokens.input || 0);
+  const cached = Number(tokens.cached || 0);
+  const output = Number(tokens.output || Math.round(recv / 4));
+  const reasoning = Number(tokens.reasoning || 0);
+  const total = input + cached + output + reasoning || 1;
+  const seg = (v) => `${(v / total * 100).toFixed(1)}%`;
+  const fmt = (n) => (n || 0).toLocaleString();
   return `
-    <div class="ea-term-status">
-      <span class="ea-term-status-dot ${session.running ? 'is-on' : 'is-off'}"></span>
-      <span class="ea-term-status-text">${esc(session.title || session.command || '')}</span>
-      <span class="ea-term-status-sep">·</span>
-      <span class="ea-term-status-text-faint">${esc(session.running ? '运行中' : '已退出')}</span>
-      ${session.cwd ? `<span class="ea-term-status-sep">·</span><span class="ea-term-status-text-faint ea-term-status-cwd" title="${esc(session.cwd)}">${esc(session.cwd)}</span>` : ''}
-      <span class="ea-term-status-spacer"></span>
-      <span class="ea-term-status-pill">读 ${esc(fmtBytes(recv))}</span>
-      <span class="ea-term-status-pill">写 ${esc(fmtBytes(sent))}</span>
-      <span class="ea-term-status-pill ea-term-status-pill-tokens">≈ ${esc(approxTokens.toLocaleString())} tokens</span>
-    </div>`;
+    <span class="ea-term-status-dot ${session.running ? 'is-on' : 'is-off'}"></span>
+    <span class="ea-term-status-text">${esc(session.title || session.command || '')}</span>
+    <span class="ea-term-status-sep">·</span>
+    <span class="ea-term-status-text-faint">${esc(session.running ? '运行中' : '已退出')}</span>
+    ${session.cwd ? `<span class="ea-term-status-sep">·</span><span class="ea-term-status-text-faint ea-term-status-cwd" title="${esc(session.cwd)}">${esc(session.cwd)}</span>` : ''}
+    <span class="ea-term-status-spacer"></span>
+    <span class="ea-term-status-bar" title="输入 ${esc(fmt(input))} · 缓存 ${esc(fmt(cached))} · 输出 ${esc(fmt(output))} · 推理 ${esc(fmt(reasoning))}">
+      <span class="ea-term-status-bar-seg is-input" style="width:${seg(input)}"></span>
+      <span class="ea-term-status-bar-seg is-cached" style="width:${seg(cached)}"></span>
+      <span class="ea-term-status-bar-seg is-output" style="width:${seg(output)}"></span>
+      <span class="ea-term-status-bar-seg is-reasoning" style="width:${seg(reasoning)}"></span>
+    </span>
+    <span class="ea-term-status-pill" title="输入 token">输入 ${esc(fmt(input))}</span>
+    <span class="ea-term-status-pill" title="缓存命中 token">缓存 ${esc(fmt(cached))}</span>
+    <span class="ea-term-status-pill ea-term-status-pill-tokens" title="输出 token">输出 ${esc(fmt(output))}</span>
+  `;
 }
 
 function renderTabStrip(tp) {
@@ -916,8 +919,7 @@ function mountTerminal(sessionId) {
         instance.resizeObserver.observe(target);
       }
 
-      // 轮询输出
-      instance.pollTimer = setInterval(() => pollOutput(sessionId), POLL_INTERVAL_MS);
+      // 推送流是唯一数据源 — 不再 setInterval 轮询，避免和 push 重叠导致内容重复
       try { term.focus(); } catch (_) {}
     };
     if (document.fonts?.ready) document.fonts.ready.then(start, start);

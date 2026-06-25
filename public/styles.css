@@ -27102,3 +27102,40 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 }
 .shell-v2 .ea-term-sec-flow-row strong { color: var(--s2-text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .shell-v2 .ea-term-sec-flow-hint { font-size: 0.56rem; color: var(--s2-faint); margin-top: 6px; line-height: 1.4; font-style: italic; }
+
+/* 状态栏 token battery bar + chips（一行紧凑） */
+.shell-v2 .ea-term-status-bar {
+  display: inline-flex; align-items: stretch;
+  width: 120px; height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.06);
+  margin-right: 6px;
+}
+[data-theme="light"] .shell-v2 .ea-term-status-bar { background: rgba(15,23,42,0.06); }
+.shell-v2 .ea-term-status-bar-seg.is-input { background: #5b8cff; }
+.shell-v2 .ea-term-status-bar-seg.is-cached { background: #22c55e; }
+.shell-v2 .ea-term-status-bar-seg.is-output { background: #a855f7; }
+.shell-v2 .ea-term-status-bar-seg.is-reasoning { background: #fb923c; }
+
+/* sec-item 风格的小状态点（在 secondary 面板 sec-subtitle 里） */
+.shell-v2 .sec-item .ea-term-sec-dot {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--s2-faint);
+  margin-right: 5px;
+  vertical-align: 0;
+}
+.shell-v2 .sec-item .ea-term-sec-dot.is-on {
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74,222,128,0.55);
+  animation: eaTermBreathe 1.6s ease-in-out infinite;
+}
+
+/* secondary 空态文字 */
+.shell-v2 .sec-empty {
+  padding: 12px 14px;
+  font-size: 0.66rem;
+  color: var(--s2-faint);
+  line-height: 1.6;
+}
