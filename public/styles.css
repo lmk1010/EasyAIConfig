@@ -27499,43 +27499,37 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 }
 @keyframes eaTermSpin { to { transform: rotate(360deg); } }
 
-/* ─── canvas 内嵌"新建会话"页 ─── */
+/* ─── canvas 内嵌"新建会话"页：无卡片，整页垂直居中 ─── */
 .shell-v2 .ea-term-launch-page {
   height: 100%;
-  display: flex; align-items: flex-start; justify-content: center;
-  padding: 40px 32px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 32px;
   overflow-y: auto;
 }
 .shell-v2 .ea-term-launch-card {
   width: 100%;
-  max-width: 520px;
-  background: var(--card-bg, rgba(255,255,255,0.6));
-  border: 1px solid rgba(150,165,200,0.18);
-  border-radius: 12px;
-  padding: 14px 16px 12px;
-  box-shadow: 0 8px 24px rgba(40,60,100,0.06);
-}
-[data-theme="dark"] .shell-v2 .ea-term-launch-card {
-  background: rgba(28,32,42,0.55);
-  border-color: rgba(110,130,160,0.22);
+  max-width: 460px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
 }
 
 .shell-v2 .ea-term-launch-head {
   display: flex; align-items: center; gap: 8px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid rgba(120,140,180,0.10);
-  margin-bottom: 10px;
+  margin-bottom: 16px;
 }
 .shell-v2 .ea-term-launch-title {
-  font-size: 12.5px; font-weight: 700;
+  font-size: 14px; font-weight: 700;
   color: var(--text);
   flex: 1;
+  letter-spacing: -0.01em;
 }
 .shell-v2 .ea-term-launch-x {
-  width: 20px; height: 20px;
+  width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: none; cursor: pointer;
-  color: var(--muted); border-radius: 5px;
+  color: var(--muted); border-radius: 6px;
 }
 .shell-v2 .ea-term-launch-x:hover {
   background: rgba(120,140,180,0.10); color: var(--text);
@@ -27559,15 +27553,15 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   font-weight: 500;
 }
 
-/* 控件统一：select / input */
+/* 控件统一：select / input — hairline border 不带灰底 */
 .shell-v2 .ea-term-launch-ctl {
   appearance: none;
   -webkit-appearance: none;
-  background: rgba(120,140,180,0.06);
-  border: 1px solid transparent;
+  background: transparent;
+  border: 1px solid rgba(120,140,180,0.20);
   border-radius: 6px;
-  padding: 0 8px;
-  padding-right: 26px;
+  padding: 0 10px;
+  padding-right: 28px;
   font: inherit; font-size: 12px;
   color: var(--text);
   width: 100%;
@@ -27582,46 +27576,45 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 }
 .shell-v2 input.ea-term-launch-ctl { padding-right: 8px; }
 .shell-v2 .ea-term-launch-ctl:hover {
-  background-color: rgba(120,140,180,0.10);
+  border-color: rgba(120,140,180,0.40);
 }
 .shell-v2 .ea-term-launch-ctl:focus {
   outline: none;
-  background: rgba(255,255,255,0.85);
-  border-color: rgba(91,140,255,0.45);
+  border-color: rgba(91,140,255,0.55);
   box-shadow: 0 0 0 3px rgba(91,140,255,0.10);
-}
-[data-theme="dark"] .shell-v2 .ea-term-launch-ctl:focus {
-  background: rgba(20,24,32,0.65);
 }
 .shell-v2 .ea-term-launch-mono { font-family: var(--font-mono); font-size: 11.5px; }
 
-/* 分段开关 */
+/* 分段开关：扁平、hairline 边、选中蓝填 — 不再 chunky 灰底 */
 .shell-v2 .ea-term-launch-seg {
   display: inline-flex;
-  background: rgba(120,140,180,0.08);
-  border-radius: 6px;
-  padding: 2px;
+  gap: 6px;
   width: 100%;
   height: 26px;
 }
 .shell-v2 .ea-term-launch-seg button {
   flex: 1;
-  border: none; background: transparent;
+  border: 1px solid rgba(120,140,180,0.20);
+  background: transparent;
   font: inherit; font-size: 11.5px; font-weight: 500;
   color: var(--muted);
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: all 120ms ease;
+}
+.shell-v2 .ea-term-launch-seg button:hover:not(.is-on) {
+  border-color: rgba(91,140,255,0.35);
+  color: var(--text);
 }
 .shell-v2 .ea-term-launch-seg button.is-on {
-  background: #fff;
-  color: var(--text);
+  background: rgba(91,140,255,0.12);
+  border-color: rgba(91,140,255,0.55);
+  color: #3358ff;
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(40,60,100,0.10);
 }
 [data-theme="dark"] .shell-v2 .ea-term-launch-seg button.is-on {
-  background: rgba(120,140,180,0.18);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.30);
+  background: rgba(91,140,255,0.20);
+  color: #8aaaff;
 }
 
 /* cwd 行：icon prefix + input + 选择按钮 */
@@ -27641,19 +27634,21 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   flex: 1;
 }
 .shell-v2 .ea-term-launch-pick {
-  font: inherit; font-size: 11px;
+  font: inherit; font-size: 11.5px; font-weight: 500;
   color: var(--muted);
-  background: rgba(120,140,180,0.08);
-  border: 1px solid transparent;
+  background: transparent;
+  border: 1px solid rgba(120,140,180,0.20);
   border-radius: 6px;
-  padding: 0 10px;
+  padding: 0 12px;
   height: 26px;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition: all 120ms ease;
+  white-space: nowrap;
 }
 .shell-v2 .ea-term-launch-pick:hover {
-  background: rgba(91,140,255,0.10);
-  color: #5b8cff;
+  background: rgba(91,140,255,0.08);
+  border-color: rgba(91,140,255,0.45);
+  color: #3358ff;
 }
 
 /* 更多参数 折叠 */
@@ -27677,9 +27672,8 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 /* 底部：提示 + 启动按钮 */
 .shell-v2 .ea-term-launch-foot {
   display: flex; align-items: center; gap: 12px;
-  padding-top: 10px;
-  margin-top: 8px;
-  border-top: 1px solid rgba(120,140,180,0.10);
+  padding-top: 14px;
+  margin-top: 10px;
 }
 .shell-v2 .ea-term-launch-hint {
   flex: 1;
