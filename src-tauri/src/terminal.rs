@@ -7,9 +7,16 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use tauri::{AppHandle, Emitter};
 
 use crate::{home_dir, parse_json_object};
 use crate::provider::get_string;
+
+// 全局 app handle，install() 时塞入；reader 线程拿它 emit 数据事件
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+pub(crate) fn install(handle: &AppHandle) {
+  let _ = APP_HANDLE.set(handle.clone());
+}
 
 const DEFAULT_COLS: u16 = 120;
 const DEFAULT_ROWS: u16 = 32;
@@ -200,22 +207,53 @@ pub(crate) fn spawn_embedded_terminal(
 
   let session_for_reader = Arc::clone(&session);
   std::thread::spawn(move || {
-    let mut chunk = [0_u8; 4096];
+    let mut chunk = [0_u8; 8192];
     loop {
       match reader.read(&mut chunk) {
         Ok(0) => {
           refresh_session_state(&session_for_reader);
+          // 通知前端会话结束
+          if let Some(app) = APP_HANDLE.get() {
+            let _ = app.emit(
+              "terminal-exit",
+              json!({
+                "sessionId": session_for_reader.id,
+                "exitCode": session_for_reader.runtime.lock().ok().and_then(|r| r.exit_code),
+              }),
+            );
+          }
           break;
         }
         Ok(size) => {
-          let mut output = session_for_reader
-            .output
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-          output.extend_from_slice(&chunk[..size]);
+          let data = &chunk[..size];
+          // 1) 落到 output buffer 给 read 接口兜底用
+          {
+            let mut output = session_for_reader
+              .output
+              .lock()
+              .unwrap_or_else(|poisoned| poisoned.into_inner());
+            output.extend_from_slice(data);
+          }
+          // 2) push 给前端：UTF-8 解码后 emit 一个 "terminal-data" 事件
+          if let Some(app) = APP_HANDLE.get() {
+            let text = String::from_utf8_lossy(data).to_string();
+            let _ = app.emit(
+              "terminal-data",
+              json!({
+                "sessionId": session_for_reader.id,
+                "data": text,
+              }),
+            );
+          }
         }
         Err(_) => {
           refresh_session_state(&session_for_reader);
+          if let Some(app) = APP_HANDLE.get() {
+            let _ = app.emit(
+              "terminal-exit",
+              json!({ "sessionId": session_for_reader.id, "exitCode": None::<i32> }),
+            );
+          }
           break;
         }
       }

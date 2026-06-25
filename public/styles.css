@@ -26522,10 +26522,10 @@ body {
 [data-theme="light"] .shell-v2 .ea-term-mini-btn { border-color: rgba(15,23,42,0.1); color: #475569; }
 [data-theme="light"] .shell-v2 .ea-term-mini-btn-ghost { background: rgba(255,255,255,0.65); }
 
-/* Tab strip：透明，单条底线代替每个 tab 的边框 */
+/* Tab strip：跟 terminal canvas 共用同色，视觉上是一片连续面板 */
 .shell-v2 .ea-term-tabs {
   display: flex; gap: 0; padding: 4px 8px 0;
-  background: transparent;
+  background: var(--bg);
   border-bottom: 0;
   overflow-x: auto;
 }
@@ -26578,12 +26578,11 @@ body {
 }
 .shell-v2 .ea-term-tab-close:hover { background: rgba(248,113,113,0.18); color: #f87171; }
 
-/* Canvas 不画底色，全部交给 xterm 的 theme.background；避免和 xterm 渲染的
-   cell 区域错位时出现可见 dark / light 边界 */
+/* Canvas 用 --bg 实色（跟 tab strip 一致），左侧 12px gutter 让文本不贴边 */
 .shell-v2 .ea-term-canvas {
   position: relative;
-  background: transparent;
-  padding: 0;
+  background: var(--bg);
+  padding: 0 0 0 12px;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -26621,11 +26620,11 @@ body {
 }
 [data-theme="light"] .shell-v2 .ea-term-empty kbd { background: rgba(91,140,255,0.16); color: #3358ff; }
 
-/* Status bar：完全融入，没有 padding-x 让它真正贴边 */
+/* Status bar：跟 tab + canvas 共用 --bg，整片右侧是一片完整面板 */
 .shell-v2 .ea-term-status {
   display: flex; align-items: center; gap: 8px;
   padding: 4px 12px;
-  background: transparent;
+  background: var(--bg);
   border-top: 0;
   font-size: 0.6rem;
   color: var(--s2-faint);

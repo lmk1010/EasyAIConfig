@@ -17,7 +17,9 @@ import { Unicode11Addon } from './vendor/xterm/addon-unicode11.mjs';
 import { WebLinksAddon } from './vendor/xterm/addon-web-links.mjs';
 import { SearchAddon } from './vendor/xterm/addon-search.mjs';
 
-const POLL_INTERVAL_MS = 120;
+// PTY 数据走 Tauri push 事件（terminal-data / terminal-exit）。
+// 保留 poll 作为兜底（首次 mount 时把已积压的历史 buffer 拉一次）。
+const POLL_INTERVAL_MS = 1200; // 兜底轮询间隔（慢，事件流为主）
 
 const TOOL_LAUNCH_BIN = {
   codex: 'codex',
@@ -25,6 +27,44 @@ const TOOL_LAUNCH_BIN = {
 };
 
 function getState() { return window.state; }
+
+// 一次性挂全局 Tauri 事件监听：terminal-data / terminal-exit
+// Rust reader 线程读到一段就 emit 一次 — 真 push 流，60fps 取决于 PTY 实际产出
+let __eaTermListenersBound = false;
+async function installTermEventListeners() {
+  if (__eaTermListenersBound) return;
+  const listen = window.__TAURI__?.event?.listen;
+  if (typeof listen !== 'function') return;
+  __eaTermListenersBound = true;
+  await listen('terminal-data', (event) => {
+    const { sessionId, data } = event.payload || {};
+    if (!sessionId || !data) return;
+    const tp = getState()?.terminalPage;
+    if (!tp) return;
+    const inst = tp.instances?.[sessionId];
+    if (!inst?.term) return;
+    let chunk = data;
+    if (inst.firstChunk) {
+      inst.firstChunk = false;
+      chunk = chunk.replace(/^(?:\r?\n)+/, '');
+    }
+    inst.term.write(chunk);
+    inst.recvBytes += chunk.length;
+    inst.cursor += chunk.length;
+  });
+  await listen('terminal-exit', (event) => {
+    const { sessionId, exitCode } = event.payload || {};
+    const tp = getState()?.terminalPage;
+    if (!tp) return;
+    const sess = tp.sessions.find((s) => s.id === sessionId);
+    if (sess) { sess.running = false; sess.exitCode = exitCode ?? null; }
+    const inst = tp.instances?.[sessionId];
+    if (inst?.term) {
+      inst.term.write(`\r\n\x1b[31m[已退出${exitCode != null ? ` · code ${exitCode}` : ''}]\x1b[0m\r\n`);
+    }
+  });
+}
+installTermEventListeners().catch(() => {});
 function api(path, opts) { return window.api(path, opts); }
 function flash(msg, type) { return typeof window.flash === 'function' ? window.flash(msg, type) : console.log(`[flash:${type || ''}] ${msg}`); }
 function escapeHtml(v) { return typeof window.escapeHtml === 'function' ? window.escapeHtml(v) : String(v ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c] || c)); }

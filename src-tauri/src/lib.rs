@@ -362,10 +362,11 @@ pub fn run() {
     .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
     .plugin(tauri_plugin_updater::Builder::new().build())
     .setup(|app| {
-      // 启动后挂托盘；失败不致命，记日志继续
       if let Err(err) = tray::install(&app.handle()) {
         log::warn!("tray install failed: {err}");
       }
+      // 让 terminal 模块拿到 AppHandle 以便 reader 线程 emit 推流事件
+      terminal::install(&app.handle());
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![backend_request])
