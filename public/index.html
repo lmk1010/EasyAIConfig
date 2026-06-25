@@ -731,6 +731,14 @@
                             <option value="">选择默认模型</option>
                           </select>
                         </div>
+                        <button id="modelBrowseBtn" type="button" class="secondary model-refresh-btn"
+                          title="浏览全部模型 · 多选添加">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <path d="M9 9h6M9 13h6M9 17h3" />
+                          </svg>
+                        </button>
                         <button id="modelRefreshBtn" type="button" class="secondary model-refresh-btn"
                           title="从 URL 获取模型列表">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -3704,6 +3712,29 @@
       <div class="oc-recipe-modal-foot">
         <button type="button" id="ocRecipeFormCancelBtn" class="secondary subtle-btn">取消</button>
         <button type="button" id="ocRecipeFormApplyBtn">应用配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Model browser modal (provider 编辑里"浏览全部模型 + 多选") -->
+  <div id="modelBrowseModal" class="model-browse-modal hide" aria-hidden="true">
+    <div class="model-browse-backdrop" data-model-browse-close></div>
+    <div class="model-browse-panel" role="dialog">
+      <div class="model-browse-head">
+        <h3>浏览模型 · 多选</h3>
+        <span class="model-browse-sub">勾选这个 Provider 支持的模型。当前选定默认会保留。</span>
+        <button type="button" class="model-browse-x" data-model-browse-close aria-label="关闭">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+      <div class="model-browse-toolbar">
+        <input type="text" id="modelBrowseSearch" placeholder="搜索 (model id / 标签)…" />
+        <span class="model-browse-count">已选 <strong id="modelBrowseSelCount">0</strong></span>
+      </div>
+      <div id="modelBrowseBody" class="model-browse-body"></div>
+      <div class="model-browse-foot">
+        <button type="button" class="secondary" data-model-browse-close>取消</button>
+        <button type="button" id="modelBrowseSaveBtn" class="primary">保存选择</button>
       </div>
     </div>
   </div>
