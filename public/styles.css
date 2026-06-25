@@ -2478,6 +2478,215 @@ button.running {
   animation: pdc-dot-pulse 1.2s ease-in-out infinite;
 }
 
+/* ─── 详情 drawer 的「📌 项目绑定」tab（P0 #3 UI） ─── */
+.pd-binding {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 4px 0;
+}
+.pd-binding-explainer {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+.pd-binding-explainer h3 {
+  margin: 0 0 10px 0;
+  font-size: 0.92rem;
+  color: #e0e7ff;
+  letter-spacing: 0.02em;
+}
+.pd-binding-explainer p {
+  margin: 0 0 12px 0;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: rgba(255,255,255,0.78);
+}
+.pd-binding-explainer code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(96,165,250,0.12);
+  color: #93c5fd;
+  font-size: 0.78rem;
+  font-family: ui-monospace, monospace;
+}
+.pd-binding-scenarios {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+.pd-binding-scenario {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: rgba(167,139,250,0.05);
+  border: 1px solid rgba(167,139,250,0.15);
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+.pd-binding-scenario-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #818cf8, #a78bfa);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.pd-binding-current {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  padding: 14px 18px;
+}
+.pd-binding-current-head {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.pd-binding-cwd {
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-size: 0.84rem;
+  color: #f5f5f4;
+  padding: 6px 0;
+  word-break: break-all;
+}
+.pd-binding-warn {
+  padding: 10px 12px;
+  background: rgba(251,191,36,0.1);
+  border: 1px solid rgba(251,191,36,0.3);
+  border-radius: 6px;
+  color: #fbbf24;
+  font-size: 0.82rem;
+}
+
+.pd-binding-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  background: rgba(167,139,250,0.06);
+  border: 1px solid rgba(167,139,250,0.25);
+  border-radius: 10px;
+}
+.pd-binding-action.is-bound {
+  background: linear-gradient(90deg, rgba(34,197,94,0.10), rgba(34,197,94,0.04));
+  border-color: rgba(34,197,94,0.35);
+}
+.pd-binding-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+}
+.pd-binding-status strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 0.92rem;
+  color: #f5f5f4;
+}
+.pd-binding-status-pin {
+  font-size: 1.4rem;
+  flex: 0 0 auto;
+}
+.pd-binding-status-pin.pd-muted { opacity: 0.45; }
+.pd-binding-warn-row {
+  /* 黄色调 — 用户当前 cwd 绑了别的 provider，提示但不阻塞 */
+}
+.pd-binding-action:has(.pd-binding-warn-row) {
+  background: rgba(251,191,36,0.08);
+  border-color: rgba(251,191,36,0.3);
+}
+
+.pd-binding-existing {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 14px 18px;
+}
+.pd-binding-existing-head {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.pd-binding-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pd-binding-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+  font-size: 0.8rem;
+}
+.pd-binding-list li.is-current {
+  background: rgba(167,139,250,0.08);
+  border: 1px solid rgba(167,139,250,0.2);
+}
+.pd-binding-list code {
+  font-family: ui-monospace, monospace;
+  flex: 1 1 auto;
+  word-break: break-all;
+  color: #e7e5e4;
+}
+.pd-binding-list-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(167,139,250,0.2);
+  color: #ddd6fe;
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+.pd-binding-list-del {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--muted);
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.pd-binding-list-del:hover {
+  background: rgba(248,113,113,0.15);
+  border-color: rgba(248,113,113,0.4);
+  color: #fca5a5;
+}
+
+.pd-binding-empty {
+  padding: 28px 24px;
+  text-align: center;
+  background: rgba(255,255,255,0.025);
+  border: 1px dashed rgba(255,255,255,0.1);
+  border-radius: 10px;
+  color: var(--muted);
+}
+.pd-binding-empty p { margin: 4px 0; font-size: 0.85rem; }
+.pd-meta-text {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .provider-pill.ok {
   color: #dff8ee;
 }

@@ -372,6 +372,7 @@ mod usage_stats;
 mod app_settings;
 mod provider_health;
 mod provider_models;
+mod project_bindings;
 mod shell_integration;
 mod terminal;
 mod terminal_persist;

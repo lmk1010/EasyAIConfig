@@ -18967,6 +18967,51 @@ function ensureProviderDetailEvents() {
     if (target.closest('[data-pd-refresh-usage]')) { actionPdRefreshUsage(); return; }
     if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
     if (target.closest('[data-pd-copy-cmd]')) { actionPdCopyLaunchCmd(); return; }
+    // P0 #3：项目绑定 tab 内的按钮
+    if (target.closest('[data-pd-bind]')) {
+      (async () => {
+        const row = lookupProviderDetailRow();
+        if (!row) return;
+        const ok = await setProjectBindingFor(row.key);
+        if (ok) {
+          // 刷新 allProjectBindings + 重画 detail
+          delete state._allProjectBindingsFetching;
+          renderProviderDetail({ force: true });
+        }
+      })();
+      return;
+    }
+    if (target.closest('[data-pd-unbind]')) {
+      (async () => {
+        const ok = await clearProjectBindingFor();
+        if (ok) {
+          delete state._allProjectBindingsFetching;
+          renderProviderDetail({ force: true });
+        }
+      })();
+      return;
+    }
+    const unbindBtn = target.closest('[data-pd-unbind-cwd]');
+    if (unbindBtn) {
+      const cwd = unbindBtn.getAttribute('data-pd-unbind-cwd');
+      (async () => {
+        if (!cwd) return;
+        const tool = (state.activeTool || 'codex');
+        const res = await api('/api/project-binding', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd, tool }),
+        });
+        if (!res?.ok) { flash(res?.error || '解绑失败', 'error'); return; }
+        flash(`已解绑 ${cwd}`, 'info');
+        await refreshProjectBindingForCurrentCwd();
+        delete state._allProjectBindingsFetching;
+        renderProviderDetail({ force: true });
+        try { window.renderConnectionHub?.(); } catch (_) {}
+        try { renderProviders(); } catch (_) {}
+      })();
+      return;
+    }
   });
 }
 
@@ -19172,6 +19217,7 @@ function renderProviderDetail(options = {}) {
     { id: 'usage',    label: '用量' },
     { id: 'test',     label: '测试' },
     { id: 'health',   label: '健康' },
+    { id: 'binding',  label: '📌 项目绑定' },
   ];
   // .pd-tab-anim 只在 tab 真切换 / 首次打开时加，平时数据刷新不再播 220ms 动画
   const animClass = tabChanged ? ' pd-tab-anim' : '';
@@ -19274,7 +19320,149 @@ function renderPdTab(tab, row) {
   if (tab === 'usage') return renderPdUsage(row);
   if (tab === 'test') return renderPdTest(row);
   if (tab === 'health') return renderPdHealth(row);
+  if (tab === 'binding') return renderPdBinding(row);
   return '';
+}
+
+// "📌 项目绑定" tab — 让 Provider 跟项目目录关联起来
+// 场景：A 项目用便宜的中转站，B 项目用官方账号，C 项目临时用 DeepSeek。
+// 切换时无感：从对应目录启动 Codex 自动切到绑定的 provider。
+function renderPdBinding(row) {
+  const esc = escapeHtml;
+  const currentCwd = (el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '').trim();
+  const isApiKey = row.mode !== 'oauth';
+  const binding = state.projectBinding;
+  const isBoundToThisProvider = isApiKey && binding?.providerKey === row.key && binding?.cwd === currentCwd;
+  const hasOtherBinding = isApiKey && binding?.providerKey && binding.providerKey !== row.key && binding.cwd === currentCwd;
+  const otherProviderName = hasOtherBinding
+    ? ((state.current?.providers || []).find((p) => p.key === binding.providerKey)?.name || binding.providerKey)
+    : '';
+
+  // 列出所有已存在的绑定（先拿 state.allProjectBindings，没有就先空显示，背后异步拉）
+  const allBindings = Array.isArray(state.allProjectBindings) ? state.allProjectBindings : [];
+  const myBindings = allBindings.filter((b) => {
+    return Object.entries(b.tools || {}).some(([t, v]) => t === 'codex' && v?.providerKey === row.key);
+  });
+
+  // 立刻触发一次后台拉取，下次 render 就有数据
+  if (!state._allProjectBindingsFetching) {
+    state._allProjectBindingsFetching = true;
+    api('/api/project-bindings', { method: 'GET' }).then((res) => {
+      state._allProjectBindingsFetching = false;
+      if (res?.ok && Array.isArray(res.data?.bindings)) {
+        state.allProjectBindings = res.data.bindings;
+        try { renderProviderDetail({ force: true }); } catch (_) {}
+      }
+    }).catch(() => { state._allProjectBindingsFetching = false; });
+  }
+
+  if (!isApiKey) {
+    return `
+      <div class="pd-binding">
+        <div class="pd-binding-empty">
+          <p>📌 项目绑定目前只对 <strong>API Key</strong> 类型的 Provider 生效。</p>
+          <p>OAuth 账号本身就是「整机一份」，按账号切换更直接。</p>
+        </div>
+      </div>`;
+  }
+
+  if (row.historyOnly) {
+    return `
+      <div class="pd-binding">
+        <div class="pd-binding-empty">
+          <p>本条 Provider 仅在本地草稿中存在，<code>~/.codex/config.toml</code> 已没有它。</p>
+          <p>请先保存（重新填一次 Key）后再绑定。</p>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="pd-binding">
+      <div class="pd-binding-explainer">
+        <h3>这是干嘛用的？</h3>
+        <p>把<strong>项目目录</strong>绑定到这个 Provider 之后，下次从该目录启动 Codex 时，
+        EasyAIConfig 会<strong>自动把 active provider 切到这个</strong>。像
+        <code>.nvmrc</code> / <code>.python-version</code> 那样按项目管理 AI 后端。</p>
+
+        <div class="pd-binding-scenarios">
+          <div class="pd-binding-scenario">
+            <span class="pd-binding-scenario-num">1</span>
+            <div>
+              <strong>多项目分账号 / 分配额</strong><br>
+              <span class="pd-meta-text">公司项目用付费中转站，个人项目用官方 OpenAI，开源项目用 DeepSeek 免费额度</span>
+            </div>
+          </div>
+          <div class="pd-binding-scenario">
+            <span class="pd-binding-scenario-num">2</span>
+            <div>
+              <strong>避免上下文污染</strong><br>
+              <span class="pd-meta-text">项目 A 用 Claude，项目 B 用 GPT — 在 UI 来回切换会忘，绑定后再也不会发错</span>
+            </div>
+          </div>
+          <div class="pd-binding-scenario">
+            <span class="pd-binding-scenario-num">3</span>
+            <div>
+              <strong>团队成员共用一台机器</strong><br>
+              <span class="pd-meta-text">每个项目跑自己的 provider，互不影响 — cc-switch 全局单例做不到</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pd-binding-current">
+        <div class="pd-binding-current-head">当前 launchCwd</div>
+        ${currentCwd
+          ? `<code class="pd-binding-cwd">${esc(currentCwd)}</code>`
+          : '<div class="pd-binding-warn">⚠️ 还没填项目目录。请先在顶栏的「启动 Codex」cwd 输入框里填一个绝对路径。</div>'}
+      </div>
+
+      ${currentCwd ? `
+        <div class="pd-binding-action ${isBoundToThisProvider ? 'is-bound' : ''}">
+          ${isBoundToThisProvider ? `
+            <div class="pd-binding-status">
+              <span class="pd-binding-status-pin">📌</span>
+              <div>
+                <strong>已绑定到当前项目</strong>
+                <div class="pd-meta-text">下次从 ${esc(currentCwd)} 启动 Codex 时会自动用此 Provider</div>
+              </div>
+            </div>
+            <button type="button" class="pd-chip-btn is-danger" data-pd-unbind>✖ 解绑当前项目</button>
+          ` : hasOtherBinding ? `
+            <div class="pd-binding-status pd-binding-warn-row">
+              <span class="pd-binding-status-pin">⚠️</span>
+              <div>
+                <strong>当前项目已绑定到 ${esc(otherProviderName)}</strong>
+                <div class="pd-meta-text">点下面按钮可改绑到本 Provider</div>
+              </div>
+            </div>
+            <button type="button" class="pd-chip-btn is-primary" data-pd-bind>📌 改绑到此 Provider</button>
+          ` : `
+            <div class="pd-binding-status">
+              <span class="pd-binding-status-pin pd-muted">○</span>
+              <div>
+                <strong>当前项目尚未绑定</strong>
+                <div class="pd-meta-text">点下面按钮把本 Provider 绑定到 ${esc(currentCwd)}</div>
+              </div>
+            </div>
+            <button type="button" class="pd-chip-btn is-primary" data-pd-bind>📌 绑定到当前项目</button>
+          `}
+        </div>
+      ` : ''}
+
+      ${myBindings.length ? `
+        <div class="pd-binding-existing">
+          <div class="pd-binding-existing-head">该 Provider 已绑定的所有项目（${myBindings.length}）</div>
+          <ul class="pd-binding-list">
+            ${myBindings.map((b) => `
+              <li class="${b.cwd === currentCwd ? 'is-current' : ''}">
+                <code>${esc(b.cwd)}</code>
+                ${b.cwd === currentCwd ? '<span class="pd-binding-list-tag">当前</span>' : ''}
+                <button type="button" class="pd-binding-list-del" data-pd-unbind-cwd="${esc(b.cwd)}" title="解绑此目录">✖</button>
+              </li>`).join('')}
+          </ul>
+        </div>
+      ` : ''}
+    </div>`;
 }
 
 // "模型支持" tab —— 默认只展示用户保存的卡片，添加时弹窗。
@@ -24732,20 +24920,9 @@ loadTools();
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
           </button>`;
     } else {
-      // API-key provider rows — edit / detect / bind / delete. Delete for Codex
-      // and Claude Code only (OpenCode uses a different flow).
+      // API-key provider rows — edit / detect / delete. Bind 操作 moved to
+      // 详情 drawer 的「📌 项目绑定」tab — 行内图标按钮太隐晦，需要场景解释。
       const canDelete = r.kind === 'codex-apikey' || r.kind === 'claudecode-apikey';
-      // P0 #3：仅 codex-apikey 支持 per-project binding（其它 tool 的 launcher 还没接 binding）
-      const canBind = r.kind === 'codex-apikey' && !r.historyOnly;
-      const bindBtn = canBind
-        ? (isBound
-          ? `<button type="button" class="ch-row-icon-btn is-bound" data-ch-row-bind="${safeEscape(r.key)}" data-ch-row-bind-action="unbind" title="解绑：当前项目不再自动用该 Provider" aria-label="解绑 ${safeEscape(r.name)}">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 17l3-3 3 3M5 8h14M7 8v5a5 5 0 0 0 10 0V8"/></svg>
-            </button>`
-          : `<button type="button" class="ch-row-icon-btn" data-ch-row-bind="${safeEscape(r.key)}" data-ch-row-bind-action="bind" title="把当前项目绑定到此 Provider — 之后从该目录启动 Codex 自动用它" aria-label="绑定 ${safeEscape(r.name)} 到当前项目">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 17l3-3 3 3M5 8h14M7 8v5a5 5 0 0 0 10 0V8"/><circle cx="12" cy="5" r="2.2"/></svg>
-            </button>`)
-        : '';
       actions = `
           <button type="button" class="ch-row-icon-btn" data-ch-row-edit="${safeEscape(r.key)}" title="编辑" aria-label="编辑 ${safeEscape(r.name)}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
@@ -24753,7 +24930,6 @@ loadTools();
           <button type="button" class="ch-row-icon-btn" data-ch-row-detect="${safeEscape(r.key)}" title="重检" aria-label="重检 ${safeEscape(r.name)}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
           </button>
-          ${bindBtn}
           ${canDelete ? `<button type="button" class="ch-row-icon-btn danger" data-ch-row-delete="${safeEscape(r.key)}" data-ch-row-delete-kind="${safeEscape(r.kind)}" title="删除" aria-label="删除 ${safeEscape(r.name)}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
           </button>` : ''}`;
@@ -26174,20 +26350,6 @@ loadTools();
       if (editBtn) { e.stopPropagation(); openSlideover('edit', editBtn.getAttribute('data-ch-row-edit')); return; }
       const detectBtn = target.closest('[data-ch-row-detect]');
       if (detectBtn) { e.stopPropagation(); detectRow(detectBtn.getAttribute('data-ch-row-detect')); return; }
-      // P0 #3：bind/unbind 当前项目到该 provider
-      const bindBtn = target.closest('[data-ch-row-bind]');
-      if (bindBtn) {
-        e.stopPropagation();
-        e.preventDefault();
-        const key = bindBtn.getAttribute('data-ch-row-bind');
-        const action = bindBtn.getAttribute('data-ch-row-bind-action') || 'bind';
-        (async () => {
-          if (action === 'unbind') await clearProjectBindingFor();
-          else await setProjectBindingFor(key);
-          try { renderConnectionHub(); } catch (_) {}
-        })();
-        return;
-      }
       const delBtn = target.closest('[data-ch-row-delete]');
       if (delBtn) {
         e.stopPropagation();

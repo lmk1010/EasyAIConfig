@@ -202,6 +202,14 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/app/update", "GET") => get_app_update_info(app).await,
     ("/api/app/update", "POST") => install_app_update(app).await,
     ("/api/app/update/progress", "GET") => get_app_update_progress(),
+
+    // ─── Per-project Provider binding (P0 #3 ⭐) ─────────────────
+    ("/api/project-binding", "GET") => crate::project_bindings::get_project_binding(query),
+    ("/api/project-binding", "POST") => crate::project_bindings::set_project_binding(body),
+    ("/api/project-binding", "DELETE") => crate::project_bindings::remove_project_binding(body),
+    ("/api/project-bindings", "GET") => crate::project_bindings::list_project_bindings(query),
+    ("/api/project-binding/summary", "GET") => crate::project_bindings::summarize_binding_for_cwd(query),
+
     _ => Err(format!("Unsupported request: {method} {path}")),
   }
 }
