@@ -55,6 +55,7 @@ async function installTermEventListeners() {
     window.__eaTermDiag = { ...(window.__eaTermDiag || {}), selfTestAt: Date.now(), selfTestPayload: event?.payload };
   });
   await listen('terminal-data', (event) => {
+    window.__eaTermDiag = { ...(window.__eaTermDiag || {}), lastDataEventAt: Date.now() };
     const { sessionId, data } = event.payload || {};
     if (!sessionId || !data) return;
     const tp = getState()?.terminalPage;
@@ -301,19 +302,36 @@ export async function renderTerminalPage() {
   const tp = st.terminalPage;
 
   // 首次进来 / 回到 terminal 页都重新拉一次现有 sessions
-  // Rust 后端返回的字段是 rows 不是 sessions（之前写错了 → 永远空数组）
   if (!tp._loadedOnce) {
     tp._loadedOnce = true;
+    // (a) 先把 localStorage 里的元数据加载（含上次 app 关掉时的"幽灵"session）
+    try {
+      const raw = localStorage.getItem('ea-term-sessions-meta');
+      const meta = raw ? JSON.parse(raw) : [];
+      for (const m of (meta || [])) {
+        if (!m?.id) continue;
+        tp.sessions.push({ ...m, running: false, _ghost: true });
+      }
+    } catch (_) {}
+    // (b) 拉 Rust 当前活的 sessions，覆盖/合并
     try {
       const res = await api('/api/terminal/list');
       const rows = res?.ok && Array.isArray(res.data?.rows) ? res.data.rows : [];
-      if (rows.length) {
-        const known = new Set(tp.sessions.map((s) => s.id));
-        for (const row of rows.map(normalizeSession)) {
-          if (!known.has(row.id)) tp.sessions.push(row);
+      const liveIds = new Set();
+      for (const row of rows.map(normalizeSession)) {
+        liveIds.add(row.id);
+        const existing = tp.sessions.find((s) => s.id === row.id);
+        if (existing) {
+          Object.assign(existing, row, { _ghost: false });
+        } else {
+          tp.sessions.push(row);
         }
-        if (!tp.activeSessionId && tp.sessions[0]) tp.activeSessionId = tp.sessions[0].id;
       }
+      // 不在 live 里的标 ghost（上次的会话，PTY 已死，需要重启）
+      for (const s of tp.sessions) {
+        if (!liveIds.has(s.id)) { s.running = false; s._ghost = true; }
+      }
+      if (!tp.activeSessionId && tp.sessions[0]) tp.activeSessionId = tp.sessions[0].id;
     } catch (_) {}
   }
 
@@ -327,11 +345,24 @@ export async function renderTerminalPage() {
     tp.launcher.providerKey = active?.key || allProviders[0]?.key || '';
   }
 
+  // 当前活动 session 是 ghost（上次 app 留下的）→ 不挂 xterm，显示"已退出 + 重启"占位
+  const activeSess = tp.sessions.find((s) => s.id === tp.activeSessionId);
+  const showGhost = activeSess?._ghost;
   host.innerHTML = `
     <div class="ea-term-shell">
       ${tp.starting ? '<div class="ea-term-progress" aria-label="启动中"><span class="ea-term-progress-bar"></span></div>' : ''}
       <div class="ea-term-canvas">
-        <div class="ea-term-host" id="eaTermHost"></div>
+        ${showGhost ? `
+          <div class="ea-term-ghost">
+            <div class="ea-term-ghost-title">这个会话已退出</div>
+            <div class="ea-term-ghost-meta">
+              <code>${escapeHtml(activeSess.command || activeSess.title || activeSess.program || 'codex')}</code><br>
+              <span class="muted">cwd: ${escapeHtml(activeSess.cwd || '~')}</span>
+            </div>
+            <button type="button" class="ea-term-ghost-btn" data-eat-restart="${escapeHtml(activeSess.id)}">用相同参数重新启动</button>
+            <button type="button" class="ea-term-ghost-btn-secondary" data-eat-forget="${escapeHtml(activeSess.id)}">忘掉这个会话</button>
+          </div>
+        ` : `<div class="ea-term-host" id="eaTermHost"></div>`}
         ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 点右下角 <kbd>+</kbd> 新建 · 或 <kbd>⌘T</kbd> 配置启动 · <kbd>⌘K</kbd> 命令面板</div>'}
       </div>
       ${renderStatusBar(tp)}
@@ -342,9 +373,9 @@ export async function renderTerminalPage() {
   `;
 
   bindEvents(host);
-  // 重挂当前 active 的 xterm 到 #eaTermHost（若已存在 instance 则复用）
+  // ghost session 不挂 xterm
   const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
-  if (active) {
+  if (active && !active._ghost) {
     mountTerminal(active.id);
   }
   renderTermSidebar();
@@ -466,8 +497,8 @@ function renderStatusBarInner(tp) {
     const d = window.__eaTermDiag || {};
     if (!d.listenOk) {
       diagChip = `<span class="ea-term-status-diag is-bad" title="Tauri event listener 未注册 (window.__TAURI__ 没注入或拒绝)">✗ listener 未启</span>`;
-    } else if (!d.selfTestAt) {
-      diagChip = `<span class="ea-term-status-diag is-bad" title="Rust install() 3 秒后会 emit terminal-self-test 但前端没收到 → Tauri event bridge 断了，可能是 capability 权限问题">✗ bridge 断开</span>`;
+    } else if (!d.selfTestAt && !d.lastTokenEventAt && !d.lastDataEventAt) {
+      diagChip = `<span class="ea-term-status-diag is-bad" title="Tauri event bridge 不通：没收到 self-test / token / data 任何 Rust 推送">✗ bridge 断开</span>`;
     } else if (!d.lastTokenEventAt) {
       diagChip = `<span class="ea-term-status-diag is-warn" title="bridge 通了（self-test ✓）但 Rust 还没 emit terminal-tokens。Console.app 看 [token-watcher] 日志">⏳ 等 token emit (bridge ✓)</span>`;
     } else if (Date.now() - d.lastTokenEventAt > 30000) {
@@ -578,6 +609,25 @@ function listProviderRows(tool) {
   } catch (_) { return []; }
 }
 
+function persistSessionsMeta() {
+  try {
+    const tp = getState()?.terminalPage;
+    if (!tp) return;
+    const meta = tp.sessions.map((s) => ({
+      id: s.id,
+      tool: s.tool,
+      title: s.title,
+      command: s.command,
+      cwd: s.cwd,
+      program: s.program,
+      args: s.args,
+      env: s.env,
+      createdAt: s.createdAt,
+    }));
+    localStorage.setItem('ea-term-sessions-meta', JSON.stringify(meta));
+  } catch (_) {}
+}
+
 function normalizeSession(s) {
   return {
     id: s.sessionId || s.id || '',
@@ -639,6 +689,10 @@ function onClick(e) {
   if (paletteAct) { handlePaletteAction(paletteAct.dataset.eatPaletteAct); return; }
   const tabClose = t.closest('[data-eat-tab-close]');
   if (tabClose) { e.stopPropagation(); closeSession(tabClose.dataset.eatTabClose); return; }
+  const restart = t.closest('[data-eat-restart]');
+  if (restart) { restartGhostSession(restart.dataset.eatRestart); return; }
+  const forget = t.closest('[data-eat-forget]');
+  if (forget) { forgetGhostSession(forget.dataset.eatForget); return; }
   const tab = t.closest('[data-eat-tab]');
   if (tab) { tp.activeSessionId = tab.dataset.eatTab; renderTerminalPage(); return; }
   const secTab = t.closest('[data-eat-sec-tab]');
@@ -931,9 +985,15 @@ async function spawnSession() {
     });
     if (res?.ok && res.data?.terminalSession) {
       const session = normalizeSession(res.data.terminalSession);
+      // 记下原始 spawn 参数 — 给 [重启] 用
+      session.program = bin;
+      session.args = args;
+      session.tool = tp.launcher.tool;
+      session.cwd = tp.launcher.cwd || session.cwd || '';
       tp.sessions.unshift(session);
       tp.activeSessionId = session.id;
       tp.launcherOpen = false; // 启动后自动收 popover
+      persistSessionsMeta();
       flash(`已启动 ${bin}`, 'success');
     } else {
       flash(`启动失败: ${res?.error || '未知'}`, 'error');
@@ -944,6 +1004,50 @@ async function spawnSession() {
     tp.starting = false;
     renderTerminalPage();
   }
+}
+
+async function restartGhostSession(sessionId) {
+  const tp = getState().terminalPage;
+  const ghost = tp.sessions.find((s) => s.id === sessionId);
+  if (!ghost) return;
+  const bin = ghost.program || (ghost.tool === 'codex' ? 'codex' : ghost.tool === 'claudecode' ? 'claude' : 'codex');
+  const args = Array.isArray(ghost.args) ? ghost.args : [];
+  // 直接调 spawn 接口（绕过 launcher 表单）
+  try {
+    const res = await api('/api/terminal/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: ghost.tool, program: bin, args,
+        cwd: ghost.cwd || '', title: ghost.title || bin,
+        commandPreview: ghost.command || [bin, ...args].join(' '),
+        cols: 120, rows: 32,
+      }),
+    });
+    if (res?.ok && res.data?.terminalSession) {
+      const fresh = normalizeSession(res.data.terminalSession);
+      fresh.program = bin; fresh.args = args; fresh.tool = ghost.tool; fresh.cwd = ghost.cwd;
+      // 替换 ghost
+      const idx = tp.sessions.findIndex((s) => s.id === sessionId);
+      if (idx >= 0) tp.sessions[idx] = fresh;
+      else tp.sessions.unshift(fresh);
+      tp.activeSessionId = fresh.id;
+      persistSessionsMeta();
+      flash('已重启会话', 'success');
+    } else {
+      flash(`重启失败: ${res?.error || '未知'}`, 'error');
+    }
+  } catch (err) {
+    flash(`重启异常: ${err.message || err}`, 'error');
+  }
+  renderTerminalPage();
+}
+
+function forgetGhostSession(sessionId) {
+  const tp = getState().terminalPage;
+  tp.sessions = tp.sessions.filter((s) => s.id !== sessionId);
+  if (tp.activeSessionId === sessionId) tp.activeSessionId = tp.sessions[0]?.id || '';
+  persistSessionsMeta();
+  renderTerminalPage();
 }
 
 async function closeSession(sessionId) {
@@ -966,6 +1070,7 @@ async function closeSession(sessionId) {
   if (tp.activeSessionId === sessionId) {
     tp.activeSessionId = tp.sessions[0]?.id || '';
   }
+  persistSessionsMeta();
   renderTerminalPage();
 }
 
@@ -1096,6 +1201,19 @@ function mountTerminal(sessionId) {
           notifyResize(sessionId, instance);
         } catch (_) {}
       }, 0);
+      // 从 Rust 拉一次完整 PTY 缓存 — re-mount / 切 tab / 新挂载都把历史灌回来
+      api(`/api/terminal/buffer?sessionId=${encodeURIComponent(sessionId)}&cursor=0`).then((res) => {
+        const data = res?.ok && res.data?.data ? res.data.data : '';
+        if (!data) return;
+        try {
+          // 把 base64/raw 写进 xterm（terminal_buffer 返回的是 base64 编码的字节）
+          const bytes = typeof data === 'string' && /^[A-Za-z0-9+/=]+$/.test(data)
+            ? atob(data)
+            : data;
+          term.write(bytes);
+          instance.cursor = res.data.cursor || bytes.length;
+        } catch (e) { console.warn('[ea-term] buffer restore fail', e); }
+      }).catch(() => {});
 
       term.onData((data) => {
         instance.sentBytes += data.length;
@@ -1130,7 +1248,20 @@ function mountTerminal(sessionId) {
   try { inst.term.options.theme = currentTermTheme(); } catch (_) {}
   try { inst.term.open(hostEl); } catch (_) {}
   inst.mountedTo = hostEl;
-  // 不再 fit / 不再 notifyResize（避免 SIGWINCH 让 codex 重画导致内容重复）
+  // ResizeObserver 之前断开了，要重新接上，否则切回来 size 变化不响应
+  if (typeof ResizeObserver === 'function' && !inst.resizeObserver) {
+    let rafId = 0;
+    inst.resizeObserver = new ResizeObserver(() => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        if (hostEl.clientWidth === 0 || hostEl.clientHeight === 0) return;
+        try { inst.fit.fit(); } catch (_) {}
+        notifyResize(sessionId, inst);
+      });
+    });
+    inst.resizeObserver.observe(hostEl);
+  }
   try { inst.term.focus(); } catch (_) {}
 }
 
