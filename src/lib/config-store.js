@@ -2088,7 +2088,14 @@ async function readText(filePath) {
 
 async function writeText(filePath, content) {
   await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, content, 'utf8');
+  // 全部使用 0600 写入 —— 此函数所有调用点都是 .env / config.toml /
+  // auth.json / settings.json 等可能含 API key 或 OAuth token 的配置，
+  // 默认 umask (0644) 在多用户机上会被其他用户 `cat` 读走
+  await fs.writeFile(filePath, content, { encoding: 'utf8', mode: 0o600 });
+  // fs.writeFile 的 mode 只对新建文件生效；对已存在文件不改权限，因此再 chmod 一次
+  if (process.platform !== 'win32') {
+    try { await fs.chmod(filePath, 0o600); } catch (_) {}
+  }
 }
 
 function parseToml(content) {
@@ -2864,10 +2871,20 @@ async function readScopeState({ scope = 'global', projectPath = '', codexHome = 
 }
 
 async function createBackup({ configPath, envPath, scope }) {
-  const targetDir = path.join(backupsRoot(), `${timestamp()}-${scope}`);
+  // 备份根目录 0700、备份子目录 0700、备份文件 0600 ——
+  // .env.bak 含 API key，config.toml.bak 可能含自定义 env / 路径
+  const root = backupsRoot();
+  await ensureDir(root);
+  if (process.platform !== 'win32') {
+    try { await fs.chmod(root, 0o700); } catch (_) {}
+  }
+  const targetDir = path.join(root, `${timestamp()}-${scope}`);
   await ensureDir(targetDir);
-  await fs.writeFile(path.join(targetDir, 'config.toml.bak'), await readText(configPath), 'utf8');
-  await fs.writeFile(path.join(targetDir, '.env.bak'), await readText(envPath), 'utf8');
+  if (process.platform !== 'win32') {
+    try { await fs.chmod(targetDir, 0o700); } catch (_) {}
+  }
+  await writeText(path.join(targetDir, 'config.toml.bak'), await readText(configPath));
+  await writeText(path.join(targetDir, '.env.bak'), await readText(envPath));
   return targetDir;
 }
 
@@ -4326,7 +4343,12 @@ function readJsonFile(filePath) {
 
 async function writeJsonFile(filePath, data) {
   await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2) + '\n', {
+    encoding: 'utf8', mode: 0o600,
+  });
+  if (process.platform !== 'win32') {
+    try { await fs.chmod(filePath, 0o600); } catch (_) {}
+  }
 }
 
 
