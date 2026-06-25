@@ -46,9 +46,14 @@ async function installTermEventListeners() {
     console.warn('[ea-term] listen unavailable after', tries, 'tries');
     return;
   }
-  console.warn('[ea-term] listen ok, registering 3 listeners');
+  console.warn('[ea-term] listen ok, registering 4 listeners');
   __eaTermListenersBound = true;
   window.__eaTermDiag = { ...(window.__eaTermDiag || {}), listenOk: true, listenAt: Date.now() };
+  // 自检事件 — Rust install() 3 秒后会 emit 一次。收到 → bridge 完全通
+  await listen('terminal-self-test', (event) => {
+    console.warn('[ea-term] SELF-TEST event arrived', event?.payload);
+    window.__eaTermDiag = { ...(window.__eaTermDiag || {}), selfTestAt: Date.now(), selfTestPayload: event?.payload };
+  });
   await listen('terminal-data', (event) => {
     const { sessionId, data } = event.payload || {};
     if (!sessionId || !data) return;
@@ -437,8 +442,10 @@ function renderStatusBarInner(tp) {
     const d = window.__eaTermDiag || {};
     if (!d.listenOk) {
       diagChip = `<span class="ea-term-status-diag is-bad" title="Tauri event listener 未注册 (window.__TAURI__ 没注入或拒绝)">✗ listener 未启</span>`;
+    } else if (!d.selfTestAt) {
+      diagChip = `<span class="ea-term-status-diag is-bad" title="Rust install() 3 秒后会 emit terminal-self-test 但前端没收到 → Tauri event bridge 断了，可能是 capability 权限问题">✗ bridge 断开</span>`;
     } else if (!d.lastTokenEventAt) {
-      diagChip = `<span class="ea-term-status-diag is-warn" title="listener 已注册但 Rust 还没 emit 任何 terminal-tokens 事件。Console.app 里看 [token-watcher] 日志">⏳ 等 Rust emit (listener ✓)</span>`;
+      diagChip = `<span class="ea-term-status-diag is-warn" title="bridge 通了（self-test ✓）但 Rust 还没 emit terminal-tokens。Console.app 看 [token-watcher] 日志">⏳ 等 token emit (bridge ✓)</span>`;
     } else if (Date.now() - d.lastTokenEventAt > 30000) {
       const ago = Math.round((Date.now() - d.lastTokenEventAt) / 1000);
       diagChip = `<span class="ea-term-status-diag is-warn" title="最近一次 token 事件: ${ago}s 前 sessionId=${esc(d.lastTokenPayload?.sessionId || '?')}">⏳ 上次 ${esc(String(ago))}s 前</span>`;
