@@ -28196,3 +28196,165 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ─── Provider 详情 · 模型支持 (卡片版) ─── */
+.pd-models-section-head {
+  display: flex; align-items: center;
+  margin-top: 4px; margin-bottom: 2px;
+  gap: 12px;
+}
+.pd-models-section-title {
+  flex: 1;
+  font-size: 13px; font-weight: 700;
+  color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+}
+.pd-models-section-count {
+  background: rgba(91,140,255,0.10);
+  color: #3358ff;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.pd-models-add-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: linear-gradient(90deg, #5b8cff, #3358ff);
+  color: #fff;
+  border: none; border-radius: 6px;
+  padding: 6px 14px;
+  font: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(51,88,255,0.28);
+  transition: all 120ms ease;
+}
+.pd-models-add-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(51,88,255,0.42);
+}
+
+/* 卡片网格：每行 2-4 个 (响应 minmax 240) */
+.pd-models-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.pd-models-card {
+  position: relative;
+  background: var(--card-bg, rgba(255,255,255,0.6));
+  border: 1px solid rgba(120,140,180,0.18);
+  border-radius: 10px;
+  padding: 14px 14px 10px;
+  transition: all 160ms ease;
+}
+[data-theme="dark"] .pd-models-card {
+  background: rgba(28,32,42,0.55);
+}
+.pd-models-card:hover {
+  border-color: rgba(91,140,255,0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(40,60,100,0.08);
+}
+.pd-models-card.is-default {
+  border-color: rgba(91,140,255,0.50);
+  background: linear-gradient(135deg, rgba(91,140,255,0.06), rgba(91,140,255,0.02));
+}
+[data-theme="dark"] .pd-models-card.is-default {
+  background: linear-gradient(135deg, rgba(91,140,255,0.10), rgba(91,140,255,0.02));
+}
+.pd-models-card-badge {
+  position: absolute; top: 10px; right: 36px;
+  font-size: 9.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  background: linear-gradient(90deg, #5b8cff, #3358ff);
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.pd-models-card-live {
+  position: absolute; top: 10px; right: 36px;
+  font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.06em;
+  background: rgba(34,197,94,0.14);
+  color: #16a34a;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.pd-models-card-id {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding-right: 24px;
+}
+.pd-models-card-label {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pd-models-card-group {
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.65;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.pd-models-card-remove {
+  position: absolute; top: 8px; right: 8px;
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent;
+  color: var(--muted); border-radius: 5px;
+  font-size: 16px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 120ms ease;
+}
+.pd-models-card:hover .pd-models-card-remove { opacity: 1; }
+.pd-models-card-remove:hover {
+  background: rgba(248,113,113,0.12);
+  color: #ef4444;
+}
+
+/* 空状态 */
+.pd-models-empty {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  background: var(--card-bg, rgba(255,255,255,0.4));
+  border: 1px dashed rgba(120,140,180,0.30);
+  border-radius: 12px;
+}
+.pd-models-empty-icon {
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.pd-models-empty-title {
+  font-size: 13px; font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.pd-models-empty-sub {
+  font-size: 11.5px; color: var(--muted);
+  margin-bottom: 16px;
+}
+.pd-models-empty-cta {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: linear-gradient(90deg, #5b8cff, #3358ff);
+  color: #fff;
+  border: none; border-radius: 6px;
+  padding: 8px 18px;
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(51,88,255,0.32);
+  transition: all 120ms ease;
+}
+.pd-models-empty-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(51,88,255,0.45);
+}

@@ -17247,6 +17247,14 @@ function renderModelBrowseBody() {
 async function saveModelBrowseSelection() {
   const providerKey = state.modelBrowse?.providerKey || '';
   if (!providerKey) { flash('当前不在编辑 provider', 'warning'); return; }
+  // 详情页 tab 用 onSave 回调路径（外部已经在 listener 处理）
+  if (typeof state.modelBrowse?.onSave === 'function') {
+    const list = Array.from(state.modelBrowse?.checked || []);
+    try { await state.modelBrowse.onSave(list); } catch (_) {}
+    flash(`已加入 ${list.length} 个模型`, 'success');
+    closeModelBrowseModal();
+    return;
+  }
   const models = Array.from(state.modelBrowse?.checked || []);
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
   try {
@@ -18743,8 +18751,8 @@ function renderPdTab(tab, row) {
   return '';
 }
 
-// "模型支持" tab —— 在 provider 详情里独立的模型列表页
-// 顶部当前默认模型 + 检测到的 live models；下方是 "支持的模型" 网格 (用户多选)
+// "模型支持" tab —— 默认只展示用户保存的卡片，添加时弹窗。
+// 顶部 summary (当前默认 + LIVE 检测) → 已保存模型卡片 grid → "+ 添加模型" 触发选择 modal
 function renderPdModels(row) {
   const providerKey = row.key;
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
@@ -18763,27 +18771,27 @@ function renderPdModels(row) {
         }
       }).catch(() => {});
   }
-  const savedSet = new Set(saved);
   const liveSet = new Set(liveModels);
-  const allChecked = new Set([...saved]); // 编辑态 — 用户改动的集合
   const esc = escapeHtml;
-  // 渲染默认模型卡 (展示用，不在这里改) + 来自 /v1/models 的 live 列表 + catalog 多选
-  let catalogHtml = '';
+  // 已保存模型 → 用 catalog meta 拿 label / group；catalog 找不到的就裸 id
+  const catalogIndex = {};
   for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
-    catalogHtml += `<div class="pd-models-group"><div class="pd-models-group-label">${esc(group.label)} <span class="pd-models-group-count">${group.options.length}</span></div><div class="pd-models-group-options">`;
-    for (const o of group.options) {
-      const isOn = savedSet.has(o.value);
-      const isLive = liveSet.has(o.value);
-      catalogHtml += `<label class="pd-models-opt ${isOn ? 'is-on' : ''}">
-        <input type="checkbox" data-pd-model="${esc(o.value)}" ${isOn ? 'checked' : ''} />
-        <span class="pd-models-opt-info">
-          <span class="pd-models-opt-id">${esc(o.value)}${isLive ? ' <em class="pd-models-live-tag">live</em>' : ''}</span>
-          <span class="pd-models-opt-label">${esc(o.label)}</span>
-        </span>
-      </label>`;
-    }
-    catalogHtml += `</div></div>`;
+    for (const o of group.options) catalogIndex[o.value] = { label: o.label, group: group.label };
   }
+  const cards = saved.map((m) => {
+    const meta = catalogIndex[m] || { label: '', group: '自定义' };
+    const isLive = liveSet.has(m);
+    const isDefault = m === currentModel;
+    return `
+      <div class="pd-models-card ${isDefault ? 'is-default' : ''}" data-pd-model-card="${esc(m)}">
+        ${isDefault ? '<span class="pd-models-card-badge">默认</span>' : ''}
+        ${isLive && !isDefault ? '<span class="pd-models-card-live">LIVE</span>' : ''}
+        <div class="pd-models-card-id">${esc(m)}</div>
+        <div class="pd-models-card-label">${esc(meta.label || '自定义模型')}</div>
+        ${meta.group ? `<div class="pd-models-card-group">${esc(meta.group)}</div>` : ''}
+        <button type="button" class="pd-models-card-remove" data-pd-model-remove="${esc(m)}" title="移除">×</button>
+      </div>`;
+  }).join('');
   return `
     <div class="pd-models-page">
       <div class="pd-models-summary">
@@ -18806,60 +18814,75 @@ function renderPdModels(row) {
         ${liveModels.length ? `<div class="pd-models-live-list">${liveModels.map((m) => `<span class="pd-models-live-chip">${esc(m)}</span>`).join('')}</div>` : ''}
       </div>
 
-      <div class="pd-models-toolbar">
-        <input type="text" id="pdModelsSearch" placeholder="搜索 model id / 标签…" />
-        <span class="pd-models-toolbar-meta">已选 <strong id="pdModelsCount">${saved.length}</strong> 个 · 共 <strong>${(typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : []).reduce((sum, g) => sum + g.options.length, 0)}</strong> 个</span>
-        <button type="button" class="primary" data-pd-models-save>保存</button>
+      <div class="pd-models-section-head">
+        <div class="pd-models-section-title">
+          支持的模型
+          <span class="pd-models-section-count">${saved.length}</span>
+        </div>
+        <button type="button" class="pd-models-add-btn" data-pd-models-add>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          添加模型
+        </button>
       </div>
-      <div class="pd-models-body" id="pdModelsBody">
-        ${catalogHtml}
-      </div>
+      ${saved.length ? `
+        <div class="pd-models-cards-grid">
+          ${cards}
+        </div>
+      ` : `
+        <div class="pd-models-empty">
+          <div class="pd-models-empty-icon">
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.4"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>
+          </div>
+          <div class="pd-models-empty-title">还没添加支持的模型</div>
+          <div class="pd-models-empty-sub">点击右上「添加模型」从内置 catalog 里多选</div>
+          <button type="button" class="pd-models-empty-cta" data-pd-models-add>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            添加模型
+          </button>
+        </div>
+      `}
     </div>`;
 }
 
-// "模型支持" 事件 — 勾选 / 搜索 / 保存 / 拉取
+// "模型支持" 事件 — 添加 / 移除卡片 / 拉取 live
 async function bindPdModelsEvents() {
   const root = document.querySelector('.pd-models-page');
   if (!root || root._pdModelsBound) return;
   root._pdModelsBound = true;
   const providerKey = state.providerDetail?.providerKey || '';
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
-  state._pdModelsDraft = new Set((state.providerSavedModels?.[providerKey]) || []);
-  const updateCount = () => { const c = root.querySelector('#pdModelsCount'); if (c) c.textContent = String(state._pdModelsDraft.size); };
-  root.addEventListener('change', (e) => {
-    const cb = e.target.closest('input[data-pd-model]');
-    if (!cb) return;
-    const v = cb.dataset.pdModel;
-    if (cb.checked) state._pdModelsDraft.add(v); else state._pdModelsDraft.delete(v);
-    cb.closest('.pd-models-opt')?.classList.toggle('is-on', cb.checked);
-    updateCount();
-  });
-  root.querySelector('#pdModelsSearch')?.addEventListener('input', (e) => {
-    const q = String(e.target.value || '').trim().toLowerCase();
-    root.querySelectorAll('.pd-models-opt').forEach((opt) => {
-      const id = (opt.querySelector('.pd-models-opt-id')?.textContent || '').toLowerCase();
-      const lab = (opt.querySelector('.pd-models-opt-label')?.textContent || '').toLowerCase();
-      const hit = !q || id.includes(q) || lab.includes(q);
-      opt.style.display = hit ? '' : 'none';
-    });
-  });
-  root.querySelector('[data-pd-models-save]')?.addEventListener('click', async () => {
-    const models = Array.from(state._pdModelsDraft);
+
+  // 移除单个卡片：直接落库 (provider_saved_models 整覆盖)
+  async function persistSet(newList) {
     try {
       const res = await api('/api/provider/saved-models', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerKey, codexHome, models }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerKey, codexHome, models: newList }),
       });
       if (res?.ok) {
         state.providerSavedModels = state.providerSavedModels || {};
-        state.providerSavedModels[providerKey] = models;
-        flash(`已保存 ${models.length} 个模型`, 'success');
+        state.providerSavedModels[providerKey] = newList;
+        renderProviderDetail();
       } else {
         flash(`保存失败: ${res?.error || '未知'}`, 'error');
       }
     } catch (err) { flash(`保存异常: ${err.message || err}`, 'error'); }
+  }
+
+  root.addEventListener('click', (e) => {
+    const remove = e.target.closest('[data-pd-model-remove]');
+    if (remove) {
+      const m = remove.dataset.pdModelRemove;
+      const cur = (state.providerSavedModels?.[providerKey]) || [];
+      persistSet(cur.filter((x) => x !== m));
+      return;
+    }
+    if (e.target.closest('[data-pd-models-add]')) {
+      openPdModelsPicker(providerKey, persistSet);
+      return;
+    }
   });
+
   root.querySelector('[data-pd-models-refetch]')?.addEventListener('click', async () => {
     const detail = state.providerDetail;
     detail.modelsLoading = true;
@@ -18879,6 +18902,24 @@ async function bindPdModelsEvents() {
     } catch (err) { flash(`拉取异常: ${err.message || err}`, 'warning'); }
     finally { detail.modelsLoading = false; renderProviderDetail(); }
   });
+}
+
+// 添加模型 modal — 复用 #modelBrowseModal markup
+function openPdModelsPicker(providerKey, persistFn) {
+  const modal = el('modelBrowseModal');
+  if (!modal) return;
+  state.modelBrowse = {
+    providerKey,
+    search: '',
+    checked: new Set((state.providerSavedModels?.[providerKey]) || []),
+    onSave: persistFn,
+  };
+  modal.classList.remove('hide');
+  modal.setAttribute('aria-hidden', 'false');
+  renderModelBrowseBody();
+  setTimeout(() => el('modelBrowseSearch')?.focus(), 60);
+  // 原 modelBrowseSaveBtn 全局 listener 走 saveModelBrowseSelection，
+  // 已修改成 onSave 优先 → 不需要单独再 hook
 }
 
 function fmtLatency(ms) {
