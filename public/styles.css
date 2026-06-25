@@ -27174,3 +27174,23 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   font-size: 0.58rem; color: var(--s2-text);
   font-variant-numeric: tabular-nums; font-weight: 600;
 }
+
+/* 顶部启动进度条：indeterminate sliding */
+.shell-v2 .ea-term-progress {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 2px;
+  z-index: 80;
+  overflow: hidden;
+  background: transparent;
+}
+.shell-v2 .ea-term-progress-bar {
+  position: absolute; top: 0; bottom: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, #5b8cff, #3358ff, transparent);
+  animation: eaTermProgress 1.1s linear infinite;
+  border-radius: 999px;
+}
+@keyframes eaTermProgress {
+  0% { left: -30%; }
+  100% { left: 100%; }
+}

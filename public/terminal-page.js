@@ -225,13 +225,18 @@ export async function renderTerminalPage() {
   const st = getState();
   const tp = st.terminalPage;
 
-  // 首次进来：拉一次现有 sessions
+  // 首次进来 / 回到 terminal 页都重新拉一次现有 sessions
+  // Rust 后端返回的字段是 rows 不是 sessions（之前写错了 → 永远空数组）
   if (!tp._loadedOnce) {
     tp._loadedOnce = true;
     try {
       const res = await api('/api/terminal/list');
-      if (res?.ok && Array.isArray(res.data?.sessions)) {
-        tp.sessions = res.data.sessions.map(normalizeSession);
+      const rows = res?.ok && Array.isArray(res.data?.rows) ? res.data.rows : [];
+      if (rows.length) {
+        const known = new Set(tp.sessions.map((s) => s.id));
+        for (const row of rows.map(normalizeSession)) {
+          if (!known.has(row.id)) tp.sessions.push(row);
+        }
         if (!tp.activeSessionId && tp.sessions[0]) tp.activeSessionId = tp.sessions[0].id;
       }
     } catch (_) {}
@@ -249,6 +254,7 @@ export async function renderTerminalPage() {
 
   host.innerHTML = `
     <div class="ea-term-shell">
+      ${tp.starting ? '<div class="ea-term-progress" aria-label="启动中"><span class="ea-term-progress-bar"></span></div>' : ''}
       <div class="ea-term-canvas">
         <div class="ea-term-host" id="eaTermHost"></div>
         ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 点右下角 <kbd>+</kbd> 新建 · 或 <kbd>⌘T</kbd> 配置启动 · <kbd>⌘K</kbd> 命令面板</div>'}
@@ -673,18 +679,19 @@ function bumpFontSize(delta) {
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 })();
 
-// 离开 terminal 页面时清理（disposeAll）
+// 离开 terminal 页面时**不** dispose xterm 实例 — 让 scrollback / PTY 连接保留。
+// 下次回到 terminal 页 mountTerminal 会重新 attach 到新 host，buffer 完整保留。
+// 只关掉 search 框这种 UI 浮窗。
 export function disposeTerminalInstances() {
+  closeSearch();
+  // 解 resize observer（DOM 变了再 observe 新的）
   const tp = getState()?.terminalPage;
   if (!tp) return;
   for (const inst of Object.values(tp.instances || {})) {
-    try { clearInterval(inst.pollTimer); } catch (_) {}
-    try { inst.resizeObserver?.disconnect(); } catch (_) {}
-    try { inst.webglAddon?.dispose(); } catch (_) {}
-    try { inst.term?.dispose(); } catch (_) {}
+    try { inst.resizeObserver?.disconnect(); inst.resizeObserver = null; } catch (_) {}
+    // mountedTo 标记清除，下次回 terminal 页强制 re-attach
+    inst.mountedTo = null;
   }
-  tp.instances = {};
-  closeSearch();
 }
 window.disposeTerminalInstances = disposeTerminalInstances;
 
