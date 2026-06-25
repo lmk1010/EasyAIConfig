@@ -222,6 +222,8 @@ export function initTerminalPageState() {
     officialProfiles: [],            // [{id, name, email, plan, codexHome, ...}]
     officialActiveId: '',
     officialProfilesLoadedAt: 0,
+    providerModels: {},              // { [providerKey]: [model-id, ...] }
+    providerModelsLoading: {},       // { [providerKey]: bool }
     paletteOpen: false,
     instances: {},           // sessionId -> { term, fit, cursor, container, pollTimer, sentBytes, recvBytes }
     sidebarOpen: true,
@@ -320,6 +322,13 @@ export async function renderTerminalPage() {
   if (showLauncher && tp.launcher.tool === 'codex' && tp.launcher.source === 'official') {
     loadOfficialProfiles();
   }
+  // launcher 打开 + 自管 provider 已选 → 首次自动后台拉模型（缓存到 launcher 关）
+  if (showLauncher && !((tp.launcher.tool === 'codex') && (tp.launcher.source === 'official'))
+      && tp.launcher.providerKey
+      && !tp.providerModels[tp.launcher.providerKey]
+      && !tp.providerModelsLoading[tp.launcher.providerKey]) {
+    fetchProviderModels(tp.launcher.providerKey, tp.launcher.tool);
+  }
   host.innerHTML = `
     <div class="ea-term-shell">
       ${tp.starting ? '<div class="ea-term-progress" aria-label="启动中"><span class="ea-term-progress-bar"></span></div>' : ''}
@@ -382,6 +391,34 @@ async function loadOfficialProfiles(force) {
   } catch (_) {}
 }
 
+// 从指定 provider 拉真实 /v1/models 列表 — 用 test-saved 端点
+async function fetchProviderModels(providerKey, tool) {
+  if (!providerKey) return;
+  const tp = getState()?.terminalPage;
+  if (!tp) return;
+  tp.providerModelsLoading[providerKey] = true;
+  renderTerminalPage();
+  try {
+    const codexHomeEnv = ''; // 用默认
+    const res = await api('/api/provider/test-saved', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerKey, tool: tool || 'codex', codexHome: codexHomeEnv }),
+    });
+    if (res?.ok && Array.isArray(res.data?.models)) {
+      tp.providerModels[providerKey] = res.data.models;
+      flash(`已拉取 ${res.data.models.length} 个模型`, 'success');
+    } else {
+      flash(`拉取模型失败: ${res?.error || '未知'}`, 'warning');
+    }
+  } catch (err) {
+    flash(`拉取模型异常: ${err?.message || err}`, 'warning');
+  } finally {
+    tp.providerModelsLoading[providerKey] = false;
+    renderTerminalPage();
+  }
+}
+
 // 自定义下拉：避开 macOS 原生 select 蓝色高亮 popup
 // options: [{value, label, hint?}]
 function renderLaunchSelect(name, options, value) {
@@ -421,9 +458,11 @@ function renderLauncherPage(tp, providers) {
     ['read-only', '只读'],
     ['none', '不设置'],
   ];
-  // 工具特定的模型列表
+  // 默认模型列表（最新 → 老）；provider 模式下会从 /v1/models 拉真实列表合并到前
   const codexModelOpts = [
     { value: '', label: '默认 (账号/profile 设定)' },
+    { value: 'gpt-5.5', label: 'gpt-5.5' },
+    { value: 'gpt-5.4', label: 'gpt-5.4' },
     { value: 'gpt-5-codex', label: 'gpt-5-codex' },
     { value: 'gpt-5', label: 'gpt-5' },
     { value: 'gpt-5-mini', label: 'gpt-5-mini' },
@@ -433,12 +472,23 @@ function renderLauncherPage(tp, providers) {
   ];
   const claudeModelOpts = [
     { value: '', label: '默认' },
-    { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
     { value: 'claude-opus-4-8', label: 'claude-opus-4-8' },
     { value: 'claude-opus-4-7', label: 'claude-opus-4-7 (1M)' },
+    { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
     { value: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
     { value: 'claude-fable-5', label: 'claude-fable-5' },
     { value: 'custom', label: '自定义…' },
+  ];
+  // 从 provider 拉到的真实模型（如果有）— 拼到前面
+  const liveModels = tp.providerModels?.[tp.launcher.providerKey] || [];
+  const liveOpts = liveModels.map((m) => ({ value: m, label: m, hint: '来自 provider' }));
+  const baseOpts = isCodex ? codexModelOpts : claudeModelOpts;
+  // 去重：live 命中的从 baseOpts 中去掉
+  const liveSet = new Set(liveModels);
+  const mergedModelOpts = [
+    baseOpts[0],                                             // 默认始终首位
+    ...liveOpts,
+    ...baseOpts.slice(1).filter((o) => !liveSet.has(o.value)),
   ];
   const reasoningOpts = [
     { value: '', label: '默认 (跟 profile)' },
@@ -448,8 +498,9 @@ function renderLauncherPage(tp, providers) {
     { value: 'low', label: 'low · 快速' },
     { value: 'minimal', label: 'minimal · 最低' },
   ];
-  const modelOpts = isCodex ? codexModelOpts : claudeModelOpts;
+  const modelOpts = mergedModelOpts;
   const isCustomModel = tp.launcher.model === 'custom';
+  const modelsLoading = tp.providerModelsLoading?.[tp.launcher.providerKey];
   const cwdDisplay = tp.launcher.cwd || '~ ($HOME)';
   return `
     <div class="ea-term-launch-page">
@@ -512,7 +563,14 @@ function renderLauncherPage(tp, providers) {
           </div>
           <div class="ea-term-launch-row">
             <label class="ea-term-launch-lab">模型</label>
-            ${renderLaunchSelect('model', modelOpts, tp.launcher.model)}
+            <div class="ea-term-launch-cwd-wrap">
+              ${renderLaunchSelect('model', modelOpts, tp.launcher.model)}
+              ${!isOfficial && tp.launcher.providerKey ? `
+                <button type="button" class="ea-term-launch-pick" data-eat-fetch-models title="从 provider /v1/models 拉真实列表" aria-label="刷新模型">
+                  ${modelsLoading ? '…' : '↻'}
+                </button>
+              ` : ''}
+            </div>
           </div>
           ${isCustomModel ? `
             <div class="ea-term-launch-row">
@@ -921,6 +979,11 @@ function onClick(e) {
   if (tabClose) { e.stopPropagation(); closeSession(tabClose.dataset.eatTabClose); return; }
   const resume = t.closest('[data-eat-resume]');
   if (resume) { resumeGhostSession(resume.dataset.eatResume); return; }
+  // 刷新模型列表
+  if (t.closest('[data-eat-fetch-models]')) {
+    fetchProviderModels(tp.launcher.providerKey, tp.launcher.tool);
+    return;
+  }
   // 自定义下拉：toggle / pick / outside-close
   const lcsToggle = t.closest('[data-eat-lcs-toggle]');
   if (lcsToggle) {
