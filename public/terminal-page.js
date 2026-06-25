@@ -79,15 +79,13 @@ export async function renderTerminalPage() {
 
   host.innerHTML = `
     <div class="ea-term-shell">
-      ${renderLauncher(tp, allProviders)}
-      <div class="ea-term-main">
-        ${renderTabStrip(tp)}
-        <div class="ea-term-canvas">
-          <div class="ea-term-host" id="eaTermHost"></div>
-          ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话。在上方启动器选好 provider 后点 <strong>启动</strong>。</div>'}
-        </div>
+      ${renderTopBar(tp, allProviders)}
+      ${renderTabStrip(tp)}
+      <div class="ea-term-canvas">
+        <div class="ea-term-host" id="eaTermHost"></div>
+        ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 选好 Provider 点 <strong>启动</strong> · 或 <kbd>⌘K</kbd> 打开命令面板</div>'}
       </div>
-      ${tp.sidebarOpen ? renderSidebar(tp) : ''}
+      ${renderStatusBar(tp)}
     </div>
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
   `;
@@ -100,41 +98,65 @@ export async function renderTerminalPage() {
   }
 }
 
-function renderLauncher(tp, providers) {
+function renderTopBar(tp, providers) {
   const esc = escapeHtml;
   const opts = providers.map((p) => `<option value="${esc(p.key)}" ${p.key === tp.launcher.providerKey ? 'selected' : ''}>${p.isActive ? '● ' : ''}${esc(p.name || p.key)}</option>`).join('');
+  const showLauncher = !tp.sessions.length || tp._launcherOpen;
   return `
-    <div class="ea-term-launcher">
-      <div class="ea-term-launcher-eyebrow">SPAWN</div>
-      <div class="ea-term-launcher-row">
-        <label class="ea-term-pick">
-          <span>工具</span>
-          <select data-eat-launch="tool">
-            <option value="codex" ${tp.launcher.tool === 'codex' ? 'selected' : ''}>Codex</option>
-            <option value="claudecode" ${tp.launcher.tool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
-          </select>
-        </label>
-        <label class="ea-term-pick">
-          <span>Provider</span>
-          <select data-eat-launch="providerKey">${opts || '<option value="">无可用 provider</option>'}</select>
-        </label>
-        <label class="ea-term-pick ea-term-pick-grow">
-          <span>工作目录</span>
-          <input type="text" data-eat-launch="cwd" placeholder="默认 = $HOME" value="${esc(tp.launcher.cwd || '')}"/>
-        </label>
-        <label class="ea-term-pick ea-term-pick-grow">
-          <span>启动参数</span>
-          <input type="text" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="--flag …"/>
-        </label>
-        <button type="button" class="ea-term-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v12l10-6z"/></svg>
-          ${tp.starting ? '启动中…' : '启动'}
-        </button>
-        <button type="button" class="ea-term-cmd-btn" data-eat-palette title="⌘K 命令面板">
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg>
-          ⌘K
+    <div class="ea-term-topbar">
+      <div class="ea-term-topbar-left">
+        <select class="ea-term-mini-select" data-eat-launch="tool" title="选工具">
+          <option value="codex" ${tp.launcher.tool === 'codex' ? 'selected' : ''}>Codex</option>
+          <option value="claudecode" ${tp.launcher.tool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
+        </select>
+        <select class="ea-term-mini-select" data-eat-launch="providerKey" title="选 provider">${opts || '<option value="">无可用 provider</option>'}</select>
+        ${showLauncher ? `
+          <input type="text" class="ea-term-mini-input" data-eat-launch="cwd" placeholder="cwd · 默认 $HOME" value="${esc(tp.launcher.cwd || '')}" title="工作目录"/>
+          <input type="text" class="ea-term-mini-input ea-term-mini-input-flags" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="启动参数" title="启动参数"/>
+        ` : `
+          <button type="button" class="ea-term-mini-btn ea-term-mini-btn-ghost" data-eat-launcher-toggle title="展开 cwd / 启动参数">⋯</button>
+        `}
+        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-primary ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v12l10-6z"/></svg>
+          ${tp.starting ? '启动中' : '启动'}
         </button>
       </div>
+      <div class="ea-term-topbar-right">
+        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-ghost" data-eat-search title="搜索 ⌘F">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+        </button>
+        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-ghost" data-eat-action="clear" title="清屏 ⌃L">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M3 4h10M3 12h6"/></svg>
+        </button>
+        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-ghost" data-eat-action="copy-cmd" title="复制启动命令">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="8" height="9" rx="1.2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-4A1.5 1.5 0 0 0 4 3.5V10"/></svg>
+        </button>
+        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-palette" data-eat-palette title="命令面板 ⌘K">⌘K</button>
+      </div>
+    </div>`;
+}
+
+function renderStatusBar(tp) {
+  const esc = escapeHtml;
+  const session = tp.sessions.find((s) => s.id === tp.activeSessionId);
+  if (!session) {
+    return `<div class="ea-term-status"><span class="ea-term-status-faint">没有运行中的会话</span></div>`;
+  }
+  const inst = tp.instances[session.id];
+  const recv = inst?.recvBytes || 0;
+  const sent = inst?.sentBytes || 0;
+  const approxTokens = Math.round(recv / 4);
+  return `
+    <div class="ea-term-status">
+      <span class="ea-term-status-dot ${session.running ? 'is-on' : 'is-off'}"></span>
+      <span class="ea-term-status-text">${esc(session.title || session.command || '')}</span>
+      <span class="ea-term-status-sep">·</span>
+      <span class="ea-term-status-text-faint">${esc(session.running ? '运行中' : '已退出')}</span>
+      ${session.cwd ? `<span class="ea-term-status-sep">·</span><span class="ea-term-status-text-faint ea-term-status-cwd" title="${esc(session.cwd)}">${esc(session.cwd)}</span>` : ''}
+      <span class="ea-term-status-spacer"></span>
+      <span class="ea-term-status-pill">读 ${esc(fmtBytes(recv))}</span>
+      <span class="ea-term-status-pill">写 ${esc(fmtBytes(sent))}</span>
+      <span class="ea-term-status-pill ea-term-status-pill-tokens">≈ ${esc(approxTokens.toLocaleString())} tokens</span>
     </div>`;
 }
 
@@ -247,6 +269,8 @@ function onClick(e) {
   if (!(t instanceof Element)) return;
   const tp = getState().terminalPage;
   if (t.closest('[data-eat-spawn]')) { spawnSession(); return; }
+  if (t.closest('[data-eat-launcher-toggle]')) { tp._launcherOpen = !tp._launcherOpen; renderTerminalPage(); return; }
+  if (t.closest('[data-eat-search]')) { openSearch(); return; }
   if (t.closest('[data-eat-palette]')) { tp.paletteOpen = true; renderTerminalPage(); return; }
   if (t.closest('[data-eat-palette-scrim]') && !t.closest('.ea-term-palette-box')) {
     tp.paletteOpen = false; renderTerminalPage(); return;
