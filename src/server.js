@@ -16,6 +16,8 @@ import {
   getProviderSecret,
   getProviderExtras,
   setProviderExtras,
+  getAllProviderHealth,
+  getProviderHealth,
   getCodexReleaseInfo,
   getCodexUsageMetrics,
   getOpenCodeUsageMetrics,
@@ -1097,7 +1099,12 @@ export async function startServer() {
       const result = await detectProvider(req.body || {});
       ok(res, { data: result });
     } catch (error) {
-      fail(res, error);
+      const diag = error?.diag || null;
+      res.status(400).json({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        diag,
+      });
     }
   });
 
@@ -1134,6 +1141,30 @@ export async function startServer() {
   app.post('/api/provider/test-saved', async (req, res) => {
     try {
       ok(res, { data: await testSavedProvider(req.body || {}) });
+    } catch (error) {
+      // 把诊断信息透传给前端：列表上的红绿灯需要知道是 DNS / TLS / Auth 哪一类
+      const diag = error?.diag || null;
+      res.status(400).json({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        diag,
+      });
+    }
+  });
+
+  // 列表加载时一次性拉所有 provider 最近一次健康快照，画红绿灯用
+  app.get('/api/provider/health-all', async (_req, res) => {
+    try {
+      ok(res, { data: { providers: await getAllProviderHealth() } });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/provider/health', async (req, res) => {
+    try {
+      const providerKey = String(req.query.providerKey || '').trim();
+      ok(res, { data: { snapshot: await getProviderHealth(providerKey) } });
     } catch (error) {
       fail(res, error);
     }

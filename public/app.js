@@ -16688,12 +16688,24 @@ async function testCodexProviderConnectivity(provider, { delayMs = 420 } = {}) {
     timeoutMs: 10000,
   });
 
-  state.providerHealth[provider.key] = { loading: false, checked: true, ok: Boolean(json?.ok) };
+  const okFlag = Boolean(json?.ok);
+  state.providerHealth[provider.key] = {
+    loading: false,
+    checked: true,
+    ok: okFlag,
+    checkedAt: Date.now(),
+    stage: okFlag ? 'ok' : (json?.diag?.stage || 'unknown'),
+    hint: okFlag ? null : (json?.diag?.hint || json?.error || null),
+    errorMessage: okFlag ? null : (json?.diag?.errorMessage || json?.error || null),
+    latencyMs: okFlag ? (json?.data?.latencyMs ?? null) : (json?.diag?.latencyMs ?? null),
+    statusCode: okFlag ? (json?.data?.statusCode ?? null) : (json?.diag?.statusCode ?? null),
+    modelCount: okFlag ? (Array.isArray(json?.data?.models) ? json.data.models.length : null) : null,
+  };
   renderCurrentConfig();
   renderProviders();
 
-  if (!json?.ok) return { ok: false, error: json?.error || '连通性检测失败' };
-  return { ok: true };
+  if (!okFlag) return { ok: false, error: json?.error || '连通性检测失败', diag: json?.diag || null };
+  return { ok: true, latencyMs: json?.data?.latencyMs ?? null, modelCount: state.providerHealth[provider.key].modelCount };
 }
 
 function claudeProviderConnectivityLabel(provider, data = state.claudeCodeState) {
@@ -17207,6 +17219,41 @@ function renderCurrentConfig() {
   renderQuickRailSupportPanel();
 }
 
+async function seedProviderHealthFromDisk() {
+  try {
+    const json = await api('/api/provider/health-all', { method: 'GET', timeoutMs: 5000 });
+    const snap = json?.data?.providers || {};
+    const validKeys = new Set((state.current?.providers || []).map((p) => p.key));
+    let merged = 0;
+    for (const [key, snapshot] of Object.entries(snap)) {
+      if (!validKeys.has(key)) continue;
+      const existing = state.providerHealth[key];
+      // 如果内存里有"刚跑完"的探测结果（< 5 分钟），尊重它，别被 disk 盖掉
+      if (existing?.checkedAt && (Date.now() - existing.checkedAt < 300000)) continue;
+      state.providerHealth[key] = {
+        loading: false,
+        checked: true,
+        ok: Boolean(snapshot.ok),
+        checkedAt: Number(snapshot.probedAt) || Date.now(),
+        stage: snapshot.stage || (snapshot.ok ? 'ok' : 'unknown'),
+        hint: snapshot.hint || null,
+        errorMessage: snapshot.errorMessage || null,
+        latencyMs: snapshot.latencyMs ?? null,
+        statusCode: snapshot.statusCode ?? null,
+        modelCount: snapshot.modelCount ?? null,
+        fromDisk: true,
+      };
+      merged += 1;
+    }
+    if (merged > 0) {
+      try { renderProviders(); } catch (_) {}
+      try { renderCurrentConfig(); } catch (_) {}
+    }
+  } catch (err) {
+    console.warn('[health] seed from disk failed:', err);
+  }
+}
+
 async function refreshProviderHealth(force = false) {
   const providers = (state.current?.providers || []).filter((provider) => provider.hasApiKey && provider.baseUrl);
   // Respect the user-configured auto-detect interval when deciding whether a
@@ -17230,6 +17277,7 @@ async function refreshProviderHealth(force = false) {
     }
     state.providerHealth[provider.key] = { loading: true, checked: false, startedAt: Date.now() };
     renderCurrentConfig();
+    renderProviders();
     try {
       const result = await Promise.race([
         api('/api/provider/test-saved', {
@@ -17244,14 +17292,30 @@ async function refreshProviderHealth(force = false) {
           }),
           timeoutMs: 8000,
         }),
-        new Promise(resolve => setTimeout(() => resolve({ ok: false, error: 'timeout' }), 9000)),
+        new Promise(resolve => setTimeout(() => resolve({ ok: false, error: 'timeout', diag: { stage: 'timeout', hint: '探测超时' } }), 9000)),
       ]);
-      state.providerHealth[provider.key] = { loading: false, checked: true, ok: Boolean(result?.ok), checkedAt: Date.now() };
+      const ok = Boolean(result?.ok);
+      state.providerHealth[provider.key] = {
+        loading: false,
+        checked: true,
+        ok,
+        checkedAt: Date.now(),
+        stage: ok ? 'ok' : (result?.diag?.stage || 'unknown'),
+        hint: ok ? null : (result?.diag?.hint || result?.error || null),
+        errorMessage: ok ? null : (result?.diag?.errorMessage || result?.error || null),
+        latencyMs: ok ? (result?.data?.latencyMs ?? null) : (result?.diag?.latencyMs ?? null),
+        statusCode: ok ? (result?.data?.statusCode ?? null) : (result?.diag?.statusCode ?? null),
+        modelCount: ok ? (Array.isArray(result?.data?.models) ? result.data.models.length : null) : null,
+      };
     } catch (err) {
       console.warn('Provider health check failed:', provider.key, err);
-      state.providerHealth[provider.key] = { loading: false, checked: true, ok: false, checkedAt: Date.now() };
+      state.providerHealth[provider.key] = {
+        loading: false, checked: true, ok: false, checkedAt: Date.now(),
+        stage: 'unknown', hint: String(err?.message || err) || null,
+      };
     }
     renderCurrentConfig();
+    renderProviders();
   }));
   // 每轮探测完检查一下 auto-failover 该不该出手
   try { if (typeof evaluateAutoFailover === 'function') evaluateAutoFailover(); } catch (_) {}
@@ -17644,13 +17708,44 @@ function renderModelOptions(models = state.detected?.models || [], preferred = '
   el('modelChips').classList.toggle('hide', detected.length === 0);
 }
 
+function describeHealthDot(provider) {
+  const h = state.providerHealth?.[provider.key];
+  if (provider.historyOnly) return { tone: 'muted', label: '历史草稿', tip: '此 Provider 仅在历史中存在，需先切换并保存到当前配置后才能检测' };
+  if (!provider.hasApiKey) return { tone: 'warn', label: '缺 Key', tip: '未保存 API Key，无法检测' };
+  if (h?.loading) return { tone: 'loading', label: '检测中', tip: '正在向 /v1/models 发探测请求…' };
+  if (!h?.checked) return { tone: 'muted', label: '未检测', tip: '点「检测」或等自动探测' };
+  if (h.ok) {
+    const lat = h.latencyMs ? `${h.latencyMs}ms` : '';
+    const count = h.modelCount ? ` · ${h.modelCount} models` : '';
+    return {
+      tone: 'ok',
+      label: lat ? `已通 · ${lat}` : '已通',
+      tip: `连通正常${count}${lat ? ` · 延迟 ${lat}` : ''}${h.checkedAt ? `\n上次检测 ${new Date(h.checkedAt).toLocaleTimeString()}` : ''}`,
+    };
+  }
+  const stageHuman = {
+    dns: 'DNS 解析失败', tls: 'TLS 握手失败', connect: 'TCP 连接失败',
+    timeout: '请求超时', auth: '鉴权失败 (401/403)', notfound: '路径不对 (404)',
+    http: 'HTTP 错误', body: '响应格式异常', unknown: '检测失败',
+  };
+  const label = stageHuman[h.stage] || '失败';
+  const tip = `${label}${h.statusCode ? ` (HTTP ${h.statusCode})` : ''}\n${h.hint || h.errorMessage || ''}${h.checkedAt ? `\n上次检测 ${new Date(h.checkedAt).toLocaleTimeString()}` : ''}`;
+  return { tone: 'bad', label, tip };
+}
+
 function renderProviders() {
   const providers = state.current?.providers || [];
-  el('savedProviders').innerHTML = providers.length ? providers.map((provider) => `
+  el('savedProviders').innerHTML = providers.length ? providers.map((provider) => {
+    const dot = describeHealthDot(provider);
+    return `
     <div class="provider-card ${provider.isActive ? 'active' : ''}">
       <div class="provider-main">
         <div class="provider-title-row">
-          <strong>${escapeHtml(provider.name || provider.key)}</strong>
+          <div class="provider-title-left">
+            <span class="pdc-dot pdc-dot-${dot.tone}" title="${escapeHtml(dot.tip)}" aria-label="${escapeHtml(dot.label)}"></span>
+            <strong>${escapeHtml(provider.name || provider.key)}</strong>
+            <span class="pdc-status pdc-status-${dot.tone}" title="${escapeHtml(dot.tip)}">${escapeHtml(dot.label)}</span>
+          </div>
           <div class="provider-tag-row">
             ${provider.historyOnly ? '<span class="provider-pill muted">历史</span>' : ''}
             ${provider.inferred && !provider.historyOnly ? '<span class="provider-pill ok">自动识别</span>' : ''}
@@ -17663,7 +17758,8 @@ function renderProviders() {
         <button class="secondary tiny-btn" data-check-provider="${escapeHtml(provider.key)}">检测</button>
       </div>
     </div>
-  `).join('') : '<div class="provider-meta">暂无 Provider</div>';
+  `;
+  }).join('') : '<div class="provider-meta">暂无 Provider</div>';
 }
 
 function renderBackups() {
@@ -18304,6 +18400,9 @@ async function loadState({ preserveForm = true } = {}) {
   } else {
     state.providerHealth = {};
   }
+  // Seed from disk (provider-health.json) so列表上一打开就有红绿灯，
+  // 不用等 refreshProviderHealth 跑完 ping。后台 ping 完会盖掉。
+  void seedProviderHealthFromDisk();
   state.codexTerminalProfiles = Array.isArray(state.current?.launch?.terminalProfiles) ? state.current.launch.terminalProfiles : [];
   fillAdvancedFromState();
   renderCodexTerminalPicker();

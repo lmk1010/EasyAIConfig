@@ -9,7 +9,7 @@ import https from 'node:https';
 import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import TOML from '@iarna/toml';
-import { detectProvider } from './provider-check.js';
+import { detectProvider, readDiag } from './provider-check.js';
 
 const APP_HOME_DIRNAME = '.codex-config-ui';
 const BACKUPS_DIRNAME = 'backups';
@@ -1322,6 +1322,79 @@ export async function buildProviderProxyEnv(providerKey = '') {
     https_proxy: extras.proxyUrl,
     http_proxy: extras.proxyUrl,
   };
+}
+
+// ─── Provider 健康快照（sidecar） ────────────────────────────────────
+// 每次 testSavedProvider / detectProvider 完成后写入。前端启动时 GET 全量，
+// 用来在列表里直接画红绿灯，不用等用户点检测。
+//
+// 存储: ~/.codex-config-ui/provider-health.json
+//   { "providers": { "<providerKey>": ProbeSnapshot } }
+//
+// ProbeSnapshot 字段：
+//   ok          — boolean
+//   stage       — ok | dns | tls | connect | timeout | auth | notfound | http | body | unknown
+//   hint        — string | null（失败时的人话提示）
+//   errorMessage— string | null
+//   statusCode  — number | null
+//   latencyMs   — number | null
+//   modelCount  — number | null  （成功时记录探到几个 model）
+//   baseUrl     — string | null
+//   probedAt    — epoch ms
+function providerHealthPath() {
+  return path.join(appHome(), 'provider-health.json');
+}
+
+async function readProviderHealthFile() {
+  const raw = await readText(providerHealthPath());
+  if (!raw.trim()) return { providers: {} };
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return { providers: {} }; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { providers: {} };
+  if (!parsed.providers || typeof parsed.providers !== 'object') parsed.providers = {};
+  return parsed;
+}
+
+export async function getAllProviderHealth() {
+  const all = await readProviderHealthFile();
+  return all.providers || {};
+}
+
+export async function getProviderHealth(providerKey = '') {
+  const key = String(providerKey || '').trim();
+  if (!key) return null;
+  const all = await readProviderHealthFile();
+  return all.providers[key] || null;
+}
+
+export async function recordProviderHealth(providerKey = '', snapshot = {}) {
+  const key = String(providerKey || '').trim();
+  if (!key) return null;
+  const all = await readProviderHealthFile();
+  const next = {
+    ok: Boolean(snapshot.ok),
+    stage: String(snapshot.stage || (snapshot.ok ? 'ok' : 'unknown')),
+    hint: snapshot.hint || null,
+    errorMessage: snapshot.errorMessage || null,
+    statusCode: snapshot.statusCode ?? null,
+    latencyMs: snapshot.latencyMs ?? null,
+    modelCount: snapshot.modelCount ?? null,
+    baseUrl: snapshot.baseUrl || null,
+    probedAt: Date.now(),
+  };
+  all.providers[key] = next;
+  try { await writeJsonFile(providerHealthPath(), all); } catch (_) { /* 写盘失败不影响主流程 */ }
+  return next;
+}
+
+export async function clearProviderHealth(providerKey = '') {
+  const key = String(providerKey || '').trim();
+  if (!key) return;
+  const all = await readProviderHealthFile();
+  if (all.providers[key]) {
+    delete all.providers[key];
+    try { await writeJsonFile(providerHealthPath(), all); } catch (_) { /* swallow */ }
+  }
 }
 
 async function readPathStorageUsage(targetPath) {
@@ -3743,7 +3816,32 @@ export async function testSavedProvider({
     throw new Error(`Provider ${base.name} 未找到 API Key`);
   }
 
-  return detectProvider({ baseUrl: base.baseUrl, apiKey: secret.value, timeoutMs });
+  try {
+    const result = await detectProvider({ baseUrl: base.baseUrl, apiKey: secret.value, timeoutMs });
+    await recordProviderHealth(safeProviderKey, {
+      ok: true,
+      stage: 'ok',
+      latencyMs: result.latencyMs ?? null,
+      statusCode: result.statusCode ?? 200,
+      modelCount: Array.isArray(result.models) ? result.models.length : null,
+      baseUrl: result.baseUrl || base.baseUrl,
+    });
+    return result;
+  } catch (error) {
+    const diag = readDiag(error);
+    await recordProviderHealth(safeProviderKey, {
+      ok: false,
+      stage: diag.stage,
+      hint: diag.hint,
+      errorMessage: diag.errorMessage,
+      statusCode: diag.statusCode ?? null,
+      latencyMs: diag.latencyMs ?? null,
+      baseUrl: base.baseUrl,
+    });
+    // attach diag onto the thrown error so the API layer can pass it through to UI
+    if (!error.diag) error.diag = diag;
+    throw error;
+  }
 }
 
 export async function saveConfig(payload) {
