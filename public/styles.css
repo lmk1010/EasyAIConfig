@@ -27236,3 +27236,54 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* ghost session 占位卡片：上次会话 PTY 死了，提示重启 */
+.shell-v2 .ea-term-ghost {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 14px;
+  height: 100%;
+  text-align: center;
+  padding: 32px;
+  color: var(--text);
+}
+.shell-v2 .ea-term-ghost-title {
+  font-size: 0.95rem; font-weight: 700;
+  opacity: 0.85;
+}
+.shell-v2 .ea-term-ghost-meta {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--muted);
+  padding: 12px 16px;
+  background: rgba(120,140,180,0.06);
+  border-radius: 10px;
+  max-width: 480px;
+}
+.shell-v2 .ea-term-ghost-meta code {
+  background: transparent; padding: 0;
+  font-family: inherit; color: var(--text);
+}
+.shell-v2 .ea-term-ghost-meta .muted { opacity: 0.65; }
+.shell-v2 .ea-term-ghost-btn,
+.shell-v2 .ea-term-ghost-btn-secondary {
+  font: inherit;
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: none; cursor: pointer;
+  transition: transform 80ms ease, box-shadow 120ms ease;
+}
+.shell-v2 .ea-term-ghost-btn {
+  background: linear-gradient(90deg, #5b8cff, #3358ff);
+  color: white;
+  font-weight: 600;
+  box-shadow: 0 6px 20px rgba(51,88,255,0.35);
+}
+.shell-v2 .ea-term-ghost-btn:hover { transform: translateY(-1px); }
+.shell-v2 .ea-term-ghost-btn-secondary {
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.shell-v2 .ea-term-ghost-btn-secondary:hover { color: var(--text); }
