@@ -263,25 +263,31 @@ fn watch_codex_session_tokens(
   }
 }
 
-/// 用 lsof 问 codex 进程开了哪些 .jsonl 文件。
-/// macOS / Linux 都有 lsof；Windows 上失败直接走 fallback。
+/// 用 lsof 问 codex 进程（含所有子孙进程）开了哪些 .jsonl 文件。
+/// codex 通过 npm 装时 PATH 上的 `codex` 是个 node 脚本 wrapper，会 fork
+/// 真正的 codex Rust 子进程，那个子进程才持有 jsonl。所以必须递归扫子树。
 fn find_codex_jsonl_via_lsof(pid: u32) -> Option<PathBuf> {
   #[cfg(not(target_os = "windows"))]
   {
     use std::process::Command;
-    // lsof -p <pid> -Fn 输出每行以 n 开头是路径；其他类型字段（pf 等）忽略
-    let out = Command::new("lsof").args(["-p", &pid.to_string(), "-Fn"]).output().ok()?;
-    if !out.status.success() { return None; }
-    let text = String::from_utf8_lossy(&out.stdout);
+    // 1. 收集 pid + 所有后代 pid
+    let mut pids = vec![pid];
+    collect_descendant_pids(pid, &mut pids, 0);
+    log::info!("[token-watcher] scanning pids: {:?}", pids);
     let mut best: Option<PathBuf> = None;
-    for line in text.lines() {
-      let Some(rest) = line.strip_prefix('n') else { continue; };
-      // 过滤 codex 写的 session jsonl
-      if rest.ends_with(".jsonl") && (rest.contains("/.codex/sessions/") || rest.contains("/sessions/")) {
-        // 优先 rollout-*.jsonl（codex 自己起的名）
-        let path = PathBuf::from(rest);
-        if rest.contains("rollout-") { return Some(path); }
-        if best.is_none() { best = Some(path); }
+    for p in pids {
+      let out = match Command::new("lsof").args(["-p", &p.to_string(), "-Fn"]).output() {
+        Ok(o) if o.status.success() => o,
+        _ => continue,
+      };
+      let text = String::from_utf8_lossy(&out.stdout);
+      for line in text.lines() {
+        let Some(rest) = line.strip_prefix('n') else { continue; };
+        if rest.ends_with(".jsonl") && (rest.contains("/.codex/sessions/") || rest.contains("/sessions/")) {
+          let path = PathBuf::from(rest);
+          if rest.contains("rollout-") { return Some(path); }
+          if best.is_none() { best = Some(path); }
+        }
       }
     }
     return best;
@@ -290,6 +296,23 @@ fn find_codex_jsonl_via_lsof(pid: u32) -> Option<PathBuf> {
   {
     let _ = pid;
     None
+  }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn collect_descendant_pids(parent: u32, acc: &mut Vec<u32>, depth: u8) {
+  if depth > 6 { return; } // 防御性深度上限
+  use std::process::Command;
+  let Ok(out) = Command::new("pgrep").args(["-P", &parent.to_string()]).output() else { return; };
+  if !out.status.success() { return; }
+  let text = String::from_utf8_lossy(&out.stdout);
+  for line in text.lines() {
+    if let Ok(child) = line.trim().parse::<u32>() {
+      if child != parent {
+        acc.push(child);
+        collect_descendant_pids(child, acc, depth + 1);
+      }
+    }
   }
 }
 
