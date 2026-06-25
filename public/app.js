@@ -17172,6 +17172,128 @@ const CODEX_DEFAULT_MODELS = [
 ];
 
 /** Render default GPT model options into a <select> when no detection has been run. */
+// ─── Slideover 内嵌"支持的模型"多选框组件 ─────────────
+// 点击 trigger 弹一个 popover, 列出全部 catalog 分组 + 复选 + 搜索
+function initModelSupportedMulti(providerKey) {
+  const wrap = el('modelSupportedMulti');
+  if (!wrap || !providerKey) return;
+  state.modelSupported = state.modelSupported || {};
+  state.modelSupported.providerKey = providerKey;
+  // 拉已保存列表
+  const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
+  api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`)
+    .then((res) => {
+      const list = (res?.ok && Array.isArray(res.data?.models)) ? res.data.models : [];
+      state.providerSavedModels = state.providerSavedModels || {};
+      state.providerSavedModels[providerKey] = list;
+      state.modelSupported.checked = new Set(list);
+      renderModelSupportedSummary();
+      renderModelSupportedPopBody();
+    }).catch(() => {});
+  // 初始 placeholder
+  state.modelSupported.checked = new Set(state.providerSavedModels?.[providerKey] || []);
+  renderModelSupportedSummary();
+
+  // 绑定一次性事件
+  if (!wrap._msInit) {
+    wrap._msInit = true;
+    const trigger = el('modelSupportedTrigger');
+    trigger?.addEventListener('click', (e) => {
+      e.preventDefault();
+      const isOpen = wrap.classList.toggle('is-open');
+      trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      if (isOpen) {
+        renderModelSupportedPopBody();
+        setTimeout(() => el('modelSupportedSearch')?.focus(), 60);
+      }
+    });
+    el('modelSupportedSearch')?.addEventListener('input', () => renderModelSupportedPopBody());
+    // 点外面关闭
+    document.addEventListener('click', (e) => {
+      if (!wrap.classList.contains('is-open')) return;
+      if (!wrap.contains(e.target)) {
+        wrap.classList.remove('is-open');
+        trigger?.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+}
+
+function renderModelSupportedSummary() {
+  const summary = el('modelSupportedSummary');
+  const popCount = el('modelSupportedPopCount');
+  if (!summary) return;
+  const checked = state.modelSupported?.checked || new Set();
+  const n = checked.size;
+  if (popCount) popCount.textContent = String(n);
+  if (n === 0) {
+    summary.textContent = '点击选择…';
+    summary.classList.add('is-empty');
+    return;
+  }
+  summary.classList.remove('is-empty');
+  // 显示前 3 个 id + "+N 更多"
+  const arr = Array.from(checked);
+  const head = arr.slice(0, 3).map((m) => `<span class="model-multi-tag">${escapeHtml(m)}</span>`).join('');
+  const rest = arr.length > 3 ? ` <span class="model-multi-more">+${arr.length - 3}</span>` : '';
+  summary.innerHTML = head + rest;
+}
+
+function renderModelSupportedPopBody() {
+  const body = el('modelSupportedPopBody');
+  const searchInput = el('modelSupportedSearch');
+  if (!body) return;
+  const filter = (searchInput?.value || '').trim().toLowerCase();
+  const checked = state.modelSupported?.checked || new Set();
+  let html = '';
+  for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
+    const matched = group.options.filter((o) =>
+      !filter || o.value.toLowerCase().includes(filter) || String(o.label || '').toLowerCase().includes(filter)
+    );
+    if (!matched.length) continue;
+    html += `<div class="model-multi-grp"><div class="model-multi-grp-label">${escapeHtml(group.label)} <em>${matched.length}</em></div>`;
+    for (const o of matched) {
+      const isOn = checked.has(o.value);
+      html += `<label class="model-multi-opt ${isOn ? 'is-on' : ''}">
+        <input type="checkbox" data-ms-model="${escapeHtml(o.value)}" ${isOn ? 'checked' : ''} />
+        <span class="model-multi-opt-id">${escapeHtml(o.value)}</span>
+        <span class="model-multi-opt-label">${escapeHtml(o.label)}</span>
+      </label>`;
+    }
+    html += `</div>`;
+  }
+  if (!html) html = '<div class="model-multi-empty">没有匹配模型</div>';
+  body.innerHTML = html;
+  body.querySelectorAll('input[data-ms-model]').forEach((cb) => {
+    cb.addEventListener('change', async (e) => {
+      const v = e.target.dataset.msModel;
+      if (e.target.checked) checked.add(v); else checked.delete(v);
+      e.target.closest('.model-multi-opt')?.classList.toggle('is-on', e.target.checked);
+      renderModelSupportedSummary();
+      // 节流写库 (200ms 内的连续 toggle 合并)
+      clearTimeout(state.modelSupported._saveTimer);
+      state.modelSupported._saveTimer = setTimeout(() => persistModelSupported(), 200);
+    });
+  });
+}
+
+async function persistModelSupported() {
+  const providerKey = state.modelSupported?.providerKey;
+  if (!providerKey) return;
+  const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
+  const models = Array.from(state.modelSupported?.checked || []);
+  try {
+    const res = await api('/api/provider/saved-models', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerKey, codexHome, models }),
+    });
+    if (res?.ok) {
+      state.providerSavedModels = state.providerSavedModels || {};
+      state.providerSavedModels[providerKey] = models;
+    }
+  } catch (_) {}
+}
+
 // ─── Model browse modal: 多选浏览全部 catalog 模型 ─────────────
 // state.modelBrowse = { open, search, checked: Set, savedSet: Set }
 function getCurrentProviderEditKey() {
@@ -24120,6 +24242,8 @@ loadTools();
       if (key === '__codex_official_oauth__') return null;
       if (key === '__codex_oauth_unsaved__' || key.startsWith('__codex_oauth_profile:')) return null;
       const p = (s.current?.providers || []).find((x) => x.key === key);
+      // 异步初始化 / 刷新支持的模型多选框
+      try { initModelSupportedMulti(key); } catch (_) {}
       if (p && typeof fillFromProvider === 'function') {
         try { fillFromProvider(p); } catch (err) { console.warn('[ch] fillFromProvider failed', err); }
       }
