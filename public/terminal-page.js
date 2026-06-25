@@ -213,9 +213,14 @@ export function initTerminalPageState() {
     activeSessionId: '',
     launcher: {
       tool: 'codex',
+      source: 'provider',          // codex: 'official' (用 ~/.codex 登录态) | 'provider' (走自管 provider)
       providerKey: '',
       cwd: '',
-      flags: '--dangerously-bypass-approvals-and-sandbox',
+      model: '',                    // 可空：传 --model
+      profile: '',                  // codex 可空：--profile
+      sandbox: 'bypass',            // bypass | workspace-write | read-only | none
+      flags: '',                    // 额外参数
+      moreOpen: false,
     },
     paletteOpen: false,
     instances: {},           // sessionId -> { term, fit, cursor, container, pollTimer, sentBytes, recvBytes }
@@ -362,44 +367,98 @@ function renderFab(tp) {
 
 function renderLauncherPopover(tp, providers) {
   const esc = escapeHtml;
-  const opts = providers.map((p) => `<option value="${esc(p.key)}" ${p.key === tp.launcher.providerKey ? 'selected' : ''}>${p.isActive ? '● ' : ''}${esc(p.name || p.key)}</option>`).join('');
-  // 没有 scrim — 直接锚定 FAB 右上方的浮卡（点外面有外部 listener 关，下面会接）
+  const isCodex = tp.launcher.tool === 'codex';
+  const isOfficial = isCodex && tp.launcher.source === 'official';
+  const providerOpts = providers.map((p) => `<option value="${esc(p.key)}" ${p.key === tp.launcher.providerKey ? 'selected' : ''}>${esc(p.name || p.key)}${p.isActive ? ' · 当前' : ''}</option>`).join('');
+  const sandboxOpts = [
+    ['bypass', '完全放开 (--dangerously-bypass)'],
+    ['workspace-write', '工作目录可写'],
+    ['read-only', '只读'],
+    ['none', '不设置'],
+  ];
+  // 顶部：标题 + 关闭。然后扁平垂直布局，无卡片阴影感
   return `
-    <div class="ea-term-launcher-card" data-eat-launcher-card>
-      <div class="ea-term-launcher-head">
-        <span class="ea-term-launcher-eyebrow">NEW SESSION</span>
-        <button type="button" class="ea-term-launcher-close" data-eat-launcher-close title="关闭 (Esc)">×</button>
+    <div class="ea-term-launcher2" data-eat-launcher-card>
+      <div class="ea-term-l2-head">
+        <span class="ea-term-l2-title">新建会话</span>
+        <button type="button" class="ea-term-l2-close" data-eat-launcher-close title="关闭 (Esc)" aria-label="关闭">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
       </div>
-      <div class="ea-term-launcher-body">
-        <label class="ea-term-launcher-field">
-          <span>工具</span>
-          <select data-eat-launch="tool">
-            <option value="codex" ${tp.launcher.tool === 'codex' ? 'selected' : ''}>Codex</option>
-            <option value="claudecode" ${tp.launcher.tool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
-          </select>
-        </label>
-        <label class="ea-term-launcher-field">
-          <span>Provider</span>
-          <select data-eat-launch="providerKey">${opts || '<option value="">无可用 provider</option>'}</select>
-        </label>
-        <div class="ea-term-launcher-field ea-term-launcher-field-wide">
-          <span>工作目录</span>
-          <div class="ea-term-launcher-cwd">
-            <input type="text" data-eat-launch="cwd" placeholder="默认 = $HOME" value="${esc(tp.launcher.cwd || '')}"/>
-            <button type="button" class="ea-term-launcher-pick" data-eat-pick-cwd title="浏览…">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.4l1.2 1.4h5.4A1.5 1.5 0 0 1 14 5.9V11.5A1.5 1.5 0 0 1 12.5 13H3.5A1.5 1.5 0 0 1 2 11.5z"/></svg>
-            </button>
+
+      <div class="ea-term-l2-row">
+        <span class="ea-term-l2-label">工具</span>
+        <div class="ea-term-l2-seg">
+          <button type="button" class="${isCodex ? 'is-on' : ''}" data-eat-launch-set="tool" data-value="codex">Codex</button>
+          <button type="button" class="${!isCodex ? 'is-on' : ''}" data-eat-launch-set="tool" data-value="claudecode">Claude Code</button>
+        </div>
+      </div>
+
+      ${isCodex ? `
+        <div class="ea-term-l2-row">
+          <span class="ea-term-l2-label">登录方式</span>
+          <div class="ea-term-l2-seg">
+            <button type="button" class="${isOfficial ? 'is-on' : ''}" data-eat-launch-set="source" data-value="official" title="使用 ~/.codex 官方登录态">官方</button>
+            <button type="button" class="${!isOfficial ? 'is-on' : ''}" data-eat-launch-set="source" data-value="provider" title="使用自管 provider API">自管 Provider</button>
           </div>
         </div>
-        <label class="ea-term-launcher-field ea-term-launcher-field-wide">
-          <span>启动参数</span>
-          <input type="text" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="--flag …"/>
-        </label>
+      ` : ''}
+
+      ${!isOfficial ? `
+        <div class="ea-term-l2-row">
+          <span class="ea-term-l2-label">Provider</span>
+          <select class="ea-term-l2-select" data-eat-launch="providerKey">
+            ${providerOpts || '<option value="">（无可用 provider）</option>'}
+          </select>
+        </div>
+      ` : ''}
+
+      <div class="ea-term-l2-row">
+        <span class="ea-term-l2-label">工作目录</span>
+        <div class="ea-term-l2-cwd">
+          <input type="text" data-eat-launch="cwd" placeholder="默认 = $HOME" value="${esc(tp.launcher.cwd || '')}"/>
+          <button type="button" class="ea-term-l2-icon" data-eat-pick-cwd title="浏览…" aria-label="浏览">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.4l1.2 1.4h5.4A1.5 1.5 0 0 1 14 5.9V11.5A1.5 1.5 0 0 1 12.5 13H3.5A1.5 1.5 0 0 1 2 11.5z"/></svg>
+          </button>
+        </div>
       </div>
-      <div class="ea-term-launcher-foot">
-        <button type="button" class="ea-term-launcher-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v12l10-6z"/></svg>
-          ${tp.starting ? '启动中…' : '启动'}
+
+      ${isCodex ? `
+        <div class="ea-term-l2-row">
+          <span class="ea-term-l2-label">沙箱模式</span>
+          <select class="ea-term-l2-select" data-eat-launch="sandbox">
+            ${sandboxOpts.map(([v, lab]) => `<option value="${v}" ${tp.launcher.sandbox === v ? 'selected' : ''}>${esc(lab)}</option>`).join('')}
+          </select>
+        </div>
+      ` : ''}
+
+      <button type="button" class="ea-term-l2-more" data-eat-launch-more aria-expanded="${tp.launcher.moreOpen ? 'true' : 'false'}">
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="${tp.launcher.moreOpen ? 'is-open' : ''}"><path d="M4 6l4 4 4-4"/></svg>
+        <span>更多参数</span>
+      </button>
+
+      ${tp.launcher.moreOpen ? `
+        <div class="ea-term-l2-more-body">
+          <div class="ea-term-l2-row">
+            <span class="ea-term-l2-label">模型</span>
+            <input type="text" class="ea-term-l2-input" data-eat-launch="model" placeholder="留空 = 默认 (例: gpt-5)" value="${esc(tp.launcher.model || '')}"/>
+          </div>
+          ${isCodex ? `
+            <div class="ea-term-l2-row">
+              <span class="ea-term-l2-label">Profile</span>
+              <input type="text" class="ea-term-l2-input" data-eat-launch="profile" placeholder="可选：~/.codex/config.toml 里的 profile 名" value="${esc(tp.launcher.profile || '')}"/>
+            </div>
+          ` : ''}
+          <div class="ea-term-l2-row">
+            <span class="ea-term-l2-label">额外参数</span>
+            <input type="text" class="ea-term-l2-input ea-term-l2-mono" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="--flag 值 …"/>
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="ea-term-l2-foot">
+        <button type="button" class="ea-term-l2-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
+          ${tp.starting ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="8" r="6" opacity="0.3"/><path d="M8 2a6 6 0 0 1 6 6" class="spin"/></svg> 启动中…' : '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2v12l10-6z"/></svg> 启动'}
         </button>
       </div>
     </div>`;
@@ -660,6 +719,27 @@ function onClick(e) {
   if (tabClose) { e.stopPropagation(); closeSession(tabClose.dataset.eatTabClose); return; }
   const resume = t.closest('[data-eat-resume]');
   if (resume) { resumeGhostSession(resume.dataset.eatResume); return; }
+  // launcher 分段开关：工具 / 登录方式
+  const segBtn = t.closest('[data-eat-launch-set]');
+  if (segBtn) {
+    const tp = getState().terminalPage;
+    const key = segBtn.dataset.eatLaunchSet;
+    const val = segBtn.dataset.value || '';
+    tp.launcher[key] = val;
+    if (key === 'tool') {
+      // 工具换了 → provider 列表清空让重选
+      tp.launcher.providerKey = '';
+      if (val === 'claudecode') tp.launcher.source = 'provider';
+    }
+    renderTerminalPage();
+    return;
+  }
+  if (t.closest('[data-eat-launch-more]')) {
+    const tp = getState().terminalPage;
+    tp.launcher.moreOpen = !tp.launcher.moreOpen;
+    renderTerminalPage();
+    return;
+  }
   const restart = t.closest('[data-eat-restart]');
   if (restart) { restartGhostSession(restart.dataset.eatRestart); return; }
   const forget = t.closest('[data-eat-forget]');
@@ -690,7 +770,9 @@ function onInput(e) {
   const t = e.target;
   if (!(t instanceof Element)) return;
   const key = t.getAttribute('data-eat-launch');
-  if (key === 'cwd' || key === 'flags') {
+  if (!key) return;
+  // 文本字段：cwd / flags / model / profile 直接写
+  if (['cwd', 'flags', 'model', 'profile'].includes(key)) {
     getState().terminalPage.launcher[key] = t.value || '';
   }
 }
@@ -914,9 +996,23 @@ startTokenPollLoop();
 async function spawnSession() {
   const tp = getState().terminalPage;
   if (tp.starting) return;
-  if (!tp.launcher.providerKey) { flash('请先选 provider', 'warning'); return; }
+  const isCodex = tp.launcher.tool === 'codex';
+  const isOfficial = isCodex && tp.launcher.source === 'official';
+  if (!isOfficial && !tp.launcher.providerKey) { flash('请先选 provider', 'warning'); return; }
   const bin = TOOL_LAUNCH_BIN[tp.launcher.tool] || tp.launcher.tool;
-  const args = (tp.launcher.flags || '').trim().split(/\s+/).filter(Boolean);
+  // 组装 args：sandbox + model + profile + 额外 flags
+  const args = [];
+  if (isCodex) {
+    const sb = tp.launcher.sandbox;
+    if (sb === 'bypass') args.push('--dangerously-bypass-approvals-and-sandbox');
+    else if (sb === 'workspace-write') args.push('--sandbox', 'workspace-write');
+    else if (sb === 'read-only') args.push('--sandbox', 'read-only');
+    if (tp.launcher.profile) args.push('--profile', tp.launcher.profile);
+  }
+  if (tp.launcher.model) args.push('--model', tp.launcher.model);
+  // 额外 raw 参数最后追
+  const rawFlags = (tp.launcher.flags || '').trim().split(/\s+/).filter(Boolean);
+  args.push(...rawFlags);
   const title = `${bin}${args.length ? ' ' + args[0] : ''}`;
   const commandPreview = [bin, ...args].join(' ');
   tp.starting = true;

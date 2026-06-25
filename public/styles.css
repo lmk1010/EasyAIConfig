@@ -27294,3 +27294,224 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   background: rgba(91,140,255,0.14);
   color: #5b8cff;
 }
+
+/* 终端会话侧栏：滚动 + 视觉降密 */
+.sec-group[data-sec-for="terminal"] {
+  display: flex; flex-direction: column;
+  min-height: 0;            /* flex 子项允许压缩 */
+  flex: 1 1 auto;
+}
+.sec-group[data-sec-for="terminal"] .sec-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120,140,180,0.25) transparent;
+}
+.sec-group[data-sec-for="terminal"] .sec-list::-webkit-scrollbar { width: 6px; }
+.sec-group[data-sec-for="terminal"] .sec-list::-webkit-scrollbar-thumb {
+  background: rgba(120,140,180,0.25); border-radius: 999px;
+}
+.sec-group[data-sec-for="terminal"] .sec-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(120,140,180,0.45);
+}
+
+/* ===== launcher v2：扁平、密、专业 ===== */
+.shell-v2 .ea-term-launcher2 {
+  position: absolute;
+  right: 20px; bottom: 78px;
+  width: 380px;
+  z-index: 50;
+  display: flex; flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  background: rgba(252,253,255,0.96);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(150,165,200,0.18);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(40,60,100,0.10), 0 2px 6px rgba(40,60,100,0.06);
+  animation: eaTermL2In 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+[data-theme="dark"] .shell-v2 .ea-term-launcher2 {
+  background: rgba(28,32,42,0.96);
+  border-color: rgba(110,130,160,0.22);
+}
+@keyframes eaTermL2In {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+.shell-v2 .ea-term-l2-head {
+  display: flex; align-items: center;
+  margin: -2px 0 2px;
+}
+.shell-v2 .ea-term-l2-title {
+  font-size: 0.74rem; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted);
+  flex: 1;
+}
+.shell-v2 .ea-term-l2-close {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--muted); border-radius: 6px;
+}
+.shell-v2 .ea-term-l2-close:hover {
+  background: rgba(120,140,180,0.10); color: var(--text);
+}
+
+/* 每行：左侧 label 64px + 右侧 控件 */
+.shell-v2 .ea-term-l2-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+.shell-v2 .ea-term-l2-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* 分段开关 */
+.shell-v2 .ea-term-l2-seg {
+  display: inline-flex;
+  background: rgba(120,140,180,0.08);
+  border-radius: 8px;
+  padding: 2px;
+  width: 100%;
+}
+.shell-v2 .ea-term-l2-seg button {
+  flex: 1;
+  border: none; background: transparent;
+  font: inherit; font-size: 0.74rem; font-weight: 500;
+  color: var(--muted);
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.shell-v2 .ea-term-l2-seg button.is-on {
+  background: #fff;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(40,60,100,0.10);
+}
+[data-theme="dark"] .shell-v2 .ea-term-l2-seg button.is-on {
+  background: rgba(120,140,180,0.18);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.30);
+}
+
+/* 自定义 select：去原生 chevron，统一样式 */
+.shell-v2 .ea-term-l2-select,
+.shell-v2 .ea-term-l2-input,
+.shell-v2 .ea-term-l2-cwd input {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(120,140,180,0.06);
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 5px 10px;
+  padding-right: 28px;
+  font: inherit; font-size: 0.78rem;
+  color: var(--text);
+  width: 100%;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.shell-v2 .ea-term-l2-input,
+.shell-v2 .ea-term-l2-cwd input {
+  padding-right: 10px;
+}
+.shell-v2 .ea-term-l2-select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%23889' stroke-width='1.4' stroke-linecap='round'><path d='M2 4l3 3 3-3'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 10px 10px;
+}
+.shell-v2 .ea-term-l2-select:hover,
+.shell-v2 .ea-term-l2-input:hover,
+.shell-v2 .ea-term-l2-cwd input:hover {
+  background-color: rgba(120,140,180,0.10);
+}
+.shell-v2 .ea-term-l2-select:focus,
+.shell-v2 .ea-term-l2-input:focus,
+.shell-v2 .ea-term-l2-cwd input:focus {
+  outline: none;
+  background: #fff;
+  border-color: rgba(91,140,255,0.45);
+  box-shadow: 0 0 0 3px rgba(91,140,255,0.12);
+}
+[data-theme="dark"] .shell-v2 .ea-term-l2-select:focus,
+[data-theme="dark"] .shell-v2 .ea-term-l2-input:focus,
+[data-theme="dark"] .shell-v2 .ea-term-l2-cwd input:focus {
+  background: rgba(20,24,32,0.95);
+}
+.shell-v2 .ea-term-l2-mono { font-family: var(--font-mono); font-size: 0.72rem; }
+
+/* cwd 行：input + 图标按钮 */
+.shell-v2 .ea-term-l2-cwd {
+  display: flex; gap: 6px;
+  width: 100%;
+}
+.shell-v2 .ea-term-l2-cwd input { flex: 1; }
+.shell-v2 .ea-term-l2-icon {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(120,140,180,0.06);
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.shell-v2 .ea-term-l2-icon:hover {
+  background: rgba(91,140,255,0.10);
+  color: #5b8cff;
+}
+
+/* 更多参数 折叠按钮 */
+.shell-v2 .ea-term-l2-more {
+  display: inline-flex; align-items: center; gap: 5px;
+  align-self: flex-start;
+  background: transparent; border: none;
+  font: inherit; font-size: 0.72rem; color: var(--muted);
+  cursor: pointer; padding: 2px 4px;
+  margin-top: 2px;
+}
+.shell-v2 .ea-term-l2-more:hover { color: var(--text); }
+.shell-v2 .ea-term-l2-more svg { transition: transform 160ms ease; }
+.shell-v2 .ea-term-l2-more svg.is-open { transform: rotate(180deg); }
+.shell-v2 .ea-term-l2-more-body {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 8px 0 2px;
+  border-top: 1px dashed rgba(120,140,180,0.20);
+  margin-top: 2px;
+}
+
+/* 底部启动按钮 */
+.shell-v2 .ea-term-l2-foot {
+  display: flex; justify-content: flex-end;
+  margin-top: 4px;
+}
+.shell-v2 .ea-term-l2-go {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: linear-gradient(90deg, #5b8cff 0%, #3358ff 100%);
+  color: #fff;
+  border: none; border-radius: 8px;
+  padding: 7px 16px;
+  font: inherit; font-size: 0.78rem; font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(51,88,255,0.32);
+  transition: transform 80ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+.shell-v2 .ea-term-l2-go:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(51,88,255,0.42); }
+.shell-v2 .ea-term-l2-go:disabled { opacity: 0.7; cursor: progress; }
+.shell-v2 .ea-term-l2-go .spin {
+  animation: eaTermSpin 0.8s linear infinite;
+  transform-origin: 8px 8px;
+}
+@keyframes eaTermSpin { to { transform: rotate(360deg); } }
