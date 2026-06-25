@@ -262,8 +262,24 @@ fn watch_codex_session_tokens(
                     .get("model_context_window")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
+                  // 从 jsonl 文件名 rollout-2026-06-25T...-019efcda-63cd-7ba1-8ef1-fe9a79c872f6.jsonl
+                  // 提取 codex session id（最后一段 UUID）；resume 用
+                  let codex_session_id = target
+                    .file_stem().and_then(|s| s.to_str())
+                    .map(|stem| {
+                      // 取最后一段 UUID（5 段 split-/，4 中线分隔的 36 char）
+                      // 文件名形如 rollout-<ts>-<uuid>，UUID 在最后
+                      let parts: Vec<&str> = stem.split('-').collect();
+                      if parts.len() >= 5 {
+                        let tail = parts[parts.len()-5..].join("-");
+                        if tail.len() == 36 { return tail; }
+                      }
+                      String::new()
+                    })
+                    .unwrap_or_default();
                   let payload = json!({
                     "sessionId": session_id,
+                    "codexSessionId": codex_session_id,
                     "input": total.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
                     "cached": total.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
                     "output": total.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),

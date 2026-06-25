@@ -114,6 +114,11 @@ async function installTermEventListeners() {
     if (sess) {
       sess.tokens = tokens;
       sess.tokensUpdatedAt = Date.now();
+      // codexSessionId 第一次拿到时 persist 一份，下次 ghost 重启就能 codex resume
+      if (payload.codexSessionId && sess.codexSessionId !== payload.codexSessionId) {
+        sess.codexSessionId = payload.codexSessionId;
+        persistOneSession(sess);
+      }
     } else {
       // sessionId 不在 tp.sessions 里 — 仍然存到 pending，等会话被 list/spawn 添加进来
       window.__eaPendingTokens = window.__eaPendingTokens || {};
@@ -255,6 +260,20 @@ function renderTermStatus() {
 
 window.renderTermSidebar = renderTermSidebar;
 
+// 侧边栏 "+" 按钮 → 打开 launcher popover
+function bindSidebarAddOnce() {
+  if (window.__eaTermSecAddBound) return;
+  const btn = document.getElementById('eaTermSecAdd');
+  if (!btn) return;
+  window.__eaTermSecAddBound = true;
+  btn.addEventListener('click', () => {
+    const tp = getState()?.terminalPage;
+    if (!tp) return;
+    tp.launcherOpen = true;
+    renderTerminalPage();
+  });
+}
+
 export function initTerminalPageState() {
   const st = getState();
   if (st.terminalPage) return;
@@ -318,6 +337,7 @@ export async function renderTerminalPage() {
           program: p.program,
           args: p.args,
           env: p.env,
+          codexSessionId: p.codexSessionId || '',
           createdAt: p.createdAtMs ? new Date(p.createdAtMs).toISOString() : new Date().toISOString(),
           running: false,
           _ghost: true,
@@ -369,8 +389,14 @@ export async function renderTerminalPage() {
             <div class="ea-term-ghost-meta">
               <code>${escapeHtml(activeSess.command || activeSess.title || activeSess.program || 'codex')}</code><br>
               <span class="muted">cwd: ${escapeHtml(activeSess.cwd || '~')}</span>
+              ${activeSess.codexSessionId ? `<br><span class="muted">codex session: ${escapeHtml(activeSess.codexSessionId.slice(0, 8))}…</span>` : ''}
             </div>
-            <button type="button" class="ea-term-ghost-btn" data-eat-restart="${escapeHtml(activeSess.id)}">用相同参数重新启动</button>
+            ${activeSess.tool === 'codex' && activeSess.codexSessionId ? `
+              <button type="button" class="ea-term-ghost-btn" data-eat-resume="${escapeHtml(activeSess.id)}" title="codex resume — 继承上次完整上下文">▶ 接着上次对话继续</button>
+              <button type="button" class="ea-term-ghost-btn-secondary" data-eat-restart="${escapeHtml(activeSess.id)}">或重新开一个新会话</button>
+            ` : `
+              <button type="button" class="ea-term-ghost-btn" data-eat-restart="${escapeHtml(activeSess.id)}">用相同参数重新启动</button>
+            `}
             <button type="button" class="ea-term-ghost-btn-secondary" data-eat-forget="${escapeHtml(activeSess.id)}">忘掉这个会话</button>
           </div>
         ` : `<div class="ea-term-host" id="eaTermHost"></div>`}
@@ -384,6 +410,7 @@ export async function renderTerminalPage() {
   `;
 
   bindEvents(host);
+  bindSidebarAddOnce();
   // ghost session 不挂 xterm
   const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
   if (active && !active._ghost) {
@@ -637,6 +664,7 @@ async function persistOneSession(s) {
         program: s.program || '',
         args: s.args || [],
         env: s.env || {},
+        codexSessionId: s.codexSessionId || '',
       }),
     });
   } catch (_) {}
@@ -713,6 +741,8 @@ function onClick(e) {
   if (paletteAct) { handlePaletteAction(paletteAct.dataset.eatPaletteAct); return; }
   const tabClose = t.closest('[data-eat-tab-close]');
   if (tabClose) { e.stopPropagation(); closeSession(tabClose.dataset.eatTabClose); return; }
+  const resume = t.closest('[data-eat-resume]');
+  if (resume) { resumeGhostSession(resume.dataset.eatResume); return; }
   const restart = t.closest('[data-eat-restart]');
   if (restart) { restartGhostSession(restart.dataset.eatRestart); return; }
   const forget = t.closest('[data-eat-forget]');
@@ -1028,6 +1058,48 @@ async function spawnSession() {
     tp.starting = false;
     renderTerminalPage();
   }
+}
+
+// 用 `codex resume <id>` 接着上次对话继续 — 完整上下文 + 历史消息全部回来
+async function resumeGhostSession(sessionId) {
+  const tp = getState().terminalPage;
+  const ghost = tp.sessions.find((s) => s.id === sessionId);
+  if (!ghost || !ghost.codexSessionId) {
+    flash('缺少 codex session id，无法 resume', 'warning');
+    return;
+  }
+  const bin = ghost.program || 'codex';
+  // codex resume <session-id> + 原始 flags（去掉 resume 本身）
+  const origArgs = Array.isArray(ghost.args) ? ghost.args.filter((a) => a !== 'resume' && !a.startsWith('--last')) : [];
+  const args = ['resume', ghost.codexSessionId, ...origArgs];
+  try {
+    const res = await api('/api/terminal/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: ghost.tool, program: bin, args,
+        cwd: ghost.cwd || '', title: `codex ↩ ${ghost.codexSessionId.slice(0, 8)}`,
+        commandPreview: [bin, ...args].join(' '),
+        cols: 120, rows: 32,
+      }),
+    });
+    if (res?.ok && res.data?.terminalSession) {
+      const fresh = normalizeSession(res.data.terminalSession);
+      fresh.program = bin; fresh.args = args; fresh.tool = ghost.tool; fresh.cwd = ghost.cwd;
+      fresh.codexSessionId = ghost.codexSessionId; // 复用同一个 codex session id
+      const idx = tp.sessions.findIndex((s) => s.id === sessionId);
+      if (idx >= 0) tp.sessions[idx] = fresh;
+      else tp.sessions.unshift(fresh);
+      tp.activeSessionId = fresh.id;
+      forgetPersistedSession(sessionId);
+      persistOneSession(fresh);
+      flash('已接续 codex 会话', 'success');
+    } else {
+      flash(`resume 失败: ${res?.error || '未知'}`, 'error');
+    }
+  } catch (err) {
+    flash(`resume 异常: ${err.message || err}`, 'error');
+  }
+  renderTerminalPage();
 }
 
 async function restartGhostSession(sessionId) {

@@ -27287,3 +27287,17 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   font-size: 0.78rem;
 }
 .shell-v2 .ea-term-ghost-btn-secondary:hover { color: var(--text); }
+
+/* 会话侧边栏 "+" 按钮 */
+.sec-group-head .sec-group-add {
+  margin-left: auto; margin-right: 8px;
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; color: var(--muted);
+  border-radius: 7px; cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.sec-group-head .sec-group-add:hover {
+  background: rgba(91,140,255,0.14);
+  color: #5b8cff;
+}
