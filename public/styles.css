@@ -27208,3 +27208,31 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 .shell-v2 .ea-term-status-diag.is-warn { background: rgba(251,191,36,0.18); color: #fbbf24; }
 [data-theme="light"] .shell-v2 .ea-term-status-diag.is-bad { color: #b91c1c; }
 [data-theme="light"] .shell-v2 .ea-term-status-diag.is-warn { color: #b45309; }
+
+/* 终端状态栏：所有 chip / pill 强制单行不换行 */
+.shell-v2 .ea-term-status {
+  flex-wrap: nowrap !important;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.shell-v2 .ea-term-status-text {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+.shell-v2 .ea-term-status-pill {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  cursor: help;
+}
+.shell-v2 .ea-term-status-ctx {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  cursor: help;
+}
+.shell-v2 .ea-term-status-ctx-num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

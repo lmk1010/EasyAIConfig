@@ -445,6 +445,17 @@ function renderStatusBarInner(tp) {
   const total = Number(tokens.total || (input + output + reasoning));
   const ctxWindow = Number(tokens.contextWindow || 0);
   const fmt = (n) => (n || 0).toLocaleString();
+  // 紧凑显示：1500 → 1.5K · 1_200_000 → 1.2M · 1_500_000_000 → 1.5B
+  const fmtShort = (n) => {
+    const v = Number(n || 0);
+    if (v < 1000) return String(v);
+    if (v < 1_000_000) return (v / 1000).toFixed(v < 10_000 ? 1 : 0).replace(/\.0$/, '') + 'K';
+    if (v < 1_000_000_000) return (v / 1_000_000).toFixed(v < 10_000_000 ? 1 : 0).replace(/\.0$/, '') + 'M';
+    return (v / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'B';
+  };
+  // 工具名提炼：codex --dangerously-bypass-... → codex
+  const titleRaw = String(session.title || session.command || '');
+  const titleShort = titleRaw.split(/\s+/)[0] || titleRaw;
   // 上下文用量条：累计 input vs context window
   const usedPct = ctxWindow > 0 ? Math.min(100, (input / ctxWindow) * 100) : 0;
   const cachePctOfInput = input > 0 ? Math.min(100, (cached / input) * 100) : 0;
@@ -469,25 +480,24 @@ function renderStatusBarInner(tp) {
   }
   return `
     <span class="ea-term-status-dot ${session.running ? 'is-on' : 'is-off'}"></span>
-    <span class="ea-term-status-text">${esc(session.title || session.command || '')}</span>
+    <span class="ea-term-status-text" title="${esc(titleRaw)}">${esc(titleShort)}</span>
     <span class="ea-term-status-sep">·</span>
     <span class="ea-term-status-text-faint">${esc(session.running ? '运行中' : '已退出')}</span>
-    ${session.cwd ? `<span class="ea-term-status-sep">·</span><span class="ea-term-status-text-faint ea-term-status-cwd" title="${esc(session.cwd)}">${esc(session.cwd)}</span>` : ''}
     ${diagChip}
     <span class="ea-term-status-spacer"></span>
     ${ctxWindow > 0 ? `
-      <span class="ea-term-status-ctx" title="上下文：${esc(fmt(input))} / ${esc(fmt(ctxWindow))} · 缓存 ${esc(fmt(cached))}">
+      <span class="ea-term-status-ctx" title="上下文 ${fmt(input)} / ${fmt(ctxWindow)} · 缓存 ${fmt(cached)}">
         <span class="ea-term-status-ctx-label">上下文</span>
         <span class="ea-term-status-ctx-bar">
           <span class="ea-term-status-ctx-fill" style="width:${usedPct.toFixed(1)}%"></span>
           <span class="ea-term-status-ctx-cache" style="width:${(usedPct * cachePctOfInput / 100).toFixed(1)}%"></span>
         </span>
-        <span class="ea-term-status-ctx-num">${esc(fmt(input))} / ${esc(fmt(ctxWindow))}</span>
+        <span class="ea-term-status-ctx-num">${esc(fmtShort(input))}/${esc(fmtShort(ctxWindow))}</span>
       </span>
     ` : ''}
-    <span class="ea-term-status-pill" title="输入 token">输入 ${esc(fmt(input))}</span>
-    <span class="ea-term-status-pill" title="缓存命中 token">缓存 ${esc(fmt(cached))}</span>
-    <span class="ea-term-status-pill ea-term-status-pill-tokens" title="输出 token">输出 ${esc(fmt(output))}</span>
+    <span class="ea-term-status-pill" title="输入 token: ${fmt(input)}">入 ${esc(fmtShort(input))}</span>
+    <span class="ea-term-status-pill" title="缓存命中 token: ${fmt(cached)} (节省 ${input > 0 ? (cached / input * 100).toFixed(0) : 0}%)">缓 ${esc(fmtShort(cached))}</span>
+    <span class="ea-term-status-pill ea-term-status-pill-tokens" title="输出 token: ${fmt(output)}">出 ${esc(fmtShort(output))}</span>
   `;
 }
 
