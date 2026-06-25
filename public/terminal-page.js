@@ -1,3 +1,4 @@
+console.log('[ea-term] terminal-page.js: module STARTED loading');
 // 内置终端页面：一站启动 codex / claude code，多 session tab，
 // 右侧 sidebar 显示当前 provider / token 估算 / 进程状态。
 //
@@ -1515,3 +1516,4 @@ function formatRelative(iso) {
 // 暴露给 app.js setPage 调用
 window.renderTerminalPage = renderTerminalPage;
 window.initTerminalPageState = initTerminalPageState;
+console.log('[ea-term] terminal-page.js: module FINISHED loading; renderTerminalPage assigned:', typeof window.renderTerminalPage);
