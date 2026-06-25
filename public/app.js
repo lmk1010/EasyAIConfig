@@ -10767,10 +10767,15 @@ const OPENCLAW_MODEL_PRESETS = [
 ];
 
 /** Model presets for Codex config editor (without provider prefix). */
+// 2026 内置模型 catalog（手工 curate；GitHub raw 不稳定就用这份）
+// 顺序：每组最新在前。--- 之后是历史版本，供向后兼容 / 老 provider。
 const CODEX_MODEL_PRESETS = [
   {
-    label: 'OpenAI / GPT',
+    label: 'OpenAI / GPT-5',
     options: [
+      { value: 'gpt-5.5', label: 'GPT-5.5 (最新旗舰)' },
+      { value: 'gpt-5.5-codex', label: 'GPT-5.5 Codex (最新编程)' },
+      { value: 'gpt-5.5-mini', label: 'GPT-5.5 Mini' },
       { value: 'gpt-5.4', label: 'GPT-5.4' },
       { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
       { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark' },
@@ -10779,32 +10784,82 @@ const CODEX_MODEL_PRESETS = [
       { value: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' },
       { value: 'gpt-5.1', label: 'GPT-5.1' },
       { value: 'gpt-5.1-mini', label: 'GPT-5.1 Mini' },
-      { value: 'o3', label: 'o3' },
-      { value: 'o4-mini', label: 'o4-mini' },
+      { value: 'gpt-5', label: 'GPT-5' },
+      { value: 'gpt-5-codex', label: 'GPT-5 Codex' },
+      { value: 'gpt-5-mini', label: 'GPT-5 Mini' },
     ],
   },
   {
-    label: 'Anthropic / Claude',
+    label: 'OpenAI / o-系列',
     options: [
+      { value: 'o4-mini', label: 'o4-mini' },
+      { value: 'o3', label: 'o3' },
+      { value: 'o3-mini', label: 'o3-mini' },
+      { value: 'o3-pro', label: 'o3 Pro' },
+      { value: 'o1', label: 'o1' },
+      { value: 'o1-mini', label: 'o1-mini' },
+    ],
+  },
+  {
+    label: 'Anthropic / Claude 4.x',
+    options: [
+      { value: 'claude-fable-5', label: 'Claude Fable 5 (最新)' },
+      { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+      { value: 'claude-opus-4-7', label: 'Claude Opus 4.7 (1M)' },
       { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
       { value: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
       { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
       { value: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
-      { value: 'claude-haiku-3-5', label: 'Claude Haiku 3.5' },
+      { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+      { value: 'claude-haiku-3-5', label: 'Claude Haiku 3.5 (legacy)' },
     ],
   },
   {
     label: 'Google / Gemini',
     options: [
       { value: 'gemini-3-pro', label: 'Gemini 3 Pro' },
+      { value: 'gemini-3-pro-thinking', label: 'Gemini 3 Pro Thinking' },
       { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
       { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+      { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
     ],
   },
   {
-    label: '其他',
+    label: 'xAI / Grok',
     options: [
+      { value: 'grok-4-1', label: 'Grok 4.1' },
+      { value: 'grok-4-fast', label: 'Grok 4 Fast' },
+      { value: 'grok-4', label: 'Grok 4' },
+      { value: 'grok-code-fast-1', label: 'Grok Code Fast 1' },
+    ],
+  },
+  {
+    label: 'DeepSeek',
+    options: [
+      { value: 'deepseek-v3.2', label: 'DeepSeek V3.2' },
+      { value: 'deepseek-v3.1', label: 'DeepSeek V3.1' },
       { value: 'deepseek-r1', label: 'DeepSeek R1' },
+      { value: 'deepseek-coder-v3', label: 'DeepSeek Coder V3' },
+    ],
+  },
+  {
+    label: 'Qwen (阿里)',
+    options: [
+      { value: 'qwen3-max', label: 'Qwen3 Max' },
+      { value: 'qwen3-coder', label: 'Qwen3 Coder' },
+      { value: 'qwen3-coder-plus', label: 'Qwen3 Coder Plus' },
+      { value: 'qwen3-72b', label: 'Qwen3 72B' },
+    ],
+  },
+  {
+    label: '其他 / 国内',
+    options: [
+      { value: 'glm-4.6', label: 'GLM 4.6 (智谱)' },
+      { value: 'kimi-k2', label: 'Kimi K2 (月之暗面)' },
+      { value: 'moonshot-v3', label: 'Moonshot V3' },
+      { value: 'doubao-pro-1.5', label: '豆包 Pro 1.5' },
+      { value: 'baichuan-4-turbo', label: '百川 4 Turbo' },
+      { value: 'yi-lightning', label: 'Yi Lightning' },
     ],
   },
 ];
@@ -17129,16 +17184,43 @@ function renderModelOptions(models = state.detected?.models || [], preferred = '
   if (state.activeTool === 'claudecode' || state.activeTool === 'opencode') return;
 
   const selected = preferred || el('modelSelect').value || state.current?.summary?.model || '';
-  const unique = [...new Set([selected, state.detected?.recommendedModel, ...models].filter(Boolean))];
+  const detected = [...new Set([selected, state.detected?.recommendedModel, ...models].filter(Boolean))];
 
-  if (unique.length) {
-    el('modelSelect').innerHTML = unique.map((model) => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(model)}</option>`).join('');
-  } else {
-    // No detected models — show curated default list
-    renderDefaultCodexModels(el('modelSelect'), selected);
+  // 把 provider 返回的模型 + 项目内置 catalog 合并去重 — 用户始终有完整选择
+  // 内置 CODEX_MODEL_PRESETS 提供 OpenAI/Anthropic/Gemini/Qwen 等所有当前主流
+  const detectedSet = new Set(detected);
+  let html = '';
+  if (detected.length) {
+    html += '<optgroup label="来自当前 Provider">';
+    for (const m of detected) {
+      html += `<option value="${escapeHtml(m)}" ${m === selected ? 'selected' : ''}>${escapeHtml(m)}</option>`;
+    }
+    html += '</optgroup>';
   }
-  el('modelChips').innerHTML = unique.slice(0, 16).map((model) => `<button class="chip ${model === selected ? 'active' : ''}" data-model="${escapeHtml(model)}">${escapeHtml(model)}</button>`).join('');
-  el('modelChips').classList.toggle('hide', unique.length === 0);
+  // 内置 catalog 分组
+  for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
+    const extras = group.options.filter((o) => !detectedSet.has(o.value));
+    if (!extras.length) continue;
+    html += `<optgroup label="${escapeHtml(group.label)}">`;
+    for (const o of extras) {
+      html += `<option value="${escapeHtml(o.value)}" ${o.value === selected ? 'selected' : ''}>${escapeHtml(o.label)} · ${escapeHtml(o.value)}</option>`;
+    }
+    html += '</optgroup>';
+  }
+  // 末尾自定义入口
+  html += '<optgroup label="—">';
+  html += `<option value="__custom__">✎ 自定义模型名…</option>`;
+  html += '</optgroup>';
+  el('modelSelect').innerHTML = html || '<option value="">无可用模型</option>';
+  // 已选不在列表（custom）时确保 value 仍生效
+  if (selected && !el('modelSelect').querySelector(`option[value="${CSS.escape(selected)}"]`)) {
+    const opt = document.createElement('option');
+    opt.value = selected; opt.textContent = selected; opt.selected = true;
+    el('modelSelect').prepend(opt);
+  }
+  // chips 仍然只显示 detected (来自 provider) 部分
+  el('modelChips').innerHTML = detected.slice(0, 16).map((model) => `<button class="chip ${model === selected ? 'active' : ''}" data-model="${escapeHtml(model)}">${escapeHtml(model)}</button>`).join('');
+  el('modelChips').classList.toggle('hide', detected.length === 0);
 }
 
 function renderProviders() {
@@ -21405,6 +21487,18 @@ function bindEvents() {
   el('modelSelect').addEventListener('change', (event) => {
     if (state.activeTool === 'openclaw' || state.activeTool === 'opencode') {
       renderCurrentConfig();
+      return;
+    }
+    // 自定义入口：弹出输入框收集模型名
+    if (event.target.value === '__custom__') {
+      const custom = window.prompt('输入自定义模型名（如 gpt-5.5-turbo / claude-opus-4-x）');
+      const v = (custom || '').trim();
+      if (v) {
+        renderModelOptions(state.detected?.models || [], v);
+      } else {
+        // 用户取消 → 复原到之前选中
+        renderModelOptions(state.detected?.models || [], state.current?.summary?.model || '');
+      }
       return;
     }
     renderModelOptions(state.detected?.models || [], event.target.value);
