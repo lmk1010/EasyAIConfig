@@ -27704,3 +27704,16 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   box-shadow: 0 6px 16px rgba(51,88,255,0.42);
 }
 .shell-v2 .ea-term-launch-go:disabled { opacity: 0.65; cursor: progress; }
+
+/* 账号空状态 */
+.shell-v2 .ea-term-launch-empty {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 6px 0;
+}
+.shell-v2 .ea-term-launch-empty a {
+  color: #5b8cff;
+  text-decoration: none;
+  font-weight: 500;
+}
+.shell-v2 .ea-term-launch-empty a:hover { text-decoration: underline; }
