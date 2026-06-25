@@ -18635,6 +18635,7 @@ function renderProviderDetail(options = {}) {
   const tab = state.providerDetail.tab || 'overview';
   const tabs = [
     { id: 'overview', label: '概览' },
+    { id: 'models',   label: '模型支持' },
     { id: 'usage',    label: '用量' },
     { id: 'test',     label: '测试' },
     { id: 'health',   label: '健康' },
@@ -18660,6 +18661,10 @@ function renderProviderDetail(options = {}) {
       ${renderPdTab(tab, row)}
     </section>
   `;
+  // models tab 内的事件 (复选 / 搜索 / 保存 / 拉取)
+  if (tab === 'models') {
+    setTimeout(() => { try { bindPdModelsEvents(); } catch (_) {} }, 0);
+  }
 }
 
 function renderPdHeader(row) {
@@ -18731,10 +18736,149 @@ function renderPdHeader(row) {
 
 function renderPdTab(tab, row) {
   if (tab === 'overview') return renderPdOverview(row);
+  if (tab === 'models') return renderPdModels(row);
   if (tab === 'usage') return renderPdUsage(row);
   if (tab === 'test') return renderPdTest(row);
   if (tab === 'health') return renderPdHealth(row);
   return '';
+}
+
+// "模型支持" tab —— 在 provider 详情里独立的模型列表页
+// 顶部当前默认模型 + 检测到的 live models；下方是 "支持的模型" 网格 (用户多选)
+function renderPdModels(row) {
+  const providerKey = row.key;
+  const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
+  const liveModels = (state.providerDetail?.detected?.[providerKey]?.models) || [];
+  const saved = (state.providerSavedModels?.[providerKey]) || [];
+  const currentModel = row.model || state.current?.summary?.model || '';
+  const loading = state.providerDetail?.modelsLoading;
+  // 异步首次拉 saved 列表（如果还没拉）
+  if (!state.providerSavedModels || !(providerKey in state.providerSavedModels)) {
+    api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`)
+      .then((res) => {
+        if (res?.ok) {
+          state.providerSavedModels = state.providerSavedModels || {};
+          state.providerSavedModels[providerKey] = res.data?.models || [];
+          if (state.providerDetail?.tab === 'models') renderProviderDetail();
+        }
+      }).catch(() => {});
+  }
+  const savedSet = new Set(saved);
+  const liveSet = new Set(liveModels);
+  const allChecked = new Set([...saved]); // 编辑态 — 用户改动的集合
+  const esc = escapeHtml;
+  // 渲染默认模型卡 (展示用，不在这里改) + 来自 /v1/models 的 live 列表 + catalog 多选
+  let catalogHtml = '';
+  for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
+    catalogHtml += `<div class="pd-models-group"><div class="pd-models-group-label">${esc(group.label)} <span class="pd-models-group-count">${group.options.length}</span></div><div class="pd-models-group-options">`;
+    for (const o of group.options) {
+      const isOn = savedSet.has(o.value);
+      const isLive = liveSet.has(o.value);
+      catalogHtml += `<label class="pd-models-opt ${isOn ? 'is-on' : ''}">
+        <input type="checkbox" data-pd-model="${esc(o.value)}" ${isOn ? 'checked' : ''} />
+        <span class="pd-models-opt-info">
+          <span class="pd-models-opt-id">${esc(o.value)}${isLive ? ' <em class="pd-models-live-tag">live</em>' : ''}</span>
+          <span class="pd-models-opt-label">${esc(o.label)}</span>
+        </span>
+      </label>`;
+    }
+    catalogHtml += `</div></div>`;
+  }
+  return `
+    <div class="pd-models-page">
+      <div class="pd-models-summary">
+        <div class="pd-models-summary-row">
+          <div class="pd-models-summary-block">
+            <div class="pd-models-summary-label">当前默认模型</div>
+            <div class="pd-models-summary-value">
+              ${currentModel ? `<code>${esc(currentModel)}</code>` : '<span class="muted">未设置</span>'}
+              <span class="pd-models-summary-hint">在 概览 / 编辑 里切换默认</span>
+            </div>
+          </div>
+          <div class="pd-models-summary-block">
+            <div class="pd-models-summary-label">Live 检测（/v1/models）</div>
+            <div class="pd-models-summary-value">
+              ${liveModels.length ? `<span class="pd-models-count">${liveModels.length} 个</span>` : '<span class="muted">尚未检测</span>'}
+              <button type="button" class="pd-models-refresh-btn" data-pd-models-refetch ${loading ? 'disabled' : ''}>${loading ? '检测中…' : '从 Provider 拉取'}</button>
+            </div>
+          </div>
+        </div>
+        ${liveModels.length ? `<div class="pd-models-live-list">${liveModels.map((m) => `<span class="pd-models-live-chip">${esc(m)}</span>`).join('')}</div>` : ''}
+      </div>
+
+      <div class="pd-models-toolbar">
+        <input type="text" id="pdModelsSearch" placeholder="搜索 model id / 标签…" />
+        <span class="pd-models-toolbar-meta">已选 <strong id="pdModelsCount">${saved.length}</strong> 个 · 共 <strong>${(typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : []).reduce((sum, g) => sum + g.options.length, 0)}</strong> 个</span>
+        <button type="button" class="primary" data-pd-models-save>保存</button>
+      </div>
+      <div class="pd-models-body" id="pdModelsBody">
+        ${catalogHtml}
+      </div>
+    </div>`;
+}
+
+// "模型支持" 事件 — 勾选 / 搜索 / 保存 / 拉取
+async function bindPdModelsEvents() {
+  const root = document.querySelector('.pd-models-page');
+  if (!root || root._pdModelsBound) return;
+  root._pdModelsBound = true;
+  const providerKey = state.providerDetail?.providerKey || '';
+  const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
+  state._pdModelsDraft = new Set((state.providerSavedModels?.[providerKey]) || []);
+  const updateCount = () => { const c = root.querySelector('#pdModelsCount'); if (c) c.textContent = String(state._pdModelsDraft.size); };
+  root.addEventListener('change', (e) => {
+    const cb = e.target.closest('input[data-pd-model]');
+    if (!cb) return;
+    const v = cb.dataset.pdModel;
+    if (cb.checked) state._pdModelsDraft.add(v); else state._pdModelsDraft.delete(v);
+    cb.closest('.pd-models-opt')?.classList.toggle('is-on', cb.checked);
+    updateCount();
+  });
+  root.querySelector('#pdModelsSearch')?.addEventListener('input', (e) => {
+    const q = String(e.target.value || '').trim().toLowerCase();
+    root.querySelectorAll('.pd-models-opt').forEach((opt) => {
+      const id = (opt.querySelector('.pd-models-opt-id')?.textContent || '').toLowerCase();
+      const lab = (opt.querySelector('.pd-models-opt-label')?.textContent || '').toLowerCase();
+      const hit = !q || id.includes(q) || lab.includes(q);
+      opt.style.display = hit ? '' : 'none';
+    });
+  });
+  root.querySelector('[data-pd-models-save]')?.addEventListener('click', async () => {
+    const models = Array.from(state._pdModelsDraft);
+    try {
+      const res = await api('/api/provider/saved-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerKey, codexHome, models }),
+      });
+      if (res?.ok) {
+        state.providerSavedModels = state.providerSavedModels || {};
+        state.providerSavedModels[providerKey] = models;
+        flash(`已保存 ${models.length} 个模型`, 'success');
+      } else {
+        flash(`保存失败: ${res?.error || '未知'}`, 'error');
+      }
+    } catch (err) { flash(`保存异常: ${err.message || err}`, 'error'); }
+  });
+  root.querySelector('[data-pd-models-refetch]')?.addEventListener('click', async () => {
+    const detail = state.providerDetail;
+    detail.modelsLoading = true;
+    renderProviderDetail();
+    try {
+      const res = await api('/api/provider/test-saved', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerKey, tool: state.activeTool || 'codex', codexHome: codexHome || '' }),
+      });
+      if (res?.ok && Array.isArray(res.data?.models)) {
+        detail.detected = detail.detected || {};
+        detail.detected[providerKey] = { models: res.data.models, at: Date.now() };
+        flash(`检测到 ${res.data.models.length} 个模型`, 'success');
+      } else {
+        flash(`拉取失败: ${res?.error || res?.data?.error || '未知'}`, 'warning');
+      }
+    } catch (err) { flash(`拉取异常: ${err.message || err}`, 'warning'); }
+    finally { detail.modelsLoading = false; renderProviderDetail(); }
+  });
 }
 
 function fmtLatency(ms) {

@@ -27996,3 +27996,203 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
   transform: translateY(-1px);
   box-shadow: 0 6px 16px rgba(51,88,255,0.42);
 }
+
+/* ─── Provider 详情 · 模型支持 tab ─── */
+.pd-models-page {
+  display: flex; flex-direction: column;
+  gap: 16px;
+  padding: 4px 2px;
+}
+.pd-models-summary {
+  background: var(--card-bg, rgba(255,255,255,0.6));
+  border: 1px solid rgba(120,140,180,0.16);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+[data-theme="dark"] .pd-models-summary {
+  background: rgba(28,32,42,0.5);
+}
+.pd-models-summary-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 10px;
+}
+.pd-models-summary-block {
+  display: flex; flex-direction: column;
+  gap: 4px;
+}
+.pd-models-summary-label {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.pd-models-summary-value {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px;
+}
+.pd-models-summary-value code {
+  font-family: var(--font-mono);
+  background: rgba(91,140,255,0.10);
+  color: #3358ff;
+  padding: 2px 8px; border-radius: 5px;
+  font-weight: 600;
+}
+.pd-models-summary-hint {
+  font-size: 11px; color: var(--muted);
+  opacity: 0.75;
+}
+.pd-models-count {
+  font-weight: 700;
+  background: rgba(91,140,255,0.10);
+  color: #3358ff;
+  padding: 2px 8px; border-radius: 5px;
+  font-size: 12px;
+}
+.pd-models-refresh-btn {
+  background: transparent;
+  border: 1px solid rgba(120,140,180,0.20);
+  border-radius: 6px;
+  padding: 4px 10px;
+  height: 26px;
+  font: inherit; font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.pd-models-refresh-btn:hover:not(:disabled) {
+  border-color: rgba(91,140,255,0.45);
+  color: #3358ff;
+}
+.pd-models-refresh-btn:disabled { opacity: 0.6; cursor: progress; }
+.pd-models-live-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(120,140,180,0.14);
+}
+.pd-models-live-chip {
+  font-family: var(--font-mono);
+  background: rgba(34,197,94,0.10);
+  color: #16a34a;
+  border: 1px solid rgba(34,197,94,0.30);
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 11.5px;
+}
+[data-theme="dark"] .pd-models-live-chip { color: #4ade80; }
+
+.pd-models-toolbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 0;
+}
+.pd-models-toolbar input {
+  flex: 1; max-width: 420px;
+  height: 30px; padding: 0 10px;
+  border: 1px solid rgba(120,140,180,0.20);
+  border-radius: 6px;
+  background: transparent;
+  font: inherit; font-size: 12.5px;
+  color: var(--text);
+  box-sizing: border-box;
+}
+.pd-models-toolbar input:focus {
+  outline: none;
+  border-color: rgba(91,140,255,0.55);
+  box-shadow: 0 0 0 3px rgba(91,140,255,0.10);
+}
+.pd-models-toolbar-meta {
+  flex: 1;
+  font-size: 12px; color: var(--muted);
+}
+.pd-models-toolbar-meta strong { color: #3358ff; font-weight: 700; }
+.pd-models-toolbar .primary {
+  background: linear-gradient(90deg, #5b8cff, #3358ff);
+  color: #fff; border: none;
+  padding: 6px 18px; height: 30px;
+  border-radius: 6px;
+  font: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(51,88,255,0.28);
+  transition: all 120ms ease;
+}
+.pd-models-toolbar .primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(51,88,255,0.42);
+}
+
+.pd-models-body {
+  display: flex; flex-direction: column;
+  gap: 14px;
+}
+.pd-models-group-label {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 4px 2px;
+  display: flex; align-items: center; gap: 6px;
+}
+.pd-models-group-count {
+  font-weight: 500;
+  font-size: 10px;
+  background: rgba(120,140,180,0.10);
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+.pd-models-group-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 4px;
+}
+.pd-models-opt {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.pd-models-opt:hover {
+  background: rgba(120,140,180,0.06);
+}
+.pd-models-opt.is-on {
+  background: rgba(91,140,255,0.08);
+  border-color: rgba(91,140,255,0.30);
+}
+.pd-models-opt input[type="checkbox"] {
+  width: 14px; height: 14px;
+  accent-color: #3358ff;
+  cursor: pointer;
+  margin: 0;
+}
+.pd-models-opt-info {
+  display: flex; flex-direction: column; gap: 1px;
+  flex: 1; min-width: 0;
+}
+.pd-models-opt-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 500;
+}
+.pd-models-live-tag {
+  display: inline-block;
+  background: rgba(34,197,94,0.12);
+  color: #16a34a;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.pd-models-opt-label {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
