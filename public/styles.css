@@ -26446,29 +26446,25 @@ body {
 /* ─── 内置终端页面 (ea-term-*) ───────────────────────────────────── */
 .shell-v2 .page-view[data-page="terminal"] { padding: 0; overflow: hidden; }
 .shell-v2 .ea-term { height: 100%; min-height: 0; }
-/* 不再分栏：top bar → tab → 终端 → status bar，整片右侧全是终端 */
+/* 不再分栏：top bar → tab → 终端 → status bar；整片透明融入页面背景 */
 .shell-v2 .ea-term-shell {
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   gap: 0;
   height: 100%;
-  background: var(--ea-term-bg, transparent);
+  background: transparent;
 }
-:root { --ea-term-bg: linear-gradient(180deg, #0b1020, #080b14); }
-[data-theme="light"] { --ea-term-bg: linear-gradient(180deg, #fafbfc, #f3f5fa); }
 
-/* 顶部 slim 工具栏：tool / provider / cwd / 启动 / 搜索 / 清屏 / ⌘K */
+/* 顶部 slim 工具栏：彻底融入背景，无 card / 无底色，靠 chip 本身的 border 表达 */
 .shell-v2 .ea-term-topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px;
-  padding: 7px 12px;
-  background: rgba(255,255,255,0.025);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  display: flex; align-items: center;
+  gap: 8px;
+  padding: 14px 16px 10px;
+  background: transparent;
+  border-bottom: 0;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
-[data-theme="light"] .shell-v2 .ea-term-topbar { background: rgba(255,255,255,0.55); border-bottom-color: rgba(15,23,42,0.07); }
-.shell-v2 .ea-term-topbar-left,
-.shell-v2 .ea-term-topbar-right { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
-.shell-v2 .ea-term-topbar-left { flex: 1; }
 
 .shell-v2 .ea-term-mini-select,
 .shell-v2 .ea-term-mini-input {
@@ -26576,16 +26572,15 @@ body {
 }
 .shell-v2 .ea-term-tab-close:hover { background: rgba(248,113,113,0.18); color: #f87171; }
 
-/* Canvas：全宽全高，背景跟随主题（dark 沉蓝 / light 米白），跟 xterm theme 对齐 */
+/* Canvas：透明，让 page bg / 渐变 透出来，没有白色卡 */
 .shell-v2 .ea-term-canvas {
   position: relative;
-  background: #0b1020;
-  padding: 8px 12px 4px;
+  background: transparent;
+  padding: 4px 12px 0;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
 }
-[data-theme="light"] .shell-v2 .ea-term-canvas { background: #fafbfc; }
 .shell-v2 .ea-term-host { width: 100%; height: 100%; min-height: 0; }
 .shell-v2 .ea-term-empty {
   position: absolute; inset: 0;
@@ -26607,18 +26602,17 @@ body {
 }
 [data-theme="light"] .shell-v2 .ea-term-empty kbd { background: rgba(91,140,255,0.16); color: #3358ff; }
 
-/* Status bar：底栏，状态点 + 进程名 + 字节 + token */
+/* Status bar：薄薄一行，没有底色 / 边框，直接浮在 page bg 上 */
 .shell-v2 .ea-term-status {
   display: flex; align-items: center; gap: 8px;
-  padding: 5px 14px;
-  background: rgba(255,255,255,0.02);
-  border-top: 1px solid rgba(255,255,255,0.05);
+  padding: 6px 16px 10px;
+  background: transparent;
+  border-top: 0;
   font-size: 0.62rem;
   color: var(--s2-faint);
   font-variant-numeric: tabular-nums;
-  min-height: 24px;
+  min-height: 22px;
 }
-[data-theme="light"] .shell-v2 .ea-term-status { background: rgba(255,255,255,0.55); border-top-color: rgba(15,23,42,0.07); }
 .shell-v2 .ea-term-status-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--s2-faint);
