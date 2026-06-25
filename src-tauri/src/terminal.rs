@@ -442,6 +442,79 @@ pub(crate) fn spawn_embedded_terminal(
   }))
 }
 
+/// GET /api/terminal/token-snapshot?sessionId=<our_session_uuid>
+/// 给前端 poll 兜底用：根据 sessionId 找到对应 codex pid → lsof 拿 jsonl
+/// → 从尾部读最后一条带 info 的 token_count 事件 → 返回真实数字。
+/// 完全独立于 watcher 线程，永远可主动调。
+pub(crate) fn terminal_token_snapshot(query: &Value) -> Result<Value, String> {
+  let object = parse_json_object(query);
+  let session_id = get_string(&object, "sessionId");
+  if session_id.trim().is_empty() {
+    return Err("sessionId 不能为空".to_string());
+  }
+  let session = get_session(&session_id)?;
+  let pid = session.runtime.lock().ok().and_then(|r| r.child.process_id());
+  // 1) 优先 lsof
+  let mut jsonl: Option<PathBuf> = pid.and_then(find_codex_jsonl_via_lsof);
+  // 2) fallback：默认 home 下扫最近一小时
+  if jsonl.is_none() {
+    if let Ok(codex_home) = crate::default_codex_home() {
+      let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+      jsonl = find_latest_codex_jsonl_after(&codex_home.join("sessions"), cutoff);
+    }
+  }
+  let Some(path) = jsonl else {
+    return Ok(json!({
+      "ok": true,
+      "pid": pid,
+      "path": null,
+      "tokens": null,
+      "reason": "no jsonl found via lsof or directory scan",
+    }));
+  };
+  // 读整个文件最后 32KB 找最新带 info 的 token_count
+  let token_evt = read_latest_token_count(&path);
+  Ok(json!({
+    "ok": true,
+    "pid": pid,
+    "path": path.to_string_lossy(),
+    "tokens": token_evt,
+  }))
+}
+
+fn read_latest_token_count(path: &Path) -> Option<Value> {
+  use std::io::{Read, Seek, SeekFrom};
+  let mut file = std::fs::File::open(path).ok()?;
+  let len = file.metadata().ok()?.len();
+  let tail_size = 32 * 1024_u64;
+  let start = len.saturating_sub(tail_size);
+  file.seek(SeekFrom::Start(start)).ok()?;
+  let mut buf = Vec::new();
+  file.read_to_end(&mut buf).ok()?;
+  let text = String::from_utf8_lossy(&buf);
+  // 倒序找最后一条带 info 的 token_count
+  let mut last: Option<Value> = None;
+  for line in text.lines() {
+    let Ok(v) = serde_json::from_str::<Value>(line) else { continue; };
+    let p = v.get("payload");
+    let kind = p.and_then(|p| p.get("type")).and_then(Value::as_str).unwrap_or("");
+    if kind != "token_count" { continue; }
+    let info = p.and_then(|p| p.get("info"));
+    let Some(info) = info else { continue; };
+    if info.is_null() { continue; }
+    let Some(total) = info.get("total_token_usage") else { continue; };
+    last = Some(json!({
+      "input": total.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+      "cached": total.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
+      "output": total.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+      "reasoning": total.get("reasoning_output_tokens").and_then(Value::as_u64).unwrap_or(0),
+      "total": total.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
+      "contextWindow": info.get("model_context_window").and_then(Value::as_u64).unwrap_or(0),
+    }));
+  }
+  last
+}
+
 pub(crate) fn terminal_create(body: &Value) -> Result<Value, String> {
   let object = parse_json_object(body);
   let cwd = parse_body_path(&object, "cwd")?;

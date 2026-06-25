@@ -740,6 +740,38 @@ async function pickCwd() {
   }
 }
 
+// 给所有运行中 session 每 3s poll 一次 token 兜底（lsof + jsonl），
+// 不依赖 Rust 推流事件是否成功
+let __eaTermTokenPollTimer = 0;
+function startTokenPollLoop() {
+  if (__eaTermTokenPollTimer) return;
+  __eaTermTokenPollTimer = setInterval(async () => {
+    const tp = getState()?.terminalPage;
+    if (!tp) return;
+    for (const s of tp.sessions) {
+      if (!s.running) continue;
+      try {
+        const res = await api(`/api/terminal/token-snapshot?sessionId=${encodeURIComponent(s.id)}`);
+        const tokens = res?.ok && res.data?.tokens;
+        if (tokens && Number.isFinite(tokens.input)) {
+          const inst = tp.instances?.[s.id];
+          if (!inst) continue;
+          inst.tokens = tokens;
+          inst.tokensUpdatedAt = Date.now();
+          if (!inst._sidebarRaf) {
+            inst._sidebarRaf = requestAnimationFrame(() => {
+              inst._sidebarRaf = 0;
+              renderTermSidebar();
+              renderTermStatus();
+            });
+          }
+        }
+      } catch (_) {}
+    }
+  }, 3000);
+}
+startTokenPollLoop();
+
 async function spawnSession() {
   const tp = getState().terminalPage;
   if (tp.starting) return;
