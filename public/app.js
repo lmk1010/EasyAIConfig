@@ -18795,7 +18795,7 @@ function openProviderDetail(key) {
 async function fetchDashboardMetricsForDetail(force = false) {
   // 即便已有 codex metrics，超过 60 秒就当过期重拉。
   // 用户从详情页切 provider / 重启 dev / 切回 codex 等场景下，
-  // 没新数据 = 旧 providers 数组里可能没他刚用过的那个 key（比如 lucoo）。
+  // 没新数据 = 旧 providers 数组里可能没他刚用过的那个 key。
   const fetchedAt = Number(state.dashboardMetricsFetchedAt || 0);
   const isStale = !fetchedAt || (Date.now() - fetchedAt > 60 * 1000);
   if (state.dashboardMetrics?.codex && !force && !isStale) return;
