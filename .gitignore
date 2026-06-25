@@ -10,6 +10,9 @@ dist/
 *.iml
 .neox/
 
+# Internal-only docs (roadmap / competitive analysis) — 本地保留，不入仓库
+docs/ROADMAP.md
+
 # Tauri build artifacts
 src-tauri/target/
 src-tauri/WixTools/

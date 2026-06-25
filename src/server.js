@@ -14,6 +14,8 @@ import {
 import {
   checkSetupEnvironment,
   getProviderSecret,
+  getProviderExtras,
+  setProviderExtras,
   getCodexReleaseInfo,
   getCodexUsageMetrics,
   getOpenCodeUsageMetrics,
@@ -1102,6 +1104,28 @@ export async function startServer() {
   app.post('/api/provider/secret', async (req, res) => {
     try {
       ok(res, { data: await getProviderSecret(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  // Per-provider extras: 当前用于 per-provider 代理 (HTTPS_PROXY) 等元数据。
+  // 储存在 ~/.codex-config-ui/provider-extras.json，不写进用户的 codex/config.toml
+  app.get('/api/provider/extras', async (req, res) => {
+    try {
+      const providerKey = String(req.query.providerKey || '').trim();
+      ok(res, { data: { extras: await getProviderExtras(providerKey) } });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/provider/extras', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const providerKey = String(body.providerKey || '').trim();
+      const patch = body.patch || {};
+      ok(res, { data: { extras: await setProviderExtras(providerKey, patch) } });
     } catch (error) {
       fail(res, error);
     }

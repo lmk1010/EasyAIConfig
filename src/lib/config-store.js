@@ -1250,6 +1250,80 @@ function backupsRoot() {
   return path.join(appHome(), BACKUPS_DIRNAME);
 }
 
+// ─── Provider extras (sidecar) ─────────────────────────────────────────
+// 给 provider 加 EasyAIConfig-only 的元数据（per-provider proxy 等）。
+// 不写进用户的 codex/config.toml，避免污染原生配置文件。
+//
+// 存储: ~/.codex-config-ui/provider-extras.json
+//   { "providers": { "<providerKey>": { proxyUrl, notes } } }
+//
+// Tauri Rust 端读同一份文件即可（后续 backfill src-tauri/src/provider.rs）
+function providerExtrasPath() {
+  return path.join(appHome(), 'provider-extras.json');
+}
+
+async function readProviderExtrasFile() {
+  const raw = await readText(providerExtrasPath());
+  if (!raw.trim()) return { providers: {} };
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return { providers: {} }; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { providers: {} };
+  if (!parsed.providers || typeof parsed.providers !== 'object') parsed.providers = {};
+  return parsed;
+}
+
+export async function getProviderExtras(providerKey = '') {
+  const key = String(providerKey || '').trim();
+  if (!key) return null;
+  const all = await readProviderExtrasFile();
+  return all.providers[key] || null;
+}
+
+export async function setProviderExtras(providerKey = '', patch = {}) {
+  const key = String(providerKey || '').trim();
+  if (!key) throw new Error('providerKey is required');
+  const all = await readProviderExtrasFile();
+  const existing = all.providers[key] || {};
+  const next = { ...existing };
+
+  // patch 字段白名单 — proxyUrl / notes 等用户可写的元数据
+  // null 删 key，undefined 不动 key（同 applyPatch 语义）
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) { delete next[k]; continue; }
+    if (v === undefined) continue;
+    // proxyUrl: 空字符串 = 删除
+    if (k === 'proxyUrl') {
+      const trimmed = String(v).trim();
+      if (!trimmed) { delete next.proxyUrl; continue; }
+      next.proxyUrl = trimmed;
+      continue;
+    }
+    next[k] = v;
+  }
+
+  if (Object.keys(next).length === 0) {
+    delete all.providers[key];
+  } else {
+    all.providers[key] = next;
+  }
+  await writeJsonFile(providerExtrasPath(), all);
+  return next;
+}
+
+// 给 spawn 出去的子进程注入 per-provider 代理 env (HTTPS_PROXY / HTTP_PROXY)
+// 用法：spawn(cmd, args, { env: { ...process.env, ...await buildProviderEnv(providerKey) } })
+// 或在 launchTerminalCommand 里把它前置到 shell 命令字符串。
+export async function buildProviderProxyEnv(providerKey = '') {
+  const extras = await getProviderExtras(providerKey);
+  if (!extras?.proxyUrl) return {};
+  return {
+    HTTPS_PROXY: extras.proxyUrl,
+    HTTP_PROXY: extras.proxyUrl,
+    https_proxy: extras.proxyUrl,
+    http_proxy: extras.proxyUrl,
+  };
+}
+
 async function readPathStorageUsage(targetPath) {
   const resolved = path.resolve(targetPath);
   let stat;
@@ -2350,6 +2424,12 @@ function isLikelyOpenCodeProviderKey(key = '') {
   return Boolean(text) && !/^https?:\/\//i.test(text) && !text.includes('/');
 }
 
+// Non-destructive merge：切 provider / 改配置时只动 patch 提到的 key，
+// patch 没提的 key 原样保留 (plugins / hooks / mcpServers / statusLine /
+// skills / customCommands 等用户自定义字段全部不动)。
+//
+// 实现原则：parse → patch in place → stringify 全对象。
+// 退化护栏: tests/non-destructive-merge.test.js
 function applyPatch(target, patch) {
   for (const [key, value] of Object.entries(patch || {})) {
     if (value === null) {
@@ -3170,13 +3250,27 @@ function launchWindowsTerminal(cwd, commandText, { toolLabel = 'Codex', terminal
   return `${toolLabel} 已在 ${profile.label} 中启动`;
 }
 
-function launchTerminalCommand(cwd, { binaryPath, binaryName = 'codex', toolLabel = 'Codex', commandText = '', terminalProfile = 'auto' } = {}) {
+// Build a POSIX shell prefix that exports given env vars before running cmd.
+// 用于把 per-provider 的 HTTPS_PROXY 注入到 AppleScript / bash -lc 的新终端会话。
+// 输出形如: `export HTTPS_PROXY='http://proxy:8080' HTTP_PROXY='http://proxy:8080'; `
+function buildPosixEnvPrefix(extraEnv = {}) {
+  const entries = Object.entries(extraEnv || {}).filter(([_, v]) => v != null && v !== '');
+  if (!entries.length) return '';
+  const exports = entries
+    .map(([k, v]) => `${k}=${quotePosixShellArg(String(v))}`)
+    .join(' ');
+  return `export ${exports}; `;
+}
+
+function launchTerminalCommand(cwd, { binaryPath, binaryName = 'codex', toolLabel = 'Codex', commandText = '', terminalProfile = 'auto', extraEnv = {} } = {}) {
   // POSIX 平台必须把 binaryPath 用 quotePosixShellArg 包裹，否则路径里
   // 含空格 / nvm 多版本目录会被 shell 拆分（典型："/Users/张三/.nvm/.../codex"）。
   // 如果调用方已经传了 commandText（资深路径，自己拼接好的命令字符串），
   // 就信任它原样使用。
-  const posixBin = commandText
+  const envPrefix = buildPosixEnvPrefix(extraEnv);
+  const rawBin = commandText
     || (binaryPath ? quotePosixShellArg(String(binaryPath)) : binaryName);
+  const posixBin = envPrefix ? `${envPrefix}${rawBin}` : rawBin;
   const windowsBin = commandText || (binaryPath ? buildWindowsBinaryCommand(binaryPath, [], binaryName) : binaryName);
 
   if (process.platform === 'darwin') {
@@ -3184,7 +3278,13 @@ function launchTerminalCommand(cwd, { binaryPath, binaryName = 'codex', toolLabe
   }
 
   if (process.platform === 'win32') {
-    return launchWindowsTerminal(cwd, windowsBin, { toolLabel, terminalProfile });
+    // Windows: 走 cmd /c 通过 set 命令注入 env
+    const winEnvSet = Object.entries(extraEnv || {})
+      .filter(([_, v]) => v != null && v !== '')
+      .map(([k, v]) => `set ${k}=${String(v).replace(/[&|<>^"]/g, '')} && `)
+      .join('');
+    const winCmd = winEnvSet ? `${winEnvSet}${windowsBin}` : windowsBin;
+    return launchWindowsTerminal(cwd, winCmd, { toolLabel, terminalProfile });
   }
 
   const quotedCwd = quotePosixShellArg(String(cwd || process.cwd()));
@@ -4239,6 +4339,19 @@ export async function forkCodexSession({ cwd, sessionId = '', terminalProfile = 
   return launchCodexSessionAction({ cwd, sessionId, action: 'fork', terminalProfile });
 }
 
+// 读当前 Codex active provider 的 per-provider 代理 env
+async function getCodexActiveProviderProxyEnv(codexHome = defaultCodexHome()) {
+  try {
+    const configContent = await readText(path.join(codexHome, 'config.toml'));
+    const config = parseToml(configContent);
+    const activeKey = String(config.model_provider || '').trim();
+    if (!activeKey) return {};
+    return await buildProviderProxyEnv(activeKey);
+  } catch (_) {
+    return {};
+  }
+}
+
 export async function launchCodex({ cwd, terminalProfile = 'auto' } = {}) {
   const targetCwd = resolveLaunchCwd(cwd);
   const codexBinary = findCodexBinary();
@@ -4246,11 +4359,13 @@ export async function launchCodex({ cwd, terminalProfile = 'auto' } = {}) {
     throw new Error(describeCodexInstallError());
   }
 
+  const extraEnv = await getCodexActiveProviderProxyEnv();
   const message = launchTerminalCommand(targetCwd, {
     binaryPath: codexBinary.path,
     binaryName: 'codex',
     toolLabel: 'Codex',
     terminalProfile,
+    extraEnv,
   });
   return { ok: true, cwd: targetCwd, message };
 }
@@ -4862,16 +4977,35 @@ export async function uninstallClaudeCode() {
   return claudeCodeNpmAction(['uninstall', '-g', CLAUDE_CODE_PACKAGE]);
 }
 
+// 读当前 Claude active provider 的 proxy。Claude 没有「当前 provider」这个概念,
+// 用 settings.json 里 env.ANTHROPIC_BASE_URL 的 host 反查 providerKey。
+async function getClaudeActiveProviderProxyEnv() {
+  try {
+    const settingsPath = path.join(claudeCodeHome(), 'settings.json');
+    const settings = await readJsonFile(settingsPath);
+    const baseUrl = settings?.env?.ANTHROPIC_BASE_URL || '';
+    if (!baseUrl) return {};
+    // 用 baseUrl host 作为 provider key 近似（和 saveClaude provider 命名一致）
+    const slug = slugifyProviderKey(inferProviderSeed(baseUrl));
+    if (!slug) return {};
+    return await buildProviderProxyEnv(slug);
+  } catch (_) {
+    return {};
+  }
+}
+
 export async function launchClaudeCode({ cwd } = {}) {
   const targetCwd = resolveLaunchCwd(cwd);
   const binary = findToolBinary('claudecode');
   if (!binary.installed) {
     throw new Error('Claude Code 尚未安装，请先点击安装');
   }
+  const extraEnv = await getClaudeActiveProviderProxyEnv();
   const message = launchTerminalCommand(targetCwd, {
     binaryPath: binary.path,
     binaryName: 'claude',
     toolLabel: 'Claude Code',
+    extraEnv,
   });
   return { ok: true, cwd: targetCwd, message };
 }
