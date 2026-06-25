@@ -350,6 +350,7 @@ mod app_settings;
 mod provider_health;
 mod shell_integration;
 mod terminal;
+mod terminal_persist;
 mod tray;
 mod routes;
 
