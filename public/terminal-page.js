@@ -17,7 +17,7 @@ import { Unicode11Addon } from './vendor/xterm/addon-unicode11.mjs';
 import { WebLinksAddon } from './vendor/xterm/addon-web-links.mjs';
 import { SearchAddon } from './vendor/xterm/addon-search.mjs';
 
-const POLL_INTERVAL_MS = 220;
+const POLL_INTERVAL_MS = 120;
 
 const TOOL_LAUNCH_BIN = {
   codex: 'codex',
@@ -624,7 +624,7 @@ const TERM_THEME_DARK = {
   brightWhite:  '#f6f8fa',
 };
 const TERM_THEME_LIGHT = {
-  background: '#f7f8fc',
+  background: '#fafbfc',
   foreground: '#1f2937',
   cursor: '#3358ff',
   cursorAccent: '#ffffff',
@@ -739,11 +739,16 @@ function mountTerminal(sessionId) {
   try { inst.fit.fit(); } catch (_) {}
   notifyResize(sessionId, inst);
 
-  // ResizeObserver：窗口拉动时同步 cols/rows
+  // ResizeObserver：窗口拉动时同步 cols/rows，rAF 节流避免 jank
   if (!inst.resizeObserver && typeof ResizeObserver === 'function') {
+    let rafId = 0;
     inst.resizeObserver = new ResizeObserver(() => {
-      try { inst.fit.fit(); } catch (_) {}
-      notifyResize(sessionId, inst);
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        try { inst.fit.fit(); } catch (_) {}
+        notifyResize(sessionId, inst);
+      });
     });
     inst.resizeObserver.observe(hostEl);
   }
