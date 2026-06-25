@@ -1,4 +1,3 @@
-console.log('[ea-term] terminal-page.js: module STARTED loading');
 // 内置终端页面：一站启动 codex / claude code，多 session tab，
 // 右侧 sidebar 显示当前 provider / token 估算 / 进程状态。
 //
@@ -139,10 +138,10 @@ function escapeHtml(v) { return typeof window.escapeHtml === 'function' ? window
 
 function renderTermSidebar() {
   const tp = getState()?.terminalPage;
-  if (!tp) { console.warn('[ea-term] renderTermSidebar: tp missing'); return; }
+  if (!tp) return;
   const listEl = document.getElementById('eaTermSecList');
   const countEl = document.getElementById('eaTermSecCount');
-  if (!listEl) { console.warn('[ea-term] renderTermSidebar: #eaTermSecList missing in DOM'); return; }
+  if (!listEl) return;
   if (countEl) countEl.textContent = String(tp.sessions.length);
   const esc = escapeHtml;
   const toolAccent = (tool) => tool === 'codex'
@@ -184,8 +183,6 @@ function renderTermSidebar() {
       </button>`;
   }).join('');
   listEl.innerHTML = newSessionRow + sessionRows;
-  // 一次性诊断：让用户能直接看 listEl 实际状态
-  console.log('[ea-term] sidebar wrote', listEl.children.length, 'items, first 100 chars:', listEl.innerHTML.slice(0, 100));
   // 状态栏的实时用量也同步刷新
   renderTermStatus();
 }
@@ -235,16 +232,6 @@ export function initTerminalPageState() {
 }
 
 export async function renderTerminalPage() {
-  console.log('[ea-term] renderTerminalPage: called');
-  try {
-    return await _renderTerminalPageInner();
-  } catch (e) {
-    console.error('[ea-term] renderTerminalPage THREW:', e);
-    throw e;
-  }
-}
-async function _renderTerminalPageInner() {
-  console.log('[ea-term] _inner step=initState');
   initTerminalPageState();
   // 把还没拿到 tp 时缓存住的 token 事件灌回 session
   const pending = window.__eaPendingTokens || {};
@@ -267,7 +254,6 @@ async function _renderTerminalPageInner() {
     window.__eaPendingTokens = {};
   }
   const host = document.getElementById('eaTerminalPage');
-  console.log('[ea-term] _inner step=findHost', !!host);
   if (!host) return;
   const st = getState();
   const tp = st.terminalPage;
@@ -343,7 +329,6 @@ async function _renderTerminalPageInner() {
       && !tp.providerModelsLoading[tp.launcher.providerKey]) {
     fetchProviderModels(tp.launcher.providerKey, tp.launcher.tool);
   }
-  console.log('[ea-term] _inner step=preHostInnerHTML showLauncher=', showLauncher, 'showGhost=', showGhost, 'sessions=', tp.sessions.length);
   host.innerHTML = `
     <div class="ea-term-shell">
       ${tp.starting ? '<div class="ea-term-progress" aria-label="启动中"><span class="ea-term-progress-bar"></span></div>' : ''}
@@ -371,14 +356,12 @@ async function _renderTerminalPageInner() {
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
   `;
 
-  console.log('[ea-term] _inner step=postInnerHTML, about to bindEvents');
   bindEvents(host);
   // ghost / launcher 时不挂 xterm
   const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
   if (active && !active._ghost && !tp.launcherOpen) {
     mountTerminal(active.id);
   }
-  console.log('[ea-term] _inner step=callRenderTermSidebar');
   renderTermSidebar();
 }
 
@@ -636,6 +619,68 @@ function renderLauncherPage(tp, providers) {
     </div>`;
 }
 
+
+function renderStatusBar(tp) {
+  return `<div class="ea-term-status">${renderStatusBarInner(tp)}</div>`;
+}
+
+function renderStatusBarInner(tp) {
+  const esc = escapeHtml;
+  const session = tp.sessions.find((s) => s.id === tp.activeSessionId);
+  if (!session) {
+    return `<span class="ea-term-status-faint">没有运行中的会话</span>`;
+  }
+  const inst = tp.instances[session.id];
+  // session 是数据真源（不依赖 xterm 是否 mount）；instance 上的是同步副本
+  const tokens = session.tokens || inst?.tokens || {};
+  const input = Number(tokens.input || 0);
+  const cached = Number(tokens.cached || 0);
+  const output = Number(tokens.output || 0);
+  const reasoning = Number(tokens.reasoning || 0);
+  const total = Number(tokens.total || (input + output + reasoning));
+  const ctxWindow = Number(tokens.contextWindow || 0);
+  const fmt = (n) => (n || 0).toLocaleString();
+  // 紧凑显示：1500 → 1.5K · 1_200_000 → 1.2M · 1_500_000_000 → 1.5B
+  const fmtShort = (n) => {
+    const v = Number(n || 0);
+    if (v < 1000) return String(v);
+    if (v < 1_000_000) return (v / 1000).toFixed(v < 10_000 ? 1 : 0).replace(/\.0$/, '') + 'K';
+    if (v < 1_000_000_000) return (v / 1_000_000).toFixed(v < 10_000_000 ? 1 : 0).replace(/\.0$/, '') + 'M';
+    return (v / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'B';
+  };
+  // 工具名提炼：codex --dangerously-bypass-... → codex
+  const titleRaw = String(session.title || session.command || '');
+  const titleShort = titleRaw.split(/\s+/)[0] || titleRaw;
+  // 上下文用量条：累计 input vs context window
+  const usedPct = ctxWindow > 0 ? Math.min(100, (input / ctxWindow) * 100) : 0;
+  const cachePctOfInput = input > 0 ? Math.min(100, (cached / input) * 100) : 0;
+  // 还没有任何 token 数据时显示"等待…"，避免视觉上跟真实 0 token 难分
+  const noTokens = ctxWindow === 0 && input === 0 && cached === 0 && output === 0;
+  return `
+    <span class="ea-term-status-dot ${session.running ? 'is-on' : 'is-off'}"></span>
+    <span class="ea-term-status-text" title="${esc(titleRaw)}">${esc(titleShort)}</span>
+    <span class="ea-term-status-sep">·</span>
+    <span class="ea-term-status-text-faint">${esc(session.running ? '运行中' : '已退出')}</span>
+    <span class="ea-term-status-spacer"></span>
+    ${noTokens ? `
+      <span class="ea-term-status-pill ea-term-status-pill-faint" title="正在等待 codex 写入第一条 token_count 事件">等待 token…</span>
+    ` : `
+      ${ctxWindow > 0 ? `
+        <span class="ea-term-status-ctx" title="上下文 ${fmt(input)} / ${fmt(ctxWindow)} · 缓存 ${fmt(cached)}">
+          <span class="ea-term-status-ctx-label">上下文</span>
+          <span class="ea-term-status-ctx-bar">
+            <span class="ea-term-status-ctx-fill" style="width:${usedPct.toFixed(1)}%"></span>
+            <span class="ea-term-status-ctx-cache" style="width:${(usedPct * cachePctOfInput / 100).toFixed(1)}%"></span>
+          </span>
+          <span class="ea-term-status-ctx-num">${esc(fmtShort(input))}/${esc(fmtShort(ctxWindow))}</span>
+        </span>
+      ` : ''}
+      <span class="ea-term-status-pill" title="输入 token: ${fmt(input)}">入 ${esc(fmtShort(input))}</span>
+      <span class="ea-term-status-pill" title="缓存命中 token: ${fmt(cached)} (节省 ${input > 0 ? (cached / input * 100).toFixed(0) : 0}%)">缓 ${esc(fmtShort(cached))}</span>
+      <span class="ea-term-status-pill ea-term-status-pill-tokens" title="输出 token: ${fmt(output)}">出 ${esc(fmtShort(output))}</span>
+    `}
+  `;
+}
 
 function renderPalette(tp, providers) {
   const esc = escapeHtml;
@@ -1530,4 +1575,3 @@ function formatRelative(iso) {
 // 暴露给 app.js setPage 调用
 window.renderTerminalPage = renderTerminalPage;
 window.initTerminalPageState = initTerminalPageState;
-console.log('[ea-term] terminal-page.js: module FINISHED loading; renderTerminalPage assigned:', typeof window.renderTerminalPage);
