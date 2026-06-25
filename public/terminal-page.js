@@ -101,38 +101,20 @@ export async function renderTerminalPage() {
 function renderTopBar(tp, providers) {
   const esc = escapeHtml;
   const opts = providers.map((p) => `<option value="${esc(p.key)}" ${p.key === tp.launcher.providerKey ? 'selected' : ''}>${p.isActive ? '● ' : ''}${esc(p.name || p.key)}</option>`).join('');
-  const showLauncher = !tp.sessions.length || tp._launcherOpen;
+  // 一行：工具 + provider + cwd + flags + 启动；没有右侧 icon chips
   return `
     <div class="ea-term-topbar">
-      <div class="ea-term-topbar-left">
-        <select class="ea-term-mini-select" data-eat-launch="tool" title="选工具">
-          <option value="codex" ${tp.launcher.tool === 'codex' ? 'selected' : ''}>Codex</option>
-          <option value="claudecode" ${tp.launcher.tool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
-        </select>
-        <select class="ea-term-mini-select" data-eat-launch="providerKey" title="选 provider">${opts || '<option value="">无可用 provider</option>'}</select>
-        ${showLauncher ? `
-          <input type="text" class="ea-term-mini-input" data-eat-launch="cwd" placeholder="cwd · 默认 $HOME" value="${esc(tp.launcher.cwd || '')}" title="工作目录"/>
-          <input type="text" class="ea-term-mini-input ea-term-mini-input-flags" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="启动参数" title="启动参数"/>
-        ` : `
-          <button type="button" class="ea-term-mini-btn ea-term-mini-btn-ghost" data-eat-launcher-toggle title="展开 cwd / 启动参数">⋯</button>
-        `}
-        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-primary ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
-          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v12l10-6z"/></svg>
-          ${tp.starting ? '启动中' : '启动'}
-        </button>
-      </div>
-      <div class="ea-term-topbar-right">
-        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-ghost" data-eat-search title="搜索 ⌘F">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
-        </button>
-        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-ghost" data-eat-action="clear" title="清屏 ⌃L">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M3 4h10M3 12h6"/></svg>
-        </button>
-        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-ghost" data-eat-action="copy-cmd" title="复制启动命令">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="8" height="9" rx="1.2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-4A1.5 1.5 0 0 0 4 3.5V10"/></svg>
-        </button>
-        <button type="button" class="ea-term-mini-btn ea-term-mini-btn-palette" data-eat-palette title="命令面板 ⌘K">⌘K</button>
-      </div>
+      <select class="ea-term-mini-select" data-eat-launch="tool" title="选工具 (⌘K 内可切)">
+        <option value="codex" ${tp.launcher.tool === 'codex' ? 'selected' : ''}>Codex</option>
+        <option value="claudecode" ${tp.launcher.tool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
+      </select>
+      <select class="ea-term-mini-select" data-eat-launch="providerKey" title="选 provider">${opts || '<option value="">无可用 provider</option>'}</select>
+      <input type="text" class="ea-term-mini-input" data-eat-launch="cwd" placeholder="cwd · 默认 $HOME" value="${esc(tp.launcher.cwd || '')}" title="工作目录"/>
+      <input type="text" class="ea-term-mini-input ea-term-mini-input-flags" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="启动参数" title="启动参数"/>
+      <button type="button" class="ea-term-mini-btn ea-term-mini-btn-primary ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v12l10-6z"/></svg>
+        ${tp.starting ? '启动中' : '启动'}
+      </button>
     </div>`;
 }
 
@@ -514,8 +496,9 @@ async function closeSession(sessionId) {
 }
 
 // Termius 级深色主题（精选拉满对比度，cursor / selection 都按品牌蓝）
+// 注意 background 透明 (rgba 0/0/0/0) 让 page 渐变透出，不再有"白卡"
 const TERM_THEME_DARK = {
-  background: '#0b1020',
+  background: 'rgba(0,0,0,0)',
   foreground: '#e6ecf5',
   cursor: '#8dbdff',
   cursorAccent: '#0b1020',
@@ -540,7 +523,7 @@ const TERM_THEME_DARK = {
   brightWhite:  '#f6f8fa',
 };
 const TERM_THEME_LIGHT = {
-  background: '#fafbfc',
+  background: 'rgba(0,0,0,0)',
   foreground: '#1f2937',
   cursor: '#3358ff',
   cursorAccent: '#fafbfc',
@@ -589,9 +572,8 @@ function mountTerminal(sessionId) {
       smoothScrollDuration: 80,
       theme: currentTermTheme(),
       allowProposedApi: true,
-      // 让 codex/claude 内的复杂 TUI 控件正常工作
       windowsMode: false,
-      allowTransparency: false,
+      allowTransparency: true,    // 让 page 渐变透出来，无白卡
       macOptionIsMeta: true,
       rightClickSelectsWord: true,
       convertEol: false,
