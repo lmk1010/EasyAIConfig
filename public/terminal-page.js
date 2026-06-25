@@ -143,10 +143,6 @@ function renderTermSidebar() {
   const countEl = document.getElementById('eaTermSecCount');
   if (!listEl) return;
   if (countEl) countEl.textContent = String(tp.sessions.length);
-  if (!tp.sessions.length) {
-    listEl.innerHTML = '<div class="sec-empty">还没有会话 · 点右下角 + 新建</div>';
-    return;
-  }
   const esc = escapeHtml;
   const toolAccent = (tool) => tool === 'codex'
     ? '--accent-a:#ffd0a8;--accent-b:#ff8c5a'
@@ -163,7 +159,18 @@ function renderTermSidebar() {
     return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>';
   };
   const toolLabel = (tool) => tool === 'codex' ? 'Codex' : tool === 'claudecode' ? 'Claude Code' : tool || 'Shell';
-  listEl.innerHTML = tp.sessions.map((s) => {
+  // 顶部的 "+ 新建会话" 卡片永远在
+  const newSessionRow = `
+    <button type="button" class="sec-item sec-item-new" data-eat-launcher-toggle title="新建会话 (⌘T)">
+      <span class="sec-ico sec-ico-new">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      </span>
+      <span class="sec-text">
+        <span class="sec-name">新建会话</span>
+        <span class="sec-subtitle">codex · claude code · 自定义</span>
+      </span>
+    </button>`;
+  const sessionRows = tp.sessions.map((s) => {
     const isActive = s.id === tp.activeSessionId;
     return `
       <button type="button" class="sec-item ${isActive ? 'active' : ''}" data-eat-sec-tab="${esc(s.id)}" style="${toolAccent(s.tool)}">
@@ -175,6 +182,7 @@ function renderTermSidebar() {
         <span class="sec-chev" aria-hidden="true">›</span>
       </button>`;
   }).join('');
+  listEl.innerHTML = newSessionRow + sessionRows;
   // 状态栏的实时用量也同步刷新
   renderTermStatus();
 }
@@ -190,20 +198,6 @@ function renderTermStatus() {
 }
 
 window.renderTermSidebar = renderTermSidebar;
-
-// 侧边栏 "+" 按钮 → 打开 launcher popover
-function bindSidebarAddOnce() {
-  if (window.__eaTermSecAddBound) return;
-  const btn = document.getElementById('eaTermSecAdd');
-  if (!btn) return;
-  window.__eaTermSecAddBound = true;
-  btn.addEventListener('click', () => {
-    const tp = getState()?.terminalPage;
-    if (!tp) return;
-    tp.launcherOpen = true;
-    renderTerminalPage();
-  });
-}
 
 export function initTerminalPageState() {
   const st = getState();
@@ -346,7 +340,6 @@ export async function renderTerminalPage() {
   `;
 
   bindEvents(host);
-  bindSidebarAddOnce();
   // ghost session 不挂 xterm
   const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
   if (active && !active._ghost) {
@@ -683,6 +676,12 @@ function bindEvents(host) {
       const tp = getState()?.terminalPage;
       if (!tp) return;
       const target = e.target instanceof Element ? e.target : null;
+      const newBtn = target?.closest('[data-eat-launcher-toggle]');
+      if (newBtn && !target.closest('#eaTerminalPage')) {
+        tp.launcherOpen = !tp.launcherOpen;
+        renderTerminalPage();
+        return;
+      }
       const secTab = target?.closest('[data-eat-sec-tab]');
       if (secTab) {
         tp.activeSessionId = secTab.dataset.eatSecTab;
