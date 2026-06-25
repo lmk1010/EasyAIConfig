@@ -2498,6 +2498,28 @@ button.running {
   gap: 10px;
   margin-top: 12px;
 }
+.pdb-cwd-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.pdb-cwd-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.84rem;
+  background: rgba(127, 127, 127, 0.06);
+  border: 1px solid rgba(127, 127, 127, 0.18);
+  border-radius: 6px;
+  color: inherit;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.pdb-cwd-input:focus {
+  border-color: var(--accent, #3b82f6);
+  background: rgba(127, 127, 127, 0.02);
+}
 .pdb-ok    { color: #16a34a; }
 .pdb-warn  { color: #d97706; }
 .pdb-row { position: relative; }

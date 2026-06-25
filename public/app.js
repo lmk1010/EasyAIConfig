@@ -17823,7 +17823,7 @@ function renderProviders() {
     const bindTip = isBound
       ? `已绑定到当前项目 (${state.projectBinding?.cwd || ''})\n点击解绑`
       : '把当前项目绑定到这个 Provider — 之后从该目录启动 Codex 时自动用它';
-    const bindBtnLabel = isBound ? '📌 已绑定' : '📌 绑定项目';
+    const bindBtnLabel = isBound ? '已绑定' : '绑定项目';
     const bindBtnAction = isBound ? 'unbind' : 'bind';
     return `
     <div class="provider-card ${provider.isActive ? 'active' : ''} ${isBound ? 'is-project-bound' : ''}">
@@ -17833,7 +17833,7 @@ function renderProviders() {
             <span class="pdc-dot pdc-dot-${dot.tone}" title="${escapeHtml(dot.tip)}" aria-label="${escapeHtml(dot.label)}"></span>
             <strong>${escapeHtml(provider.name || provider.key)}</strong>
             <span class="pdc-status pdc-status-${dot.tone}" title="${escapeHtml(dot.tip)}">${escapeHtml(dot.label)}</span>
-            ${isBound ? '<span class="pdc-bound-pin" title="该项目已绑定到此 Provider，启动 Codex 时会自动切到这里">📌 本项目</span>' : ''}
+            ${isBound ? '<span class="pdc-bound-pin" title="该项目已绑定到此 Provider，启动 Codex 时会自动切到这里">本项目</span>' : ''}
           </div>
           <div class="provider-tag-row">
             ${provider.historyOnly ? '<span class="provider-pill muted">历史</span>' : ''}
@@ -18949,6 +18949,18 @@ function ensureProviderDetailEvents() {
   const container = document.getElementById('chDetail');
   if (!container) return;
   pdEventsBound = true;
+  // 项目绑定 tab 里 cwd 输入手动编辑后，把值同步到 launchCwdInput 并重查 binding
+  container.addEventListener('change', (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement) || target.id !== 'pdbCwdInput') return;
+    const v = target.value.trim();
+    const launchInput = el('launchCwdInput');
+    if (launchInput) launchInput.value = v;
+    refreshProjectBindingForCurrentCwd().then(() => {
+      renderProviderDetail({ force: true });
+      try { window.renderConnectionHub?.(); } catch (_) {}
+    });
+  });
   container.addEventListener('click', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
@@ -18967,6 +18979,34 @@ function ensureProviderDetailEvents() {
     if (target.closest('[data-pd-refresh-usage]')) { actionPdRefreshUsage(); return; }
     if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
     if (target.closest('[data-pd-copy-cmd]')) { actionPdCopyLaunchCmd(); return; }
+    // P0 #3：项目绑定 tab 的目录选择器
+    if (target.closest('[data-pdb-pick-dir]')) {
+      (async () => {
+        if (!window.__TAURI__ && !window.__TAURI_INTERNALS__) {
+          flash('Web 模式暂不支持原生目录选择，请手动输入路径', 'error');
+          return;
+        }
+        const cwdInput = document.getElementById('pdbCwdInput');
+        const initialPath = cwdInput?.value?.trim() || el('launchCwdInput')?.value?.trim() || '';
+        const res = await api('/api/path/pick-directory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: '选择项目目录', initialPath }),
+        });
+        if (!res?.ok) { flash(res?.error || '打开目录选择器失败', 'error'); return; }
+        if (!res.data?.selected) return;
+        const picked = res.data.path || '';
+        if (!picked) return;
+        // 同步到 launchCwdInput（保持「项目绑定 / 启动 cwd」同源）
+        const launchInput = el('launchCwdInput');
+        if (launchInput) launchInput.value = picked;
+        if (cwdInput) cwdInput.value = picked;
+        await refreshProjectBindingForCurrentCwd();
+        renderProviderDetail({ force: true });
+        try { window.renderConnectionHub?.(); } catch (_) {}
+      })();
+      return;
+    }
     // P0 #3：项目绑定 tab 内的按钮
     if (target.closest('[data-pd-bind]')) {
       (async () => {
@@ -19217,7 +19257,7 @@ function renderProviderDetail(options = {}) {
     { id: 'usage',    label: '用量' },
     { id: 'test',     label: '测试' },
     { id: 'health',   label: '健康' },
-    { id: 'binding',  label: '📌 项目绑定' },
+    { id: 'binding',  label: '项目绑定' },
   ];
   // .pd-tab-anim 只在 tab 真切换 / 首次打开时加，平时数据刷新不再播 220ms 动画
   const animClass = tabChanged ? ' pd-tab-anim' : '';
@@ -19360,45 +19400,23 @@ function renderPdBinding(row) {
     return `<div class="pd-empty"><p>本 Provider 仅在本地草稿，先保存后再绑定。</p></div>`;
   }
 
-  // 状态卡：三种情况
-  let statusCard = '';
+  // 状态行：根据是否填了 cwd / 是否已绑 显示不同操作按钮
+  let statusRow, actionBtn;
   if (!currentCwd) {
-    statusCard = `
-      <div class="pd-section">
-        <div class="pd-section-title">当前项目目录</div>
-        <div class="pd-info-grid"><div class="pd-info-row"><span>未设置</span><code>在顶部「启动 Codex」处填绝对路径</code></div></div>
-      </div>`;
+    statusRow = `<div class="pd-info-row"><span>状态</span><code>请先选择/填写项目目录</code></div>`;
+    actionBtn = '';
   } else if (isBoundToThisProvider) {
-    statusCard = `
-      <div class="pd-section">
-        <div class="pd-section-title">绑定状态</div>
-        <div class="pd-info-grid">
-          <div class="pd-info-row"><span>项目目录</span><code>${esc(currentCwd)}</code></div>
-          <div class="pd-info-row"><span>状态</span><code class="pdb-ok">已绑定到本 Provider</code></div>
-        </div>
-        <div class="pd-binding-actions"><button type="button" class="pd-chip-btn is-danger" data-pd-unbind>解绑当前项目</button></div>
-      </div>`;
+    statusRow = `<div class="pd-info-row"><span>状态</span><code class="pdb-ok">已绑定到本 Provider</code></div>`;
+    actionBtn = `<button type="button" class="pd-chip-btn is-danger" data-pd-unbind>解绑当前项目</button>`;
   } else if (hasOtherBinding) {
-    statusCard = `
-      <div class="pd-section">
-        <div class="pd-section-title">绑定状态</div>
-        <div class="pd-info-grid">
-          <div class="pd-info-row"><span>项目目录</span><code>${esc(currentCwd)}</code></div>
-          <div class="pd-info-row"><span>当前绑定</span><code class="pdb-warn">${esc(otherProviderName)}</code></div>
-        </div>
-        <div class="pd-binding-actions"><button type="button" class="pd-chip-btn is-primary" data-pd-bind>改绑到本 Provider</button></div>
-      </div>`;
+    statusRow = `<div class="pd-info-row"><span>当前绑定</span><code class="pdb-warn">${esc(otherProviderName)}</code></div>`;
+    actionBtn = `<button type="button" class="pd-chip-btn is-primary" data-pd-bind>改绑到本 Provider</button>`;
   } else {
-    statusCard = `
-      <div class="pd-section">
-        <div class="pd-section-title">绑定状态</div>
-        <div class="pd-info-grid">
-          <div class="pd-info-row"><span>项目目录</span><code>${esc(currentCwd)}</code></div>
-          <div class="pd-info-row"><span>状态</span><code>未绑定</code></div>
-        </div>
-        <div class="pd-binding-actions"><button type="button" class="pd-chip-btn is-primary" data-pd-bind>绑定到当前项目</button></div>
-      </div>`;
+    statusRow = `<div class="pd-info-row"><span>状态</span><code>未绑定</code></div>`;
+    actionBtn = `<button type="button" class="pd-chip-btn is-primary" data-pd-bind>绑定到当前项目</button>`;
   }
+
+  const showPickerBtn = Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__);
 
   return `
     <div class="pd-overview">
@@ -19407,7 +19425,17 @@ function renderPdBinding(row) {
         <div class="pdb-note">绑定后，从该目录启动 Codex 时自动用本 Provider。同 <code>.nvmrc</code> / <code>.python-version</code> 的项目级路由思路。</div>
       </div>
 
-      ${statusCard}
+      <div class="pd-section">
+        <div class="pd-section-title">项目目录</div>
+        <div class="pdb-cwd-row">
+          <input type="text" id="pdbCwdInput" class="pdb-cwd-input" placeholder="/Users/you/some/project" value="${esc(currentCwd)}" autocomplete="off" spellcheck="false" />
+          ${showPickerBtn ? '<button type="button" class="pd-chip-btn" data-pdb-pick-dir>选择…</button>' : ''}
+        </div>
+        <div class="pd-info-grid" style="margin-top:10px;">
+          ${statusRow}
+        </div>
+        ${actionBtn ? `<div class="pd-binding-actions">${actionBtn}</div>` : ''}
+      </div>
 
       ${myBindings.length ? `
         <div class="pd-section">
@@ -24837,11 +24865,11 @@ loadTools();
       dotTip = '尚未探测。点 ↻ 重检 或等自动 ping';
     }
 
-    // P0 #3：当前 cwd 绑定到此 provider 时高亮 + 📌 pin
+    // P0 #3：当前 cwd 绑定到此 provider 时显示一个轻量「本项目」标签
     const boundKey = currentBoundProviderKey();
     const isBound = boundKey && r.key === boundKey && r.mode === 'apikey';
     const boundPin = isBound
-      ? `<span class="ch-row-bound-pin" title="该 Provider 已绑定到当前项目 ${safeEscape(state.projectBinding?.cwd || '')}\n下次启动 Codex 时自动用它">📌 本项目</span>`
+      ? `<span class="ch-row-bound-pin" title="该 Provider 已绑定到当前项目 ${safeEscape(state.projectBinding?.cwd || '')}，启动 Codex 时自动用它">本项目</span>`
       : '';
 
     let actions = '';
