@@ -52,11 +52,9 @@ async function installTermEventListeners() {
     inst.recvBytes += chunk.length;
     inst.cursor += chunk.length;
 
-    // 解析 codex / claude 的 token 行 — 大部分 TUI 会 inline 打印
-    // "input: 12,345 ▴ cached: 8,200 ▴ output: 423" 这种格式
-    parseTokenChunk(inst, chunk);
-    // 抓取最近一次"输入"内容（粗略）
-    // 节流 sidebar + 状态栏重渲染 (rAF)
+    // 不再 regex 解 TUI 文本（容易把 "output_tokens" 字样误判）。
+    // 真 token 走 terminal-tokens 事件（Rust 直接 tail codex jsonl）
+    // 节流 sidebar + 状态栏重渲染 (rAF) — 字节计数仍然更新
     if (!inst._sidebarRaf) {
       inst._sidebarRaf = requestAnimationFrame(() => {
         inst._sidebarRaf = 0;
@@ -251,7 +249,6 @@ export async function renderTerminalPage() {
 
   host.innerHTML = `
     <div class="ea-term-shell">
-      ${renderTabStrip(tp)}
       <div class="ea-term-canvas">
         <div class="ea-term-host" id="eaTermHost"></div>
         ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 点右下角 <kbd>+</kbd> 新建 · 或 <kbd>⌘T</kbd> 配置启动 · <kbd>⌘K</kbd> 命令面板</div>'}

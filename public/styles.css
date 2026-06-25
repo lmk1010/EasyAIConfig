@@ -26446,10 +26446,10 @@ body {
 /* ─── 内置终端页面 (ea-term-*) ───────────────────────────────────── */
 .shell-v2 .page-view[data-page="terminal"] { padding: 0; overflow: hidden; }
 .shell-v2 .ea-term { height: 100%; min-height: 0; }
-/* 布局：tab → 终端 → status；浮按钮固定右下；popover 覆盖在整片之上 */
+/* 顶部 tab 撤了（左侧 sidebar 已经列出 sessions）；终端占满整个垂直空间 */
 .shell-v2 .ea-term-shell {
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: 1fr auto;
   gap: 0;
   height: 100%;
   background: transparent;
