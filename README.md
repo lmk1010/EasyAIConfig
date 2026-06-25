@@ -22,6 +22,12 @@
 
 ## [Core] 已支持功能（当前版本）
 
+### [What's New] v1.0.54
+
+- 安全：npm 发包瘦身 — 加 `files` 字段，tarball 从 11.3MB / 140 文件 → 1.3MB / 34 文件
+- 安全：Tauri CSP 收紧 — `'self' + tauri: + 仅 GitHub/api.github.com 出站`，关闭 XSS / 远程脚本面
+- 清理：`.idea/` `.neox/` 不再入 git；测试脚本 .txt 全部清空
+
 ### [What's New] v1.0.53
 
 - 新增：**支持的模型** 卡片化管理 — Provider 详情页一行一个模型，点击即可设为默认，悬停删除
@@ -273,8 +279,8 @@ npx tauri signer generate -w ~/.tauri/easyaiconfig.key
 推送 tag 即可触发自动构建与发布：
 
 ```bash
-git tag v1.0.53
-git push origin v1.0.53
+git tag v1.0.54
+git push origin v1.0.54
 ```
 
 ## [Contributing] 贡献

@@ -4,6 +4,12 @@ node_modules/
 *.log
 dist/
 
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+.neox/
+
 # Tauri build artifacts
 src-tauri/target/
 src-tauri/WixTools/
