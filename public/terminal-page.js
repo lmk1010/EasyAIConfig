@@ -82,7 +82,7 @@ export async function renderTerminalPage() {
       ${renderTabStrip(tp)}
       <div class="ea-term-canvas">
         <div class="ea-term-host" id="eaTermHost"></div>
-        ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 点右下角 <kbd>⚙</kbd> 打开配置 · 或 <kbd>⌘K</kbd> 命令面板</div>'}
+        ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 点右下角 <kbd>+</kbd> 新建 · 或 <kbd>⌘T</kbd> 配置启动 · <kbd>⌘K</kbd> 命令面板</div>'}
       </div>
       ${renderStatusBar(tp)}
       ${renderFab(tp)}
@@ -597,7 +597,7 @@ async function closeSession(sessionId) {
   renderTerminalPage();
 }
 
-// Termius / electerm 风格：终端永远深色（dark surface），跟 app 主题解耦
+// 终端跟随 app 主题：dark / light 各一套完整 palette
 const TERM_THEME_DARK = {
   background: '#0b1020',
   foreground: '#e6ecf5',
@@ -624,27 +624,27 @@ const TERM_THEME_DARK = {
   brightWhite:  '#f6f8fa',
 };
 const TERM_THEME_LIGHT = {
-  background: '#0e1322',
-  foreground: '#e6ecf5',
+  background: '#f7f8fc',
+  foreground: '#1f2937',
   cursor: '#3358ff',
-  cursorAccent: '#fafbfc',
+  cursorAccent: '#ffffff',
   selectionBackground: 'rgba(51,88,255,0.22)',
-  selectionForeground: '#1f2937',
+  selectionForeground: '#0f172a',
   black:        '#0f172a',
   red:          '#dc2626',
-  green:        '#16a34a',
-  yellow:       '#ca8a04',
+  green:        '#15803d',
+  yellow:       '#b45309',
   blue:         '#2563eb',
-  magenta:      '#9333ea',
-  cyan:         '#0891b2',
+  magenta:      '#7c3aed',
+  cyan:         '#0e7490',
   white:        '#475569',
-  brightBlack:  '#475569',
+  brightBlack:  '#64748b',
   brightRed:    '#ef4444',
-  brightGreen:  '#22c55e',
-  brightYellow: '#eab308',
+  brightGreen:  '#16a34a',
+  brightYellow: '#ca8a04',
   brightBlue:   '#3b82f6',
-  brightMagenta:'#a855f7',
-  brightCyan:   '#06b6d4',
+  brightMagenta:'#9333ea',
+  brightCyan:   '#0891b2',
   brightWhite:  '#0f172a',
 };
 
