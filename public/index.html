@@ -33,6 +33,12 @@
               <path d="M7 9l3 3-3 3M13 15h4" />
             </svg>
           </button>
+          <button type="button" class="rail-btn" data-page-target="terminal" data-tip="内置终端" aria-label="内置终端">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="16" rx="2.4" />
+              <path d="M6 8l3.5 3.5L6 15M12 15h6" />
+            </svg>
+          </button>
           <button type="button" class="rail-btn" data-page-target="dashboard" data-tip="数据看板" aria-label="数据看板">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 20h18" />
@@ -843,6 +849,12 @@
               <span id="tcDotClaude" hidden></span>
               <span id="tcDotOpenCode" hidden></span>
               <span id="tcDotOpenClaw" hidden></span>
+            </div>
+          </section>
+
+          <section class="page-view" data-page="terminal">
+            <div class="ea-term" id="eaTerminalPage">
+              <!-- Rendered by renderTerminalPage() -->
             </div>
           </section>
 
@@ -3669,6 +3681,7 @@
   </main>
   <script src="/vendor/ace/ace.js"></script>
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/terminal-page.js"></script>
   <!-- ═══ Recipe Input Form Modal ═══ -->
   <div id="ocRecipeFormModal" class="oc-recipe-modal hide">
     <div class="oc-recipe-modal-backdrop"></div>

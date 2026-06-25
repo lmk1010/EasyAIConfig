@@ -6285,6 +6285,7 @@ const PAGE_META = {
   quick: { eyebrow: 'QUICK SETUP', title: '一键配置', subtitle: '输入 URL 和 API Key，剩下交给 EasyAIConfig。' },
   providers: { eyebrow: 'Providers', title: 'Provider 与备份', subtitle: '集中查看已发现配置、检测状态与历史备份。' },
   console: { eyebrow: 'Console', title: '运行控制台', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的运行状态、异常检测与快速修复入口。' },
+  terminal: { eyebrow: 'Terminal', title: '内置终端', subtitle: '一站启动 codex / claude code，多会话 tab、token 实时监控与命令面板。' },
   dashboard: { eyebrow: 'Dashboard', title: '数据看板', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的状态、用量与趋势。' },
   tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新、重装或卸载 AI 编程工具。' },
   tasks: { eyebrow: 'Tasks', title: '任务管理', subtitle: '查看当前进行中和历史安装任务。' },
@@ -11947,6 +11948,20 @@ function setPage(page = 'quick') {
   // Render tasks page on navigate
   if (page !== 'dashboard') stopDashboardAutoRefresh();
   if (page !== 'console') disposeEmbeddedTerminalInstance();
+  if (page === 'terminal') {
+    // 给独立模块 terminal-page.js 暴露必要的全局
+    try {
+      window.state = state;
+      window.api = api;
+      window.flash = flash;
+      window.escapeHtml = escapeHtml;
+    } catch (_) {}
+    try {
+      if (typeof window.renderTerminalPage === 'function') {
+        Promise.resolve(window.renderTerminalPage()).catch(() => {});
+      }
+    } catch (_) {}
+  }
   if (page === 'tasks') renderTasksPage();
   if (page === 'console') {
     renderToolConsole();
