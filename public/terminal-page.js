@@ -129,7 +129,7 @@ async function installTermEventListeners() {
     console.error('[ea-term] TOKEN WRITE OK input=', tokens.input, 'output=', tokens.output, 'sess?', !!sess);
     try {
       // 状态栏内部 HTML 直接重渲染
-      const host = document.getElementById('eaTermPage');
+      const host = document.getElementById('eaTerminalPage');
       const statusEl = host?.querySelector('.ea-term-status');
       if (statusEl) {
         statusEl.innerHTML = renderStatusBarInner(tp);
@@ -243,7 +243,7 @@ function renderTermSidebar() {
 function renderTermStatus() {
   const tp = getState()?.terminalPage;
   if (!tp) { console.warn('[ea-term] renderTermStatus: tp missing'); return; }
-  const host = document.getElementById('eaTermPage');
+  const host = document.getElementById('eaTerminalPage');
   if (!host) { console.warn('[ea-term] renderTermStatus: host missing'); return; }
   const statusEl = host.querySelector('.ea-term-status');
   if (!statusEl) { console.warn('[ea-term] renderTermStatus: .ea-term-status missing'); return; }
