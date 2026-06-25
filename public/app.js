@@ -18883,24 +18883,39 @@ async function bindPdModelsEvents() {
     }
   });
 
-  root.querySelector('[data-pd-models-refetch]')?.addEventListener('click', async () => {
+  root.querySelector('[data-pd-models-refetch]')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const btn = e.currentTarget;
+    if (btn.dataset.busy === '1') return;
+    btn.dataset.busy = '1';
+    const originalText = btn.textContent;
+    btn.textContent = '检测中…';
+    btn.disabled = true;
     const detail = state.providerDetail;
-    detail.modelsLoading = true;
-    renderProviderDetail();
     try {
       const res = await api('/api/provider/test-saved', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ providerKey, tool: state.activeTool || 'codex', codexHome: codexHome || '' }),
       });
-      if (res?.ok && Array.isArray(res.data?.models)) {
+      // res.data.models 或 res.data.raw.data 都尝试
+      const models = (Array.isArray(res?.data?.models) && res.data.models)
+        || (Array.isArray(res?.data?.raw?.data) && res.data.raw.data.map((m) => m.id || m).filter(Boolean))
+        || [];
+      if (res?.ok && models.length) {
         detail.detected = detail.detected || {};
-        detail.detected[providerKey] = { models: res.data.models, at: Date.now() };
-        flash(`检测到 ${res.data.models.length} 个模型`, 'success');
-      } else {
-        flash(`拉取失败: ${res?.error || res?.data?.error || '未知'}`, 'warning');
+        detail.detected[providerKey] = { models, at: Date.now() };
+        flash(`检测到 ${models.length} 个模型`, 'success');
+        renderProviderDetail();  // 唯一一次 render，避免 race
+        return;
       }
-    } catch (err) { flash(`拉取异常: ${err.message || err}`, 'warning'); }
-    finally { detail.modelsLoading = false; renderProviderDetail(); }
+      flash(`拉取失败: ${res?.error || res?.data?.error || (res?.ok ? '响应里没有模型列表' : '未知')}`, 'warning');
+    } catch (err) {
+      flash(`拉取异常: ${err.message || err}`, 'warning');
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+      delete btn.dataset.busy;
+    }
   });
 }
 

@@ -724,7 +724,7 @@
                     </div>
 
                     <label class="field field-wide model-field">
-                      <span>可用模型</span>
+                      <span>当前默认模型</span>
                       <div class="model-select-row">
                         <div class="select-wrap" style="flex:1;min-width:0">
                           <select id="modelSelect" data-empty-placeholder="true">
@@ -740,6 +740,19 @@
                         </button>
                       </div>
                     </label>
+
+                    <div id="modelSupportedField" class="field field-wide model-supported-field">
+                      <div class="model-supported-head">
+                        <span class="model-supported-label">支持的模型 <span class="model-supported-count" id="modelSupportedCount">0</span></span>
+                        <button type="button" id="modelSupportedManageBtn" class="model-supported-manage">
+                          管理
+                          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 3l5 5-5 5"/></svg>
+                        </button>
+                      </div>
+                      <div class="model-supported-chips" id="modelSupportedChips">
+                        <span class="model-supported-empty">还没添加 · 点「管理」去模型支持页配置</span>
+                      </div>
+                    </div>
                   </div>
 
                   <div id="modelChips" class="chips hide"></div>
