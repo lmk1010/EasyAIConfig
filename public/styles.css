@@ -27281,18 +27281,31 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 }
 .shell-v2 .ea-term-ghost-btn-secondary:hover { color: var(--text); }
 
-/* 会话侧边栏 "+" 按钮 */
-.sec-group-head .sec-group-add {
-  margin-left: auto; margin-right: 8px;
-  width: 22px; height: 22px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: transparent; border: none; color: var(--muted);
-  border-radius: 7px; cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+/* "+ 新建会话" 列表项：永远在会话列表顶部 */
+.sec-list .sec-item-new {
+  border: 1px dashed rgba(120,140,180,0.30) !important;
+  background: transparent !important;
+  margin-bottom: 4px;
 }
-.sec-group-head .sec-group-add:hover {
-  background: rgba(91,140,255,0.14);
-  color: #5b8cff;
+.sec-list .sec-item-new:hover {
+  border-color: rgba(91,140,255,0.55) !important;
+  background: rgba(91,140,255,0.06) !important;
+}
+.sec-list .sec-item-new .sec-ico-new {
+  background: rgba(91,140,255,0.10) !important;
+  color: #5b8cff !important;
+  box-shadow: none !important;
+}
+.sec-list .sec-item-new:hover .sec-ico-new {
+  background: rgba(91,140,255,0.18) !important;
+}
+.sec-list .sec-item-new .sec-name {
+  color: var(--text) !important;
+  font-weight: 600;
+}
+.sec-list .sec-item-new .sec-subtitle {
+  opacity: 0.55;
+  font-size: 0.62rem;
 }
 
 /* 终端会话侧栏：滚动 + 视觉降密 */
