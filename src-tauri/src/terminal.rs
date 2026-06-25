@@ -156,7 +156,11 @@ fn build_command_preview(program: &str, args: &[String]) -> String {
 /// codex 启动后会在 ~/.codex/sessions/YYYY/MM/DD/ 新写一个 jsonl，我们等几百毫秒
 /// 让它出现，找 mtime > spawn_time 的最新一个，从头读，每读到一个 token_count
 /// emit "terminal-tokens" 给前端。
-fn watch_codex_session_tokens(session: &Arc<TerminalSession>, spawn_time: std::time::SystemTime) {
+fn watch_codex_session_tokens(
+  session: &Arc<TerminalSession>,
+  spawn_time: std::time::SystemTime,
+  codex_pid: Option<u32>,
+) {
   let session_id = session.id.clone();
   let codex_home = match crate::default_codex_home() {
     Ok(p) => p,
@@ -171,22 +175,32 @@ fn watch_codex_session_tokens(session: &Arc<TerminalSession>, spawn_time: std::t
     return;
   }
 
-  // 等最多 30 秒找新 jsonl（skills/MCP 慢；codex 可能在 spawn 后 10s 才写第一行）
-  // mtime 比较留 60s 容忍：跨进程文件系统时钟可能有偏差，宁可匹配近一分钟内动过的
+  // 找 jsonl 的两条路：
+  // (1) lsof 问 codex 进程开的 .jsonl —— 最快最准
+  // (2) 兜底：在 sessions_root 下扫 mtime 最新的（容忍 60s 时钟偏差）
   let watch_cutoff = spawn_time
     .checked_sub(std::time::Duration::from_secs(60))
     .unwrap_or(spawn_time);
-  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
   let mut target: Option<PathBuf> = None;
   while std::time::Instant::now() < deadline {
+    // 1. lsof 直查
+    if let Some(pid) = codex_pid {
+      if let Some(path) = find_codex_jsonl_via_lsof(pid) {
+        log::info!("[token-watcher] lsof hit: pid={pid} → {path:?}");
+        target = Some(path);
+        break;
+      }
+    }
+    // 2. fallback：扫目录
     if let Some(path) = find_latest_codex_jsonl_after(&sessions_root, watch_cutoff) {
       target = Some(path);
       break;
     }
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    std::thread::sleep(std::time::Duration::from_millis(500));
   }
   let Some(target) = target else {
-    log::warn!("[token-watcher] no jsonl found for session {session_id} after 30s under {sessions_root:?}");
+    log::warn!("[token-watcher] no jsonl found for session {session_id} after 45s; pid={codex_pid:?} root={sessions_root:?}");
     return;
   };
   log::info!("[token-watcher] tailing {target:?} for session {session_id}");
@@ -246,6 +260,36 @@ fn watch_codex_session_tokens(session: &Arc<TerminalSession>, spawn_time: std::t
       }
     }
     std::thread::sleep(std::time::Duration::from_millis(500));
+  }
+}
+
+/// 用 lsof 问 codex 进程开了哪些 .jsonl 文件。
+/// macOS / Linux 都有 lsof；Windows 上失败直接走 fallback。
+fn find_codex_jsonl_via_lsof(pid: u32) -> Option<PathBuf> {
+  #[cfg(not(target_os = "windows"))]
+  {
+    use std::process::Command;
+    // lsof -p <pid> -Fn 输出每行以 n 开头是路径；其他类型字段（pf 等）忽略
+    let out = Command::new("lsof").args(["-p", &pid.to_string(), "-Fn"]).output().ok()?;
+    if !out.status.success() { return None; }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut best: Option<PathBuf> = None;
+    for line in text.lines() {
+      let Some(rest) = line.strip_prefix('n') else { continue; };
+      // 过滤 codex 写的 session jsonl
+      if rest.ends_with(".jsonl") && (rest.contains("/.codex/sessions/") || rest.contains("/sessions/")) {
+        // 优先 rollout-*.jsonl（codex 自己起的名）
+        let path = PathBuf::from(rest);
+        if rest.contains("rollout-") { return Some(path); }
+        if best.is_none() { best = Some(path); }
+      }
+    }
+    return best;
+  }
+  #[cfg(target_os = "windows")]
+  {
+    let _ = pid;
+    None
   }
 }
 
@@ -328,10 +372,12 @@ pub(crate) fn spawn_embedded_terminal(
   });
 
   // 若是 codex 会话，启动一个 jsonl watcher 抓 token_count 事件
+  // 优先用 lsof 拿 codex 进程开的真实 jsonl，避免 mtime 猜错
   if tool.eq_ignore_ascii_case("codex") {
     let session_for_watch = Arc::clone(&session);
     let spawn_time = std::time::SystemTime::now();
-    std::thread::spawn(move || watch_codex_session_tokens(&session_for_watch, spawn_time));
+    let codex_pid = session.runtime.lock().ok().and_then(|r| r.child.process_id());
+    std::thread::spawn(move || watch_codex_session_tokens(&session_for_watch, spawn_time, codex_pid));
   }
 
   let session_for_reader = Arc::clone(&session);
