@@ -79,13 +79,14 @@ export async function renderTerminalPage() {
 
   host.innerHTML = `
     <div class="ea-term-shell">
-      ${renderTopBar(tp, allProviders)}
       ${renderTabStrip(tp)}
       <div class="ea-term-canvas">
         <div class="ea-term-host" id="eaTermHost"></div>
-        ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 选好 Provider 点 <strong>启动</strong> · 或 <kbd>⌘K</kbd> 打开命令面板</div>'}
+        ${tp.sessions.length ? '' : '<div class="ea-term-empty">还没有会话 · 点右下角 <kbd>⚙</kbd> 打开配置 · 或 <kbd>⌘K</kbd> 命令面板</div>'}
       </div>
       ${renderStatusBar(tp)}
+      ${renderFab(tp)}
+      ${tp.launcherOpen ? renderLauncherPopover(tp, allProviders) : ''}
     </div>
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
   `;
@@ -96,6 +97,57 @@ export async function renderTerminalPage() {
   if (active) {
     mountTerminal(active.id);
   }
+}
+
+function renderFab(tp) {
+  const open = Boolean(tp.launcherOpen);
+  return `
+    <button type="button" class="ea-term-fab ${open ? 'is-open' : ''}" data-eat-fab title="新建终端 / 配置启动参数">
+      ${open
+        ? '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>'
+        : '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M2 8h12"/></svg>'}
+    </button>`;
+}
+
+function renderLauncherPopover(tp, providers) {
+  const esc = escapeHtml;
+  const opts = providers.map((p) => `<option value="${esc(p.key)}" ${p.key === tp.launcher.providerKey ? 'selected' : ''}>${p.isActive ? '● ' : ''}${esc(p.name || p.key)}</option>`).join('');
+  return `
+    <div class="ea-term-launcher-pop" data-eat-launcher-scrim>
+      <div class="ea-term-launcher-card">
+        <div class="ea-term-launcher-head">
+          <span class="ea-term-launcher-eyebrow">NEW SESSION</span>
+          <button type="button" class="ea-term-launcher-close" data-eat-launcher-close title="关闭 (Esc)">×</button>
+        </div>
+        <div class="ea-term-launcher-body">
+          <label class="ea-term-launcher-field">
+            <span>工具</span>
+            <select data-eat-launch="tool">
+              <option value="codex" ${tp.launcher.tool === 'codex' ? 'selected' : ''}>Codex</option>
+              <option value="claudecode" ${tp.launcher.tool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
+            </select>
+          </label>
+          <label class="ea-term-launcher-field">
+            <span>Provider</span>
+            <select data-eat-launch="providerKey">${opts || '<option value="">无可用 provider</option>'}</select>
+          </label>
+          <label class="ea-term-launcher-field ea-term-launcher-field-wide">
+            <span>工作目录</span>
+            <input type="text" data-eat-launch="cwd" placeholder="默认 = $HOME" value="${esc(tp.launcher.cwd || '')}"/>
+          </label>
+          <label class="ea-term-launcher-field ea-term-launcher-field-wide">
+            <span>启动参数</span>
+            <input type="text" data-eat-launch="flags" value="${esc(tp.launcher.flags || '')}" placeholder="--flag …"/>
+          </label>
+        </div>
+        <div class="ea-term-launcher-foot">
+          <button type="button" class="ea-term-launcher-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v12l10-6z"/></svg>
+            ${tp.starting ? '启动中…' : '启动'}
+          </button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderTopBar(tp, providers) {
@@ -144,15 +196,15 @@ function renderStatusBar(tp) {
 
 function renderTabStrip(tp) {
   const esc = escapeHtml;
-  if (!tp.sessions.length) return '<div class="ea-term-tabs ea-term-tabs-empty"></div>';
   return `
-    <div class="ea-term-tabs">
+    <div class="ea-term-tabs ${tp.sessions.length ? '' : 'is-empty'}">
       ${tp.sessions.map((s) => `
         <button type="button" class="ea-term-tab ${s.id === tp.activeSessionId ? 'is-active' : ''}" data-eat-tab="${esc(s.id)}">
           <span class="ea-term-tab-dot ${s.running ? 'is-on' : ''}"></span>
           <span class="ea-term-tab-label">${esc(s.title || s.command || s.id.slice(0, 8))}</span>
           <span class="ea-term-tab-close" data-eat-tab-close="${esc(s.id)}" title="关闭">×</span>
         </button>`).join('')}
+      ${tp.sessions.length ? '<button type="button" class="ea-term-tab-new" data-eat-tab-new title="新建终端 (⌘T)"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2v12M2 8h12"/></svg></button>' : ''}
     </div>`;
 }
 
@@ -251,7 +303,16 @@ function onClick(e) {
   if (!(t instanceof Element)) return;
   const tp = getState().terminalPage;
   if (t.closest('[data-eat-spawn]')) { spawnSession(); return; }
-  if (t.closest('[data-eat-launcher-toggle]')) { tp._launcherOpen = !tp._launcherOpen; renderTerminalPage(); return; }
+  if (t.closest('[data-eat-fab]') || t.closest('[data-eat-tab-new]')) {
+    tp.launcherOpen = !tp.launcherOpen;
+    renderTerminalPage();
+    return;
+  }
+  if (t.closest('[data-eat-launcher-close]')) { tp.launcherOpen = false; renderTerminalPage(); return; }
+  if (t.closest('[data-eat-launcher-scrim]') && !t.closest('.ea-term-launcher-card')) {
+    tp.launcherOpen = false; renderTerminalPage(); return;
+  }
+  if (t.closest('[data-eat-launcher-toggle]')) { tp.launcherOpen = !tp.launcherOpen; renderTerminalPage(); return; }
   if (t.closest('[data-eat-search]')) { openSearch(); return; }
   if (t.closest('[data-eat-palette]')) { tp.paletteOpen = true; renderTerminalPage(); return; }
   if (t.closest('[data-eat-palette-scrim]') && !t.closest('.ea-term-palette-box')) {
@@ -315,8 +376,16 @@ function onGlobalKey(e) {
   if (meta && e.key === '-') {
     e.preventDefault(); bumpFontSize(-1); return;
   }
+  // ⌘T 新建终端
+  if (meta && e.key.toLowerCase() === 't') {
+    e.preventDefault();
+    st.terminalPage.launcherOpen = !st.terminalPage.launcherOpen;
+    renderTerminalPage();
+    return;
+  }
   if (e.key === 'Escape') {
     if (st.terminalPage.paletteOpen) { st.terminalPage.paletteOpen = false; renderTerminalPage(); return; }
+    if (st.terminalPage.launcherOpen) { st.terminalPage.launcherOpen = false; renderTerminalPage(); return; }
     closeSearch();
   }
 }
@@ -441,17 +510,22 @@ async function spawnSession() {
   if (!tp.launcher.providerKey) { flash('请先选 provider', 'warning'); return; }
   const bin = TOOL_LAUNCH_BIN[tp.launcher.tool] || tp.launcher.tool;
   const args = (tp.launcher.flags || '').trim().split(/\s+/).filter(Boolean);
-  const command = [bin, ...args];
+  const title = `${bin}${args.length ? ' ' + args[0] : ''}`;
+  const commandPreview = [bin, ...args].join(' ');
   tp.starting = true;
   renderTerminalPage();
   try {
+    // 后端期望 program + args，不是 command 数组
     const res = await api('/api/terminal/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         tool: tp.launcher.tool,
-        command,
+        program: bin,
+        args,
         cwd: tp.launcher.cwd || '',
+        title,
+        commandPreview,
         cols: 120,
         rows: 32,
       }),
@@ -460,6 +534,7 @@ async function spawnSession() {
       const session = normalizeSession(res.data.terminalSession);
       tp.sessions.unshift(session);
       tp.activeSessionId = session.id;
+      tp.launcherOpen = false; // 启动后自动收 popover
       flash(`已启动 ${bin}`, 'success');
     } else {
       flash(`启动失败: ${res?.error || '未知'}`, 'error');
