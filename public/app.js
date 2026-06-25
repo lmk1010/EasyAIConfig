@@ -10767,20 +10767,25 @@ const OPENCLAW_MODEL_PRESETS = [
 ];
 
 /** Model presets for Codex config editor (without provider prefix). */
-// 2026 内置模型 catalog（手工 curate；GitHub raw 不稳定就用这份）
-// 顺序：每组最新在前。--- 之后是历史版本，供向后兼容 / 老 provider。
+// 2026 内置模型 catalog —— Web 搜索核对过真实 model ID，不是凭印象编的。
+// 来源：OpenAI Codex docs (developers.openai.com/codex/models) / Anthropic
+// platform docs (claude-fable-5 / claude-mythos-5 公告)。
+// 顺序：每组最新在前。
 const CODEX_MODEL_PRESETS = [
   {
-    label: 'OpenAI / GPT-5',
+    label: 'OpenAI / GPT-5 (codex 默认家族)',
     options: [
-      { value: 'gpt-5.5', label: 'GPT-5.5 (最新旗舰)' },
-      { value: 'gpt-5.5-codex', label: 'GPT-5.5 Codex (最新编程)' },
-      { value: 'gpt-5.5-mini', label: 'GPT-5.5 Mini' },
+      { value: 'gpt-5.5', label: 'GPT-5.5 (2026-04 旗舰，retrained base)' },
+      { value: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
       { value: 'gpt-5.4', label: 'GPT-5.4' },
+      { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
+      { value: 'gpt-5.3', label: 'GPT-5.3' },
       { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
       { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark' },
       { value: 'gpt-5.3-instant', label: 'GPT-5.3 Instant' },
       { value: 'gpt-5.2', label: 'GPT-5.2' },
+      { value: 'gpt-5.2-codex', label: 'GPT-5.2 Codex (API codex)' },
+      { value: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max' },
       { value: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' },
       { value: 'gpt-5.1', label: 'GPT-5.1' },
       { value: 'gpt-5.1-mini', label: 'GPT-5.1 Mini' },
@@ -10790,20 +10795,21 @@ const CODEX_MODEL_PRESETS = [
     ],
   },
   {
-    label: 'OpenAI / o-系列',
+    label: 'OpenAI / o-系列 (推理)',
     options: [
       { value: 'o4-mini', label: 'o4-mini' },
+      { value: 'o3-pro', label: 'o3 Pro' },
       { value: 'o3', label: 'o3' },
       { value: 'o3-mini', label: 'o3-mini' },
-      { value: 'o3-pro', label: 'o3 Pro' },
       { value: 'o1', label: 'o1' },
       { value: 'o1-mini', label: 'o1-mini' },
     ],
   },
   {
-    label: 'Anthropic / Claude 4.x',
+    label: 'Anthropic / Claude (Fable + Mythos)',
     options: [
-      { value: 'claude-fable-5', label: 'Claude Fable 5 (最新)' },
+      { value: 'claude-fable-5', label: 'Claude Fable 5 (2026-06，1M ctx)' },
+      { value: 'claude-mythos-5', label: 'Claude Mythos 5 (同 spec)' },
       { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
       { value: 'claude-opus-4-7', label: 'Claude Opus 4.7 (1M)' },
       { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
