@@ -754,48 +754,60 @@ async function pickCwd() {
   }
 }
 
-// 给所有运行中 session 每 3s poll 一次 token 兜底（lsof + jsonl），
-// 不依赖 Rust 推流事件是否成功
+// Token 兜底 poll：自适应频率 + 仅当 terminal 页可见时才跑（性能）
+// - 未拿到 token 时 2 秒一次（快速发现）
+// - 已拿到 token 时 6 秒一次（节流，避免狂 lsof）
 let __eaTermTokenPollTimer = 0;
 function startTokenPollLoop() {
   if (__eaTermTokenPollTimer) return;
-  __eaTermTokenPollTimer = setInterval(async () => {
-    const tp = getState()?.terminalPage;
-    if (!tp) return;
-    for (const s of tp.sessions) {
-      if (!s.running) continue;
-      try {
-        const res = await api(`/api/terminal/token-snapshot?sessionId=${encodeURIComponent(s.id)}`);
-        // 调试日志：开 DevTools console 就能看到接口返回值
-        console.log('[token-poll]', s.id.slice(0, 8), res);
-        if (!res?.ok) {
-          tp._lastDiag = { ok: false, error: res?.error || 'endpoint missing', at: Date.now() };
-          continue;
-        }
-        const data = res.data || {};
-        tp._lastDiag = { ok: true, pid: data.pid, path: data.path, tokens: data.tokens, reason: data.reason, at: Date.now() };
-        const tokens = data.tokens;
-        if (tokens && Number.isFinite(tokens.input)) {
-          const inst = tp.instances?.[s.id];
-          if (!inst) continue;
-          inst.tokens = tokens;
-          inst.tokensUpdatedAt = Date.now();
-          if (!inst._sidebarRaf) {
-            inst._sidebarRaf = requestAnimationFrame(() => {
-              inst._sidebarRaf = 0;
-              renderTermSidebar();
-              renderTermStatus();
-            });
+  const tick = async () => {
+    try {
+      const tp = getState()?.terminalPage;
+      if (!tp) return;
+      // 不在 terminal 页时跳过（节省 CPU / 不打扰别处）
+      if (getState()?.activePage !== 'terminal') return;
+      let interval = 6000;
+      for (const s of tp.sessions) {
+        if (!s.running) continue;
+        try {
+          const res = await api(`/api/terminal/token-snapshot?sessionId=${encodeURIComponent(s.id)}`);
+          if (!res?.ok) {
+            tp._lastDiag = { ok: false, error: res?.error || 'endpoint missing', at: Date.now() };
+            interval = 2000;
+            continue;
           }
+          const data = res.data || {};
+          tp._lastDiag = { ok: true, pid: data.pid, path: data.path, tokens: data.tokens, source: data.source, reason: data.reason, at: Date.now() };
+          const tokens = data.tokens;
+          if (tokens && Number.isFinite(tokens.input) && tokens.input > 0) {
+            const inst = tp.instances?.[s.id];
+            if (!inst) continue;
+            inst.tokens = tokens;
+            inst.tokensUpdatedAt = Date.now();
+            if (!inst._sidebarRaf) {
+              inst._sidebarRaf = requestAnimationFrame(() => {
+                inst._sidebarRaf = 0;
+                renderTermSidebar();
+                renderTermStatus();
+              });
+            }
+          } else {
+            interval = 2000; // 还没拿到，下次快点
+          }
+        } catch (err) {
+          if (tp) tp._lastDiag = { ok: false, error: String(err?.message || err), at: Date.now() };
+          interval = 2000;
         }
-      } catch (err) {
-        const tp = getState()?.terminalPage;
-        if (tp) tp._lastDiag = { ok: false, error: String(err?.message || err), at: Date.now() };
       }
+      renderTermStatus();
+      // 调整下次间隔
+      if (__eaTermTokenPollTimer) clearTimeout(__eaTermTokenPollTimer);
+      __eaTermTokenPollTimer = setTimeout(tick, interval);
+    } catch (_) {
+      __eaTermTokenPollTimer = setTimeout(tick, 6000);
     }
-    // 触发 rAF 刷状态栏（即使 token 没拿到也要更新诊断指示器）
-    renderTermStatus();
-  }, 3000);
+  };
+  __eaTermTokenPollTimer = setTimeout(tick, 1500);
 }
 startTokenPollLoop();
 

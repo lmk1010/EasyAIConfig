@@ -30,6 +30,22 @@ struct TerminalSession {
   created_at: String,
   output: Mutex<Vec<u8>>,
   runtime: Mutex<TerminalRuntime>,
+  /// codex session 的 jsonl 路径，watcher 锁定后写入；之后所有 token 查询直接读它
+  jsonl_path: Mutex<Option<PathBuf>>,
+}
+
+// 全局已被某个 session 认领的 jsonl 路径集；防多 session 抢同一个文件
+static CLAIMED_JSONL: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+fn claimed_jsonl() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
+  CLAIMED_JSONL.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+fn try_claim_jsonl(path: &Path) -> bool {
+  if let Ok(mut set) = claimed_jsonl().lock() {
+    set.insert(path.to_path_buf())
+  } else { false }
+}
+fn release_jsonl(path: &Path) {
+  if let Ok(mut set) = claimed_jsonl().lock() { set.remove(path); }
 }
 
 struct TerminalRuntime {
@@ -159,15 +175,13 @@ fn build_command_preview(program: &str, args: &[String]) -> String {
 fn watch_codex_session_tokens(
   session: &Arc<TerminalSession>,
   spawn_time: std::time::SystemTime,
-  codex_pid: Option<u32>,
+  _codex_pid: Option<u32>,
 ) {
   let session_id = session.id.clone();
+  let our_cwd = session.cwd.clone();
   let codex_home = match crate::default_codex_home() {
     Ok(p) => p,
-    Err(error) => {
-      log::warn!("[token-watcher] no codex_home: {error}");
-      return;
-    }
+    Err(error) => { log::warn!("[token-watcher] no codex_home: {error}"); return; }
   };
   let sessions_root = codex_home.join("sessions");
   if !sessions_root.is_dir() {
@@ -175,37 +189,37 @@ fn watch_codex_session_tokens(
     return;
   }
 
-  // 找 jsonl 的两条路：
-  // (1) lsof 问 codex 进程开的 .jsonl —— 最快最准
-  // (2) 兜底：在 sessions_root 下扫 mtime 最新的（容忍 60s 时钟偏差）
-  let watch_cutoff = spawn_time
-    .checked_sub(std::time::Duration::from_secs(60))
+  // 锁定阶段：只接受
+  //   - spawn_time 之后才 modified 的（mtime 不能早于 spawn_time - 5s）
+  //   - 第一行 session_meta.payload.cwd == 我们的 cwd
+  //   - 还没有被任何其它 session 认领
+  // 然后挑 mtime 最早的（spawn 后第一个出现的就是 codex 刚开的那一份）
+  // 找到立即 try_claim_jsonl 原子认领，多 session 不抢同一文件
+  let claim_floor = spawn_time
+    .checked_sub(std::time::Duration::from_secs(5))
     .unwrap_or(spawn_time);
   let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
   let mut target: Option<PathBuf> = None;
   while std::time::Instant::now() < deadline {
-    // 1. lsof 直查
-    if let Some(pid) = codex_pid {
-      if let Some(path) = find_codex_jsonl_via_lsof(pid) {
-        log::info!("[token-watcher] lsof hit: pid={pid} → {path:?}");
+    if let Some(path) = find_unclaimed_session_jsonl(&sessions_root, &our_cwd, claim_floor) {
+      if try_claim_jsonl(&path) {
+        log::info!("[token-watcher] CLAIMED {path:?} for our session={session_id} cwd={our_cwd}");
+        if let Ok(mut slot) = session.jsonl_path.lock() {
+          *slot = Some(path.clone());
+        }
         target = Some(path);
         break;
       }
     }
-    // 2. fallback：扫目录
-    if let Some(path) = find_latest_codex_jsonl_after(&sessions_root, watch_cutoff) {
-      target = Some(path);
-      break;
-    }
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(std::time::Duration::from_millis(300));
   }
   let Some(target) = target else {
-    log::warn!("[token-watcher] no jsonl found for session {session_id} after 45s; pid={codex_pid:?} root={sessions_root:?}");
+    log::warn!("[token-watcher] could not claim a jsonl for session {session_id} within 45s. cwd={our_cwd}");
     return;
   };
-  log::info!("[token-watcher] tailing {target:?} for session {session_id}");
 
-  // tail 该 jsonl：每 400ms 轮询新行
+  // tail 阶段：200ms 监视这一份独占文件，size 增加才读，模拟"事件触发"
+  // codex 每次完成一轮 HTTP 请求才 append token_count，所以 size 变化 = HTTP 事件
   let mut cursor: u64 = 0;
   loop {
     // 主进程退出则收线程
@@ -259,85 +273,55 @@ fn watch_codex_session_tokens(
         }
       }
     }
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(std::time::Duration::from_millis(200));
   }
+  release_jsonl(&target);
+  log::info!("[token-watcher] released {target:?} for session {session_id}");
 }
 
-/// 用 lsof 问 codex 进程（含所有子孙进程）开了哪些 .jsonl 文件。
-/// codex 通过 npm 装时 PATH 上的 `codex` 是个 node 脚本 wrapper，会 fork
-/// 真正的 codex Rust 子进程，那个子进程才持有 jsonl。所以必须递归扫子树。
-fn find_codex_jsonl_via_lsof(pid: u32) -> Option<PathBuf> {
-  #[cfg(not(target_os = "windows"))]
-  {
-    use std::process::Command;
-    // 1. 收集 pid + 所有后代 pid
-    let mut pids = vec![pid];
-    collect_descendant_pids(pid, &mut pids, 0);
-    log::info!("[token-watcher] scanning pids: {:?}", pids);
-    let mut best: Option<PathBuf> = None;
-    for p in pids {
-      let out = match Command::new("lsof").args(["-p", &p.to_string(), "-Fn"]).output() {
-        Ok(o) if o.status.success() => o,
-        _ => continue,
-      };
-      let text = String::from_utf8_lossy(&out.stdout);
-      for line in text.lines() {
-        let Some(rest) = line.strip_prefix('n') else { continue; };
-        if rest.ends_with(".jsonl") && (rest.contains("/.codex/sessions/") || rest.contains("/sessions/")) {
-          let path = PathBuf::from(rest);
-          if rest.contains("rollout-") { return Some(path); }
-          if best.is_none() { best = Some(path); }
-        }
-      }
-    }
-    return best;
-  }
-  #[cfg(target_os = "windows")]
-  {
-    let _ = pid;
-    None
-  }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn collect_descendant_pids(parent: u32, acc: &mut Vec<u32>, depth: u8) {
-  if depth > 6 { return; } // 防御性深度上限
-  use std::process::Command;
-  let Ok(out) = Command::new("pgrep").args(["-P", &parent.to_string()]).output() else { return; };
-  if !out.status.success() { return; }
-  let text = String::from_utf8_lossy(&out.stdout);
-  for line in text.lines() {
-    if let Ok(child) = line.trim().parse::<u32>() {
-      if child != parent {
-        acc.push(child);
-        collect_descendant_pids(child, acc, depth + 1);
-      }
-    }
-  }
-}
-
-fn find_latest_codex_jsonl_after(sessions_root: &Path, after: std::time::SystemTime) -> Option<PathBuf> {
+/// 找一份"未被任何 session 认领、cwd 完全匹配、spawn 之后 modified"的 codex jsonl。
+/// 取 mtime 最早的一份（spawn 出来的第一个就是 codex 刚开的那个）。
+fn find_unclaimed_session_jsonl(
+  sessions_root: &Path,
+  target_cwd: &str,
+  claim_floor: std::time::SystemTime,
+) -> Option<PathBuf> {
   use std::fs;
+  use std::io::{BufRead, BufReader};
+  if target_cwd.trim().is_empty() { return None; }
+  let claimed = claimed_jsonl().lock().ok()?.clone();
   let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-  fn walk(dir: &Path, after: std::time::SystemTime, best: &mut Option<(std::time::SystemTime, PathBuf)>) {
+  fn walk(
+    dir: &Path,
+    target_cwd: &str,
+    floor: std::time::SystemTime,
+    claimed: &std::collections::HashSet<PathBuf>,
+    best: &mut Option<(std::time::SystemTime, PathBuf)>,
+  ) {
     let Ok(entries) = fs::read_dir(dir) else { return; };
     for entry in entries.flatten() {
       let path = entry.path();
-      let meta = match entry.metadata() { Ok(m) => m, Err(_) => continue };
+      let Ok(meta) = entry.metadata() else { continue; };
       if meta.is_dir() {
-        walk(&path, after, best);
+        walk(&path, target_cwd, floor, claimed, best);
       } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-        if let Ok(mtime) = meta.modified() {
-          if mtime > after {
-            if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
-              *best = Some((mtime, path));
-            }
-          }
+        if claimed.contains(&path) { continue; }
+        let Ok(mtime) = meta.modified() else { continue; };
+        if mtime < floor { continue; }
+        let Ok(file) = std::fs::File::open(&path) else { continue; };
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() { continue; }
+        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { continue; };
+        let cwd = v.get("payload").and_then(|p| p.get("cwd")).and_then(Value::as_str).unwrap_or("");
+        if cwd != target_cwd { continue; }
+        if best.as_ref().map(|(t, _)| mtime < *t).unwrap_or(true) {
+          *best = Some((mtime, path));
         }
       }
     }
   }
-  walk(sessions_root, after, &mut best);
+  walk(sessions_root, target_cwd, claim_floor, &claimed, &mut best);
   best.map(|(_, p)| p)
 }
 
@@ -392,6 +376,7 @@ pub(crate) fn spawn_embedded_terminal(
       running: true,
       exit_code: None,
     }),
+    jsonl_path: Mutex::new(None),
   });
 
   // 若是 codex 会话，启动一个 jsonl watcher 抓 token_count 事件
@@ -472,38 +457,28 @@ pub(crate) fn spawn_embedded_terminal(
 pub(crate) fn terminal_token_snapshot(query: &Value) -> Result<Value, String> {
   let object = parse_json_object(query);
   let session_id = get_string(&object, "sessionId");
-  if session_id.trim().is_empty() {
-    return Err("sessionId 不能为空".to_string());
-  }
+  if session_id.trim().is_empty() { return Err("sessionId 不能为空".to_string()); }
   let session = get_session(&session_id)?;
-  let pid = session.runtime.lock().ok().and_then(|r| r.child.process_id());
-  // 1) 优先 lsof
-  let mut jsonl: Option<PathBuf> = pid.and_then(find_codex_jsonl_via_lsof);
-  // 2) fallback：默认 home 下扫最近一小时
-  if jsonl.is_none() {
-    if let Ok(codex_home) = crate::default_codex_home() {
-      let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-      jsonl = find_latest_codex_jsonl_after(&codex_home.join("sessions"), cutoff);
+  // 只允许读 watcher 给本 session 锁定的 jsonl — 杜绝跨 session 抢数据
+  let path = match session.jsonl_path.lock().ok().and_then(|p| p.clone()) {
+    Some(p) => p,
+    None => {
+      return Ok(json!({
+        "ok": true,
+        "path": null,
+        "tokens": null,
+        "reason": "watcher 还在认领 jsonl",
+      }));
     }
-  }
-  let Some(path) = jsonl else {
-    return Ok(json!({
-      "ok": true,
-      "pid": pid,
-      "path": null,
-      "tokens": null,
-      "reason": "no jsonl found via lsof or directory scan",
-    }));
   };
-  // 读整个文件最后 32KB 找最新带 info 的 token_count
   let token_evt = read_latest_token_count(&path);
   Ok(json!({
     "ok": true,
-    "pid": pid,
     "path": path.to_string_lossy(),
     "tokens": token_evt,
   }))
 }
+
 
 fn read_latest_token_count(path: &Path) -> Option<Value> {
   use std::io::{Read, Seek, SeekFrom};
