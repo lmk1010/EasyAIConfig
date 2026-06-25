@@ -2438,6 +2438,46 @@ button.running {
   border-color: rgba(167,139,250,0.4) !important;
 }
 
+/* ─── Connection Hub row pin + bound state（P0 #3 主 UI） ─── */
+.ch-row-bound-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: linear-gradient(135deg, rgba(96,165,250,0.18), rgba(167,139,250,0.18));
+  color: #c7d2fe;
+  border: 1px solid rgba(167,139,250,0.4);
+  cursor: help;
+  vertical-align: middle;
+}
+.ch-row.is-project-bound {
+  background: linear-gradient(90deg, rgba(167,139,250,0.06) 0%, rgba(167,139,250,0.02) 100%);
+  border-left: 2px solid rgba(167,139,250,0.55);
+}
+.ch-row-icon-btn.is-bound {
+  background: linear-gradient(135deg, rgba(96,165,250,0.16), rgba(167,139,250,0.22)) !important;
+  color: #ddd6fe !important;
+  border: 1px solid rgba(167,139,250,0.42) !important;
+}
+.ch-row-icon-btn.is-bound svg { stroke: #ddd6fe; }
+
+/* 让健康灯 hover 更清晰：把 cursor 改 help + 加微微 outline */
+.ch-row-dot { cursor: help; }
+.ch-row-dot:hover {
+  outline: 2px solid rgba(255,255,255,0.08);
+  outline-offset: 1px;
+}
+/* loading 态加脉冲 */
+.ch-row-dot.warn { background: #fbbf24; }
+.ch-row-status .ch-status.loading {
+  animation: pdc-dot-pulse 1.2s ease-in-out infinite;
+}
+
 .provider-pill.ok {
   color: #dff8ee;
 }

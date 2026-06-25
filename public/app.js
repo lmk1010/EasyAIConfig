@@ -17763,7 +17763,8 @@ async function setProjectBindingFor(providerKey) {
     return false;
   }
   await refreshProjectBindingForCurrentCwd();
-  renderProviders();
+  try { renderProviders(); } catch (_) {}
+  try { window.renderConnectionHub?.(); } catch (_) {}
   if (typeof flash === 'function') flash(`已把项目 ${cwd} 绑定到 Provider「${providerKey}」`, 'success');
   return true;
 }
@@ -17782,7 +17783,8 @@ async function clearProjectBindingFor() {
     return false;
   }
   await refreshProjectBindingForCurrentCwd();
-  renderProviders();
+  try { renderProviders(); } catch (_) {}
+  try { window.renderConnectionHub?.(); } catch (_) {}
   if (typeof flash === 'function') flash('已解绑当前项目', 'info');
   return true;
 }
@@ -22414,8 +22416,11 @@ function bindEvents() {
   });
   el('launchCwdInput')?.addEventListener('blur', () => {
     loadCodexResumeSessions({ silent: true });
-    // P0 #3：cwd 变了 → 重查 binding → 重画 provider 卡片
-    refreshProjectBindingForCurrentCwd().then(() => renderProviders());
+    // P0 #3：cwd 变了 → 重查 binding → 重画 hub 列表 + 老 savedProviders 列表
+    refreshProjectBindingForCurrentCwd().then(() => {
+      try { renderProviders(); } catch (_) {}
+      try { window.renderConnectionHub?.(); } catch (_) {}
+    });
   });
   el('codexHomeInput')?.addEventListener('blur', () => loadCodexResumeSessions({ silent: true }));
   el('codexTerminalMenu')?.addEventListener('click', async (event) => {
@@ -24637,19 +24642,59 @@ loadTools();
     } else if (h.loading) {
       dotCls = 'warn'; statusCls = 'warn loading'; statusTxt = '检测中';
     } else if (h.ok) {
-      dotCls = 'ok'; statusCls = 'ok'; statusTxt = '已通';
+      dotCls = 'ok'; statusCls = 'ok';
+      statusTxt = h.latencyMs ? `已通 · ${h.latencyMs}ms` : '已通';
     } else if (h.checked) {
-      dotCls = 'bad'; statusCls = 'bad'; statusTxt = '失败';
+      dotCls = 'bad'; statusCls = 'bad';
+      // 把诊断 stage 映射成短中文标签放进状态文字（详细 hint 走 title tooltip）
+      const stageHuman = {
+        dns: 'DNS', tls: 'TLS', connect: '连接', timeout: '超时',
+        auth: '鉴权', notfound: '路径', http: 'HTTP', body: '格式', unknown: '失败',
+      };
+      const label = stageHuman[h.stage] || '失败';
+      statusTxt = h.statusCode ? `${label} ${h.statusCode}` : label;
     } else if (r.historyOnly) {
-      // "本地草稿"= localStorage 里还留着这条 baseUrl 历史，但 ~/.codex/config.toml
-      // 里已经没有 provider 条目了（用户之前删了，或者换了机器）。提示用户：
-      // 重新填一次 Key 保存就能恢复，无需重输 URL。
       dotCls = 'muted'; statusCls = 'muted'; statusTxt = '本地草稿';
     } else if (!r.hasCredential) {
       dotCls = 'muted'; statusCls = 'warn'; statusTxt = '缺 Key';
     } else {
       dotCls = 'muted'; statusCls = 'muted'; statusTxt = '未检测';
     }
+
+    // 诊断 tooltip：失败时给 hint + errorMessage + checkedAt；成功时给 latency + modelCount
+    let dotTip = '';
+    if (isOauth && !r.hasCredential) {
+      dotTip = '该 OAuth 账号还没完成登录授权。';
+    } else if (isOauth) {
+      dotTip = '官方 OAuth 登录，无需主动探测。';
+    } else if (h.loading) {
+      dotTip = '正在向 /v1/models 发探测请求…';
+    } else if (h.ok) {
+      const bits = ['连通正常'];
+      if (h.latencyMs) bits.push(`延迟 ${h.latencyMs}ms`);
+      if (h.modelCount) bits.push(`${h.modelCount} 个模型`);
+      if (h.checkedAt) bits.push(`检测于 ${new Date(h.checkedAt).toLocaleTimeString()}`);
+      dotTip = bits.join(' · ');
+    } else if (h.checked) {
+      const lines = [];
+      if (h.hint) lines.push(h.hint);
+      else if (h.errorMessage) lines.push(h.errorMessage);
+      if (h.checkedAt) lines.push(`检测于 ${new Date(h.checkedAt).toLocaleTimeString()}`);
+      dotTip = lines.join('\n') || '检测失败';
+    } else if (r.historyOnly) {
+      dotTip = '本地草稿：~/.codex/config.toml 里已删，重填一次 Key 保存即可恢复';
+    } else if (!r.hasCredential) {
+      dotTip = '尚未保存 API Key，无法做连通性探测';
+    } else {
+      dotTip = '尚未探测。点 ↻ 重检 或等自动 ping';
+    }
+
+    // P0 #3：当前 cwd 绑定到此 provider 时高亮 + 📌 pin
+    const boundKey = currentBoundProviderKey();
+    const isBound = boundKey && r.key === boundKey && r.mode === 'apikey';
+    const boundPin = isBound
+      ? `<span class="ch-row-bound-pin" title="该 Provider 已绑定到当前项目 ${safeEscape(state.projectBinding?.cwd || '')}\n下次启动 Codex 时自动用它">📌 本项目</span>`
+      : '';
 
     let actions = '';
     if (r.kind === 'codex-oauth-profile') {
@@ -24687,9 +24732,20 @@ loadTools();
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
           </button>`;
     } else {
-      // API-key provider rows — edit / detect / delete. Delete for Codex
+      // API-key provider rows — edit / detect / bind / delete. Delete for Codex
       // and Claude Code only (OpenCode uses a different flow).
       const canDelete = r.kind === 'codex-apikey' || r.kind === 'claudecode-apikey';
+      // P0 #3：仅 codex-apikey 支持 per-project binding（其它 tool 的 launcher 还没接 binding）
+      const canBind = r.kind === 'codex-apikey' && !r.historyOnly;
+      const bindBtn = canBind
+        ? (isBound
+          ? `<button type="button" class="ch-row-icon-btn is-bound" data-ch-row-bind="${safeEscape(r.key)}" data-ch-row-bind-action="unbind" title="解绑：当前项目不再自动用该 Provider" aria-label="解绑 ${safeEscape(r.name)}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 17l3-3 3 3M5 8h14M7 8v5a5 5 0 0 0 10 0V8"/></svg>
+            </button>`
+          : `<button type="button" class="ch-row-icon-btn" data-ch-row-bind="${safeEscape(r.key)}" data-ch-row-bind-action="bind" title="把当前项目绑定到此 Provider — 之后从该目录启动 Codex 自动用它" aria-label="绑定 ${safeEscape(r.name)} 到当前项目">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 17l3-3 3 3M5 8h14M7 8v5a5 5 0 0 0 10 0V8"/><circle cx="12" cy="5" r="2.2"/></svg>
+            </button>`)
+        : '';
       actions = `
           <button type="button" class="ch-row-icon-btn" data-ch-row-edit="${safeEscape(r.key)}" title="编辑" aria-label="编辑 ${safeEscape(r.name)}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
@@ -24697,6 +24753,7 @@ loadTools();
           <button type="button" class="ch-row-icon-btn" data-ch-row-detect="${safeEscape(r.key)}" title="重检" aria-label="重检 ${safeEscape(r.name)}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
           </button>
+          ${bindBtn}
           ${canDelete ? `<button type="button" class="ch-row-icon-btn danger" data-ch-row-delete="${safeEscape(r.key)}" data-ch-row-delete-kind="${safeEscape(r.kind)}" title="删除" aria-label="删除 ${safeEscape(r.name)}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
           </button>` : ''}`;
@@ -24706,13 +24763,14 @@ loadTools();
     const homeMeta = r.homePath ? `<span class="ch-row-url mono">${safeEscape(`${r.homeLabel || 'HOME'}: ${r.homePath}`)}</span>` : '';
 
     return `
-      <div class="ch-row ${r.isActive ? 'current' : ''}" role="listitem" data-ch-key="${safeEscape(r.key)}" tabindex="0">
-        <span class="ch-row-dot ${dotCls}"></span>
+      <div class="ch-row ${r.isActive ? 'current' : ''} ${isBound ? 'is-project-bound' : ''}" role="listitem" data-ch-key="${safeEscape(r.key)}" tabindex="0">
+        <span class="ch-row-dot ${dotCls}" title="${safeEscape(dotTip)}" aria-label="${safeEscape(statusTxt || '状态')}"></span>
         <span class="ch-row-body">
           <span class="ch-row-title">
             <span class="ch-row-name">${safeEscape(r.name)}</span>
             ${planPill}
             ${r.isActive ? '<span class="ch-row-current-tag">当前</span>' : ''}
+            ${boundPin}
           </span>
           <span class="ch-row-meta">
             ${r.model ? `<span class="ch-row-model">${safeEscape(r.model)}</span>` : ''}
@@ -24720,7 +24778,7 @@ loadTools();
             ${homeMeta}
           </span>
         </span>
-        <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}" title="${safeEscape(r.historyOnly ? '本地草稿：之前在这台机器上配过 baseUrl 但 ~/.codex/config.toml 里已不存在该 provider。重新填一次 API Key 保存即可恢复。' : '')}">${safeEscape(statusTxt)}</span>` : ''}${(() => {
+        <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}" title="${safeEscape(dotTip)}">${safeEscape(statusTxt)}</span>` : ''}${(() => {
           const up = state.providerUptime?.[r.key];
           if (r.mode !== 'apikey' || up == null || up.uptimePct == null) return '';
           const v = Number(up.uptimePct);
@@ -26116,6 +26174,20 @@ loadTools();
       if (editBtn) { e.stopPropagation(); openSlideover('edit', editBtn.getAttribute('data-ch-row-edit')); return; }
       const detectBtn = target.closest('[data-ch-row-detect]');
       if (detectBtn) { e.stopPropagation(); detectRow(detectBtn.getAttribute('data-ch-row-detect')); return; }
+      // P0 #3：bind/unbind 当前项目到该 provider
+      const bindBtn = target.closest('[data-ch-row-bind]');
+      if (bindBtn) {
+        e.stopPropagation();
+        e.preventDefault();
+        const key = bindBtn.getAttribute('data-ch-row-bind');
+        const action = bindBtn.getAttribute('data-ch-row-bind-action') || 'bind';
+        (async () => {
+          if (action === 'unbind') await clearProjectBindingFor();
+          else await setProjectBindingFor(key);
+          try { renderConnectionHub(); } catch (_) {}
+        })();
+        return;
+      }
       const delBtn = target.closest('[data-ch-row-delete]');
       if (delBtn) {
         e.stopPropagation();
