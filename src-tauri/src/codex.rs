@@ -239,6 +239,36 @@ fn windows_binary_candidates_from_dir(dir: &Path, binary_name: &str) -> Vec<Path
   .collect()
 }
 
+fn has_windows_invocation_extension(path: &str) -> bool {
+  let lower = path.to_ascii_lowercase();
+  lower.ends_with(".exe") || lower.ends_with(".cmd") || lower.ends_with(".bat") || lower.ends_with(".ps1")
+}
+
+fn windows_executable_sibling_candidate(program: &str) -> Option<String> {
+  let normalized = normalize_windows_cmd_path(program);
+  if normalized.trim().is_empty() || has_windows_invocation_extension(&normalized) {
+    return None;
+  }
+  let path = Path::new(&normalized);
+  let parent = path.parent()?;
+  if parent.as_os_str().is_empty() {
+    return None;
+  }
+  let stem = path.file_name()?.to_string_lossy();
+  for ext in ["cmd", "exe", "bat", "ps1"] {
+    let candidate = parent.join(format!("{}.{}", stem, ext));
+    if candidate.exists() {
+      return Some(candidate.to_string_lossy().to_string());
+    }
+  }
+  None
+}
+
+fn normalize_windows_invocation_path(path: &str) -> String {
+  let normalized = normalize_windows_cmd_path(path);
+  windows_executable_sibling_candidate(&normalized).unwrap_or(normalized)
+}
+
 fn windows_common_tool_candidate_paths(binary_name: &str) -> Vec<PathBuf> {
   if !cfg!(target_os = "windows") {
     return Vec::new();
@@ -2494,21 +2524,21 @@ fn windows_embedded_terminal_env(extra_env: &[(String, String)]) -> Vec<(String,
 }
 
 fn resolve_windows_binary_invocation_path(binary_path: &str, fallback_binary: &str) -> String {
-  let normalized = normalize_windows_cmd_path(binary_path);
+  let normalized = normalize_windows_invocation_path(binary_path);
   if !normalized.is_empty() {
     let lower = normalized.to_ascii_lowercase();
     let looks_like_path = normalized.contains('\\') || normalized.contains('/') || normalized.contains(':');
-    if looks_like_path || Path::new(&normalized).exists() || lower.ends_with(".exe") || lower.ends_with(".cmd") || lower.ends_with(".bat") || lower.ends_with(".ps1") {
+    if looks_like_path || Path::new(&normalized).exists() || has_windows_invocation_extension(&lower) {
       return normalized;
     }
     if let Some(resolved) = command_exists(&normalized) {
-      return normalize_windows_cmd_path(&resolved);
+      return normalize_windows_invocation_path(&resolved);
     }
   }
 
   if !fallback_binary.trim().is_empty() {
     if let Some(resolved) = command_exists(fallback_binary) {
-      return normalize_windows_cmd_path(&resolved);
+      return normalize_windows_invocation_path(&resolved);
     }
     return fallback_binary.to_string();
   }
@@ -2516,13 +2546,103 @@ fn resolve_windows_binary_invocation_path(binary_path: &str, fallback_binary: &s
   normalized
 }
 
+fn windows_command_line_tokens(command: &str) -> Vec<String> {
+  let mut tokens = Vec::new();
+  let mut current = String::new();
+  let mut in_quotes = false;
+  let mut chars = command.trim_matches('\0').chars().peekable();
+  while let Some(ch) = chars.next() {
+    match ch {
+      '"' => {
+        if in_quotes && matches!(chars.peek(), Some('"')) {
+          current.push('"');
+          let _ = chars.next();
+        } else {
+          in_quotes = !in_quotes;
+        }
+      }
+      ch if ch.is_whitespace() && !in_quotes => {
+        if !current.is_empty() {
+          tokens.push(current.clone());
+          current.clear();
+        }
+      }
+      _ => current.push(ch),
+    }
+  }
+  if !current.is_empty() {
+    tokens.push(current);
+  }
+  tokens
+}
+
+fn windows_program_candidate_exists(program: &str) -> bool {
+  let candidate = normalize_windows_cmd_path(program);
+  if candidate.is_empty() {
+    return false;
+  }
+  let path = Path::new(&candidate);
+  let looks_like_path = candidate.contains('\\') || candidate.contains('/') || candidate.contains(':');
+  windows_executable_sibling_candidate(&candidate).is_some()
+    || path.exists()
+    || (has_windows_invocation_extension(&candidate) && !looks_like_path)
+    || (!looks_like_path && command_exists(&candidate).is_some())
+}
+
+fn split_windows_program_prefix(command: &str) -> Option<(String, Vec<String>)> {
+  let text = normalize_windows_cmd_path(command);
+  let boundaries = text
+    .char_indices()
+    .filter_map(|(index, ch)| ch.is_whitespace().then_some(index))
+    .collect::<Vec<_>>();
+  for index in boundaries.into_iter().rev() {
+    let program = text[..index].trim();
+    let rest = text[index..].trim();
+    if program.is_empty() || rest.is_empty() {
+      continue;
+    }
+    if windows_program_candidate_exists(program) {
+      return Some((program.to_string(), windows_command_line_tokens(rest)));
+    }
+  }
+  None
+}
+
+fn split_windows_binary_invocation(program: &str, args: &[String]) -> (String, Vec<String>) {
+  let mut tokens = windows_command_line_tokens(program);
+  if tokens.is_empty() {
+    tokens.push(String::new());
+  }
+  let mut raw_program = normalize_windows_cmd_path(&tokens.remove(0));
+  let mut merged_args = tokens
+    .into_iter()
+    .map(|item| item.trim_matches('\0').trim().to_string())
+    .filter(|item| !item.is_empty())
+    .collect::<Vec<_>>();
+  if merged_args.is_empty() && raw_program.chars().any(char::is_whitespace) {
+    if let Some((split_program, split_args)) = split_windows_program_prefix(&raw_program) {
+      raw_program = split_program;
+      merged_args = split_args;
+    }
+  }
+  merged_args.extend(
+    args
+      .iter()
+      .map(|item| item.trim_matches('\0').trim().to_string())
+      .filter(|item| !item.is_empty()),
+  );
+  (raw_program, merged_args)
+}
+
 fn resolve_windows_embedded_terminal_command(
   program: &str,
   args: &[String],
   fallback_binary: &str,
 ) -> (String, Vec<String>, String) {
-  let resolved_program = resolve_windows_binary_invocation_path(program, fallback_binary);
-  let preview = build_windows_binary_command(&resolved_program, args, fallback_binary);
+  let (raw_program, merged_args) = split_windows_binary_invocation(program, args);
+
+  let resolved_program = resolve_windows_binary_invocation_path(&raw_program, fallback_binary);
+  let preview = build_windows_binary_command(&resolved_program, &merged_args, fallback_binary);
   let lower = resolved_program.to_ascii_lowercase();
 
   if lower.ends_with(".ps1") {
@@ -2534,37 +2654,42 @@ fn resolve_windows_embedded_terminal_command(
       "-File".to_string(),
       resolved_program,
     ];
-    command_args.extend(args.iter().cloned());
+    command_args.extend(merged_args);
     return ("powershell.exe".to_string(), command_args, preview);
   }
 
   if lower.ends_with(".exe") {
-    return (resolved_program, args.to_vec(), preview);
+    return (resolved_program, merged_args, preview);
   }
 
-  if resolved_program.trim().is_empty() || lower.ends_with(".cmd") || lower.ends_with(".bat") {
-    return (
-      "cmd.exe".to_string(),
-      vec![
-        "/d".to_string(),
-        "/s".to_string(),
-        "/c".to_string(),
-        preview.clone(),
-      ],
-      preview,
-    );
-  }
-
-  (
-    "cmd.exe".to_string(),
-    vec![
+  if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+    let mut command_args = vec![
       "/d".to_string(),
-      "/s".to_string(),
       "/c".to_string(),
-      preview.clone(),
-    ],
-    preview,
-  )
+      "call".to_string(),
+      resolved_program,
+    ];
+    command_args.extend(merged_args);
+    return ("cmd.exe".to_string(), command_args, preview);
+  }
+
+  if resolved_program.trim().is_empty() {
+    let mut command_args = vec![
+      "/d".to_string(),
+      "/c".to_string(),
+      fallback_binary.to_string(),
+    ];
+    command_args.extend(merged_args);
+    return ("cmd.exe".to_string(), command_args, preview);
+  }
+
+  let mut command_args = vec![
+    "/d".to_string(),
+    "/c".to_string(),
+    resolved_program,
+  ];
+  command_args.extend(merged_args);
+  ("cmd.exe".to_string(), command_args, preview)
 }
 
 fn spawn_windows_embedded_session(
@@ -5520,12 +5645,13 @@ fn normalize_windows_cmd_path(raw: &str) -> String {
 }
 
 fn build_windows_binary_command(binary_path: &str, args: &[String], fallback_binary: &str) -> String {
-  let normalized = resolve_windows_binary_invocation_path(binary_path, fallback_binary);
+  let (raw_binary, merged_args) = split_windows_binary_invocation(binary_path, args);
+  let normalized = resolve_windows_binary_invocation_path(&raw_binary, fallback_binary);
   let lower = normalized.to_ascii_lowercase();
 
   if normalized.trim().is_empty() {
     let mut parts = vec![fallback_binary.to_string()];
-    parts.extend(args.iter().map(|arg| quote_windows_cmd_arg(arg)));
+    parts.extend(merged_args.iter().map(|arg| quote_windows_cmd_arg(arg)));
     return parts.join(" ");
   }
 
@@ -5539,7 +5665,7 @@ fn build_windows_binary_command(binary_path: &str, args: &[String], fallback_bin
       "-File".to_string(),
       quote_windows_cmd_arg(&normalized),
     ];
-    parts.extend(args.iter().map(|arg| quote_windows_cmd_arg(arg)));
+    parts.extend(merged_args.iter().map(|arg| quote_windows_cmd_arg(arg)));
     return parts.join(" ");
   }
 
@@ -5548,7 +5674,7 @@ fn build_windows_binary_command(binary_path: &str, args: &[String], fallback_bin
     parts.push("call".to_string());
   }
   parts.push(quote_windows_cmd_arg(&normalized));
-  parts.extend(args.iter().map(|arg| quote_windows_cmd_arg(arg)));
+  parts.extend(merged_args.iter().map(|arg| quote_windows_cmd_arg(arg)));
   parts.join(" ")
 }
 

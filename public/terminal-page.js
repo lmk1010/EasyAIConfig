@@ -222,13 +222,27 @@ export function initTerminalPageState() {
     officialProfiles: [],            // [{id, name, email, plan, codexHome, ...}]
     officialActiveId: '',
     officialProfilesLoadedAt: 0,
+    claudeStateLoadedAt: 0,
+    claudeStateLoading: false,
     providerModels: {},              // { [providerKey]: [model-id, ...] }
     providerModelsLoading: {},       // { [providerKey]: bool }
+    providerModelsFailed: {},        // { [tool:providerKey]: true }
     paletteOpen: false,
     instances: {},           // sessionId -> { term, fit, cursor, container, pollTimer, sentBytes, recvBytes }
     sidebarOpen: true,
     starting: false,
   };
+}
+
+function looksLikeClaudeModel(model = '') {
+  const text = String(model || '').trim().toLowerCase();
+  if (!text) return false;
+  return text === 'opus' || text === 'sonnet' || text === 'haiku' || text.includes('claude');
+}
+
+function sanitizeClaudeLauncherModel(model = '') {
+  const value = String(model || '').trim();
+  return looksLikeClaudeModel(value) ? value : '';
 }
 
 export async function renderTerminalPage() {
@@ -307,6 +321,10 @@ export async function renderTerminalPage() {
   const codexProviders = listProviderRows('codex');
   const claudeProviders = listProviderRows('claudecode');
   const allProviders = tp.launcher.tool === 'codex' ? codexProviders : claudeProviders;
+  const currentProvider = allProviders.find((p) => p.key === tp.launcher.providerKey) || null;
+  if (tp.launcher.providerKey && !currentProvider) {
+    tp.launcher.providerKey = '';
+  }
 
   // 默认填一个 provider（如果没选）
   if (!tp.launcher.providerKey) {
@@ -322,10 +340,16 @@ export async function renderTerminalPage() {
   if (showLauncher && tp.launcher.tool === 'codex' && tp.launcher.source === 'official') {
     loadOfficialProfiles();
   }
+  if (showLauncher && tp.launcher.tool === 'claudecode') {
+    loadClaudeTerminalState();
+  }
   // launcher 打开 + 自管 provider 已选 → 首次自动后台拉模型（缓存到 launcher 关）
   if (showLauncher && !((tp.launcher.tool === 'codex') && (tp.launcher.source === 'official'))
       && tp.launcher.providerKey
+      && !tp.launcher.providerKey.startsWith('__claudecode_')
+      && (selectedProviderRow(tp.launcher.tool, tp.launcher.providerKey)?.mode || '') === 'apikey'
       && !tp.providerModels[tp.launcher.providerKey]
+      && !tp.providerModelsFailed?.[`${tp.launcher.tool}:${tp.launcher.providerKey}`]
       && !tp.providerModelsLoading[tp.launcher.providerKey]) {
     fetchProviderModels(tp.launcher.providerKey, tp.launcher.tool);
   }
@@ -392,26 +416,80 @@ async function loadOfficialProfiles(force) {
 }
 
 // 从指定 provider 拉真实 /v1/models 列表 — 用 test-saved 端点
+async function loadClaudeTerminalState(force) {
+  const st = getState();
+  const tp = st?.terminalPage;
+  if (!tp || tp.claudeStateLoading) return;
+  if (!force && st.claudeCodeState && tp.claudeStateLoadedAt && Date.now() - tp.claudeStateLoadedAt < 30000) return;
+  tp.claudeStateLoading = true;
+  try {
+    const [stateRes, profilesRes] = await Promise.all([
+      api('/api/claudecode/state'),
+      api('/api/claudecode/oauth/profiles').catch(() => null),
+    ]);
+    if (stateRes?.ok && stateRes.data) {
+      st.claudeCodeState = stateRes.data;
+      tp.claudeStateLoadedAt = Date.now();
+    }
+    if (profilesRes?.ok) {
+      window.__chClaudeOauthProfiles = { loaded: true, data: profilesRes.data || {} };
+    }
+    const rows = listProviderRows('claudecode');
+    if (!rows.some((row) => row.key === tp.launcher.providerKey)) {
+      const active = rows.find((row) => row.isActive) || rows[0];
+      tp.launcher.providerKey = active?.key || '';
+    }
+    if (tp.launcherOpen && getState()?.activePage === 'terminal') {
+      renderTerminalPage();
+    }
+  } catch (err) {
+    console.warn('[terminal] load Claude Code state failed:', err);
+  } finally {
+    tp.claudeStateLoading = false;
+  }
+}
+
 async function fetchProviderModels(providerKey, tool) {
   if (!providerKey) return;
+  if (tool === 'claudecode' && providerKey.startsWith('__claudecode_')) return;
   const tp = getState()?.terminalPage;
   if (!tp) return;
+  const normalizedTool = tool || 'codex';
+  const selected = selectedProviderRow(normalizedTool, providerKey);
+  if (!selected || selected.mode !== 'apikey') return;
+  const failureKey = `${normalizedTool}:${providerKey}`;
+  if (tp.providerModelsFailed?.[failureKey]) return;
   tp.providerModelsLoading[providerKey] = true;
   renderTerminalPage();
   try {
-    const codexHomeEnv = ''; // 用默认
-    const res = await api('/api/provider/test-saved', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ providerKey, tool: tool || 'codex', codexHome: codexHomeEnv }),
-    });
+    const provider = selected.ref || selected;
+    const isClaude = normalizedTool === 'claudecode';
+    const res = isClaude
+      ? await api('/api/provider/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerKey,
+          baseUrl: selected.baseUrl || provider.baseUrl || '',
+          apiKey: provider.authToken || provider.apiKey || selected.authToken || selected.apiKey || '',
+          timeoutMs: 15000,
+        }),
+      })
+      : await api('/api/provider/test-saved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerKey, tool: normalizedTool, codexHome: '' }),
+      });
     if (res?.ok && Array.isArray(res.data?.models)) {
       tp.providerModels[providerKey] = res.data.models;
+      delete tp.providerModelsFailed[failureKey];
       flash(`已拉取 ${res.data.models.length} 个模型`, 'success');
     } else {
+      tp.providerModelsFailed[failureKey] = true;
       flash(`拉取模型失败: ${res?.error || '未知'}`, 'warning');
     }
   } catch (err) {
+    tp.providerModelsFailed[failureKey] = true;
     flash(`拉取模型异常: ${err?.message || err}`, 'warning');
   } finally {
     tp.providerModelsLoading[providerKey] = false;
@@ -480,7 +558,7 @@ function renderLauncherPage(tp, providers) {
     { value: 'custom', label: '自定义…' },
   ];
   // 从 provider 拉到的真实模型（如果有）— 拼到前面
-  const liveModels = tp.providerModels?.[tp.launcher.providerKey] || [];
+  const liveModels = (tp.providerModels?.[tp.launcher.providerKey] || []).filter((model) => isCodex || looksLikeClaudeModel(model));
   const liveOpts = liveModels.map((m) => ({ value: m, label: m, hint: '来自 provider' }));
   const baseOpts = isCodex ? codexModelOpts : claudeModelOpts;
   // 去重：live 命中的从 baseOpts 中去掉
@@ -499,6 +577,7 @@ function renderLauncherPage(tp, providers) {
     { value: 'minimal', label: 'minimal · 最低' },
   ];
   const modelOpts = mergedModelOpts;
+  const launcherModel = isCodex ? (tp.launcher.model || '') : sanitizeClaudeLauncherModel(tp.launcher.model || '');
   const isCustomModel = tp.launcher.model === 'custom';
   const modelsLoading = tp.providerModelsLoading?.[tp.launcher.providerKey];
   const cwdDisplay = tp.launcher.cwd || '~ ($HOME)';
@@ -564,7 +643,7 @@ function renderLauncherPage(tp, providers) {
           <div class="ea-term-launch-row">
             <label class="ea-term-launch-lab">模型</label>
             <div class="ea-term-launch-cwd-wrap">
-              ${renderLaunchSelect('model', modelOpts, tp.launcher.model)}
+              ${renderLaunchSelect('model', modelOpts, launcherModel)}
               ${!isOfficial && tp.launcher.providerKey ? `
                 <button type="button" class="ea-term-launch-pick" data-eat-fetch-models title="从 provider /v1/models 拉真实列表" aria-label="刷新模型">
                   ${modelsLoading ? '…' : '↻'}
@@ -701,8 +780,33 @@ function renderPalette(tp, providers) {
 function listProviderRows(tool) {
   if (typeof window.__chBuildRows !== 'function') return [];
   try {
-    return window.__chBuildRows(tool).filter((r) => r.mode === 'apikey' && !r.historyOnly && r.hasCredential);
+    const rows = window.__chBuildRows(tool) || [];
+    if (tool === 'claudecode') {
+      const usable = rows.filter((r) => !r.historyOnly && (r.hasCredential || r.mode === 'oauth'));
+      if (usable.length) return usable;
+      const data = getState()?.claudeCodeState || {};
+      if (data.binary?.installed || data.configHome || data.settingsPath) {
+        return [{
+          key: '__claudecode_default__',
+          name: '默认 Claude Code 配置',
+          baseUrl: data.configHome || '~/.claude',
+          model: data.model || '',
+          mode: 'default',
+          kind: 'claudecode-default',
+          isActive: true,
+          hasCredential: true,
+          health: { ok: true, checked: true },
+          tool,
+        }];
+      }
+      return [];
+    }
+    return rows.filter((r) => r.mode === 'apikey' && !r.historyOnly && r.hasCredential);
   } catch (_) { return []; }
+}
+
+function selectedProviderRow(tool, providerKey) {
+  return listProviderRows(tool).find((row) => row.key === providerKey) || null;
 }
 
 // 用 Rust SQLite 落盘单个 session 元数据 (写入 ~/.codex-config-ui/cache/terminals.db)
@@ -848,6 +952,8 @@ function onClick(e) {
     if (key === 'tool') {
       // 工具换了 → provider 列表清空让重选
       tp.launcher.providerKey = '';
+      tp.launcher.model = '';
+      tp.launcher.modelCustom = '';
       if (val === 'claudecode') tp.launcher.source = 'provider';
     }
     renderTerminalPage();
@@ -881,6 +987,8 @@ function onChange(e) {
   if (key === 'tool') {
     // 工具变 → provider 列表变；强制重 render
     tp.launcher.providerKey = '';
+    tp.launcher.model = '';
+    tp.launcher.modelCustom = '';
     renderTerminalPage();
   }
 }
@@ -1117,7 +1225,8 @@ async function spawnSession() {
   if (tp.starting) return;
   const isCodex = tp.launcher.tool === 'codex';
   const isOfficial = isCodex && tp.launcher.source === 'official';
-  if (!isOfficial && !tp.launcher.providerKey) { flash('请先选 provider', 'warning'); return; }
+  const selectedProvider = selectedProviderRow(tp.launcher.tool, tp.launcher.providerKey);
+  if (isCodex && !isOfficial && !tp.launcher.providerKey) { flash('请先选 provider', 'warning'); return; }
   // official 模式：必须选一个账号 + 用它的 codexHome 当 CODEX_HOME env
   let officialEnv = null;
   if (isOfficial) {
@@ -1125,6 +1234,9 @@ async function spawnSession() {
     const prof = tp.officialProfiles.find((p) => p.id === tp.launcher.officialProfileId);
     if (!prof?.codexHome) { flash('选中账号缺 codexHome', 'error'); return; }
     officialEnv = { CODEX_HOME: prof.codexHome };
+  }
+  if (!isCodex && selectedProvider?.homePath) {
+    officialEnv = { ...(officialEnv || {}), CLAUDE_CONFIG_DIR: selectedProvider.homePath };
   }
   const bin = TOOL_LAUNCH_BIN[tp.launcher.tool] || tp.launcher.tool;
   // 组装 args：sandbox + model + reasoning + profile + 额外 flags

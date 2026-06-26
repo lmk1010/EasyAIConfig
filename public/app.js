@@ -28,6 +28,7 @@ const state = {
   toolsCatalogPageSize: 9,
   providerHealth: {},
   claudeProviderHealth: {},
+  claudeProviderModels: {},
   openCodeProviderHealth: {},
   providerSecrets: {},
   claudeSelectedProviderKey: '',
@@ -2453,6 +2454,20 @@ function dedupeClaudeModels(models = []) {
   return output;
 }
 
+function looksLikeClaudeModel(model = '') {
+  const text = String(model || '').trim().toLowerCase();
+  if (!text) return false;
+  return text === 'opus'
+    || text === 'sonnet'
+    || text === 'haiku'
+    || text.includes('claude');
+}
+
+function sanitizeClaudeModelValue(model = '') {
+  const value = String(model || '').trim();
+  return looksLikeClaudeModel(value) ? value : '';
+}
+
 function isClaudePresetModel(model = '') {
   const key = normalizeClaudeModelKey(model);
   if (!key) return false;
@@ -2467,19 +2482,20 @@ function renderClaudeModelSelect(selectId, {
   const select = el(selectId);
   if (!select) return;
   const presets = dedupeClaudeModels(CLAUDE_MODEL_PRESETS);
-  const history = dedupeClaudeModels(usedModels);
+  const history = dedupeClaudeModels(usedModels.filter(looksLikeClaudeModel));
   const merged = dedupeClaudeModels([...presets, ...history]);
   let html = `<option value="">${escapeHtml(emptyLabel)}</option>`;
   html += merged.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('');
-  const normalizedCurrent = normalizeClaudeModelKey(currentModel);
+  const cleanCurrent = sanitizeClaudeModelValue(currentModel);
+  const normalizedCurrent = normalizeClaudeModelKey(cleanCurrent);
   if (normalizedCurrent && !merged.some((item) => normalizeClaudeModelKey(item) === normalizedCurrent)) {
-    html += `<option value="${escapeHtml(currentModel)}">${escapeHtml(currentModel)} (当前自定义)</option>`;
+    html += `<option value="${escapeHtml(cleanCurrent)}">${escapeHtml(cleanCurrent)} (当前自定义)</option>`;
   }
   select.innerHTML = html;
 }
 
 function setClaudeModelControl(selectId, customId, modelValue = '', usedModels = []) {
-  const model = String(modelValue || '').trim();
+  const model = sanitizeClaudeModelValue(modelValue);
   renderClaudeModelSelect(selectId, { usedModels, currentModel: model });
   const select = el(selectId);
   const custom = el(customId);
@@ -2504,7 +2520,7 @@ function renderClaudeModelPresetList() {
   }
   const createSelect = el('ccProviderCreateModelSelect');
   if (createSelect) {
-    const previous = createSelect.value || '';
+    const previous = sanitizeClaudeModelValue(createSelect.value || '');
     let html = '<option value="">从预置选择（可留空）</option>';
     html += uniqueModels.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('');
     if (previous && !uniqueModels.includes(previous)) {
@@ -2551,6 +2567,7 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
 
     const modelSelect = el('modelSelect');
     if (modelSelect) {
+      const cleanModel = sanitizeClaudeModelValue(data.model || '');
       // Build model options: aliases + preset model IDs + used models from history
       let html = '<option value="">默认 (由 Claude Code 决定)</option>';
       const usedKeys = new Set();
@@ -2565,7 +2582,7 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
       html += '<optgroup label="模型别名 (推荐)">';
       for (const m of CLAUDE_MODEL_ALIASES) {
         if (!markUsed(m.value)) continue;
-        const selected = data.model === m.value ? ' selected' : '';
+        const selected = cleanModel === m.value ? ' selected' : '';
         html += `<option value="${m.value}"${selected}>${m.label}</option>`;
       }
       html += '</optgroup>';
@@ -2573,7 +2590,7 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
       html += '<optgroup label="Claude 预置模型 ID">';
       for (const modelId of dedupeClaudeModels(CLAUDE_MODEL_PRESETS)) {
         if (!markUsed(modelId)) continue;
-        const selected = data.model === modelId ? ' selected' : '';
+        const selected = cleanModel === modelId ? ' selected' : '';
         html += `<option value="${escapeHtml(modelId)}"${selected}>${escapeHtml(modelId)}</option>`;
       }
       html += '</optgroup>';
@@ -2583,21 +2600,22 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
       if (historyModels.length) {
         html += '<optgroup label="历史使用模型">';
         for (const modelName of historyModels) {
+          if (!looksLikeClaudeModel(modelName)) continue;
           if (!markUsed(modelName)) continue;
-          const selected = data.model === modelName ? ' selected' : '';
+          const selected = cleanModel === modelName ? ' selected' : '';
           html += `<option value="${escapeHtml(modelName)}"${selected}>${escapeHtml(modelName)}</option>`;
         }
         html += '</optgroup>';
       }
 
       modelSelect.innerHTML = html;
-      if (data.model && ![...modelSelect.options].some((option) => normalizeClaudeModelKey(option.value) === normalizeClaudeModelKey(data.model))) {
+      if (cleanModel && ![...modelSelect.options].some((option) => normalizeClaudeModelKey(option.value) === normalizeClaudeModelKey(cleanModel))) {
         const customOption = document.createElement('option');
-        customOption.value = data.model;
-        customOption.textContent = `${data.model} (自定义)`;
+        customOption.value = cleanModel;
+        customOption.textContent = `${cleanModel} (自定义)`;
         modelSelect.appendChild(customOption);
       }
-      if (data.model) modelSelect.value = data.model;
+      modelSelect.value = cleanModel || '';
     }
 
     const cache = _getToolFormCache('claudecode', true);
@@ -15577,9 +15595,10 @@ function buildClaudeCodeSettingsFromFields({
   settings.easyaiconfig = ensurePlainObject(settings.easyaiconfig, {});
   settings.easyaiconfig.providers = ensurePlainObject(settings.easyaiconfig.providers, {});
 
-  const modelValue = fromConfigEditor
+  const rawModelValue = fromConfigEditor
     ? readClaudeModelControl('ccCfgModelSelect', 'ccCfgModelCustom')
     : (el('modelSelect')?.value?.trim() || '');
+  const modelValue = sanitizeClaudeModelValue(rawModelValue);
   if (modelValue) settings.model = modelValue;
   else delete settings.model;
 
@@ -15696,7 +15715,7 @@ function buildClaudeCodeResetSettingsPreservingProviders() {
   const baseUrl = normalizeClaudeBaseUrl(activeProvider.baseUrl || currentEnv.ANTHROPIC_BASE_URL || '');
   const authToken = String(activeProvider.authToken || currentEnv.ANTHROPIC_AUTH_TOKEN || '').trim();
   const apiKey = authToken ? '' : String(activeProvider.apiKey || currentEnv.ANTHROPIC_API_KEY || '').trim();
-  const model = String(activeProvider.model || currentSettings.model || '').trim();
+  const model = sanitizeClaudeModelValue(activeProvider.model || currentSettings.model || '');
   const nextEasy = ensurePlainObject(cloneJson(easy), {});
   nextEasy.providers = providers;
   if (activeProviderKey) nextEasy.activeProvider = activeProviderKey;
@@ -16391,7 +16410,7 @@ function getClaudeProviderProfiles(data = state.claudeCodeState) {
     const baseUrl = normalizeClaudeBaseUrl(item.baseUrl || '');
     const apiKey = String(item.apiKey || '').trim();
     const authToken = String(item.authToken || '').trim();
-    const model = String(item.model || '').trim();
+    const model = sanitizeClaudeModelValue(item.model || '');
     return {
       key,
       name: String(item.name || inferClaudeProviderLabel(baseUrl || '')),
@@ -16434,7 +16453,7 @@ function getClaudeProviderProfiles(data = state.claudeCodeState) {
       baseUrl: envBaseUrl,
       apiKey: envApiKey,
       authToken: envAuthToken,
-      model: String(settings.model || '').trim(),
+      model: sanitizeClaudeModelValue(settings.model || ''),
       maskedApiKey: maskSecret(envApiKey) || runtimeMaskedApiKey,
       maskedAuthToken: maskSecret(envAuthToken) || runtimeMaskedAuthToken,
       hasApiKey: Boolean(envApiKey || envAuthToken || hasRuntimeSecret),
@@ -16450,7 +16469,7 @@ function getClaudeProviderProfiles(data = state.claudeCodeState) {
       baseUrl: '',
       apiKey: '',
       authToken: '',
-      model: String(settings.model || '').trim(),
+      model: sanitizeClaudeModelValue(settings.model || ''),
       maskedApiKey: '',
       maskedAuthToken: '',
       hasApiKey: false,
@@ -16483,21 +16502,26 @@ function fillFromClaudeProvider(provider) {
   const providerKeyInput = el('claudeProviderKeyInput');
   if (providerKeyInput) providerKeyInput.value = provider.key || '';
   const modelSelect = el('modelSelect');
-  if (modelSelect && provider.model) {
-    let found = false;
-    for (const option of modelSelect.options) {
-      if (option.value === provider.model) {
-        found = true;
-        break;
+  if (modelSelect) {
+    const modelValue = sanitizeClaudeModelValue(provider.model || '');
+    if (!modelValue) {
+      modelSelect.value = '';
+    } else {
+      let found = false;
+      for (const option of modelSelect.options) {
+        if (option.value === modelValue) {
+          found = true;
+          break;
+        }
       }
+      if (!found) {
+        const option = document.createElement('option');
+        option.value = modelValue;
+        option.textContent = modelValue;
+        modelSelect.appendChild(option);
+      }
+      modelSelect.value = modelValue;
     }
-    if (!found) {
-      const option = document.createElement('option');
-      option.value = provider.model;
-      option.textContent = provider.model;
-      modelSelect.appendChild(option);
-    }
-    modelSelect.value = provider.model;
   }
   const baseUrlInput = el('baseUrlInput');
   if (baseUrlInput) baseUrlInput.value = provider.baseUrl || '';
@@ -16723,7 +16747,15 @@ async function testClaudeProviderConnectivity(provider, { delayMs = 420 } = {}) 
   if (getConfigEditorTool() === 'claudecode') populateClaudeCodeConfigEditor();
 
   if (!json?.ok) return { ok: false, error: json?.error || '连通性检测失败' };
-  return { ok: true };
+  const models = (Array.isArray(json.data?.models) && json.data.models)
+    || (Array.isArray(json.data?.raw?.data) && json.data.raw.data.map((item) => item?.id || item).filter(Boolean))
+    || [];
+  state.claudeProviderModels[provider.key] = {
+    models: dedupeClaudeModels(models),
+    at: Date.now(),
+    baseUrl,
+  };
+  return { ok: true, data: { ...(json.data || {}), models: dedupeClaudeModels(models) } };
 }
 
 function modelScore(model) {
@@ -16944,7 +16976,7 @@ function renderCurrentConfig() {
       renderQuickRailSupportPanel();
       return;
     }
-    const model = cc?.model || el('modelSelect')?.value || '未选择模型';
+    const model = sanitizeClaudeModelValue(cc?.model || el('modelSelect')?.value || '') || '未选择模型';
     const login = cc?.login || {};
     const providers = getClaudeProviderProfiles(cc);
     const activeProvider = providers.find((provider) => provider.key === state.claudeSelectedProviderKey)
@@ -18751,14 +18783,44 @@ function lookupProviderDetailRow() {
   // hubState / buildProviderRows 都是 connection hub 的 IIFE 内部函数，
   // 通过 window.__chHubState / window.__chBuildRows 桥出来。
   const s = (typeof window.__chHubState === 'function' ? window.__chHubState() : null) || state;
-  const tool = s.activeTool || 'codex';
+  const tool = state.providerDetail?.tool || s.activeTool || 'codex';
   const rows = typeof window.__chBuildRows === 'function' ? window.__chBuildRows(tool) : [];
   return rows.find((r) => r.key === state.providerDetail.providerKey) || null;
 }
 
+function providerDetailTool(row = lookupProviderDetailRow()) {
+  return row?.tool || (typeof window.__chHubState === 'function' ? window.__chHubState()?.activeTool : '') || state.activeTool || 'codex';
+}
+
+function isClaudeProviderDetail(row = lookupProviderDetailRow()) {
+  return providerDetailTool(row) === 'claudecode';
+}
+
+function isCodexProviderDetail(row = lookupProviderDetailRow()) {
+  return providerDetailTool(row) === 'codex';
+}
+
+function getProviderDetailModel(row = lookupProviderDetailRow()) {
+  if (!row) return '';
+  if (isClaudeProviderDetail(row)) {
+    return sanitizeClaudeModelValue(row.ref?.model || row.model || state.claudeCodeState?.model || state.claudeCodeState?.settings?.model || '');
+  }
+  return row.model || state.current?.summary?.model || '';
+}
+
+function getProviderDetailToolName(row = lookupProviderDetailRow()) {
+  const tool = providerDetailTool(row);
+  if (tool === 'claudecode') return 'Claude Code';
+  if (tool === 'opencode') return 'OpenCode';
+  if (tool === 'openclaw') return 'OpenClaw';
+  return 'Codex';
+}
+
 function openProviderDetail(key) {
   if (!key) return;
+  const s = (typeof window.__chHubState === 'function' ? window.__chHubState() : null) || state;
   state.providerDetail.providerKey = key;
+  state.providerDetail.tool = s.activeTool || state.activeTool || 'codex';
   state.providerDetail.open = true;
   state.providerDetail.tab = 'overview';
   state.providerDetail.summary = null;
@@ -18778,7 +18840,7 @@ function openProviderDetail(key) {
   requestAnimationFrame(() => requestAnimationFrame(() => detail?.classList.add('is-in')));
   // 异步拉真数据：probe history + dashboard metrics
   const row = lookupProviderDetailRow();
-  if (row && row.mode === 'apikey') {
+  if (row && isCodexProviderDetail(row) && row.mode === 'apikey') {
     (async () => {
       await fetchProviderProbeData(row).catch(() => {});
       // 若 24h 内一条探测都没有 → 自动跑一次，让 uptime 不再空白
@@ -18787,9 +18849,9 @@ function openProviderDetail(key) {
         await actionPdRunTest().catch(() => {});
       }
     })();
+    // 用量数据从 dashboard metrics 来，没就拉一次
+    fetchDashboardMetricsForDetail().catch(() => {});
   }
-  // 用量数据从 dashboard metrics 来，没就拉一次
-  fetchDashboardMetricsForDetail().catch(() => {});
 }
 
 async function fetchDashboardMetricsForDetail(force = false) {
@@ -18806,10 +18868,15 @@ async function fetchDashboardMetricsForDetail(force = false) {
 }
 
 async function actionPdRefreshUsage() {
+  const row = lookupProviderDetailRow();
   state.providerDetail.usageRefreshing = true;
   state.providerDetail.usageAutoRetried = true; // 用户手动刷过 → 不要再自动 retry
   renderProviderDetail();
-  await fetchDashboardMetricsForDetail(true).catch(() => {});
+  if (isClaudeProviderDetail(row)) {
+    await loadClaudeCodeQuickState({ force: true, cacheOnly: false }).catch(() => {});
+  } else {
+    await fetchDashboardMetricsForDetail(true).catch(() => {});
+  }
   state.providerDetail.usageRefreshing = false;
   renderProviderDetail();
 }
@@ -18823,13 +18890,14 @@ function closeProviderDetail() {
   }
   if (hub) hub.classList.remove('ch-detail-on');
   state.providerDetail.open = false;
+  state.providerDetail.tool = '';
   // 清空缓存签名，确保下次打开走完整 render（否则 sig 命中会跳过 innerHTML）
   pdLastRenderSig = '';
   pdLastTab = '';
 }
 
 async function fetchProviderProbeData(row) {
-  if (!row) return;
+  if (!row || !isCodexProviderDetail(row)) return;
   const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
   const params = new URLSearchParams({ providerKey: row.key, codexHome });
   state.providerDetail.loading = true;
@@ -18857,9 +18925,11 @@ function pdComputeRenderSig(row) {
   // 这些字段一致就不重画 → 这是去闪烁的关键
   return [
     row.key,
+    providerDetailTool(row),
     row.isActive ? 1 : 0,
     row.hasCredential ? 1 : 0,
     row.mode,
+    getProviderDetailModel(row),
     row.health?.ok ? 'h-ok' : row.health?.checked ? 'h-bad' : row.health?.loading ? 'h-load' : 'h-none',
     pd.tab,
     sum?.uptimePct ?? '-',
@@ -18873,6 +18943,7 @@ function pdComputeRenderSig(row) {
     state.dashboardMetrics?.codex ? 'dm' : 'dn',
     // 跟 dashboard 数据相关：providers 数量 + 该 row 是否能匹配上一条 provider 条目
     Array.isArray(state.dashboardMetrics?.codex?.providers) ? state.dashboardMetrics.codex.providers.length : 0,
+    isClaudeProviderDetail(row) ? (state.claudeCodeState?.usage?.generatedAt || '') : '',
     Number(state.dashboardMetricsFetchedAt || 0),
   ].join('|');
 }
@@ -18919,7 +18990,7 @@ function renderProviderDetail(options = {}) {
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3L4.5 8L9.5 13M4.5 8H14"/></svg>
         返回列表
       </button>
-      <span class="pd-back-crumb">${escapeHtml((state.activeTool === 'codex' ? 'Codex' : (state.activeTool || ''))) } / 连接配置 / <strong>${escapeHtml(row.name || row.key)}</strong></span>
+      <span class="pd-back-crumb">${escapeHtml(getProviderDetailToolName(row))} / 连接配置 / <strong>${escapeHtml(row.name || row.key)}</strong></span>
     </div>
     ${renderPdHeader(row)}
     <nav class="pd-tabs" role="tablist">
@@ -18941,6 +19012,7 @@ function renderProviderDetail(options = {}) {
 function renderPdHeader(row) {
   const esc = escapeHtml;
   const isOauth = row.mode === 'oauth';
+  const isCodex = isCodexProviderDetail(row);
   const isCurrent = Boolean(row.isActive);
   const h = row.health || {};
   const summary = state.providerDetail.summary;
@@ -18957,7 +19029,7 @@ function renderPdHeader(row) {
   const p95 = summary?.p95LatencyMs;
   const sucCount = Number(summary?.success || 0);
   const failCount = Number(summary?.failure || 0);
-  const model = row.model || state.current?.summary?.model || '';
+  const model = getProviderDetailModel(row);
 
   // 右侧 live panel：状态环 + 大字号 uptime + latency mini chips
   const livePanel = `
@@ -18996,8 +19068,8 @@ function renderPdHeader(row) {
             : '<button type="button" class="pd-chip-btn is-primary" data-pd-switch><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>切换为当前</button>'}
           ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-chip-btn" data-pd-edit><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 13.5l3-1L13 5l-2-2-7.5 7.5z"/></svg>编辑</button>' : ''}
           <button type="button" class="pd-chip-btn" data-pd-test title="向 /models 发一次带鉴权探测，结果落进 24h 历史"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6a6 6 0 0 1 11-2.5L14 5M14 10a6 6 0 0 1-11 2.5L2 11M14 2v3h-3M2 14v-3h3"/></svg>立即重检</button>
-          ${(state.activeTool || 'codex') === 'codex' ? '<button type="button" class="pd-chip-btn" data-pd-copy-cmd title="复制带危险模式参数的 codex 启动命令到剪贴板"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="8" height="9" rx="1.2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-4A1.5 1.5 0 0 0 4 3.5V10"/></svg>复制命令</button>' : ''}
-          ${(state.activeTool || 'codex') === 'codex' && isCurrent ? '<button type="button" class="pd-chip-btn" data-pd-launch title="按当前 provider 启动一次 codex"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9M9 4l4 4-4 4"/></svg>启动</button>' : ''}
+          ${isCodex ? '<button type="button" class="pd-chip-btn" data-pd-copy-cmd title="复制带危险模式参数的 codex 启动命令到剪贴板"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="8" height="9" rx="1.2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-4A1.5 1.5 0 0 0 4 3.5V10"/></svg>复制命令</button>' : ''}
+          ${isCodex && isCurrent ? '<button type="button" class="pd-chip-btn" data-pd-launch title="按当前 provider 启动一次 codex"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9M9 4l4 4-4 4"/></svg>启动</button>' : ''}
           ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-chip-btn is-danger" data-pd-delete><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10M6 4V2.5h4V4M5 4l1 9h4l1-9"/></svg>删除</button>' : ''}
         </div>
       </div>
@@ -19017,11 +19089,12 @@ function renderPdTab(tab, row) {
 // "模型支持" tab —— 默认只展示用户保存的卡片，添加时弹窗。
 // 顶部 summary (当前默认 + LIVE 检测) → 已保存模型卡片 grid → "+ 添加模型" 触发选择 modal
 function renderPdModels(row) {
+  if (isClaudeProviderDetail(row)) return renderClaudeProviderDetailModels(row);
   const providerKey = row.key;
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
   const liveModels = (state.providerDetail?.detected?.[providerKey]?.models) || [];
   const saved = (state.providerSavedModels?.[providerKey]) || [];
-  const currentModel = row.model || state.current?.summary?.model || '';
+  const currentModel = getProviderDetailModel(row);
   const loading = state.providerDetail?.modelsLoading;
   // 异步首次拉 saved 列表（如果还没拉）
   if (!state.providerSavedModels || !(providerKey in state.providerSavedModels)) {
@@ -19087,10 +19160,74 @@ function renderPdModels(row) {
     </div>`;
 }
 
+function renderClaudeProviderDetailModels(row) {
+  const esc = escapeHtml;
+  const cc = state.claudeCodeState || {};
+  const providerKey = row.key || row.ref?.key || '';
+  const live = state.claudeProviderModels?.[providerKey] || null;
+  const liveModels = Array.isArray(live?.models) ? live.models : [];
+  const running = Boolean(state.providerDetail?.testRunning);
+  const usageModels = Array.isArray(cc.usage?.models)
+    ? cc.usage.models.map((m) => m?.model || m?.name || '').filter(Boolean)
+    : [];
+  const usedModels = Array.isArray(cc.usedModels) ? cc.usedModels : [];
+  const currentModel = getProviderDetailModel(row);
+  const providerModel = row.ref?.model || '';
+  const models = dedupeClaudeModels([
+    ...liveModels,
+    currentModel,
+    providerModel,
+    ...usedModels,
+    ...usageModels,
+    ...(typeof CLAUDE_MODEL_PRESETS !== 'undefined' ? CLAUDE_MODEL_PRESETS : []),
+  ]);
+  const rows = models.slice(0, 60).map((model) => {
+    const key = normalizeClaudeModelKey(model);
+    const isDefault = key === normalizeClaudeModelKey(currentModel);
+    const isProvider = providerModel && key === normalizeClaudeModelKey(providerModel);
+    const isLive = liveModels.some((m) => normalizeClaudeModelKey(m) === key);
+    const isUsed = usedModels.some((m) => normalizeClaudeModelKey(m) === key)
+      || usageModels.some((m) => normalizeClaudeModelKey(m) === key);
+    return `
+      <div class="pdm-row ${isDefault ? 'is-default' : ''}">
+        <span class="pdm-row-dot" aria-hidden="true"></span>
+        <span class="pdm-row-id">${esc(model)}</span>
+        <span class="pdm-row-label">${esc(isLive ? 'Provider /models' : isProvider ? 'Provider 配置' : isUsed ? '使用历史' : 'Claude 预设')}</span>
+        <span class="pdm-row-tags">
+          ${isDefault ? '<span class="pdm-tag pdm-tag-default">默认</span>' : ''}
+          ${isLive ? '<span class="pdm-tag pdm-tag-live">LIVE</span>' : ''}
+          ${isProvider ? '<span class="pdm-tag pdm-tag-live">Provider</span>' : ''}
+        </span>
+      </div>`;
+  }).join('');
+  return `
+    <div class="pd-models-page">
+      <div class="pdm-bar">
+        <div class="pdm-bar-item">
+          <span class="pdm-bar-label">Claude Code 默认</span>
+          ${currentModel ? `<code class="pdm-bar-model">${esc(currentModel)}</code>` : '<span class="pdm-bar-none">未显式设置</span>'}
+        </div>
+        <div class="pdm-bar-item pdm-bar-right">
+          ${liveModels.length ? `<span class="pdm-bar-live">Live 已拉取 ${liveModels.length}</span>` : '<span class="pdm-bar-none">Live 未拉取</span>'}
+          <button type="button" class="pdm-link-btn ${running ? 'is-busy' : ''}" data-pd-test ${running ? 'disabled' : ''}>${running ? '检测中…' : '从 Provider 拉取'}</button>
+        </div>
+      </div>
+      <div class="pdm-list-head">
+        <div class="pdm-list-title">本地可见模型 <em>${models.length}</em></div>
+      </div>
+      ${rows ? `<div class="pdm-list">${rows}</div>` : `
+        <div class="pdm-empty">
+          <div class="pdm-empty-text">Claude Code 当前没有显式模型配置</div>
+        </div>`}
+    </div>`;
+}
+
 // "模型支持" 事件 — 添加 / 移除卡片 / 拉取 live
 async function bindPdModelsEvents() {
   const root = document.querySelector('.pd-models-page');
   if (!root || root._pdModelsBound) return;
+  const row = lookupProviderDetailRow();
+  if (!isCodexProviderDetail(row)) return;
   root._pdModelsBound = true;
   const providerKey = state.providerDetail?.providerKey || '';
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
@@ -19326,6 +19463,7 @@ function renderPdSparkline(history, width = 280, height = 40) {
 
 function renderPdOverview(row) {
   const esc = escapeHtml;
+  if (isClaudeProviderDetail(row)) return renderClaudeProviderDetailOverview(row);
   const summary = state.providerDetail.summary || {};
   const avg = summary.avgLatencyMs;
   const p95 = summary.p95LatencyMs;
@@ -19354,10 +19492,10 @@ function renderPdOverview(row) {
         </div>
         <div class="pd-stat-mini">
           <div class="pd-stat-mini-label">${row.isActive ? '当前模型' : '默认模型'}</div>
-          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(row.model || state.current?.summary?.model || '—')}</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(getProviderDetailModel(row) || '—')}</div>
         </div>
       </div>
-      ${row.mode === 'apikey' ? `
+      ${isCodexProviderDetail(row) && row.mode === 'apikey' ? `
         <div class="pd-section">
           <div class="pd-section-title">连接信息</div>
           <div class="pd-info-grid">
@@ -19379,12 +19517,52 @@ function renderPdOverview(row) {
     </div>`;
 }
 
+function renderClaudeProviderDetailOverview(row) {
+  const esc = escapeHtml;
+  const ref = row.ref || {};
+  const model = getProviderDetailModel(row);
+  const keyMask = ref.maskedAuthToken || ref.maskedApiKey || (row.hasCredential ? '已保存' : '');
+  const health = state.claudeProviderHealth?.[row.key] || row.health || {};
+  const status = health.loading ? '检测中' : health.ok ? '已连通' : health.checked ? '失败' : row.hasCredential ? '未检测' : '缺 Key';
+  return `
+    <div class="pd-overview">
+      <div class="pd-stat-rail">
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">工具</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">Claude Code</div>
+        </div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">连通性</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(status)}</div>
+        </div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">默认模型</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(model || '—')}</div>
+        </div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">凭据</div>
+          <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(keyMask || '未保存')}</div>
+        </div>
+      </div>
+      <div class="pd-section">
+        <div class="pd-section-title">连接信息</div>
+        <div class="pd-info-grid">
+          <div class="pd-info-row"><span>Provider Key</span><code>${esc(row.key || '')}</code></div>
+          ${row.baseUrl ? `<div class="pd-info-row"><span>Base URL</span><code>${esc(row.baseUrl)}</code></div>` : ''}
+          ${model ? `<div class="pd-info-row"><span>Model</span><code>${esc(model)}</code></div>` : ''}
+          ${ref.name ? `<div class="pd-info-row"><span>Name</span><code>${esc(ref.name)}</code></div>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
 function pdNormalizeProviderKey(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 function renderPdUsage(row) {
   const esc = escapeHtml;
+  if (isClaudeProviderDetail(row)) return renderClaudeProviderDetailUsage(row);
   const codexMetrics = state.dashboardMetrics?.codex;
   const usageRefreshing = state.providerDetail.usageRefreshing;
   if (!codexMetrics) {
@@ -19566,6 +19744,73 @@ function renderPdUsage(row) {
     </div>`;
 }
 
+function renderClaudeProviderDetailUsage(row) {
+  const esc = escapeHtml;
+  const usageRefreshing = state.providerDetail.usageRefreshing;
+  const usage = state.claudeCodeState?.usage;
+  const fmtM = (v) => (typeof formatDashboardMetric === 'function') ? formatDashboardMetric(v || 0) : String(v || 0);
+  const fmtUsd = (v) => (typeof formatDashboardUsd === 'function') ? formatDashboardUsd(v || 0, { min: 2, max: 2 }) : ('$' + Number(v || 0).toFixed(2));
+  if (!usage || !usage.totals) {
+    return `
+      <div class="pd-empty">
+        <div class="pd-empty-title-line">Claude Code 用量未加载</div>
+        <p>这里只读取 Claude Code 本地用量缓存，不读取 Codex sessions。</p>
+        <div class="pd-empty-actions">
+          <button type="button" class="pd-btn pd-btn-primary pd-btn-small ${usageRefreshing ? 'is-busy' : ''}" data-pd-refresh-usage ${usageRefreshing ? 'disabled' : ''}>${usageRefreshing ? '刷新中…' : '刷新 Claude 用量'}</button>
+        </div>
+      </div>`;
+  }
+  const totals = usage.totals || {};
+  const input = Number(totals.input || 0);
+  const output = Number(totals.output || 0);
+  const cacheRead = Number(totals.cacheRead || totals.cachedInput || 0);
+  const cacheCreation = Number(totals.cacheCreation || 0);
+  const total = Number(totals.total || input + output + cacheRead + cacheCreation);
+  const cost = Number(totals.cost || 0);
+  const models = Array.isArray(usage.models) ? usage.models.slice(0, 8) : [];
+  const generatedAt = usage.generatedAt ? formatRelativeTime(usage.generatedAt) : '—';
+  return `
+    <div class="pd-usage">
+      <div class="pd-stat-rail">
+        <div class="pd-stat-mini pd-stat-mini-hero">
+          <div class="pd-stat-mini-label">本地估算费用</div>
+          <div class="pd-stat-mini-value pd-cost-hero">${esc(fmtUsd(cost))}</div>
+          <div class="pd-stat-mini-sub">Claude Code 本地用量</div>
+        </div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">总 Token</div>
+          <div class="pd-stat-mini-value">${esc(fmtM(total))}</div>
+          <div class="pd-stat-mini-sub">更新时间 ${esc(generatedAt)}</div>
+        </div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">输入 / 输出</div>
+          <div class="pd-stat-mini-value">${esc(fmtM(input))}</div>
+          <div class="pd-stat-mini-sub">输出 ${esc(fmtM(output))}</div>
+        </div>
+        <div class="pd-stat-mini">
+          <div class="pd-stat-mini-label">缓存</div>
+          <div class="pd-stat-mini-value">${esc(fmtM(cacheRead))}</div>
+          <div class="pd-stat-mini-sub">写入 ${esc(fmtM(cacheCreation))}</div>
+        </div>
+      </div>
+      ${models.length ? `
+        <div class="pd-section">
+          <div class="pd-section-title">
+            <span>Claude 模型分布</span>
+            <span class="pd-section-meta">不按 Provider 猜测归因</span>
+          </div>
+          <div class="pd-chip-row">
+            ${models.map((m) => {
+              const name = m?.model || m?.name || 'unknown';
+              const mt = m?.totals || {};
+              return `<span class="pd-chip"><strong>${esc(name)}</strong><em>${esc(fmtM(mt.total || 0))}</em></span>`;
+            }).join('')}
+          </div>
+        </div>` : ''}
+      <div class="pd-empty pd-empty-small">Claude Code 的本地统计不和 Codex provider 历史混用。</div>
+    </div>`;
+}
+
 function renderPdTokenSplitBar({ input = 0, cached = 0, output = 0, reasoning = 0 }) {
   // 防止 input 双计：input_tokens 字段在 OpenAI 是含 cached 的
   const nonCached = Math.max(0, input - cached);
@@ -19654,6 +19899,7 @@ function renderPdTestResult(result) {
 
 function renderPdHealth(row) {
   const esc = escapeHtml;
+  if (isClaudeProviderDetail(row)) return renderClaudeProviderDetailHealth(row);
   const history = state.providerDetail.history;
   const summary = state.providerDetail.summary || {};
   const rows = Array.isArray(history?.rows) ? history.rows : [];
@@ -19697,6 +19943,45 @@ function renderPdHealth(row) {
     </div>`;
 }
 
+function renderClaudeProviderDetailHealth(row) {
+  const esc = escapeHtml;
+  const running = state.providerDetail.testRunning;
+  const result = state.providerDetail.testResult;
+  const health = state.claudeProviderHealth?.[row.key] || row.health || {};
+  const ok = result ? !result.error : Boolean(health.ok);
+  const checked = Boolean(result || health.checked);
+  const statusCls = running ? 'warn' : ok ? 'ok' : checked ? 'bad' : row.hasCredential ? 'warn' : 'bad';
+  const statusText = running ? '检测中' : ok ? '已连通' : checked ? '失败' : row.hasCredential ? '未检测' : '缺 Key';
+  return `
+    <div class="pd-health">
+      <div class="pd-section">
+        <div class="pd-section-title">
+          <span>Claude Code 连通性</span>
+          <button type="button" class="pd-link ${running ? 'is-busy' : ''}" data-pd-test ${running ? 'disabled' : ''}>${running ? '检测中…' : '重检'}</button>
+        </div>
+        <div class="pd-stat-rail">
+          <div class="pd-stat-mini">
+            <div class="pd-stat-mini-label">状态</div>
+            <div class="pd-stat-mini-value pd-stat-mini-value-soft"><span class="pd-status ${statusCls}">${esc(statusText)}</span></div>
+          </div>
+          <div class="pd-stat-mini">
+            <div class="pd-stat-mini-label">Base URL</div>
+            <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(row.baseUrl || '—')}</div>
+          </div>
+          <div class="pd-stat-mini">
+            <div class="pd-stat-mini-label">Provider</div>
+            <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(row.key || '—')}</div>
+          </div>
+          <div class="pd-stat-mini">
+            <div class="pd-stat-mini-label">模型</div>
+            <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(getProviderDetailModel(row) || '—')}</div>
+          </div>
+        </div>
+        ${result ? renderPdTestResult(result) : '<div class="pd-empty pd-empty-small">Claude Code 不写入 Codex 的 24h probe 历史；这里显示当前 Provider 的即时检测结果。</div>'}
+      </div>
+    </div>`;
+}
+
 async function actionPdSwitch() {
   const row = lookupProviderDetailRow();
   if (!row) return;
@@ -19731,6 +20016,24 @@ async function actionPdRunTest() {
   state.providerDetail.testRunning = true;
   state.providerDetail.testResult = null;
   renderProviderDetail();
+  if (isClaudeProviderDetail(row)) {
+    try {
+      const res = await testClaudeProviderConnectivity(row.ref || row, { delayMs: 0 });
+      const data = res?.data || res || {};
+      const models = (Array.isArray(data.models) && data.models)
+        || (Array.isArray(data.raw?.data) && data.raw.data.map((m) => m?.id || m).filter(Boolean))
+        || [];
+      state.providerDetail.testResult = res?.ok === false
+        ? { ok: false, error: res?.error || data?.error || '检测失败' }
+        : { ok: true, models, latencyMs: data.latencyMs ?? data.elapsedMs ?? null };
+    } catch (err) {
+      state.providerDetail.testResult = { ok: false, error: err?.message || String(err) };
+    } finally {
+      state.providerDetail.testRunning = false;
+      renderProviderDetail();
+    }
+    return;
+  }
   const codexHome = state.current?.codexHome || '';
   const res = await api('/api/provider/test-saved', {
     method: 'POST',
@@ -19761,6 +20064,10 @@ async function actionPdRunTest() {
 
 async function actionPdRefreshHealth() {
   const row = lookupProviderDetailRow();
+  if (row && isClaudeProviderDetail(row)) {
+    await actionPdRunTest();
+    return;
+  }
   if (row) await fetchProviderProbeData(row);
 }
 
@@ -20175,30 +20482,27 @@ async function saveClaudeCodeConfigOnly() {
   const apiKey = el('apiKeyInput')?.value?.trim() || '';
   const baseUrl = el('baseUrlInput')?.value?.trim() || '';
 
-  // Safety: don't save OpenAI keys into Claude Code config
-  if (apiKey && /^sk-(?!ant)/i.test(apiKey) && apiKey.length > 30) {
-    flash('检测到 OpenAI Key，请勿填入 Claude Code 配置', 'error');
-    return;
-  }
-
   // If user manually changed URL and no provider is selected, infer one for this save.
   if (!state.claudeSelectedProviderKey && (baseUrl || model || apiKey)) {
     state.claudeSelectedProviderKey = inferClaudeProviderKey(baseUrl || '');
   }
 
   setBusy('saveBtn', true, '保存中...');
-  const nextSettings = buildClaudeCodeSettingsFromFields({
-    fromConfigEditor: false,
-    preferOauthForOfficial: true,
-  });
-  const saved = await saveClaudeCodeSettingsJson(nextSettings);
-  setBusy('saveBtn', false);
-  if (!saved.ok) return flash(saved.error || '保存失败', 'error');
-  await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
-  renderCurrentConfig();
-  const activeProvider = getClaudeProviderByKey(state.claudeSelectedProviderKey);
-  const providerLabel = activeProvider?.name || state.claudeSelectedProviderKey || '当前';
-  flash(`Claude Code 配置已保存，当前 Provider：${providerLabel}`, 'success');
+  try {
+    const nextSettings = buildClaudeCodeSettingsFromFields({
+      fromConfigEditor: false,
+      preferOauthForOfficial: true,
+    });
+    const saved = await saveClaudeCodeSettingsJson(nextSettings);
+    if (!saved.ok) return flash(saved.error || '保存失败', 'error');
+    await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+    renderCurrentConfig();
+    const activeProvider = getClaudeProviderByKey(state.claudeSelectedProviderKey);
+    const providerLabel = activeProvider?.name || state.claudeSelectedProviderKey || '当前';
+    flash(`Claude Code 配置已保存，当前 Provider：${providerLabel}`, 'success');
+  } finally {
+    setBusy('saveBtn', false);
+  }
 }
 
 function getCodexLaunchCredentialWarning() {
@@ -24419,7 +24723,11 @@ loadTools();
     if (tool === 'claudecode') {
       if (key === '__claudecode_oauth_default__' || key.startsWith('__claudecode_oauth_profile:')) return null;
       const profiles = typeof getClaudeProviderProfiles === 'function' ? getClaudeProviderProfiles(s.claudeCodeState) : [];
-      return (profiles || []).find((x) => x.key === key) || null;
+      const p = (profiles || []).find((x) => x.key === key) || null;
+      if (p && typeof fillFromClaudeProvider === 'function') {
+        try { fillFromClaudeProvider(p); } catch (err) { console.warn('[ch] fillFromClaudeProvider failed', err); }
+      }
+      return p;
     }
     if (tool === 'opencode') {
       return ((s.opencodeState?.providers) || []).find((x) => x.key === key) || null;

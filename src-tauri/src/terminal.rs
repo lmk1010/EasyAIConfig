@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
@@ -81,11 +82,182 @@ fn default_cwd() -> Result<PathBuf, String> {
 }
 
 fn parse_body_path(object: &serde_json::Map<String, Value>, key: &str) -> Result<PathBuf, String> {
-  let input = get_string(object, key);
+  let input = sanitize_terminal_text(&get_string(object, key));
   if input.trim().is_empty() {
     return default_cwd();
   }
   Ok(PathBuf::from(input))
+}
+
+fn sanitize_terminal_text(value: &str) -> String {
+  value.trim_matches('\0').trim().to_string()
+}
+
+fn quote_windows_cmd_arg(value: &str) -> String {
+  format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn windows_command_line_tokens(command: &str) -> Vec<String> {
+  let mut tokens = Vec::new();
+  let mut current = String::new();
+  let mut in_quotes = false;
+  let mut chars = command.trim_matches('\0').chars().peekable();
+  while let Some(ch) = chars.next() {
+    match ch {
+      '"' => {
+        if in_quotes && matches!(chars.peek(), Some('"')) {
+          current.push('"');
+          let _ = chars.next();
+        } else {
+          in_quotes = !in_quotes;
+        }
+      }
+      ch if ch.is_whitespace() && !in_quotes => {
+        if !current.is_empty() {
+          tokens.push(current.clone());
+          current.clear();
+        }
+      }
+      _ => current.push(ch),
+    }
+  }
+  if !current.is_empty() {
+    tokens.push(current);
+  }
+  tokens
+}
+
+fn windows_terminal_program_candidate_exists(program: &str) -> bool {
+  let candidate = sanitize_terminal_text(program);
+  if candidate.is_empty() {
+    return false;
+  }
+  let path = Path::new(&candidate);
+  path.exists() || windows_npm_shim_candidate(&candidate).is_some() || windows_where(&candidate).is_some()
+}
+
+fn split_windows_terminal_program_prefix(command: &str) -> Option<(String, Vec<String>)> {
+  let text = sanitize_terminal_text(command);
+  let boundaries = text
+    .char_indices()
+    .filter_map(|(index, ch)| ch.is_whitespace().then_some(index))
+    .collect::<Vec<_>>();
+  for index in boundaries.into_iter().rev() {
+    let program = text[..index].trim();
+    let rest = text[index..].trim();
+    if program.is_empty() || rest.is_empty() {
+      continue;
+    }
+    if windows_terminal_program_candidate_exists(program) {
+      return Some((program.to_string(), windows_command_line_tokens(rest)));
+    }
+  }
+  None
+}
+
+fn windows_where(command: &str) -> Option<String> {
+  let trimmed = command.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  let output = Command::new("where.exe").arg(trimmed).output().ok()?;
+  if !output.status.success() {
+    return None;
+  }
+  String::from_utf8_lossy(&output.stdout)
+    .lines()
+    .map(str::trim)
+    .find(|line| !line.is_empty())
+    .map(|line| line.trim_matches('"').to_string())
+}
+
+fn windows_npm_shim_candidate(program: &str) -> Option<String> {
+  let path = Path::new(program);
+  let parent = path.parent()?;
+  let stem = path.file_name()?.to_string_lossy();
+  for ext in ["cmd", "bat", "exe", "ps1"] {
+    let candidate = parent.join(format!("{}.{}", stem, ext));
+    if candidate.exists() {
+      return Some(candidate.to_string_lossy().to_string());
+    }
+  }
+  None
+}
+
+fn resolve_windows_terminal_command(program: &str, args: &[String]) -> (String, Vec<String>, String) {
+  let mut tokens = windows_command_line_tokens(program);
+  if tokens.is_empty() {
+    tokens.push("cmd.exe".to_string());
+  }
+  let mut raw_program = sanitize_terminal_text(&tokens.remove(0));
+  let mut merged_args = tokens
+    .into_iter()
+    .map(|item| sanitize_terminal_text(&item))
+    .filter(|item| !item.is_empty())
+    .collect::<Vec<_>>();
+  if merged_args.is_empty() && raw_program.chars().any(char::is_whitespace) {
+    if let Some((split_program, split_args)) = split_windows_terminal_program_prefix(&raw_program) {
+      raw_program = split_program;
+      merged_args = split_args;
+    }
+  }
+  merged_args.extend(args.iter().map(|item| sanitize_terminal_text(item)).filter(|item| !item.is_empty()));
+
+  let mut resolved_program = raw_program.clone();
+  let raw_path = Path::new(&raw_program);
+  let raw_lower = raw_program.to_ascii_lowercase();
+  if !raw_path.exists() && !raw_lower.ends_with(".exe") && !raw_lower.ends_with(".cmd") && !raw_lower.ends_with(".bat") && !raw_lower.ends_with(".ps1") {
+    if let Some(found) = windows_where(&raw_program) {
+      resolved_program = found;
+    }
+  }
+  let mut lower = resolved_program.to_ascii_lowercase();
+  if !lower.ends_with(".exe") && !lower.ends_with(".cmd") && !lower.ends_with(".bat") && !lower.ends_with(".ps1") {
+    if let Some(shim) = windows_npm_shim_candidate(&resolved_program) {
+      resolved_program = shim;
+      lower = resolved_program.to_ascii_lowercase();
+    }
+  }
+
+  let mut preview_parts = vec![quote_windows_cmd_arg(&resolved_program)];
+  preview_parts.extend(merged_args.iter().map(|arg| quote_windows_cmd_arg(arg)));
+  let preview = preview_parts.join(" ");
+
+  if lower.ends_with(".ps1") {
+    let mut command_args = vec![
+      "-NoProfile".to_string(),
+      "-NonInteractive".to_string(),
+      "-ExecutionPolicy".to_string(),
+      "Bypass".to_string(),
+      "-File".to_string(),
+      resolved_program,
+    ];
+    command_args.extend(merged_args);
+    return ("powershell.exe".to_string(), command_args, preview);
+  }
+
+  if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+    let mut command_args = vec![
+      "/d".to_string(),
+      "/c".to_string(),
+      "call".to_string(),
+      resolved_program,
+    ];
+    command_args.extend(merged_args);
+    return ("cmd.exe".to_string(), command_args, preview);
+  }
+
+  if !lower.ends_with(".exe") {
+    let mut command_args = vec![
+      "/d".to_string(),
+      "/c".to_string(),
+      resolved_program,
+    ];
+    command_args.extend(merged_args);
+    return ("cmd.exe".to_string(), command_args, preview);
+  }
+
+  (resolved_program, merged_args, preview)
 }
 
 fn parse_rows(object: &serde_json::Map<String, Value>, key: &str, fallback: u16) -> u16 {
@@ -522,18 +694,19 @@ pub(crate) fn terminal_create(body: &Value) -> Result<Value, String> {
   let cwd = parse_body_path(&object, "cwd")?;
   let title = get_string(&object, "title");
   let tool = get_string(&object, "tool");
-  let program = get_string(&object, "program");
+  let program = sanitize_terminal_text(&get_string(&object, "program"));
   if program.trim().is_empty() {
     return Err("program 不能为空".to_string());
   }
-  let args = object
+  let mut args = object
     .get("args")
     .and_then(Value::as_array)
     .map(|items| {
       items
         .iter()
         .filter_map(Value::as_str)
-        .map(|item| item.to_string())
+        .map(sanitize_terminal_text)
+        .filter(|item| !item.is_empty())
         .collect::<Vec<_>>()
     })
     .unwrap_or_default();
@@ -553,6 +726,13 @@ pub(crate) fn terminal_create(body: &Value) -> Result<Value, String> {
     .get("commandPreview")
     .and_then(Value::as_str)
     .map(|value| value.to_string());
+  let (program, resolved_preview) = if cfg!(target_os = "windows") {
+    let (resolved_program, resolved_args, resolved_preview) = resolve_windows_terminal_command(&program, &args);
+    args = resolved_args;
+    (resolved_program, Some(resolved_preview))
+  } else {
+    (program, None)
+  };
   spawn_embedded_terminal(
     &cwd,
     if title.trim().is_empty() { &program } else { &title },
@@ -562,7 +742,7 @@ pub(crate) fn terminal_create(body: &Value) -> Result<Value, String> {
     &envs,
     rows,
     cols,
-    preview,
+    preview.or(resolved_preview),
   )
 }
 
