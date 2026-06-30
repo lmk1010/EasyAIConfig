@@ -543,7 +543,7 @@
                       <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
                         <path d="M8 3v10M3 8h10"/>
                       </svg>
-                      新增 Provider
+                      <span class="ch-add-btn-label">新增 Provider</span>
                     </button>
                   </div>
 
@@ -558,7 +558,7 @@
                       <span>API Key</span><span class="ch-ribbon-count" data-count="apikey">0</span>
                     </button>
                     <div class="ch-ribbon-spacer"></div>
-                    <div class="ch-autodetect" id="chAutodetect" title="周期探测所有 provider 的连接状态。每次探测都会落进 24h uptime 历史；关闭即不再自动落数据">
+                    <div class="ch-autodetect" id="chAutodetect" title="仅探测 Codex API Key Provider；官方 OAuth 不参与连通性探测。关闭即不再自动落数据">
                       <button type="button" class="ch-autodetect-trigger" id="chAutodetectTrigger" aria-haspopup="menu" aria-expanded="false">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                           <circle cx="12" cy="13" r="8"/>
@@ -1105,7 +1105,7 @@
               <div class="cfg-page-title">
                 <div class="cfg-page-title-main">
                   <h1 class="cfg-page-title-h1"><span id="cfgPageTool">Codex</span><em>·</em><span>配置编辑</span></h1>
-                  <p class="cfg-page-title-sub" id="cfgPageSub">点击分类卡进入子页 · 在子页编辑后点右上 <strong>保存并生效</strong> · 也可切到原始文件直改 TOML/JSON</p>
+                  <p class="cfg-page-title-sub" id="cfgPageSub">点击分类卡进入子页 · 编辑后点右上 <strong>保存</strong> · 保存后重启 Codex 或新开会话生效</p>
                 </div>
                 <div class="cfg-page-meta" id="cfgPageMeta"></div>
               </div>
@@ -1182,7 +1182,7 @@
                       </button>
                       <button id="saveConfigEditorBtn" class="secondary subtle-btn" hidden>保存配置</button>
                       <button id="closeConfigEditorBtn" class="secondary subtle-btn" hidden>关闭</button>
-                      <button id="applyConfigEditorBtn" class="cfg3-primary-btn">保存并生效</button>
+                      <button id="applyConfigEditorBtn" class="cfg3-primary-btn">保存</button>
                     </div>
                     <!-- Hidden search elements for backward compatibility -->
                     <input id="ocRecipeSearchInput" type="hidden" />
@@ -1220,7 +1220,10 @@
                             <input id="cfgModelInput" placeholder="默认由模型目录决定" autocomplete="off" />
                           </div>
                         </label>
-                        <label class="field"><span>默认 Provider</span><input id="cfgProviderInput" placeholder="openai" /></label>
+                        <label class="field" id="cfgProviderField"><span>默认 Provider</span>
+                          <input id="cfgProviderInput" placeholder="openai" />
+                          <div id="cfgProviderScopeHint" class="config-field-hint hide">项目配置不能覆盖 Provider；请在全局配置中设置。</div>
+                        </label>
                         <label class="field"><span>推理强度</span>
                           <div class="select-wrap"><select id="cfgReasoningSelect">
                               <option value="">默认 (medium)</option><option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option>
@@ -1229,6 +1232,16 @@
                         <label class="field"><span>Plan 推理</span>
                           <div class="select-wrap"><select id="cfgPlanReasoningSelect">
                               <option value="">默认 (medium)</option><option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>推理摘要</span>
+                          <div class="select-wrap"><select id="cfgReasoningSummarySelect">
+                              <option value="">默认 (auto)</option><option value="auto">auto</option><option value="concise">concise</option><option value="detailed">detailed</option><option value="none">none</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>输出详略</span>
+                          <div class="select-wrap"><select id="cfgVerbositySelect">
+                              <option value="">默认 (medium)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option>
                             </select></div>
                         </label>
                       </div>
@@ -1256,12 +1269,28 @@
                         </label>
                         <label class="field"><span>审批策略</span>
                           <div class="select-wrap"><select id="cfgApprovalSelect">
-                              <option value="">默认 (suggest)</option><option value="never">never</option><option value="on-request">on-request</option><option value="on-failure">on-failure</option><option value="untrusted">untrusted</option>
+                              <option value="">默认 (on-request)</option><option value="on-request">on-request</option><option value="untrusted">untrusted</option><option value="never">never</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>审批 reviewer</span>
+                          <div class="select-wrap"><select id="cfgApprovalsReviewerSelect">
+                              <option value="">默认 (user)</option><option value="user">user</option><option value="auto_review">auto_review</option>
                             </select></div>
                         </label>
                         <label class="field"><span>沙箱模式</span>
                           <div class="select-wrap"><select id="cfgSandboxSelect">
                               <option value="">默认 (read-only)</option><option value="read-only">read-only</option><option value="workspace-write">workspace-write</option><option value="danger-full-access">danger-full-access</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>权限 Profile</span><input id="cfgDefaultPermissionsInput" placeholder="如 :workspace / :read-only / 自定义 profile" /></label>
+                        <label class="field"><span>登录 Shell</span>
+                          <div class="select-wrap"><select id="cfgAllowLoginShellSelect">
+                              <option value="">默认 (true)</option><option value="true">true</option><option value="false">false</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>Web Search</span>
+                          <div class="select-wrap"><select id="cfgWebSearchSelect">
+                              <option value="">默认 (cached)</option><option value="cached">cached</option><option value="live">live</option><option value="disabled">disabled</option>
                             </select></div>
                         </label>
                       </div>
@@ -1401,11 +1430,33 @@
                       <svg class="cfg-section-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
                     </summary>
                     <div class="cfg-section-body">
+                      <div class="editor-grid dense-grid cfg-switch-select-grid">
+                        <label class="field"><span>图片查看工具</span>
+                          <div class="select-wrap"><select id="cfgViewImageSelect">
+                              <option value="">默认</option><option value="true">true</option><option value="false">false</option>
+                            </select></div>
+                        </label>
+                        <label class="field"><span>推理摘要支持</span>
+                          <div class="select-wrap"><select id="cfgSupportsReasoningSummariesSelect">
+                              <option value="">默认</option><option value="true">true</option><option value="false">false</option>
+                            </select></div>
+                        </label>
+                      </div>
                       <div class="toggle-grid">
                         <label class="toggle-item"><input id="cfgHideReasoningCheck" type="checkbox" /><span>隐藏推理过程</span></label>
                         <label class="toggle-item"><input id="cfgShowRawReasoningCheck" type="checkbox" /><span>显示原始推理</span></label>
                         <label class="toggle-item"><input id="cfgDisableStorageCheck" type="checkbox" /><span>关闭响应存储</span></label>
+                        <label class="toggle-item"><input id="cfgHooksCheck" type="checkbox" /><span>启用 Hooks</span></label>
+                        <label class="toggle-item"><input id="cfgFastModeCheck" type="checkbox" /><span>启用 Fast Mode</span></label>
+                        <label class="toggle-item"><input id="cfgMultiAgentCheck" type="checkbox" /><span>启用 Multi Agent</span></label>
+                        <label class="toggle-item"><input id="cfgPersonalityFeatureCheck" type="checkbox" /><span>启用 Personality</span></label>
+                        <label class="toggle-item"><input id="cfgShellToolCheck" type="checkbox" /><span>启用 Shell Tool</span></label>
+                        <label class="toggle-item"><input id="cfgUnifiedExecCheck" type="checkbox" /><span>启用 Unified Exec</span></label>
                         <label class="toggle-item"><input id="cfgShellSnapshotCheck" type="checkbox" /><span>启用 Shell Snapshot</span></label>
+                        <label class="toggle-item"><input id="cfgMemoriesFeatureCheck" type="checkbox" /><span>启用 Memories</span></label>
+                        <label class="toggle-item"><input id="cfgUndoFeatureCheck" type="checkbox" /><span>启用 Undo</span></label>
+                        <label class="toggle-item"><input id="cfgCodexGitCommitCheck" type="checkbox" /><span>启用 Git Commit</span></label>
+                        <label class="toggle-item"><input id="cfgAppsFeatureCheck" type="checkbox" /><span>启用 Apps</span></label>
                         <label class="toggle-item"><input id="cfgCompactPromptCheck" type="checkbox" /><span>紧凑提示模式</span></label>
                         <label class="toggle-item"><input id="cfgUpdateCheck" type="checkbox" checked /><span>启动时检查更新</span></label>
                       </div>
@@ -3139,12 +3190,12 @@
                     <div id="cfgRawTomlWrap">
                       <div id="cfgRawTomlEditor" class="raw-code-editor" aria-label="当前原始 TOML 编辑器"></div>
                       <textarea id="cfgRawTomlTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
-                      <div class="toml-hint">支持 TOML 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存并生效」。</div>
+                      <div class="toml-hint">支持 TOML 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存」。</div>
                     </div>
                     <div id="cfgRawAuthWrap" style="display:none">
                       <div id="cfgRawAuthEditor" class="raw-code-editor" aria-label="当前原始 auth.json 编辑器"></div>
                       <textarea id="cfgRawAuthTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
-                      <div class="toml-hint">编辑 auth.json 中的 API Key 键值对；修改后点击顶部「保存并生效」。</div>
+                      <div class="toml-hint">编辑 auth.json 中的 API Key 键值对；修改后点击顶部「保存」。</div>
                     </div>
                   </div>
                   <!-- Claude Code raw JSON -->
@@ -3155,7 +3206,7 @@
                     </div>
                     <div id="ccCfgRawJsonEditor" class="raw-code-editor" aria-label="Claude Code settings.json 编辑器"></div>
                     <textarea id="ccCfgRawJsonTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
-                    <div class="toml-hint">支持 JSON 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存并生效」。</div>
+                    <div class="toml-hint">支持 JSON 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存」。</div>
                   </div>
                   <!-- OpenCode raw JSON -->
                   <div class="config-side-section hide" data-tool-editor-side="opencode">
@@ -3165,7 +3216,7 @@
                     </div>
                     <div id="opCfgRawJsonEditor" class="raw-code-editor" aria-label="OpenCode opencode.json 编辑器"></div>
                     <textarea id="opCfgRawJsonTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
-                    <div class="toml-hint">支持 JSON / JSONC 文本编辑；修改后点击顶部「保存并生效」。</div>
+                    <div class="toml-hint">支持 JSON / JSONC 文本编辑；修改后点击顶部「保存」。</div>
                   </div>
                   <!-- OpenClaw raw JSON -->
                   <div class="config-side-section hide" data-tool-editor-side="openclaw">
@@ -3175,7 +3226,7 @@
                     </div>
                     <div id="ocCfgRawJsonEditor" class="raw-code-editor" aria-label="当前原始 JSON 编辑器"></div>
                     <textarea id="ocCfgRawJsonTextarea" class="raw-config raw-config-native" rows="26" hidden></textarea>
-                    <div class="toml-hint">支持 JSON 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存并生效」。</div>
+                    <div class="toml-hint">支持 JSON 高亮、行号和 `Ctrl/Cmd + F` 搜索；修改后点击顶部「保存」。</div>
                   </div>
                 </aside>
               </div>

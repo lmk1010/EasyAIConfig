@@ -2304,65 +2304,155 @@ fn escape_applescript(text: &str) -> String {
   text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn macos_iterm_available() -> bool {
-  let home = home_dir().ok();
-  Path::new("/Applications/iTerm.app").exists()
-    || Path::new("/Applications/iTerm2.app").exists()
-    || home.as_ref().map(|h| h.join("Applications/iTerm.app").exists()).unwrap_or(false)
-    || home.as_ref().map(|h| h.join("Applications/iTerm2.app").exists()).unwrap_or(false)
+fn macos_application_roots() -> Vec<PathBuf> {
+  let mut roots = vec![
+    PathBuf::from("/Applications"),
+    PathBuf::from("/Applications/Utilities"),
+    PathBuf::from("/System/Applications"),
+    PathBuf::from("/System/Applications/Utilities"),
+  ];
+  if let Ok(home) = home_dir() {
+    roots.push(home.join("Applications"));
+  }
+  roots
 }
 
-fn macos_termius_available() -> bool {
-  let home = home_dir().ok();
-  Path::new("/Applications/Termius.app").exists()
-    || home.as_ref().map(|h| h.join("Applications/Termius.app").exists()).unwrap_or(false)
+fn find_macos_application(app_names: &[&str]) -> Option<(String, PathBuf)> {
+  for name in app_names {
+    let app_name = name.trim().trim_end_matches(".app");
+    if app_name.is_empty() {
+      continue;
+    }
+    for root in macos_application_roots() {
+      let candidate = root.join(format!("{}.app", app_name));
+      if candidate.exists() {
+        return Some((app_name.to_string(), candidate));
+      }
+    }
+  }
+  None
 }
 
-fn resolve_macos_terminal_profile(profile: &str) -> &'static str {
+fn macos_bundle_executable(app_names: &[&str], executable_names: &[&str]) -> Option<String> {
+  let (_, app_path) = find_macos_application(app_names)?;
+  for executable in executable_names {
+    let candidate = app_path.join("Contents").join("MacOS").join(executable);
+    if candidate.exists() {
+      return Some(candidate.to_string_lossy().to_string());
+    }
+  }
+  None
+}
+
+fn macos_terminal_cli_command(profile: &str) -> Option<String> {
+  match profile {
+    "wezterm" => command_exists("wezterm").or_else(|| macos_bundle_executable(&["WezTerm"], &["wezterm"])),
+    "ghostty" => command_exists("ghostty").or_else(|| macos_bundle_executable(&["Ghostty"], &["ghostty"])),
+    "alacritty" => command_exists("alacritty").or_else(|| macos_bundle_executable(&["Alacritty"], &["alacritty"])),
+    "kitty" => command_exists("kitty").or_else(|| macos_bundle_executable(&["kitty"], &["kitty"])),
+    _ => None,
+  }
+}
+
+fn generic_macos_terminal_app(profile: &str) -> Option<(&'static str, &'static str)> {
+  match profile {
+    "termius" => Some(("Termius", "Termius")),
+    "terminus" => Some(("Terminus", "Terminus")),
+    "tabby" => Some(("Tabby", "Tabby / Terminus")),
+    "warp" => Some(("Warp", "Warp")),
+    "hyper" => Some(("Hyper", "Hyper")),
+    _ => None,
+  }
+}
+
+fn macos_terminal_profile_available(profile: &str) -> bool {
+  match profile {
+    "terminal" => find_macos_application(&["Terminal"]).is_some(),
+    "iterm" => find_macos_application(&["iTerm", "iTerm2"]).is_some(),
+    "wezterm" | "ghostty" | "alacritty" | "kitty" => macos_terminal_cli_command(profile).is_some(),
+    "termius" | "terminus" | "tabby" | "warp" | "hyper" => {
+      generic_macos_terminal_app(profile)
+        .map(|(app_name, _)| find_macos_application(&[app_name]).is_some())
+        .unwrap_or(false)
+    }
+    _ => false,
+  }
+}
+
+fn resolve_macos_terminal_profile(profile: &str) -> String {
   let normalized = profile.trim().to_lowercase();
-  if normalized == "terminal" {
-    return "terminal";
+  let requested = match normalized.as_str() {
+    "terminal" | "iterm" | "termius" | "terminus" | "tabby" | "warp" | "hyper" | "wezterm" | "ghostty" | "alacritty" | "kitty" => normalized.as_str(),
+    _ => "auto",
+  };
+  if requested != "auto" && macos_terminal_profile_available(requested) {
+    return requested.to_string();
   }
-  if normalized == "termius" {
-    return if macos_termius_available() { "termius" } else { "terminal" };
+  for candidate in ["iterm", "terminal", "wezterm", "ghostty", "alacritty", "kitty", "termius", "terminus", "tabby", "warp", "hyper"] {
+    if macos_terminal_profile_available(candidate) {
+      return candidate.to_string();
+    }
   }
-  if normalized == "iterm" {
-    return if macos_iterm_available() { "iterm" } else { "terminal" };
+  "terminal".to_string()
+}
+
+fn launch_macos_app_and_type_command(app_name: &str, app_label: &str, shell_command: &str, tool_label: &str) -> Result<String, String> {
+  let opened = create_command("open")
+    .args(["-a", app_name])
+    .output()
+    .map_err(|error| error.to_string())?;
+  if !opened.status.success() {
+    return Err(String::from_utf8_lossy(&opened.stderr).trim().to_string());
   }
-  if macos_iterm_available() { "iterm" } else { "terminal" }
+
+  let script = [
+    &format!("tell application \"{}\" to activate", escape_applescript(app_name)),
+    "delay 0.35",
+    "tell application \"System Events\"",
+    &format!("keystroke \"{}\"", escape_applescript(shell_command)),
+    "key code 36",
+    "end tell",
+  ].join("\n");
+  let typed = create_command("osascript")
+    .arg("-e")
+    .arg(script)
+    .output()
+    .map_err(|error| error.to_string())?;
+  if typed.status.success() {
+    return Ok(format!("{} 已在 {} 中启动", tool_label, app_label));
+  }
+
+  Ok(format!("{} 已打开 {}，请在其中执行：{}", tool_label, app_label, shell_command))
 }
 
 fn launch_macos_terminal_with_profile(cwd: &Path, command_text: &str, tool_label: &str, terminal_profile: &str) -> Result<String, String> {
   let shell_command = format!("cd {} && {}", quote_posix_shell_arg(&cwd.to_string_lossy()), command_text);
   let resolved = resolve_macos_terminal_profile(terminal_profile);
 
-  if resolved == "termius" {
-    let opened = create_command("open")
-      .args(["-a", "Termius"])
-      .output()
-      .map_err(|error| error.to_string())?;
-    if !opened.status.success() {
-      return Err(String::from_utf8_lossy(&opened.stderr).trim().to_string());
-    }
+  if let Some((app_name, app_label)) = generic_macos_terminal_app(&resolved) {
+    return launch_macos_app_and_type_command(app_name, app_label, &shell_command, tool_label);
+  }
 
-    let script = [
-      "tell application \"Termius\" to activate",
-      "delay 0.25",
-      "tell application \"System Events\"",
-      &format!("keystroke \"{}\"", escape_applescript(&shell_command)),
-      "key code 36",
-      "end tell",
-    ].join("\n");
-    let typed = create_command("osascript")
-      .arg("-e")
-      .arg(script)
-      .output()
-      .map_err(|error| error.to_string())?;
-    if typed.status.success() {
-      return Ok(format!("{} 已在 Termius 中启动", tool_label));
+  if let Some(command) = macos_terminal_cli_command(&resolved) {
+    let cwd_text = cwd.to_string_lossy().to_string();
+    let args = match resolved.as_str() {
+      "wezterm" => vec!["start".to_string(), "--cwd".to_string(), cwd_text, "--".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.clone()],
+      "ghostty" => vec!["--working-directory".to_string(), cwd_text, "-e".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.clone()],
+      "alacritty" => vec!["--working-directory".to_string(), cwd_text, "-e".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.clone()],
+      "kitty" => vec!["--directory".to_string(), cwd_text, "bash".to_string(), "-lc".to_string(), shell_command.clone()],
+      _ => Vec::new(),
+    };
+    if !args.is_empty() {
+      create_command(&command).args(args).spawn().map_err(|error| error.to_string())?;
+      let label = match resolved.as_str() {
+        "wezterm" => "WezTerm",
+        "ghostty" => "Ghostty",
+        "alacritty" => "Alacritty",
+        "kitty" => "kitty",
+        _ => "终端",
+      };
+      return Ok(format!("{} 已在 {} 中启动", tool_label, label));
     }
-
-    return Ok(format!("{} 已打开 Termius，请在 Termius 中执行：{}", tool_label, shell_command));
   }
 
   let script = if resolved == "iterm" {
@@ -2398,6 +2488,71 @@ fn launch_macos_terminal_with_profile(cwd: &Path, command_text: &str, tool_label
 
   let app_label = if resolved == "iterm" { "iTerm" } else { "Terminal" };
   Ok(format!("{} 已在 {} 中启动", tool_label, app_label))
+}
+
+fn linux_terminal_specs() -> Vec<(&'static str, &'static str, &'static str)> {
+  vec![
+    ("x-terminal-emulator", "系统默认终端", "x-terminal-emulator"),
+    ("gnome-terminal", "GNOME Terminal", "gnome-terminal"),
+    ("konsole", "Konsole", "konsole"),
+    ("wezterm", "WezTerm", "wezterm"),
+    ("alacritty", "Alacritty", "alacritty"),
+    ("kitty", "kitty", "kitty"),
+    ("tilix", "Tilix", "tilix"),
+    ("xfce4-terminal", "Xfce Terminal", "xfce4-terminal"),
+    ("lxterminal", "LXTerminal", "lxterminal"),
+    ("xterm", "xterm", "xterm"),
+  ]
+}
+
+fn resolve_linux_terminal_profile(profile: &str) -> Option<(&'static str, &'static str, String)> {
+  let normalized = profile.trim().to_lowercase();
+  let specs = linux_terminal_specs();
+  if normalized != "auto" {
+    if let Some((id, label, command)) = specs.iter().find(|(id, _, _)| *id == normalized) {
+      if let Some(found) = command_exists(command) {
+        return Some((*id, *label, found));
+      }
+    }
+  }
+  for preferred in ["x-terminal-emulator", "gnome-terminal", "konsole", "wezterm", "alacritty", "kitty"] {
+    if let Some((id, label, command)) = specs.iter().find(|(id, _, _)| *id == preferred) {
+      if let Some(found) = command_exists(command) {
+        return Some((*id, *label, found));
+      }
+    }
+  }
+  for (id, label, command) in specs {
+    if let Some(found) = command_exists(command) {
+      return Some((id, label, found));
+    }
+  }
+  None
+}
+
+fn linux_terminal_args(profile: &str, cwd: &Path, shell_command: &str) -> Vec<String> {
+  let cwd_text = cwd.to_string_lossy().to_string();
+  match profile {
+    "gnome-terminal" => vec!["--".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.to_string()],
+    "wezterm" => vec!["start".to_string(), "--cwd".to_string(), cwd_text, "--".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.to_string()],
+    "alacritty" => vec!["--working-directory".to_string(), cwd_text, "-e".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.to_string()],
+    "kitty" => vec!["--directory".to_string(), cwd_text, "bash".to_string(), "-lc".to_string(), shell_command.to_string()],
+    "tilix" => vec!["--working-directory".to_string(), cwd_text, "-e".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.to_string()],
+    "xfce4-terminal" => vec!["--working-directory".to_string(), cwd_text, "-e".to_string(), format!("bash -lc {}", quote_posix_shell_arg(shell_command))],
+    "lxterminal" => vec!["--working-directory".to_string(), cwd_text, "-e".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.to_string()],
+    _ => vec!["-e".to_string(), "bash".to_string(), "-lc".to_string(), shell_command.to_string()],
+  }
+}
+
+fn launch_linux_terminal_with_profile(cwd: &Path, command_text: &str, tool_label: &str, terminal_profile: &str) -> Result<String, String> {
+  let (profile, label, command) = resolve_linux_terminal_profile(terminal_profile)
+    .ok_or_else(|| format!("没有找到可用终端，请先手动运行 {}", command_text))?;
+  let shell_command = format!("cd {} && {}", quote_posix_shell_arg(&cwd.to_string_lossy()), command_text);
+  create_command(&command)
+    .args(linux_terminal_args(profile, cwd, &shell_command))
+    .spawn()
+    .map_err(|error| error.to_string())?;
+  Ok(format!("{} 已在 {} 中启动", tool_label, label))
 }
 
 
@@ -2736,6 +2891,9 @@ fn launch_codex_terminal_command(cwd: &Path, terminal_profile: &str, codex_home:
   if cfg!(target_os = "macos") {
     return launch_macos_terminal_with_profile(cwd, &command_text, "Codex", terminal_profile);
   }
+  if cfg!(target_os = "linux") {
+    return launch_linux_terminal_with_profile(cwd, &command_text, "Codex", terminal_profile);
+  }
 
   launch_terminal_command(cwd, &command_text, "Codex")
 }
@@ -2888,6 +3046,8 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
   let command = with_codex_home_command(&command, &codex_home, Some(&cwd));
   let message = if cfg!(target_os = "macos") {
     launch_macos_terminal_with_profile(&cwd, &command, "Codex 登录", &terminal_profile)?
+  } else if cfg!(target_os = "linux") {
+    launch_linux_terminal_with_profile(&cwd, &command, "Codex 登录", &terminal_profile)?
   } else {
     launch_terminal_command(&cwd, &command, "Codex 登录")?
   };
@@ -3329,6 +3489,8 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
   let command = with_codex_home_command(&build_codex_session_command(binary_path, &args), &codex_home, Some(&cwd));
   let message = if cfg!(target_os = "macos") {
     launch_macos_terminal_with_profile(&cwd, &command, tool_label, &terminal_profile)?
+  } else if cfg!(target_os = "linux") {
+    launch_linux_terminal_with_profile(&cwd, &command, tool_label, &terminal_profile)?
   } else {
     launch_terminal_command(&cwd, &command, tool_label)?
   };

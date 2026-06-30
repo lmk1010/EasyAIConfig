@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
@@ -20,6 +21,47 @@ struct ScopePaths {
   root_path: PathBuf,
   config_path: PathBuf,
   env_path: PathBuf,
+  auth_path: PathBuf,
+}
+
+const PROJECT_IGNORED_CODEX_CONFIG_KEYS: &[&str] = &[
+  "openai_base_url",
+  "chatgpt_base_url",
+  "apps_mcp_product_sku",
+  "model_provider",
+  "model_providers",
+  "notify",
+  "profile",
+  "profiles",
+  "experimental_realtime_ws_base_url",
+  "otel",
+];
+
+fn normalize_settings_patch_for_scope(patch: &Value, scope: &str) -> Value {
+  let mut normalized = normalize_settings_patch(patch);
+  if scope != "project" {
+    return normalized;
+  }
+
+  if let Some(object) = normalized.as_object_mut() {
+    for key in PROJECT_IGNORED_CODEX_CONFIG_KEYS {
+      let should_remove = object.get(*key).map(|value| !value.is_null()).unwrap_or(false);
+      if should_remove {
+        object.remove(*key);
+      }
+    }
+  }
+  normalized
+}
+
+fn scope_paths_json(paths: &ScopePaths) -> Value {
+  json!({
+    "scope": paths.scope.clone(),
+    "rootPath": paths.root_path.to_string_lossy().to_string(),
+    "configPath": paths.config_path.to_string_lossy().to_string(),
+    "envPath": paths.env_path.to_string_lossy().to_string(),
+    "authPath": paths.auth_path.to_string_lossy().to_string(),
+  })
 }
 
 fn summarize_codex_login(auth_json: &Value) -> Value {
@@ -110,6 +152,7 @@ fn scope_paths(scope: &str, project_path: &str, codex_home: &Path) -> Result<Sco
       root_path: root_path.clone(),
       config_path: root_path.join(".codex").join("config.toml"),
       env_path: codex_home.join(".env"),
+      auth_path: codex_home.join("auth.json"),
     });
   }
 
@@ -118,11 +161,12 @@ fn scope_paths(scope: &str, project_path: &str, codex_home: &Path) -> Result<Sco
     root_path: codex_home.clone(),
     config_path: codex_home.join("config.toml"),
     env_path: codex_home.join(".env"),
+    auth_path: codex_home.join("auth.json"),
   })
 }
 
 fn create_backup(paths: &ScopePaths) -> Result<String, String> {
-  // 备份目录与 .env.bak / config.toml.bak 都可能含 API key / OAuth token，
+  // 备份目录与 .env.bak / auth.json.bak / config.toml.bak 都可能含 API key / OAuth token，
   // 必须把目录设 0700、文件设 0600，否则共享机上其他用户能 `cat` 到。
   let backups_root_path = backups_root()?;
   ensure_secret_dir(&backups_root_path)?;
@@ -130,6 +174,9 @@ fn create_backup(paths: &ScopePaths) -> Result<String, String> {
   ensure_secret_dir(&target_dir)?;
   write_secret(&target_dir.join("config.toml.bak"), &read_text(&paths.config_path)?)?;
   write_secret(&target_dir.join(".env.bak"), &read_text(&paths.env_path)?)?;
+  if paths.auth_path.is_file() {
+    write_secret(&target_dir.join("auth.json.bak"), &read_text(&paths.auth_path)?)?;
+  }
   Ok(target_dir.to_string_lossy().to_string())
 }
 
@@ -143,6 +190,97 @@ fn launch_platform_id() -> &'static str {
   }
 }
 
+#[cfg(target_os = "macos")]
+fn macos_application_roots() -> Vec<PathBuf> {
+  let mut roots = vec![
+    PathBuf::from("/Applications"),
+    PathBuf::from("/Applications/Utilities"),
+    PathBuf::from("/System/Applications"),
+    PathBuf::from("/System/Applications/Utilities"),
+  ];
+  if let Ok(home) = home_dir() {
+    roots.push(home.join("Applications"));
+  }
+  roots
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_application(app_names: &[&str]) -> Option<(String, String)> {
+  for name in app_names {
+    let app_name = name.trim().trim_end_matches(".app");
+    if app_name.is_empty() {
+      continue;
+    }
+    for root in macos_application_roots() {
+      let candidate = root.join(format!("{}.app", app_name));
+      if candidate.exists() {
+        return Some((app_name.to_string(), candidate.to_string_lossy().to_string()));
+      }
+    }
+  }
+  None
+}
+
+fn command_exists_for_launch(command: &str) -> Option<String> {
+  let trimmed = command.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  if trimmed.contains('/') {
+    let path = Path::new(trimmed);
+    return path.exists().then(|| trimmed.to_string());
+  }
+  let mut paths: Vec<PathBuf> = env::var_os("PATH")
+    .map(|value| env::split_paths(&value).collect())
+    .unwrap_or_default();
+  paths.extend([
+    PathBuf::from("/opt/homebrew/bin"),
+    PathBuf::from("/usr/local/bin"),
+    PathBuf::from("/usr/bin"),
+    PathBuf::from("/bin"),
+  ]);
+  for dir in paths {
+    let candidate = dir.join(trimmed);
+    if candidate.exists() {
+      return Some(candidate.to_string_lossy().to_string());
+    }
+  }
+  None
+}
+
+#[cfg(target_os = "macos")]
+fn first_macos_command_or_bundle(command_names: &[&str], app: &Option<(String, String)>, executable_names: &[&str]) -> String {
+  for command in command_names {
+    if let Some(found) = command_exists_for_launch(command) {
+      return found;
+    }
+  }
+  if let Some((_, app_path)) = app {
+    for executable in executable_names {
+      let candidate = Path::new(app_path).join("Contents").join("MacOS").join(executable);
+      if candidate.exists() {
+        return candidate.to_string_lossy().to_string();
+      }
+    }
+  }
+  String::new()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_profile(id: &str, label: &str, app_names: &[&str]) -> Value {
+  let app = find_macos_application(app_names);
+  let (app_name, app_path) = app.clone().unwrap_or_else(|| (app_names.first().copied().unwrap_or(label).to_string(), String::new()));
+  json!({
+    "id": id,
+    "label": label,
+    "available": app.is_some(),
+    "command": app_name,
+    "appName": app_name,
+    "appPath": app_path,
+    "launchMode": "type-command",
+  })
+}
+
 fn launch_terminal_profiles() -> Value {
   if cfg!(target_os = "windows") {
     return json!([
@@ -150,12 +288,79 @@ fn launch_terminal_profiles() -> Value {
     ]);
   }
   if cfg!(target_os = "macos") {
-    return json!([
-      { "id": "auto", "label": "自动选择（推荐）" },
-      { "id": "terminal", "label": "系统终端" },
-      { "id": "iterm", "label": "iTerm" },
-      { "id": "termius", "label": "Termius" }
-    ]);
+    #[cfg(target_os = "macos")]
+    {
+      let terminal_app = find_macos_application(&["Terminal"]);
+      let iterm_app = find_macos_application(&["iTerm", "iTerm2"]);
+      let wezterm_app = find_macos_application(&["WezTerm"]);
+      let ghostty_app = find_macos_application(&["Ghostty"]);
+      let alacritty_app = find_macos_application(&["Alacritty"]);
+      let kitty_app = find_macos_application(&["kitty"]);
+      let wezterm = first_macos_command_or_bundle(&["wezterm"], &wezterm_app, &["wezterm"]);
+      let ghostty = first_macos_command_or_bundle(&["ghostty"], &ghostty_app, &["ghostty"]);
+      let alacritty = first_macos_command_or_bundle(&["alacritty"], &alacritty_app, &["alacritty"]);
+      let kitty = first_macos_command_or_bundle(&["kitty"], &kitty_app, &["kitty"]);
+      let mut profiles = vec![
+        json!({ "id": "auto", "label": "自动选择（推荐）", "available": true }),
+        json!({
+          "id": "terminal",
+          "label": "Terminal.app",
+          "available": terminal_app.is_some(),
+          "command": "Terminal",
+          "appName": "Terminal",
+          "appPath": terminal_app.as_ref().map(|(_, p)| p.clone()).unwrap_or_default(),
+          "launchMode": "applescript",
+        }),
+        json!({
+          "id": "iterm",
+          "label": if iterm_app.as_ref().map(|(n, _)| n.as_str()) == Some("iTerm2") { "iTerm2" } else { "iTerm" },
+          "available": iterm_app.is_some(),
+          "command": "iTerm",
+          "appName": iterm_app.as_ref().map(|(n, _)| n.clone()).unwrap_or_else(|| "iTerm".to_string()),
+          "appPath": iterm_app.as_ref().map(|(_, p)| p.clone()).unwrap_or_default(),
+          "launchMode": "applescript",
+        }),
+        macos_app_profile("termius", "Termius", &["Termius"]),
+        macos_app_profile("terminus", "Terminus", &["Terminus"]),
+        macos_app_profile("tabby", "Tabby / Terminus", &["Tabby"]),
+        macos_app_profile("warp", "Warp", &["Warp"]),
+        macos_app_profile("hyper", "Hyper", &["Hyper"]),
+        json!({ "id": "wezterm", "label": "WezTerm", "available": !wezterm.is_empty(), "command": wezterm, "appName": "WezTerm", "appPath": wezterm_app.as_ref().map(|(_, p)| p.clone()).unwrap_or_default(), "launchMode": "cli" }),
+        json!({ "id": "ghostty", "label": "Ghostty", "available": !ghostty.is_empty(), "command": ghostty, "appName": "Ghostty", "appPath": ghostty_app.as_ref().map(|(_, p)| p.clone()).unwrap_or_default(), "launchMode": "cli" }),
+        json!({ "id": "alacritty", "label": "Alacritty", "available": !alacritty.is_empty(), "command": alacritty, "appName": "Alacritty", "appPath": alacritty_app.as_ref().map(|(_, p)| p.clone()).unwrap_or_default(), "launchMode": "cli" }),
+        json!({ "id": "kitty", "label": "kitty", "available": !kitty.is_empty(), "command": kitty, "appName": "kitty", "appPath": kitty_app.as_ref().map(|(_, p)| p.clone()).unwrap_or_default(), "launchMode": "cli" }),
+      ];
+      profiles.retain(|profile| profile.get("id").and_then(Value::as_str) == Some("auto")
+        || profile.get("available").and_then(Value::as_bool).unwrap_or(false));
+      return Value::Array(profiles);
+    }
+  }
+  if cfg!(target_os = "linux") {
+    let specs = [
+      ("x-terminal-emulator", "系统默认终端", "x-terminal-emulator"),
+      ("gnome-terminal", "GNOME Terminal", "gnome-terminal"),
+      ("konsole", "Konsole", "konsole"),
+      ("wezterm", "WezTerm", "wezterm"),
+      ("alacritty", "Alacritty", "alacritty"),
+      ("kitty", "kitty", "kitty"),
+      ("tilix", "Tilix", "tilix"),
+      ("xfce4-terminal", "Xfce Terminal", "xfce4-terminal"),
+      ("lxterminal", "LXTerminal", "lxterminal"),
+      ("xterm", "xterm", "xterm"),
+    ];
+    let mut profiles = vec![json!({ "id": "auto", "label": "自动选择（推荐）", "available": true })];
+    for (id, label, command) in specs {
+      if let Some(found) = command_exists_for_launch(command) {
+        profiles.push(json!({
+          "id": id,
+          "label": label,
+          "available": true,
+          "command": found,
+          "launchMode": "cli",
+        }));
+      }
+    }
+    return Value::Array(profiles);
   }
   json!([])
 }
@@ -174,7 +379,7 @@ pub(crate) fn load_state(query: &Value) -> Result<Value, String> {
   let paths = scope_paths(if scope.is_empty() { "global" } else { &scope }, &project_path, &codex_home)?;
   let config_content = read_text(&paths.config_path)?;
   let env_content = read_text(&paths.env_path)?;
-  let auth_content = read_text(&codex_home.join("auth.json"))?;
+  let auth_content = read_text(&paths.auth_path)?;
   let auth_json = serde_json::from_str::<Value>(&auth_content).unwrap_or_else(|_| json!({}));
   let login = summarize_codex_login(&auth_json);
   let config = parse_toml_config(&config_content)?;
@@ -205,6 +410,7 @@ pub(crate) fn load_state(query: &Value) -> Result<Value, String> {
     "projectPath": if scope == "project" { paths.root_path.to_string_lossy().to_string() } else { String::new() },
     "configPath": paths.config_path.to_string_lossy().to_string(),
     "envPath": paths.env_path.to_string_lossy().to_string(),
+    "authPath": paths.auth_path.to_string_lossy().to_string(),
     "configExists": !config_content.trim().is_empty(),
     "envExists": !env_content.trim().is_empty(),
     "configToml": config_content,
@@ -252,7 +458,7 @@ pub(crate) fn get_provider_secret(body: &Value) -> Result<Value, String> {
   let paths = scope_paths(if scope.is_empty() { "global" } else { &scope }, &project_path, &codex_home)?;
   let config_content = read_text(&paths.config_path)?;
   let env_content = read_text(&paths.env_path)?;
-  let auth_content = read_text(&codex_home.join("auth.json"))?;
+  let auth_content = read_text(&paths.auth_path)?;
   let auth_json = serde_json::from_str::<Value>(&auth_content).unwrap_or_else(|_| json!({}));
   let config = parse_toml_config(&config_content)?;
   let env = parse_env(&env_content);
@@ -277,7 +483,7 @@ pub(crate) async fn test_saved_provider(body: &Value) -> Result<Value, String> {
   let paths = scope_paths(if scope.is_empty() { "global" } else { &scope }, &project_path, &codex_home)?;
   let config_content = read_text(&paths.config_path)?;
   let env_content = read_text(&paths.env_path)?;
-  let auth_content = read_text(&codex_home.join("auth.json"))?;
+  let auth_content = read_text(&paths.auth_path)?;
   let auth_json = serde_json::from_str::<Value>(&auth_content).unwrap_or_else(|_| json!({}));
   let config = parse_toml_config(&config_content)?;
   let env = parse_env(&env_content);
@@ -345,7 +551,7 @@ pub(crate) fn delete_codex_provider(body: &Value) -> Result<Value, String> {
 
   let config_content = read_text(&paths.config_path)?;
   let env_content = read_text(&paths.env_path)?;
-  let auth_path = codex_home.join("auth.json");
+  let auth_path = paths.auth_path.clone();
   let auth_content = read_text(&auth_path)?;
 
   let mut config = parse_toml_config(&config_content)?;
@@ -488,12 +694,7 @@ pub(crate) fn use_oauth_config(body: &Value) -> Result<Value, String> {
   Ok(json!({
     "saved": true,
     "backupPath": backup_path,
-    "paths": {
-      "scope": paths.scope,
-      "rootPath": paths.root_path.to_string_lossy().to_string(),
-      "configPath": paths.config_path.to_string_lossy().to_string(),
-      "envPath": paths.env_path.to_string_lossy().to_string(),
-    },
+    "paths": scope_paths_json(&paths),
     "activeProvider": "",
     "changed": {
       "config": config_changed,
@@ -676,12 +877,7 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
   Ok(json!({
     "saved": true,
     "backupPath": backup_path,
-    "paths": {
-      "scope": paths.scope,
-      "rootPath": paths.root_path.to_string_lossy().to_string(),
-      "configPath": paths.config_path.to_string_lossy().to_string(),
-      "envPath": paths.env_path.to_string_lossy().to_string(),
-    },
+    "paths": scope_paths_json(&paths),
     "activated": activate,
     "activeProvider": if activate { provider_key.clone() } else { previous_active_provider.clone() },
     "savedProviderKey": provider_key.clone(),
@@ -709,7 +905,10 @@ pub(crate) fn save_settings(body: &Value) -> Result<Value, String> {
   let config_content = read_text(&paths.config_path)?;
   let mut config = parse_toml_config(&config_content)?;
   let original_config = config.clone();
-  let normalized_settings = normalize_settings_patch(object.get("settings").unwrap_or(&json!({})));
+  let normalized_settings = normalize_settings_patch_for_scope(
+    object.get("settings").unwrap_or(&json!({})),
+    &paths.scope,
+  );
   apply_patch(&mut config, &normalized_settings);
 
   let changed = config != original_config;
@@ -725,12 +924,7 @@ pub(crate) fn save_settings(body: &Value) -> Result<Value, String> {
   Ok(json!({
     "saved": true,
     "backupPath": backup_path,
-    "paths": {
-      "scope": paths.scope,
-      "rootPath": paths.root_path.to_string_lossy().to_string(),
-      "configPath": paths.config_path.to_string_lossy().to_string(),
-      "envPath": paths.env_path.to_string_lossy().to_string(),
-    },
+    "paths": scope_paths_json(&paths),
     "changed": changed,
   }))
 }
@@ -752,7 +946,18 @@ pub(crate) fn save_raw_config(body: &Value) -> Result<Value, String> {
   config_toml.parse::<TomlValue>().map_err(|error| format!("TOML 解析失败：{error}"))?;
   let current_content = read_text(&paths.config_path)?;
   let changed = current_content != config_toml;
-  let backup_path = if changed {
+
+  let auth_json_raw = get_string(&object, "authJson");
+  let mut auth_changed = false;
+  if !auth_json_raw.trim().is_empty() {
+    serde_json::from_str::<Value>(&auth_json_raw).map_err(|e| format!("auth.json 解析失败：{e}"))?;
+    let current_auth = read_text(&paths.auth_path)?;
+    if current_auth != auth_json_raw {
+      auth_changed = true;
+    }
+  }
+
+  let backup_path = if changed || auth_changed {
     Some(create_backup(&paths)?)
   } else {
     None
@@ -760,28 +965,14 @@ pub(crate) fn save_raw_config(body: &Value) -> Result<Value, String> {
   if changed {
     write_secret(&paths.config_path, &config_toml)?;
   }
-
-  let auth_json_raw = get_string(&object, "authJson");
-  let mut auth_changed = false;
-  if !auth_json_raw.trim().is_empty() {
-    serde_json::from_str::<Value>(&auth_json_raw).map_err(|e| format!("auth.json 解析失败：{e}"))?;
-    let auth_path = assert_allowed_path(&codex_home.join("auth.json"), "authJsonPath")?;
-    let current_auth = read_text(&auth_path)?;
-    if current_auth != auth_json_raw {
-      write_secret(&auth_path, &auth_json_raw)?;
-      auth_changed = true;
-    }
+  if auth_changed {
+    write_secret(&paths.auth_path, &auth_json_raw)?;
   }
 
   Ok(json!({
     "saved": true,
     "backupPath": backup_path,
-    "paths": {
-      "scope": paths.scope,
-      "rootPath": paths.root_path.to_string_lossy().to_string(),
-      "configPath": paths.config_path.to_string_lossy().to_string(),
-      "envPath": paths.env_path.to_string_lossy().to_string(),
-    },
+    "paths": scope_paths_json(&paths),
     "changed": changed || auth_changed,
   }))
 }
@@ -826,6 +1017,7 @@ pub(crate) fn restore_backup(body: &Value) -> Result<Value, String> {
 
   let config_backup = backup_dir.join("config.toml.bak");
   let env_backup = backup_dir.join(".env.bak");
+  let auth_backup = backup_dir.join("auth.json.bak");
   if !config_backup.is_file() {
     return Err("Backup config.toml.bak is missing".to_string());
   }
@@ -837,14 +1029,13 @@ pub(crate) fn restore_backup(body: &Value) -> Result<Value, String> {
   let env_content = fs::read_to_string(&env_backup).map_err(|error| error.to_string())?;
   write_secret(&paths.config_path, &config_content)?;
   write_secret(&paths.env_path, &env_content)?;
+  if auth_backup.is_file() {
+    let auth_content = fs::read_to_string(&auth_backup).map_err(|error| error.to_string())?;
+    write_secret(&paths.auth_path, &auth_content)?;
+  }
   Ok(json!({
     "restored": true,
-    "paths": {
-      "scope": paths.scope,
-      "rootPath": paths.root_path.to_string_lossy().to_string(),
-      "configPath": paths.config_path.to_string_lossy().to_string(),
-      "envPath": paths.env_path.to_string_lossy().to_string(),
-    }
+    "paths": scope_paths_json(&paths)
   }))
 }
 
@@ -920,4 +1111,3 @@ pub(crate) fn write_config_file(body: &Value) -> Result<Value, String> {
     "changed": changed,
   }))
 }
-

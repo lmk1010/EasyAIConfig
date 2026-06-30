@@ -130,6 +130,11 @@ const state = {
     tab: 'overview',           // overview | usage | test | health
     summary: null,             // { uptimePct, avgLatencyMs, p95LatencyMs, total, success, lastAt }
     history: null,             // { rows: [{ probedAt, success, latencyMs, error }] }
+    selectedProbeKey: '',
+    usageWindow: localStorage.getItem('easyaiconfig_pd_usage_window') || '30',
+    usageModel: 'all',
+    usageMetrics: null,
+    usageMetricsFetchedAt: 0,
     testResult: null,          // { ok, models, latencyMs, error }
     testRunning: false,
     loading: false,
@@ -139,9 +144,13 @@ const state = {
   // 让命令带上 unset + CODEX_HOME（多账号/IP 残留 env 必须）
   codexCmdShowPrefix: false,
   dashboardMetrics: { codex: null, opencode: null },
+  dashboardMetricsByWindow: {},
+  dashboardMetricsActiveKey: { codex: '', opencode: '' },
   dashboardLoading: false,
   dashboardRefreshing: false,
+  dashboardRefreshingByWindow: {},
   dashboardMetricsFetchedAt: 0,
+  dashboardMetricsFetchedAtByWindow: {},
   dashboardAutoRefreshTimer: null,
   dashboardAutoRefreshMs: Math.max(0, Number(localStorage.getItem('easyaiconfig_dashboard_auto_refresh_ms') || (30 * 60 * 1000)) || 0),
   consoleRefreshing: false,
@@ -191,7 +200,7 @@ const state = {
   openClawLastRepair: null,
   openClawConfigView: localStorage.getItem('easyaiconfig_oc_config_view') === 'minimal' ? 'minimal' : 'full',
   codexAuthView: localStorage.getItem('easyaiconfig_codex_auth_view') === 'api_key' ? 'api_key' : 'official',
-  codexTerminalProfile: 'auto',
+  codexTerminalProfile: localStorage.getItem('easyaiconfig_codex_terminal_profile') || 'auto',
   codexTerminalProfiles: [],
   codexTerminalMenuOpen: false,
   codexResumeSessions: [],
@@ -2541,8 +2550,8 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
     const params = new URLSearchParams();
     if (force) params.set('forceUsageRefresh', '1');
     if (cacheOnly) params.set('cacheOnly', '1');
-    // dashboard 当前窗口对应的天数（自定义日期范围也算成天数），让后端按需要 fetch
-    const requestDays = Math.min(366, Math.max(1, getDashboardWindow().days));
+    // dashboard 当前窗口需要覆盖的天数；自定义历史区间要从起始日覆盖到今天。
+    const requestDays = getDashboardRequestDays();
     params.set('days', String(requestDays));
     // 用 localStorage 持久化 Dashboard 账号筛选偏好(切号后仍保留用户选择)
     const scope = usageScope || localStorage.getItem('easyaiconfig_claude_usage_scope') || 'active';
@@ -4105,7 +4114,7 @@ async function saveOpenCodeConfigOnly() {
   if (!json.ok) return flash(json.error || '保存失败', 'error');
   await loadOpenCodeQuickState();
   renderCurrentConfig();
-  flash('OpenCode 配置已保存', 'success');
+  flashToolSavedNeedsRestart('OpenCode');
 }
 
 async function launchOpenCodeOnly() {
@@ -6407,8 +6416,84 @@ function isApiDashboardTool(tool = '') {
   return tool === 'codex' || tool === 'opencode';
 }
 
-function getDashboardMetricsForTool(tool = '') {
-  return state.dashboardMetrics?.[tool] || null;
+function normalizeDashboardWindowForCache(win = getDashboardWindow()) {
+  const days = Math.min(366, Math.max(1, Number(win?.days) || 30));
+  return {
+    kind: win?.custom ? 'custom' : 'preset',
+    days,
+    from: String(win?.from || ''),
+    to: String(win?.to || ''),
+  };
+}
+
+function getDashboardMetricsCacheKey(tool = '', win = getDashboardWindow(), codexHome = getDashboardCodexHome()) {
+  const normalizedTool = isApiDashboardTool(tool) ? tool : 'codex';
+  const normalizedWindow = normalizeDashboardWindowForCache(win);
+  return JSON.stringify({
+    tool: normalizedTool,
+    window: normalizedWindow.kind,
+    days: normalizedWindow.days,
+    from: normalizedWindow.from,
+    to: normalizedWindow.to,
+    codexHome: normalizedTool === 'codex' ? String(codexHome || '') : '',
+  });
+}
+
+function getDashboardMetricsEntryForTool(tool = '', win = getDashboardWindow(), codexHome = getDashboardCodexHome()) {
+  if (!isApiDashboardTool(tool)) return { data: null, fetchedAt: 0, key: '' };
+  const key = getDashboardMetricsCacheKey(tool, win, codexHome);
+  const cached = state.dashboardMetricsByWindow?.[key] || null;
+  if (cached) {
+    return {
+      data: cached,
+      fetchedAt: Number(state.dashboardMetricsFetchedAtByWindow?.[key] || 0),
+      key,
+    };
+  }
+
+  const legacyData = state.dashboardMetrics?.[tool] || null;
+  const legacyKey = state.dashboardMetricsActiveKey?.[tool] || '';
+  if (legacyData && legacyKey === key) {
+    return {
+      data: legacyData,
+      fetchedAt: Number(state.dashboardMetricsFetchedAt || 0),
+      key,
+    };
+  }
+  return { data: null, fetchedAt: 0, key };
+}
+
+function getDashboardMetricsForTool(tool = '', win = getDashboardWindow(), codexHome = getDashboardCodexHome()) {
+  return getDashboardMetricsEntryForTool(tool, win, codexHome).data;
+}
+
+function getDashboardMetricsFetchedAtForTool(tool = '', win = getDashboardWindow(), codexHome = getDashboardCodexHome()) {
+  return getDashboardMetricsEntryForTool(tool, win, codexHome).fetchedAt;
+}
+
+function setDashboardMetricsForTool(tool = '', data = null, win = getDashboardWindow(), codexHome = getDashboardCodexHome()) {
+  if (!isApiDashboardTool(tool) || !data) return null;
+  if (!state.dashboardMetricsByWindow) state.dashboardMetricsByWindow = {};
+  if (!state.dashboardMetricsFetchedAtByWindow) state.dashboardMetricsFetchedAtByWindow = {};
+  if (!state.dashboardMetricsActiveKey) state.dashboardMetricsActiveKey = { codex: '', opencode: '' };
+  const key = getDashboardMetricsCacheKey(tool, win, codexHome);
+  const fetchedAt = Date.now();
+  state.dashboardMetricsByWindow[key] = data;
+  state.dashboardMetricsFetchedAtByWindow[key] = fetchedAt;
+
+  const currentKey = getDashboardMetricsCacheKey(tool);
+  if (key === currentKey) {
+    state.dashboardMetrics[tool] = data;
+    state.dashboardMetricsActiveKey[tool] = key;
+    state.dashboardMetricsFetchedAt = fetchedAt;
+  }
+  return { key, fetchedAt };
+}
+
+function isDashboardMetricsRefreshingForTool(tool = '', win = getDashboardWindow(), codexHome = getDashboardCodexHome()) {
+  if (!isApiDashboardTool(tool)) return false;
+  const key = getDashboardMetricsCacheKey(tool, win, codexHome);
+  return Boolean(state.dashboardRefreshingByWindow?.[key]);
 }
 
 function hasClaudeDashboardData() {
@@ -6470,7 +6555,11 @@ function renderDashboardLoadingCard() {
 const CODEX_MODEL_PRICING = {
   // ── OpenAI / Codex（价来源：ccusage pricing.rs put_builtin_pricing）──
   'gpt-5.5':           { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.5' },
+  'gpt-5.5-pro':       { provider: 'openai',    input: 30.00, output: 180.00, cached: null, label: 'GPT-5.5 Pro' },
+  'gpt-5.4-pro':       { provider: 'openai',    input: 30.00, output: 180.00, cached: null, label: 'GPT-5.4 Pro' },
   'gpt-5.4':           { provider: 'openai',    input: 2.50,  output: 15.00, cached: 0.25,  label: 'GPT-5.4' },
+  'gpt-5.4-mini':      { provider: 'openai',    input: 0.75,  output: 4.50,  cached: 0.075, label: 'GPT-5.4 mini' },
+  'gpt-5.4-nano':      { provider: 'openai',    input: 0.20,  output: 1.25,  cached: 0.02,  label: 'GPT-5.4 nano' },
   'gpt-5.3-codex':     { provider: 'openai',    input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.3 Codex' },
   'gpt-5.2':           { provider: 'openai',    input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.2' },
   'gpt-5.2-codex':     { provider: 'openai',    input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.2 Codex' },
@@ -6527,7 +6616,16 @@ function lookupModelPricingEntry(modelName) {
   if (CODEX_MODEL_PRICING[name]) return { key: name, pricing: CODEX_MODEL_PRICING[name], fallback: false };
   const keys = Object.keys(CODEX_MODEL_PRICING).sort((a, b) => b.length - a.length);
   for (const key of keys) {
-    if (name.startsWith(key)) return { key, pricing: CODEX_MODEL_PRICING[key], fallback: false };
+    if (!name.startsWith(key)) continue;
+    const suffix = name.slice(key.length);
+    const pricing = CODEX_MODEL_PRICING[key];
+    const isSnapshotAlias = /^-(latest|\d{8}|\d{4}-\d{2}-\d{2})(?:$|-)/.test(suffix);
+    if (isSnapshotAlias) return { key, pricing, fallback: false };
+    return {
+      key,
+      pricing: { ...pricing, label: `${pricing.label}（按 ${key} 估算）` },
+      fallback: true,
+    };
   }
   // 家族兜底
   for (const family of PRICING_FAMILIES) {
@@ -6579,6 +6677,18 @@ function getDashboardWindow() {
     label: `${days} 天`,
     custom: false,
   };
+}
+
+function getDashboardRequestDays(win = getDashboardWindow()) {
+  const windowDays = Math.min(366, Math.max(1, Number(win?.days) || 30));
+  if (!win?.custom) return windowDays;
+  const from = String(win.from || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return windowDays;
+  const fromMs = Date.parse(`${from}T00:00:00Z`);
+  const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(todayMs) || fromMs > todayMs) return windowDays;
+  const daysFromStartToToday = Math.round((todayMs - fromMs) / 86400000) + 1;
+  return Math.min(366, Math.max(windowDays, daysFromStartToToday));
 }
 
 // ─── 自定义日期范围 picker ──────────────────────────────
@@ -6745,7 +6855,8 @@ function calcModelCost(modelEntry) {
     cacheWriteCost = 0; // OpenAI 不另外收缓存写入
   }
   const outputCost = (out + reasoning) * pricing.output;
-  const cachedReadCost = cachedRead * pricing.cached;
+  const cachedRate = Number.isFinite(pricing.cached) ? pricing.cached : pricing.input;
+  const cachedReadCost = cachedRead * cachedRate;
   const totalCost = inputCost + outputCost + cachedReadCost + cacheWriteCost;
   return {
     inputCost,
@@ -6788,7 +6899,7 @@ function renderPricingStandardsCards(models = [], preferredKeys = []) {
           </div>
           <div class="db3-rate-table-num">${escapeHtml(formatDashboardUsd(pricing.input, { min: pricing.input < 1 ? 3 : 2, max: 3 }))}</div>
           <div class="db3-rate-table-num">${escapeHtml(formatDashboardUsd(pricing.output, { min: pricing.output < 1 ? 3 : 2, max: 3 }))}</div>
-          <div class="db3-rate-table-num">${escapeHtml(formatDashboardUsd(pricing.cached, { min: pricing.cached < 1 ? 3 : 2, max: 3 }))}</div>
+          <div class="db3-rate-table-num">${pricing.cached == null ? '—' : escapeHtml(formatDashboardUsd(pricing.cached, { min: pricing.cached < 1 ? 3 : 2, max: 3 }))}</div>
         </div>`;
       }).join('')}
     </div>`;
@@ -7001,22 +7112,33 @@ function renderDashboardPage() {
   const codex = state.current || {};
   const claude = state.claudeCodeState || {};
   const openclaw = state.openclawState || {};
-  const codexMetricsRaw = state.dashboardMetrics.codex || { totals: { input: 0, cachedInput: 0, output: 0, reasoning: 0, total: 0 }, daily: [], providers: [], sessions: [], models: [] };
-  const opencodeMetricsRaw = state.dashboardMetrics.opencode || { totals: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0 }, daily: [], providers: [], sessions: [], models: [] };
+  const win = getDashboardWindow();
+  const codexMetricsRaw = getDashboardMetricsForTool('codex', win) || { totals: { input: 0, cachedInput: 0, output: 0, reasoning: 0, total: 0 }, daily: [], providers: [], sessions: [], models: [] };
+  const opencodeMetricsRaw = getDashboardMetricsForTool('opencode', win) || { totals: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0 }, daily: [], providers: [], sessions: [], models: [] };
   // 过滤后的数据：除 codex / opencode 之外的 tool 不参与过滤
   const codexMetrics = applyDashboardFilter(codexMetricsRaw, state.dashboardFilter, 'codex');
   const opencodeMetrics = applyDashboardFilter(opencodeMetricsRaw, state.dashboardFilter, 'opencode');
   const openclawChannels = getOpenClawConsoleChannels(openclaw.config || {});
   const openclawProviders = getOpenClawConsoleProviders(openclaw.config || {});
   const dashboardTool = state.dashboardTool || 'codex';
-  const isLoading = Boolean(state.dashboardLoading);
-  const hasCodexMetrics = Boolean(state.dashboardMetrics.codex);
-  const hasOpenCodeMetrics = Boolean(state.dashboardMetrics.opencode);
+  const hasCodexMetrics = Boolean(getDashboardMetricsForTool('codex', win));
+  const hasOpenCodeMetrics = Boolean(getDashboardMetricsForTool('opencode', win));
+  const hasCurrentMetrics = dashboardTool === 'codex'
+    ? hasCodexMetrics
+    : dashboardTool === 'opencode'
+      ? hasOpenCodeMetrics
+      : dashboardTool === 'claudecode'
+        ? hasClaudeDashboardData()
+        : true;
+  const apiDashboardRefreshing = isApiDashboardTool(dashboardTool) ? isDashboardMetricsRefreshingForTool(dashboardTool, win) : false;
+  const dashboardRefreshing = dashboardTool === 'claudecode' ? Boolean(state.dashboardRefreshing) : apiDashboardRefreshing;
+  const isLoading = dashboardTool === 'claudecode'
+    ? Boolean(state.dashboardLoading)
+    : Boolean((state.dashboardLoading && !hasCurrentMetrics) || (state.dashboardLoading && dashboardRefreshing) || (dashboardRefreshing && !hasCurrentMetrics));
   const lastUpdated = formatDashboardUpdatedAt(codexMetrics.generatedAt);
   const opencodeLastUpdated = formatDashboardUpdatedAt(opencodeMetrics.generatedAt);
   const claudeLastUpdated = formatDashboardUpdatedAt(claude.usage?.generatedAt);
   const showDashboardRefresh = dashboardTool === 'codex' || dashboardTool === 'claudecode' || dashboardTool === 'opencode';
-  const win = getDashboardWindow();
   const daysWindow = win.days;
   const winFrom = win.from;
   const winTo = win.to;
@@ -7539,7 +7661,7 @@ function renderDashboardPage() {
               </div>
             </div>
           </span>
-          ${showDashboardRefresh ? `<button type="button" class="dashboard-refresh-btn ${state.dashboardRefreshing ? 'is-busy' : ''}" data-dashboard-refresh ${state.dashboardRefreshing ? 'disabled' : ''}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${escapeHtml(state.dashboardRefreshing ? '刷新中' : '刷新')}</button>` : ''}
+          ${showDashboardRefresh ? `<button type="button" class="dashboard-refresh-btn ${dashboardRefreshing ? 'is-busy' : ''}" data-dashboard-refresh ${dashboardRefreshing ? 'disabled' : ''}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${escapeHtml(dashboardRefreshing ? '刷新中' : '刷新')}</button>` : ''}
         </div>
       </div>
       ${content}
@@ -8060,28 +8182,58 @@ function renderDashboardStackChart(items = []) {
 
 async function refreshDashboardData({ force = false, silent = false, tool = state.dashboardTool || 'codex' } = {}) {
   if (!isApiDashboardTool(tool)) return;
-  if (state.dashboardRefreshing) return;
-  state.dashboardRefreshing = true;
-  state.dashboardLoading = !silent || !getDashboardMetricsForTool(tool);
-  if (state.activePage === 'dashboard') renderDashboardPage();
+  const win = getDashboardWindow();
+  const codexHome = tool === 'codex' ? getDashboardCodexHome() : '';
+  const cacheKey = getDashboardMetricsCacheKey(tool, win, codexHome);
+  const isCurrentRequest = () => (
+    (state.dashboardTool || 'codex') === tool &&
+    getDashboardMetricsCacheKey(tool) === cacheKey
+  );
+  const cachedMetrics = getDashboardMetricsForTool(tool, win, codexHome);
+
+  if (!state.dashboardRefreshingByWindow) state.dashboardRefreshingByWindow = {};
+  if (state.dashboardRefreshingByWindow[cacheKey]) {
+    if (isCurrentRequest()) {
+      state.dashboardRefreshing = true;
+      state.dashboardLoading = !silent || !cachedMetrics;
+      if (state.activePage === 'dashboard') renderDashboardPage();
+    }
+    return;
+  }
+
+  state.dashboardRefreshingByWindow[cacheKey] = true;
+  if (isCurrentRequest()) {
+    state.dashboardRefreshing = true;
+    state.dashboardLoading = !silent || !cachedMetrics;
+    if (state.activePage === 'dashboard') renderDashboardPage();
+  }
 
   try {
-    // 用当前 dashboard window 的天数请求后端，自定义日期范围下也能拿到足够远的数据
-    const requestDays = String(Math.min(366, Math.max(1, getDashboardWindow().days)));
+    // 用当前 dashboard window 需要覆盖的天数请求后端，自定义历史区间也能拿到足够远的数据。
+    const requestDays = String(getDashboardRequestDays(win));
     const params = new URLSearchParams({ days: requestDays });
     if (tool === 'codex') {
-      params.set('codexHome', getDashboardCodexHome());
+      params.set('codexHome', codexHome);
     }
     if (force) params.set('force', '1');
     const route = tool === 'opencode' ? '/api/dashboard/opencode-usage' : '/api/dashboard/codex-usage';
-    const json = await api(`${route}?${params.toString()}`, { timeoutMs: force ? 120000 : 20000 });
-    if (json.ok && json.data && json.data.totals && typeof json.data.totals === 'object') {
-      state.dashboardMetrics[tool] = json.data;
-      state.dashboardMetricsFetchedAt = Date.now();
+    let json = await api(`${route}?${params.toString()}`, { timeoutMs: force ? 120000 : 20000 });
+    if (json?.ok && json.data?.cacheMiss && !force) {
+      params.set('force', '1');
+      json = await api(`${route}?${params.toString()}`, { timeoutMs: 120000 });
+    }
+    if (json?.ok && json.data && !json.data.cacheMiss && json.data.totals && typeof json.data.totals === 'object') {
+      setDashboardMetricsForTool(tool, json.data, win, codexHome);
     }
   } catch { /* ignore */ } finally {
-    state.dashboardLoading = false;
-    state.dashboardRefreshing = false;
+    if (state.dashboardRefreshingByWindow) delete state.dashboardRefreshingByWindow[cacheKey];
+    if (isCurrentRequest()) {
+      state.dashboardLoading = false;
+      state.dashboardRefreshing = false;
+    } else if (isApiDashboardTool(state.dashboardTool || '')) {
+      state.dashboardRefreshing = isDashboardMetricsRefreshingForTool(state.dashboardTool);
+      if (!state.dashboardRefreshing) state.dashboardLoading = false;
+    }
     if (state.activePage === 'dashboard') renderDashboardPage();
   }
 }
@@ -9648,6 +9800,134 @@ function renderLatencyStripHTML() {
   return `<div class="cv3-latency-strip"><span class="cv3-latency-label">网络时延</span>${pills}${summary}<button type="button" class="cv3-link-btn cv3-latency-refresh" data-console-v3-refresh-latency>重测</button></div>`;
 }
 
+function inferCodexProcessMeta(command = '', rawKind = '') {
+  const lower = String(command || '').toLowerCase();
+  const base = {
+    kind: rawKind || 'cli',
+    processKind: 'codex-cli',
+    processLabel: 'CLI',
+    processDetail: 'Codex CLI 会话',
+    processGroup: 'cli',
+    processGroupLabel: 'Codex CLI 会话',
+    processGroupShort: 'CLI',
+    processOrder: 11,
+  };
+  const asMeta = (overrides) => ({ ...base, ...overrides });
+
+  if (lower.includes('skycomputeruseservice') || lower.includes('/codex computer use.app/contents/')) {
+    return asMeta({ kind: 'service', processKind: 'codex-computer-use', processLabel: 'COMPUTER USE', processDetail: 'Codex Computer Use 服务', processGroup: 'service', processGroupLabel: 'Codex 后台服务', processGroupShort: '服务', processOrder: 30 });
+  }
+  if (lower.includes('/contents/resources/codex app-server') || lower.includes(' codex app-server')) {
+    return asMeta({ kind: 'service', processKind: 'codex-app-server', processLabel: 'APP SERVER', processDetail: 'Codex 桌面 app-server', processGroup: 'service', processGroupLabel: 'Codex 后台服务', processGroupShort: '服务', processOrder: 31 });
+  }
+  if (lower.includes('/contents/resources/cua_node/bin/node_repl')) {
+    return asMeta({ kind: 'service', processKind: 'codex-cua-node-repl', processLabel: 'CUA NODE', processDetail: 'Codex CUA Node REPL', processGroup: 'service', processGroupLabel: 'Codex 后台服务', processGroupShort: '服务', processOrder: 32 });
+  }
+  if (lower.includes('bare-modifier-monitor')) {
+    return asMeta({ kind: 'service', processKind: 'codex-hotkey-monitor', processLabel: 'HOTKEY', processDetail: 'Codex 快捷键监听', processGroup: 'service', processGroupLabel: 'Codex 后台服务', processGroupShort: '服务', processOrder: 33 });
+  }
+  if (lower.includes('sparkle.framework') || lower.includes('autoupdate com.openai.codex')) {
+    return asMeta({ kind: 'service', processKind: 'codex-updater', processLabel: 'UPDATER', processDetail: 'Codex 自动更新进程', processGroup: 'service', processGroupLabel: 'Codex 后台服务', processGroupShort: '服务', processOrder: 34 });
+  }
+  if (lower.includes('browser_crashpad_handler') || lower.includes('crashpad')) {
+    return asMeta({ kind: 'helper', processKind: 'codex-crashpad', processLabel: 'CRASHPAD', processDetail: 'Codex 崩溃报告辅助进程', processGroup: 'helper', processGroupLabel: 'Codex 桌面辅助进程', processGroupShort: '辅助', processOrder: 50 });
+  }
+  if (lower.includes('--type=gpu-process')) {
+    return asMeta({ kind: 'helper', processKind: 'codex-desktop-gpu', processLabel: 'GPU', processDetail: 'Codex 桌面 GPU 进程', processGroup: 'helper', processGroupLabel: 'Codex 桌面辅助进程', processGroupShort: '辅助', processOrder: 51 });
+  }
+  if (lower.includes('--type=renderer') || lower.includes('codex (renderer)')) {
+    return asMeta({ kind: 'helper', processKind: 'codex-desktop-renderer', processLabel: 'RENDERER', processDetail: 'Codex 桌面渲染进程', processGroup: 'helper', processGroupLabel: 'Codex 桌面辅助进程', processGroupShort: '辅助', processOrder: 52 });
+  }
+  if (lower.includes('network.mojom.networkservice')) {
+    return asMeta({ kind: 'helper', processKind: 'codex-desktop-network', processLabel: 'NETWORK', processDetail: 'Codex 桌面网络服务', processGroup: 'helper', processGroupLabel: 'Codex 桌面辅助进程', processGroupShort: '辅助', processOrder: 53 });
+  }
+  if (lower.includes('storage.mojom.storageservice')) {
+    return asMeta({ kind: 'helper', processKind: 'codex-desktop-storage', processLabel: 'STORAGE', processDetail: 'Codex 桌面存储服务', processGroup: 'helper', processGroupLabel: 'Codex 桌面辅助进程', processGroupShort: '辅助', processOrder: 54 });
+  }
+  if (lower.includes('audio.mojom.audioservice')) {
+    return asMeta({ kind: 'helper', processKind: 'codex-desktop-audio', processLabel: 'AUDIO', processDetail: 'Codex 桌面音频服务', processGroup: 'helper', processGroupLabel: 'Codex 桌面辅助进程', processGroupShort: '辅助', processOrder: 55 });
+  }
+  if (lower.includes('video_capture.mojom.videocaptureservice')) {
+    return asMeta({ kind: 'helper', processKind: 'codex-desktop-video', processLabel: 'VIDEO', processDetail: 'Codex 桌面视频采集服务', processGroup: 'helper', processGroupLabel: 'Codex 桌面辅助进程', processGroupShort: '辅助', processOrder: 56 });
+  }
+  if (lower.includes('--type=utility') || lower.includes('codex (service)')) {
+    return asMeta({ kind: 'helper', processKind: 'codex-desktop-utility', processLabel: 'UTILITY', processDetail: 'Codex 桌面 Utility 服务', processGroup: 'helper', processGroupLabel: 'Codex 桌面辅助进程', processGroupShort: '辅助', processOrder: 57 });
+  }
+  if (lower.includes('/codex.app/contents/macos/codex')) {
+    return asMeta({ kind: 'desktop', processKind: 'codex-desktop-main', processLabel: 'DESKTOP', processDetail: 'Codex 桌面主进程', processGroup: 'desktop', processGroupLabel: 'Codex 桌面应用', processGroupShort: '桌面', processOrder: 20 });
+  }
+  if (lower.includes('/codex.app/contents/') || lower.includes('.app/contents/')) {
+    return asMeta({ kind: 'desktop', processKind: 'codex-desktop-app', processLabel: 'APP', processDetail: 'Codex 桌面应用进程', processGroup: 'desktop', processGroupLabel: 'Codex 桌面应用', processGroupShort: '桌面', processOrder: 21 });
+  }
+  if (lower.includes('@openai/codex') || lower.includes('openai-codex')) {
+    return asMeta({ kind: 'cli', processKind: 'codex-node-cli', processLabel: 'NODE CLI', processDetail: 'Node 包装的 Codex CLI', processGroup: 'cli', processGroupLabel: 'Codex CLI 会话', processGroupShort: 'CLI', processOrder: 10 });
+  }
+  return base;
+}
+
+function normalizeConsoleProcess(tool, row = {}) {
+  const rawKind = String(row.kind || '').toLowerCase();
+  const fallback = tool === 'codex'
+    ? inferCodexProcessMeta(row.command || '', rawKind)
+    : {
+        kind: rawKind === 'app' ? 'app' : 'cli',
+        processKind: rawKind === 'app' ? 'desktop-app' : 'cli',
+        processLabel: rawKind === 'app' ? 'APP' : 'CLI',
+        processDetail: rawKind === 'app' ? '桌面 GUI 应用' : '命令行 CLI',
+        processGroup: rawKind === 'app' ? 'app' : 'cli',
+        processGroupLabel: rawKind === 'app' ? '桌面应用' : 'CLI 会话',
+        processGroupShort: rawKind === 'app' ? 'App' : 'CLI',
+        processOrder: rawKind === 'app' ? 20 : 10,
+      };
+  const hasBackendMeta = Boolean(row.processKind || row.processLabel || row.processGroup);
+  const kind = String((hasBackendMeta ? row.kind : fallback.kind) || row.kind || 'cli').toLowerCase();
+  const processGroup = String((hasBackendMeta ? row.processGroup : fallback.processGroup) || fallback.processGroup || kind || 'cli').toLowerCase();
+  return {
+    ...row,
+    kind,
+    processKind: row.processKind || fallback.processKind,
+    processLabel: row.processLabel || fallback.processLabel,
+    processDetail: row.processDetail || fallback.processDetail,
+    processGroup,
+    processGroupLabel: row.processGroupLabel || fallback.processGroupLabel,
+    processGroupShort: row.processGroupShort || fallback.processGroupShort,
+    processOrder: Number.isFinite(Number(row.processOrder)) ? Number(row.processOrder) : fallback.processOrder,
+  };
+}
+
+function groupConsoleProcesses(rows, tool, toolLabel) {
+  const normalized = rows.map((row) => normalizeConsoleProcess(tool, row));
+  normalized.sort((a, b) => {
+    const orderDiff = (a.processOrder || 99) - (b.processOrder || 99);
+    if (orderDiff) return orderDiff;
+    const cpuDiff = Number(b.cpu || 0) - Number(a.cpu || 0);
+    if (cpuDiff) return cpuDiff;
+    return Number(a.pid || 0) - Number(b.pid || 0);
+  });
+  const groups = [];
+  const byKey = new Map();
+  normalized.forEach((row) => {
+    const key = row.processGroup || row.kind || 'other';
+    if (!byKey.has(key)) {
+      const label = row.processGroupLabel || (key === 'app' ? `${toolLabel} App` : key === 'cli' ? `${toolLabel} CLI` : `${toolLabel} 进程`);
+      const short = row.processGroupShort || (key === 'app' ? 'App' : key === 'cli' ? 'CLI' : '其他');
+      const group = { key, label, short, order: row.processOrder || 99, rows: [] };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    byKey.get(key).rows.push(row);
+  });
+  groups.sort((a, b) => (a.order || 99) - (b.order || 99) || a.label.localeCompare(b.label));
+  return groups;
+}
+
+function consoleProcessKindClass(row = {}) {
+  const kind = String(row.kind || '').toLowerCase();
+  const group = String(row.processGroup || '').toLowerCase();
+  const key = ['cli', 'app', 'desktop', 'service', 'helper'].includes(kind) ? kind : group;
+  return ['cli', 'app', 'desktop', 'service', 'helper'].includes(key) ? `is-${key}` : 'is-other';
+}
+
 function renderConsoleV3Procs(tool, toolLabel) {
   const el = document.getElementById('consoleV2Procs');
   if (!el) return;
@@ -9661,30 +9941,32 @@ function renderConsoleV3Procs(tool, toolLabel) {
       <div class="cv3-proc-empty">正在扫描进程…</div>`;
     return;
   }
-  const appRows = rows.filter((p) => p.kind === 'app');
-  const cliRows = rows.filter((p) => p.kind !== 'app');
   if (!rows.length) {
     el.innerHTML = `
       ${cv3SectionHead(CV3_ICONS.cpu, headLabel, { count: 0, extras: refreshProcsBtn })}
       <div class="cv3-proc-empty">当前没有在跑的 ${esc(toolLabel)} 进程</div>`;
     return;
   }
+  const groups = groupConsoleProcesses(rows, tool, toolLabel);
   const renderRow = (p) => {
     const mem = p.memMB ? `${p.memMB} MB` : (p.memPct ? `${p.memPct.toFixed(1)}%` : '—');
     const cpu = (typeof p.cpu === 'number') ? `${p.cpu.toFixed(1)}%` : '—';
     const cmdClean = (p.command || '').replace(/^\S*\/node\s+/, 'node ').trim();
+    const kindClass = consoleProcessKindClass(p);
+    const processLabel = p.processLabel || (p.kind === 'app' ? 'APP' : 'CLI');
+    const processDetail = p.processDetail || (p.kind === 'app' ? '桌面 GUI 应用' : '命令行 CLI');
     const accountBadge = p.accountLabel
       ? `<span class="cv3-proc-account" title="${esc(p.accountHome ? `${p.accountLabel} · ${p.accountHome}` : p.accountLabel)}">${esc(p.accountLabel)}</span>`
       : '';
     const cwd = p.cwd ? `<span class="cv3-proc-cwd" title="${esc(p.cwd)}">${esc(p.cwd)}</span>` : '';
-    const kindBadge = p.kind === 'app'
-      ? '<span class="cv3-proc-kind is-app" title="桌面 GUI 应用">APP</span>'
-      : '<span class="cv3-proc-kind is-cli" title="命令行 CLI">CLI</span>';
+    const kindBadge = `<span class="cv3-proc-kind ${kindClass}" title="${esc(processDetail)}">${esc(processLabel)}</span>`;
+    const roleBadge = processDetail ? `<span class="cv3-proc-role" title="${esc(processDetail)}">${esc(processDetail)}</span>` : '';
     return `
-      <div class="cv3-proc-row ${p.kind === 'app' ? 'is-app' : 'is-cli'}">
+      <div class="cv3-proc-row ${kindClass}">
         <div class="cv3-proc-head">
           <span class="cv3-proc-dot"></span>
           ${kindBadge}
+          ${roleBadge}
           <span class="cv3-proc-pid">PID ${esc(String(p.pid))}</span>
           ${accountBadge}
           <span class="cv3-proc-elapsed" title="已运行">${esc(p.elapsed || '—')}</span>
@@ -9699,17 +9981,16 @@ function renderConsoleV3Procs(tool, toolLabel) {
         ${cwd ? `<div class="cv3-proc-cwd-row"><span class="cv3-proc-cwd-label">cwd</span>${cwd}</div>` : ''}
       </div>`;
   };
-  const sectionFor = (title, group, kindCls) => group.length
-    ? `<div class="cv3-proc-group ${kindCls}">
-         <div class="cv3-proc-group-head"><span class="cv3-proc-group-title">${esc(title)}</span><span class="cv3-proc-group-count">${group.length}</span></div>
-         <div class="cv3-proc-list">${group.map(renderRow).join('')}</div>
+  const sectionFor = (group) => group.rows.length
+    ? `<div class="cv3-proc-group kind-${esc(group.key)}">
+         <div class="cv3-proc-group-head"><span class="cv3-proc-group-title">${esc(group.label)}</span><span class="cv3-proc-group-count">${esc(String(group.rows.length))}</span></div>
+         <div class="cv3-proc-list">${group.rows.map(renderRow).join('')}</div>
        </div>`
     : '';
-  const summary = `${cliRows.length} CLI · ${appRows.length} App`;
+  const summary = groups.map((group) => `${group.rows.length} ${group.short}`).join(' · ');
   el.innerHTML = `
     ${cv3SectionHead(CV3_ICONS.cpu, headLabel, { count: summary, extras: refreshProcsBtn })}
-    ${sectionFor(`${toolLabel} CLI`, cliRows, 'kind-cli')}
-    ${sectionFor(`${toolLabel} App`, appRows, 'kind-app')}`;
+    ${groups.map(sectionFor).join('')}`;
 }
 
 function renderConsoleV3Usage(tool) {
@@ -10595,6 +10876,105 @@ function ensureRawCodeEditor({ editorId, textareaId, mode }) {
   return editor;
 }
 
+function getRawTextareaValue(textareaId) {
+  const textarea = el(textareaId);
+  const editor = rawCodeEditors.get(textareaId);
+  if (editor) {
+    const value = editor.getValue();
+    if (textarea && textarea.value !== value) textarea.value = value;
+    return value;
+  }
+  return textarea?.value || '';
+}
+
+function getCodexRawTomlValue() {
+  return getRawTextareaValue('cfgRawTomlTextarea');
+}
+
+function getCodexRawAuthValue() {
+  return getRawTextareaValue('cfgRawAuthTextarea');
+}
+
+function getCodexRawAuthBaseline() {
+  return state.current?.authJsonRaw || '{}';
+}
+
+function isCodexRawTomlEdited() {
+  const value = getCodexRawTomlValue();
+  return Boolean(value.trim() && value !== (state.current?.configToml || ''));
+}
+
+function isCodexRawAuthEdited() {
+  const value = getCodexRawAuthValue();
+  return Boolean(value.trim() && value !== getCodexRawAuthBaseline());
+}
+
+function buildCodexRawSavePayload() {
+  const payload = {
+    scope: el('scopeSelect')?.value || 'global',
+    projectPath: el('projectPathInput')?.value?.trim() || '',
+    codexHome: el('codexHomeInput')?.value?.trim() || '',
+    configToml: getCodexRawTomlValue(),
+  };
+  const authJson = getCodexRawAuthValue();
+  if (authJson.trim() && isCodexRawAuthEdited()) {
+    payload.authJson = authJson;
+  }
+  return payload;
+}
+
+async function saveCodexConfigEditorRequest({ forceRaw = false } = {}) {
+  const rawEdited = isCodexRawTomlEdited() || isCodexRawAuthEdited();
+  if (forceRaw || rawEdited) {
+    return api('/api/config/raw-save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildCodexRawSavePayload()),
+    });
+  }
+
+  return api('/api/config/settings-save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: el('scopeSelect')?.value || 'global',
+      projectPath: el('projectPathInput')?.value?.trim() || '',
+      codexHome: el('codexHomeInput')?.value?.trim() || '',
+      settings: buildSettingsPatch(),
+    }),
+  });
+}
+
+function flashBackendHints(json) {
+  const hints = Array.isArray(json?.data?.hints) ? json.data.hints : [];
+  for (const h of hints) {
+    if (h?.message) flash(h.message, 'info');
+  }
+}
+
+function flashCodexSavedNeedsRestart(json, messagePrefix = '') {
+  const configPath = json?.data?.paths?.configPath || state.current?.configPath || '';
+  const prefix = messagePrefix || (configPath ? `配置已保存到 ${configPath}` : '配置已保存');
+  flash(`${prefix}；已运行的 Codex 会话不会自动重载，请重启 Codex 或新开会话后生效。`, 'success');
+  flashBackendHints(json);
+}
+
+function flashClaudeCodeSavedNeedsRestart(json) {
+  const settingsPath = json?.data?.settingsPath || state.claudeCodeState?.settingsPath || '';
+  const prefix = settingsPath ? `Claude Code 配置已保存到 ${settingsPath}` : 'Claude Code 配置已保存';
+  flash(`${prefix}；已运行的 Claude Code 会话不会自动重载，请重启 Claude Code 或新开会话后生效。`, 'success');
+}
+
+function flashToolSavedNeedsRestart(toolLabel, detail = '') {
+  const prefix = detail || `${toolLabel} 配置已保存`;
+  flash(`${prefix}；已运行的 ${toolLabel} 会话不会自动重载，请重启或新开会话后生效。`, 'success');
+}
+
+async function refreshCodexConfigEditorAfterSave() {
+  await loadState({ preserveForm: true });
+  populateConfigEditor();
+}
+
 function initRawCodeEditors() {
   if (!window.ace) {
     document.querySelectorAll('.raw-code-editor').forEach((node) => node.classList.add('hide'));
@@ -10789,31 +11169,17 @@ const OPENCLAW_MODEL_PRESETS = [
 ];
 
 /** Model presets for Codex config editor (without provider prefix). */
-// 2026 内置模型 catalog —— Web 搜索核对过真实 model ID，不是凭印象编的。
-// 来源：OpenAI Codex docs (developers.openai.com/codex/models) / Anthropic
-// platform docs (claude-fable-5 / claude-mythos-5 公告)。
-// 顺序：每组最新在前。
+// 顺序按当前 Codex 官方推荐模型优先；已废弃但可能仍在 API-Key 工作流中可用的模型放在 Legacy。
 const CODEX_MODEL_PRESETS = [
   {
-    label: 'OpenAI / GPT-5 (codex 默认家族)',
+    label: 'OpenAI / Codex 推荐',
     options: [
-      { value: 'gpt-5.5', label: 'GPT-5.5 (2026-04 旗舰，retrained base)' },
-      { value: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
-      { value: 'gpt-5.4', label: 'GPT-5.4' },
+      { value: 'gpt-5.5', label: 'GPT-5.5 (推荐)' },
       { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
+      { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark (Preview)' },
+      { value: 'gpt-5.4', label: 'GPT-5.4' },
       { value: 'gpt-5.3', label: 'GPT-5.3' },
-      { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
-      { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark' },
       { value: 'gpt-5.3-instant', label: 'GPT-5.3 Instant' },
-      { value: 'gpt-5.2', label: 'GPT-5.2' },
-      { value: 'gpt-5.2-codex', label: 'GPT-5.2 Codex (API codex)' },
-      { value: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max' },
-      { value: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' },
-      { value: 'gpt-5.1', label: 'GPT-5.1' },
-      { value: 'gpt-5.1-mini', label: 'GPT-5.1 Mini' },
-      { value: 'gpt-5', label: 'GPT-5' },
-      { value: 'gpt-5-codex', label: 'GPT-5 Codex' },
-      { value: 'gpt-5-mini', label: 'GPT-5 Mini' },
     ],
   },
   {
@@ -10825,6 +11191,21 @@ const CODEX_MODEL_PRESETS = [
       { value: 'o3-mini', label: 'o3-mini' },
       { value: 'o1', label: 'o1' },
       { value: 'o1-mini', label: 'o1-mini' },
+    ],
+  },
+  {
+    label: 'OpenAI / Legacy',
+    options: [
+      { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex (deprecated for ChatGPT sign-in)' },
+      { value: 'gpt-5.2', label: 'GPT-5.2 (deprecated for ChatGPT sign-in)' },
+      { value: 'gpt-5.2-codex', label: 'GPT-5.2 Codex (legacy API)' },
+      { value: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max' },
+      { value: 'gpt-5.1-codex', label: 'GPT-5.1 Codex' },
+      { value: 'gpt-5.1', label: 'GPT-5.1' },
+      { value: 'gpt-5.1-mini', label: 'GPT-5.1 Mini' },
+      { value: 'gpt-5', label: 'GPT-5' },
+      { value: 'gpt-5-codex', label: 'GPT-5 Codex' },
+      { value: 'gpt-5-mini', label: 'GPT-5 Mini' },
     ],
   },
   {
@@ -12617,17 +12998,19 @@ const CFG_SECTION_TIPS = {
     intro: '这一节决定 codex 启动时默认走哪个模型 / 哪条线路，以及推理深度。',
     bullets: [
       '<strong>默认模型</strong>：会话开始时的兜底；运行中可用 <code>/model</code> 临时切换。',
-      '<strong>默认 Provider</strong>：API 线路的 key（来自 <code>~/.codex/config.toml</code> 的 <code>[model_providers]</code>）。OAuth 登录在用时此值被忽略。',
+      '<strong>默认 Provider</strong>：API 线路的 key（来自全局 <code>~/.codex/config.toml</code> 的 <code>[model_providers]</code>）。项目 <code>.codex/config.toml</code> 中该字段会被 Codex 忽略。',
       '<strong>推理强度</strong>：从 <em>none</em> 到 <em>xhigh</em>。xhigh 在复杂任务里多花 2–4 倍 reasoning token 换更深思考。',
       '<strong>Plan 推理</strong>：仅当 codex 生成 plan（如 <code>/plan</code>）时使用，跟主回答可以分档。',
+      '<strong>推理摘要 / 输出详略</strong>：对应 <code>model_reasoning_summary</code> 与 <code>model_verbosity</code>。',
     ],
   },
   '行为与审批': {
     intro: '决定 codex 怎么执行 shell / 工具，以及什么动作要弹审批。',
     bullets: [
       '<strong>服务模式</strong>：OpenAI 官方 API 才有效，社区线路通常忽略。',
-      '<strong>审批策略</strong>：<code>untrusted</code> 最严格；<code>on-failure</code> 适合个人本机开发；<code>never</code> 危险但流畅。',
+      '<strong>审批策略</strong>：<code>untrusted</code> 最严格；<code>on-request</code> 是常用交互模式；<code>never</code> 不弹审批。',
       '<strong>沙箱模式</strong>：<code>workspace-write</code> 是黄金平衡；<code>danger-full-access</code> 等价于裸跑，慎用。',
+      '<strong>Web Search</strong>：优先用根配置 <code>web_search</code>，不要再写 deprecated feature toggle。',
     ],
   },
   '上下文与性能': {
@@ -12660,11 +13043,11 @@ const CFG_SECTION_TIPS = {
     ],
   },
   '开关选项': {
-    intro: '一组开关：HUD、推理可见性、shell snapshot、是否关闭响应存储等。',
+    intro: '一组开关：推理可见性、shell/tool 特性、图片查看、响应存储等。',
     bullets: [
       '<strong>隐藏推理过程</strong> 适合录屏分享；<strong>显示原始推理</strong> 适合调试 prompt。',
       '<strong>关闭响应存储</strong> 会让 OpenAI 端不再保留这次 conversation。',
-      '<strong>启用 Shell Snapshot</strong>：开启后 codex 启动更快但首次冷启动慢一截。',
+      '<strong>Shell Snapshot / Hooks / Multi Agent</strong> 默认按 Codex 内置值显示；保存时不会无故把默认值写成 false。',
       '<strong>紧凑提示模式</strong>：把系统提示压短，省 token，代价是部分 instruction 失效。',
     ],
   },
@@ -12719,7 +13102,7 @@ function buildCfgGrid(toolId) {
     const text = (summary?.textContent || '').replace(/\s+/g, ' ').trim();
     const heading = text.split(/[·：:|]/)[0].trim() || '配置';
     const icon = CFG_CARD_ICONS[heading] || CFG_CARD_FALLBACK;
-    // 真正在 section 里去数生效中的字段值 + 启用的开关数（之前都是 0 也写"可配置"）
+    // 真正在 section 里去数已填写的字段值 + 启用的开关数（之前都是 0 也写"可配置"）
     const checks = sec.querySelectorAll('input[type="checkbox"]');
     const enabledCount = Array.from(checks).filter((c) => c.checked).length;
     const inputs = sec.querySelectorAll('input[type="text"], input[type="number"], input[type="url"], select, textarea');
@@ -12963,6 +13346,58 @@ function configValue(path, fallback = '') {
   return path.split('.').reduce((obj, key) => (obj && obj[key] !== undefined ? obj[key] : undefined), state.current?.config) ?? fallback;
 }
 
+function hasConfigValue(path) {
+  return path.split('.').reduce((obj, key) => (obj && obj[key] !== undefined ? obj[key] : undefined), state.current?.config) !== undefined;
+}
+
+function setSelectValuePreservingUnknown(selectId, value, label = '当前配置') {
+  const select = el(selectId);
+  if (!select) return;
+  const text = value === null || value === undefined ? '' : String(value);
+  Array.from(select.options)
+    .filter((option) => option.dataset.dynamicUnknown === 'true')
+    .forEach((option) => option.remove());
+  if (text && !Array.from(select.options).some((option) => option.value === text)) {
+    const option = document.createElement('option');
+    option.value = text;
+    option.textContent = `${text} (${label})`;
+    option.dataset.dynamicUnknown = 'true';
+    select.appendChild(option);
+  }
+  select.value = text;
+}
+
+function setBooleanSelectValue(selectId, value) {
+  if (value === true) {
+    setSelectValuePreservingUnknown(selectId, 'true');
+  } else if (value === false) {
+    setSelectValuePreservingUnknown(selectId, 'false');
+  } else {
+    setSelectValuePreservingUnknown(selectId, '');
+  }
+}
+
+function readBooleanSelectValue(selectId) {
+  const value = el(selectId)?.value || '';
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
+}
+
+function setCheckboxFromConfig(inputId, path, defaultValue = false) {
+  const input = el(inputId);
+  if (!input) return;
+  input.checked = Boolean(hasConfigValue(path) ? configValue(path, defaultValue) : defaultValue);
+}
+
+function checkboxPatchValue(inputId, path, defaultValue = false) {
+  const input = el(inputId);
+  if (!input) return null;
+  const checked = Boolean(input.checked);
+  if (!hasConfigValue(path) && checked === Boolean(defaultValue)) return null;
+  return checked;
+}
+
 function compactPromptEnabled(value = configValue('compact_prompt', null)) {
   if (value === null || value === undefined || value === '') return true;
   if (typeof value === 'string') return value.trim().toLowerCase() !== 'false';
@@ -12982,6 +13417,15 @@ function buildCompactPromptSetting() {
 
 const CODEX_CONTEXT_EFFECTIVE_RATIO = 0.95;
 const CODEX_AUTO_COMPACT_LIMIT_RATIO = 0.9;
+const CODEX_APPROVAL_POLICY_VALUES = new Set(['untrusted', 'on-request', 'never']);
+const CODEX_SANDBOX_MODE_VALUES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
+const CODEX_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+const CODEX_REASONING_SUMMARY_VALUES = new Set(['auto', 'concise', 'detailed', 'none']);
+const CODEX_VERBOSITY_VALUES = new Set(['low', 'medium', 'high']);
+const CODEX_SERVICE_TIER_VALUES = new Set(['fast', 'flex']);
+const CODEX_PERSONALITY_VALUES = new Set(['none', 'friendly', 'pragmatic']);
+const CODEX_WEB_SEARCH_VALUES = new Set(['cached', 'live', 'disabled']);
+const CODEX_APPROVALS_REVIEWER_VALUES = new Set(['user', 'auto_review']);
 
 function getCodexContextWindowForUi() {
   return getConfigNumberValue('cfgContextWindowInput') || getCodexSelectedModelContextCap() || 272000;
@@ -13198,6 +13642,21 @@ function closeCfg3Drawer() {
 window.openCfg3Drawer = openCfg3Drawer;
 window.closeCfg3Drawer = closeCfg3Drawer;
 
+function syncCodexProjectScopeUi() {
+  const isProjectScope = (el('scopeSelect')?.value || state.current?.scope || 'global') === 'project';
+  const providerInput = el('cfgProviderInput');
+  const providerHint = el('cfgProviderScopeHint');
+  const providerField = el('cfgProviderField');
+  if (providerInput) {
+    providerInput.disabled = isProjectScope;
+    providerInput.title = isProjectScope
+      ? 'Codex 项目配置会忽略 model_provider，请在全局配置设置 Provider。'
+      : '';
+  }
+  providerHint?.classList.toggle('hide', !isProjectScope);
+  providerField?.classList.toggle('is-disabled', isProjectScope);
+}
+
 function populateConfigEditor() {
   syncConfigEditorForTool();
 
@@ -13224,28 +13683,47 @@ function populateConfigEditor() {
   // ── Codex (default) ──
   el('cfgModelInput').value = configValue('model', '');
   el('cfgProviderInput').value = configValue('model_provider', '');
-  el('cfgServiceTierSelect').value = configValue('service_tier', '');
-  el('cfgPersonalityInput').value = configValue('personality', '');
-  el('cfgApprovalSelect').value = configValue('approval_policy', '');
-  el('cfgSandboxSelect').value = configValue('sandbox_mode', '');
-  el('cfgReasoningSelect').value = configValue('model_reasoning_effort', '');
-  el('cfgPlanReasoningSelect').value = configValue('plan_mode_reasoning_effort', '');
+  setSelectValuePreservingUnknown('cfgServiceTierSelect', configValue('service_tier', ''));
+  setSelectValuePreservingUnknown('cfgPersonalityInput', configValue('personality', ''));
+  setSelectValuePreservingUnknown('cfgApprovalSelect', configValue('approval_policy', ''), '旧值/未支持');
+  setSelectValuePreservingUnknown('cfgApprovalsReviewerSelect', configValue('approvals_reviewer', ''));
+  setSelectValuePreservingUnknown('cfgSandboxSelect', configValue('sandbox_mode', ''));
+  setSelectValuePreservingUnknown('cfgReasoningSelect', configValue('model_reasoning_effort', ''));
+  setSelectValuePreservingUnknown('cfgPlanReasoningSelect', configValue('plan_mode_reasoning_effort', ''));
+  setSelectValuePreservingUnknown('cfgReasoningSummarySelect', configValue('model_reasoning_summary', ''));
+  setSelectValuePreservingUnknown('cfgVerbositySelect', configValue('model_verbosity', ''));
+  setSelectValuePreservingUnknown('cfgWebSearchSelect', configValue('web_search', ''));
+  setBooleanSelectValue('cfgAllowLoginShellSelect', hasConfigValue('allow_login_shell') ? configValue('allow_login_shell', true) : undefined);
+  setBooleanSelectValue('cfgViewImageSelect', hasConfigValue('tools.view_image') ? configValue('tools.view_image', undefined) : undefined);
+  setBooleanSelectValue('cfgSupportsReasoningSummariesSelect', hasConfigValue('model_supports_reasoning_summaries') ? configValue('model_supports_reasoning_summaries', undefined) : undefined);
+  el('cfgDefaultPermissionsInput').value = configValue('default_permissions', '');
   el('cfgContextWindowInput').value = configValue('model_context_window', '');
   el('cfgCompactLimitInput').value = configValue('model_auto_compact_token_limit', '');
   el('cfgToolLimitInput').value = configValue('tool_output_token_limit', '');
   el('cfgSqliteHomeInput').value = configValue('sqlite_home', '');
   el('cfgSqliteHomeInput').placeholder = `默认 ${state.current?.codexHome || '~/.codex'}`;
   el('cfgSqliteHomeUseCodexHomeBtn').title = state.current?.codexHome || '~/.codex';
-  el('cfgHideReasoningCheck').checked = Boolean(configValue('hide_agent_reasoning', false));
-  el('cfgShowRawReasoningCheck').checked = Boolean(configValue('show_raw_agent_reasoning', false));
-  el('cfgDisableStorageCheck').checked = Boolean(configValue('disable_response_storage', false));
-  el('cfgShellSnapshotCheck').checked = Boolean(configValue('features.shell_snapshot', false));
+  setCheckboxFromConfig('cfgHideReasoningCheck', 'hide_agent_reasoning', false);
+  setCheckboxFromConfig('cfgShowRawReasoningCheck', 'show_raw_agent_reasoning', false);
+  setCheckboxFromConfig('cfgDisableStorageCheck', 'disable_response_storage', false);
+  setCheckboxFromConfig('cfgHooksCheck', 'features.hooks', true);
+  setCheckboxFromConfig('cfgFastModeCheck', 'features.fast_mode', true);
+  setCheckboxFromConfig('cfgMultiAgentCheck', 'features.multi_agent', true);
+  setCheckboxFromConfig('cfgPersonalityFeatureCheck', 'features.personality', true);
+  setCheckboxFromConfig('cfgShellToolCheck', 'features.shell_tool', true);
+  setCheckboxFromConfig('cfgUnifiedExecCheck', 'features.unified_exec', true);
+  setCheckboxFromConfig('cfgShellSnapshotCheck', 'features.shell_snapshot', true);
+  setCheckboxFromConfig('cfgMemoriesFeatureCheck', 'features.memories', false);
+  setCheckboxFromConfig('cfgUndoFeatureCheck', 'features.undo', false);
+  setCheckboxFromConfig('cfgCodexGitCommitCheck', 'features.codex_git_commit', false);
+  setCheckboxFromConfig('cfgAppsFeatureCheck', 'features.apps', false);
   el('cfgCompactPromptCheck').checked = compactPromptEnabled();
-  el('cfgUpdateCheck').checked = Boolean(configValue('check_for_update_on_startup', false));
+  setCheckboxFromConfig('cfgUpdateCheck', 'check_for_update_on_startup', true);
   el('cfgInstructionsTextarea').value = configValue('instructions', '');
   el('cfgBaseInstructionsTextarea').value = configValue('base_instructions', '');
   el('cfgRawTomlTextarea').value = state.current?.configToml || '';
   el('cfgRawAuthTextarea').value = state.current?.authJsonRaw || '{}';
+  syncCodexProjectScopeUi();
   syncRawConfigHighlight();
   refreshConfigNumberFields();
   syncShortcutActiveState();
@@ -13603,6 +14081,17 @@ function applyConfigEditorSearch() {
 function syncConfigEditorForTool() {
   const tool = getConfigEditorTool();
   renderConfigEditorShell(tool);
+  const applyBtn = el('applyConfigEditorBtn');
+  if (applyBtn) {
+    const label = cfgToolLabel(tool);
+    applyBtn.textContent = '保存';
+    applyBtn.title = `只保存配置；已运行的 ${label} 会话需要重启或新开会话后生效`;
+  }
+  const pageSub = el('cfgPageSub');
+  if (pageSub) {
+    const label = cfgToolLabel(tool);
+    pageSub.innerHTML = `点击分类卡进入子页 · 编辑后点右上 <strong>保存</strong> · 保存后重启 ${escapeHtml(label)} 或新开会话生效`;
+  }
   const tabs = document.getElementById('configEditorTabs');
   if (tabs) tabs.dataset.activeTool = tool;
   document.querySelectorAll('[data-tool-editor]').forEach(section => {
@@ -14190,9 +14679,16 @@ function applyCodexRecipePatch(patch) {
     service_tier: 'cfgServiceTierSelect',
     personality: 'cfgPersonalityInput',
     approval_policy: 'cfgApprovalSelect',
+    approvals_reviewer: 'cfgApprovalsReviewerSelect',
     sandbox_mode: 'cfgSandboxSelect',
+    default_permissions: 'cfgDefaultPermissionsInput',
+    allow_login_shell: 'cfgAllowLoginShellSelect',
+    web_search: 'cfgWebSearchSelect',
     model_reasoning_effort: 'cfgReasoningSelect',
     plan_mode_reasoning_effort: 'cfgPlanReasoningSelect',
+    model_reasoning_summary: 'cfgReasoningSummarySelect',
+    model_verbosity: 'cfgVerbositySelect',
+    model_supports_reasoning_summaries: 'cfgSupportsReasoningSummariesSelect',
     model_context_window: 'cfgContextWindowInput',
     model_auto_compact_token_limit: 'cfgCompactLimitInput',
     tool_output_token_limit: 'cfgToolLimitInput',
@@ -14201,14 +14697,34 @@ function applyCodexRecipePatch(patch) {
     disable_response_storage: 'cfgDisableStorageCheck',
     compact_prompt: 'cfgCompactPromptCheck',
     check_for_update_on_startup: 'cfgUpdateCheck',
+    'tools.view_image': 'cfgViewImageSelect',
+    'features.hooks': 'cfgHooksCheck',
+    'features.fast_mode': 'cfgFastModeCheck',
+    'features.multi_agent': 'cfgMultiAgentCheck',
+    'features.personality': 'cfgPersonalityFeatureCheck',
+    'features.shell_tool': 'cfgShellToolCheck',
+    'features.unified_exec': 'cfgUnifiedExecCheck',
+    'features.shell_snapshot': 'cfgShellSnapshotCheck',
+    'features.memories': 'cfgMemoriesFeatureCheck',
+    'features.undo': 'cfgUndoFeatureCheck',
+    'features.codex_git_commit': 'cfgCodexGitCommitCheck',
+    'features.apps': 'cfgAppsFeatureCheck',
   };
-  for (const [key, value] of Object.entries(patch)) {
+  const flattenPatch = (obj, prefix = '') => Object.entries(obj || {}).flatMap(([key, value]) => {
+    const nextKey = prefix ? `${prefix}.${key}` : key;
+    if (value && typeof value === 'object' && !Array.isArray(value)) return flattenPatch(value, nextKey);
+    return [[nextKey, value]];
+  });
+  for (const [key, value] of flattenPatch(patch)) {
     const elId = fieldMap[key];
     if (!elId) continue;
     const field = el(elId);
     if (!field) continue;
     if (field.type === 'checkbox') {
       field.checked = key === 'compact_prompt' ? compactPromptEnabled(value) : Boolean(value);
+    } else if (field.tagName === 'SELECT') {
+      if (typeof value === 'boolean') field.value = value ? 'true' : 'false';
+      else field.value = value === null || value === undefined ? '' : String(value);
     } else {
       field.value = value === null || value === undefined ? '' : String(value);
     }
@@ -14573,6 +15089,14 @@ function validateCodexConfig() {
   const warnings = [];
 
   try {
+    const validateSelect = (id, label, allowed, severity = 'error') => {
+      const value = el(id)?.value || '';
+      if (!value || allowed.has(value)) return;
+      const message = `${label} "${value}" 不在当前 Codex 支持值内`;
+      if (severity === 'warning') warnings.push(message);
+      else errors.push(message);
+    };
+
     // Check raw TOML syntax
     const tomlEl = el('cfgRawTomlTextarea');
     if (tomlEl?.value?.trim()) {
@@ -14601,12 +15125,58 @@ function validateCodexConfig() {
           }
         }
       });
+      if ((el('scopeSelect')?.value || 'global') === 'project') {
+        const projectForbiddenKeys = [
+          'openai_base_url',
+          'chatgpt_base_url',
+          'apps_mcp_product_sku',
+          'model_provider',
+          'model_providers',
+          'notify',
+          'profile',
+          'profiles',
+          'experimental_realtime_ws_base_url',
+          'otel',
+        ];
+        for (const key of projectForbiddenKeys) {
+          const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const keyPattern = new RegExp(`(^|\\n)\\s*(?:${safeKey}\\s*=|\\[\\s*${safeKey}(?:\\.|\\s*\\]))`, 'm');
+          if (keyPattern.test(tomlText)) {
+            warnings.push(`项目 .codex/config.toml 会被 Codex 忽略 "${key}"，请改到全局配置`);
+            break;
+          }
+        }
+      }
     }
+
+    validateSelect('cfgApprovalSelect', '审批策略', CODEX_APPROVAL_POLICY_VALUES);
+    validateSelect('cfgSandboxSelect', '沙箱模式', CODEX_SANDBOX_MODE_VALUES);
+    validateSelect('cfgReasoningSelect', '推理强度', CODEX_REASONING_EFFORT_VALUES);
+    validateSelect('cfgPlanReasoningSelect', 'Plan 推理', CODEX_REASONING_EFFORT_VALUES);
+    validateSelect('cfgReasoningSummarySelect', '推理摘要', CODEX_REASONING_SUMMARY_VALUES);
+    validateSelect('cfgVerbositySelect', '输出详略', CODEX_VERBOSITY_VALUES);
+    validateSelect('cfgServiceTierSelect', '服务模式', CODEX_SERVICE_TIER_VALUES);
+    validateSelect('cfgPersonalityInput', '个性', CODEX_PERSONALITY_VALUES);
+    validateSelect('cfgWebSearchSelect', 'Web Search', CODEX_WEB_SEARCH_VALUES);
+    validateSelect('cfgApprovalsReviewerSelect', '审批 reviewer', CODEX_APPROVALS_REVIEWER_VALUES);
 
     // Check model field
     const model = el('cfgModelInput')?.value?.trim();
     if (!model) {
       warnings.push('未设置默认模型 (将使用 Codex 内置默认值)');
+    }
+
+    if ((el('scopeSelect')?.value || 'global') === 'project' && el('cfgProviderInput')?.value?.trim()) {
+      warnings.push('项目范围不能覆盖 model_provider，保存时会移除该字段');
+    }
+
+    const defaultPermissions = el('cfgDefaultPermissionsInput')?.value?.trim();
+    if (defaultPermissions && el('cfgSandboxSelect')?.value) {
+      warnings.push('default_permissions 与 sandbox_mode 属于两套权限配置，建议只保留一种');
+    }
+
+    if (el('cfgApprovalSelect')?.value === 'never' && el('cfgSandboxSelect')?.value === 'danger-full-access') {
+      warnings.push('当前是完全无沙箱且无审批模式，仅建议在可信本机环境使用');
     }
 
     // Check context window
@@ -15537,30 +16107,52 @@ function numOrNull(value) {
 }
 
 function buildSettingsPatch() {
-  return {
+  const scope = el('scopeSelect')?.value || 'global';
+  const patch = {
     model: el('cfgModelInput').value.trim() || null,
-    model_provider: el('cfgProviderInput').value.trim() || null,
+    model_provider: scope === 'project' ? null : (el('cfgProviderInput').value.trim() || null),
     service_tier: el('cfgServiceTierSelect').value || null,
     personality: el('cfgPersonalityInput').value || null,
     approval_policy: el('cfgApprovalSelect').value || null,
+    approvals_reviewer: el('cfgApprovalsReviewerSelect').value || null,
     sandbox_mode: el('cfgSandboxSelect').value || null,
+    default_permissions: el('cfgDefaultPermissionsInput').value.trim() || null,
+    allow_login_shell: readBooleanSelectValue('cfgAllowLoginShellSelect'),
+    web_search: el('cfgWebSearchSelect').value || null,
     model_reasoning_effort: el('cfgReasoningSelect').value || null,
     plan_mode_reasoning_effort: el('cfgPlanReasoningSelect').value || null,
+    model_reasoning_summary: el('cfgReasoningSummarySelect').value || null,
+    model_verbosity: el('cfgVerbositySelect').value || null,
+    model_supports_reasoning_summaries: readBooleanSelectValue('cfgSupportsReasoningSummariesSelect'),
     model_context_window: numOrNull(el('cfgContextWindowInput').value),
     model_auto_compact_token_limit: numOrNull(el('cfgCompactLimitInput').value),
     tool_output_token_limit: numOrNull(el('cfgToolLimitInput').value),
     sqlite_home: el('cfgSqliteHomeInput').value.trim() || null,
-    hide_agent_reasoning: el('cfgHideReasoningCheck').checked,
-    show_raw_agent_reasoning: el('cfgShowRawReasoningCheck').checked,
-    disable_response_storage: el('cfgDisableStorageCheck').checked,
+    hide_agent_reasoning: checkboxPatchValue('cfgHideReasoningCheck', 'hide_agent_reasoning', false),
+    show_raw_agent_reasoning: checkboxPatchValue('cfgShowRawReasoningCheck', 'show_raw_agent_reasoning', false),
+    disable_response_storage: checkboxPatchValue('cfgDisableStorageCheck', 'disable_response_storage', false),
     compact_prompt: buildCompactPromptSetting(),
-    check_for_update_on_startup: el('cfgUpdateCheck').checked,
+    check_for_update_on_startup: checkboxPatchValue('cfgUpdateCheck', 'check_for_update_on_startup', true),
     instructions: el('cfgInstructionsTextarea').value.trim() || null,
     base_instructions: el('cfgBaseInstructionsTextarea').value.trim() || null,
+    tools: {
+      view_image: readBooleanSelectValue('cfgViewImageSelect'),
+    },
     features: {
-      shell_snapshot: el('cfgShellSnapshotCheck').checked,
+      hooks: checkboxPatchValue('cfgHooksCheck', 'features.hooks', true),
+      fast_mode: checkboxPatchValue('cfgFastModeCheck', 'features.fast_mode', true),
+      multi_agent: checkboxPatchValue('cfgMultiAgentCheck', 'features.multi_agent', true),
+      personality: checkboxPatchValue('cfgPersonalityFeatureCheck', 'features.personality', true),
+      shell_tool: checkboxPatchValue('cfgShellToolCheck', 'features.shell_tool', true),
+      unified_exec: checkboxPatchValue('cfgUnifiedExecCheck', 'features.unified_exec', true),
+      shell_snapshot: checkboxPatchValue('cfgShellSnapshotCheck', 'features.shell_snapshot', true),
+      memories: checkboxPatchValue('cfgMemoriesFeatureCheck', 'features.memories', false),
+      undo: checkboxPatchValue('cfgUndoFeatureCheck', 'features.undo', false),
+      codex_git_commit: checkboxPatchValue('cfgCodexGitCommitCheck', 'features.codex_git_commit', false),
+      apps: checkboxPatchValue('cfgAppsFeatureCheck', 'features.apps', false),
     },
   };
+  return patch;
 }
 
 function normalizeProviderKey(value = '') {
@@ -15858,8 +16450,8 @@ async function saveConfigEditor() {
 
   // ── OpenCode save ──
   if (getConfigEditorTool() === 'opencode') {
-    const rawEl = el('opCfgRawJsonTextarea');
-    const rawEdited = Boolean(rawEl && rawEl.value.trim() && rawEl.value !== (state.opencodeState?.configJson || ''));
+    const rawValue = getRawTextareaValue('opCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawValue.trim() && rawValue !== (state.opencodeState?.configJson || ''));
     let json;
     if (rawEdited) {
       json = await api('/api/opencode/raw-save', {
@@ -15868,7 +16460,7 @@ async function saveConfigEditor() {
         body: JSON.stringify({
           scope: el('scopeSelect')?.value || 'global',
           projectPath: el('projectPathInput')?.value?.trim() || '',
-          configJson: rawEl?.value || '{}',
+          configJson: rawValue || '{}',
         }),
       });
     } else {
@@ -15889,7 +16481,7 @@ async function saveConfigEditor() {
     }
     setBusy('saveConfigEditorBtn', false);
     if (!json.ok) return flash(json.error || 'OpenCode 配置保存失败', 'error');
-    flash('OpenCode 配置已保存', 'success');
+    flashToolSavedNeedsRestart('OpenCode');
     await loadOpenCodeQuickState();
     populateConfigEditor();
     return;
@@ -15897,9 +16489,9 @@ async function saveConfigEditor() {
 
   // ── OpenClaw save ──
   if (getConfigEditorTool() === 'openclaw') {
-    const rawEl = el('ocCfgRawJsonTextarea');
-    const rawEdited = rawEl && rawEl.value.trim() && rawEl.value !== (state.openclawState?.configJson || '');
-    let configJson = rawEl?.value || '';
+    const rawValue = getRawTextareaValue('ocCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawValue.trim() && rawValue !== (state.openclawState?.configJson || ''));
+    let configJson = rawValue || '';
     if (!rawEdited) {
       try {
         configJson = JSON.stringify(buildOpenClawConfigFromForm(), null, 2);
@@ -15915,7 +16507,7 @@ async function saveConfigEditor() {
     });
     setBusy('saveConfigEditorBtn', false);
     if (!json.ok) return flash(json.error || 'OpenClaw 配置保存失败', 'error');
-    flash('OpenClaw 配置已保存', 'success');
+    flashToolSavedNeedsRestart('OpenClaw');
     // Refresh state
     await loadOpenClawQuickState();
     populateConfigEditor();
@@ -15924,13 +16516,13 @@ async function saveConfigEditor() {
 
   // ── Claude Code save ──
   if (getConfigEditorTool() === 'claudecode') {
-    const rawEl = el('ccCfgRawJsonTextarea');
-    const rawEdited = Boolean(rawEl && rawEl.value.trim() && rawEl.value !== (state.claudeCodeState?.settingsJson || ''));
+    const rawValue = getRawTextareaValue('ccCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawValue.trim() && rawValue !== (state.claudeCodeState?.settingsJson || ''));
     const json = rawEdited
       ? await api('/api/claudecode/raw-save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settingsJson: rawEl?.value || '{}' }),
+        body: JSON.stringify({ settingsJson: rawValue || '{}' }),
       })
       : await saveClaudeCodeSettingsJson(buildClaudeCodeSettingsFromFields({
         fromConfigEditor: true,
@@ -15938,77 +16530,40 @@ async function saveConfigEditor() {
       }));
     setBusy('saveConfigEditorBtn', false);
     if (!json.ok) return flash(json.error || 'Claude Code 配置保存失败', 'error');
-    flash('Claude Code 配置已保存', 'success');
+    flashClaudeCodeSavedNeedsRestart(json);
     await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
     populateConfigEditor();
     return;
   }
 
   // ── Codex save (default) ──
-  const tomlEl = el('cfgRawTomlTextarea');
-  const rawEdited = Boolean(tomlEl && tomlEl.value.trim() && tomlEl.value !== (state.current?.configToml || ''));
-  const json = rawEdited
-    ? await api('/api/config/raw-save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scope: el('scopeSelect').value,
-        projectPath: el('projectPathInput').value.trim(),
-        codexHome: el('codexHomeInput').value.trim(),
-        configToml: tomlEl?.value || '',
-      }),
-    })
-    : await api('/api/config/settings-save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scope: el('scopeSelect').value,
-        projectPath: el('projectPathInput').value.trim(),
-        codexHome: el('codexHomeInput').value.trim(),
-        settings: buildSettingsPatch(),
-      }),
-    });
+  const json = await saveCodexConfigEditorRequest();
   setBusy('saveConfigEditorBtn', false);
   if (!json.ok) return flash(json.error || '配置保存失败', 'error');
-  flash('当前配置已保存', 'success');
-  // 把后端 hints（cn_provider_adapter_applied / provider_key_replaced 等）也展示给用户
-  const hints = Array.isArray(json.data?.hints) ? json.data.hints : [];
-  for (const h of hints) {
-    if (h?.message) flash(h.message, h.code === 'cn_provider_adapter_applied' ? 'info' : 'info');
-  }
-  await loadState({ preserveForm: true });
-  populateConfigEditor();
+  flashCodexSavedNeedsRestart(json);
+  await refreshCodexConfigEditorAfterSave();
 }
 
 async function saveRawConfigEditor() {
   setBusy('saveRawConfigEditorBtn', true, '保存中...');
-  const authJsonVal = el('cfgRawAuthTextarea')?.value || '';
-  const json = await api('/api/config/raw-save', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      scope: el('scopeSelect').value,
-      projectPath: el('projectPathInput').value.trim(),
-      codexHome: el('codexHomeInput').value.trim(),
-      configToml: el('cfgRawTomlTextarea').value,
-      authJson: authJsonVal.trim() || undefined,
-    }),
-  });
+  const json = await saveCodexConfigEditorRequest({ forceRaw: true });
   setBusy('saveRawConfigEditorBtn', false);
-  if (!json.ok) return false;
-  flash('配置已保存', 'success');
-  await loadState({ preserveForm: true });
-  populateConfigEditor();
+  if (!json.ok) {
+    flash(json.error || '配置保存失败', 'error');
+    return false;
+  }
+  flashCodexSavedNeedsRestart(json);
+  await refreshCodexConfigEditorAfterSave();
   return true;
 }
 
 async function applyConfigEditor() {
-  setBusy('applyConfigEditorBtn', true, '生效中...');
+  setBusy('applyConfigEditorBtn', true, '保存中...');
 
   // ── OpenCode apply ──
   if (getConfigEditorTool() === 'opencode') {
-    const rawEl = el('opCfgRawJsonTextarea');
-    const rawEdited = Boolean(rawEl && rawEl.value.trim() && rawEl.value !== (state.opencodeState?.configJson || ''));
+    const rawValue = getRawTextareaValue('opCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawValue.trim() && rawValue !== (state.opencodeState?.configJson || ''));
     let json;
     if (rawEdited) {
       json = await api('/api/opencode/raw-save', {
@@ -16017,7 +16572,7 @@ async function applyConfigEditor() {
         body: JSON.stringify({
           scope: el('scopeSelect')?.value || 'global',
           projectPath: el('projectPathInput')?.value?.trim() || '',
-          configJson: rawEl?.value || '{}',
+          configJson: rawValue || '{}',
         }),
       });
     } else {
@@ -16040,15 +16595,15 @@ async function applyConfigEditor() {
     if (!json.ok) return flash(json.error || 'OpenCode 配置保存失败', 'error');
     await loadOpenCodeQuickState();
     populateConfigEditor();
-    await launchOpenCodeOnly();
+    flashToolSavedNeedsRestart('OpenCode');
     return;
   }
 
   // ── OpenClaw apply ──
   if (getConfigEditorTool() === 'openclaw') {
-    const rawEl = el('ocCfgRawJsonTextarea');
-    const rawEdited = rawEl && rawEl.value.trim() && rawEl.value !== (state.openclawState?.configJson || '');
-    let configJson = rawEl?.value || '';
+    const rawValue = getRawTextareaValue('ocCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawValue.trim() && rawValue !== (state.openclawState?.configJson || ''));
+    let configJson = rawValue || '';
     if (!rawEdited) {
       try {
         configJson = JSON.stringify(buildOpenClawConfigFromForm(), null, 2);
@@ -16066,81 +16621,45 @@ async function applyConfigEditor() {
     if (!json.ok) return flash(json.error || 'OpenClaw 配置保存失败', 'error');
     await loadOpenClawQuickState();
     populateConfigEditor();
-    // Launch OpenClaw after saving
-    try {
-      const launch = await api('/api/openclaw/launch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd: el('launchCwdInput')?.value?.trim() || '' }),
-      });
-      if (launch.ok && launch.data?.gatewayUrl) {
-        flash('配置已生效，OpenClaw Gateway 启动中', 'success');
-        await repairOpenClawDashboard({ silent: true });
-      } else {
-        flash(launch.data?.message || '配置已保存', 'success');
-      }
-    } catch (e) {
-      flash('配置已保存，但启动失败：' + e.message, 'warn');
-    }
+    flashToolSavedNeedsRestart('OpenClaw');
     return;
   }
 
   // ── Claude Code apply ──
   if (getConfigEditorTool() === 'claudecode') {
-    const rawEl = el('ccCfgRawJsonTextarea');
-    const rawEdited = Boolean(rawEl && rawEl.value.trim() && rawEl.value !== (state.claudeCodeState?.settingsJson || ''));
+    const rawValue = getRawTextareaValue('ccCfgRawJsonTextarea');
+    const rawEdited = Boolean(rawValue.trim() && rawValue !== (state.claudeCodeState?.settingsJson || ''));
     const json = rawEdited
       ? await api('/api/claudecode/raw-save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settingsJson: rawEl?.value || '{}' }),
+        body: JSON.stringify({ settingsJson: rawValue || '{}' }),
       })
-      : await saveClaudeCodeSettingsJson(buildClaudeCodeSettingsFromFields({ fromConfigEditor: true }));
+      : await saveClaudeCodeSettingsJson(buildClaudeCodeSettingsFromFields({
+        fromConfigEditor: true,
+        preferOauthForOfficial: true,
+      }));
     setBusy('applyConfigEditorBtn', false);
     if (!json.ok) return flash(json.error || 'Claude Code 配置保存失败', 'error');
     await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
     populateConfigEditor();
-    await launchClaudeCodeOnly();
+    flashClaudeCodeSavedNeedsRestart(json);
     return;
   }
 
   // ── Codex apply (default) ──
-  const tomlEl = el('cfgRawTomlTextarea');
-  const rawEdited = Boolean(tomlEl && tomlEl.value.trim() && tomlEl.value !== (state.current?.configToml || ''));
-  const json = rawEdited
-    ? await api('/api/config/raw-save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scope: el('scopeSelect').value,
-        projectPath: el('projectPathInput').value.trim(),
-        codexHome: el('codexHomeInput').value.trim(),
-        configToml: tomlEl?.value || '',
-      }),
-    })
-    : await api('/api/config/settings-save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scope: el('scopeSelect').value,
-        projectPath: el('projectPathInput').value.trim(),
-        codexHome: el('codexHomeInput').value.trim(),
-        settings: buildSettingsPatch(),
-      }),
-    });
+  const json = await saveCodexConfigEditorRequest();
   setBusy('applyConfigEditorBtn', false);
   if (!json.ok) return flash(json.error || '表单配置保存失败', 'error');
-  await loadState({ preserveForm: true });
-  populateConfigEditor();
-  await launchCodex('applyConfigEditorBtn', '配置已生效并启动 Codex');
+  flashCodexSavedNeedsRestart(json);
+  await refreshCodexConfigEditorAfterSave();
 }
 
 async function applyRawConfigEditor() {
-  setBusy('applyRawConfigEditorBtn', true, '生效中...');
+  setBusy('applyRawConfigEditorBtn', true, '保存中...');
   const saved = await saveRawConfigEditor();
   setBusy('applyRawConfigEditorBtn', false);
-  if (!saved) return flash('原始 TOML 生效失败', 'error');
-  await launchCodex('applyRawConfigEditorBtn', '原始 TOML 已生效并启动 Codex');
+  if (!saved) return;
 }
 
 function normalizeBaseUrl(baseUrl) {
@@ -17264,7 +17783,12 @@ async function seedProviderHealthFromDisk() {
 }
 
 async function refreshProviderHealth(force = false) {
-  const providers = (state.current?.providers || []).filter((provider) => provider.hasApiKey && provider.baseUrl);
+  const providers = (state.current?.providers || []).filter((provider) => (
+    provider?.key
+    && provider.hasApiKey
+    && provider.baseUrl
+    && !provider.historyOnly
+  ));
   // Respect the user-configured auto-detect interval when deciding whether a
   // cached result is still fresh. Without this, every loadState() (triggered
   // e.g. by a row-switch) would spray /api/provider/test-saved across every
@@ -17359,12 +17883,12 @@ function positionProviderDropdown() {
 
 /** Default GPT models to show in the Codex model dropdown before detection. */
 const CODEX_DEFAULT_MODELS = [
-  { value: 'gpt-5.4', label: 'GPT-5.4 (最新旗舰)' },
-  { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex (编程专用)' },
-  { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark (快速)' },
-  { value: 'gpt-5.3-instant', label: 'GPT-5.3 Instant' },
-  { value: 'o3', label: 'o3' },
+  { value: 'gpt-5.5', label: 'GPT-5.5 (推荐)' },
+  { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini (快速)' },
+  { value: 'gpt-5.4', label: 'GPT-5.4' },
+  { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark (Preview)' },
   { value: 'o4-mini', label: 'o4-mini' },
+  { value: 'o3', label: 'o3' },
 ];
 
 /** Render default GPT model options into a <select> when no detection has been run. */
@@ -17379,7 +17903,7 @@ function initModelSupportedMulti(providerKey) {
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
   api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`)
     .then((res) => {
-      const list = (res?.ok && Array.isArray(res.data?.models)) ? res.data.models : [];
+      const list = normalizeProviderModelList((res?.ok && Array.isArray(res.data?.models)) ? res.data.models : []);
       state.providerSavedModels = state.providerSavedModels || {};
       state.providerSavedModels[providerKey] = list;
       state.modelSupported.checked = new Set(list);
@@ -17387,7 +17911,7 @@ function initModelSupportedMulti(providerKey) {
       renderModelSupportedPopBody();
     }).catch(() => {});
   // 初始 placeholder
-  state.modelSupported.checked = new Set(state.providerSavedModels?.[providerKey] || []);
+  state.modelSupported.checked = new Set(normalizeProviderModelList(state.providerSavedModels?.[providerKey] || []));
   renderModelSupportedSummary();
 
   // 绑定一次性事件
@@ -17527,7 +18051,7 @@ async function persistModelSupported() {
   const providerKey = state.modelSupported?.providerKey;
   if (!providerKey) return;
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
-  const models = Array.from(state.modelSupported?.checked || []);
+  const models = normalizeProviderModelList(Array.from(state.modelSupported?.checked || []));
   try {
     const res = await api('/api/provider/saved-models', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -17557,7 +18081,7 @@ async function openModelBrowseModal() {
     try {
       const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
       const res = await api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`);
-      if (res?.ok) saved = res.data?.models || [];
+      if (res?.ok) saved = normalizeProviderModelList(res.data?.models || []);
     } catch (_) {}
   }
   state.modelBrowse.checked = new Set(saved);
@@ -17617,13 +18141,16 @@ async function saveModelBrowseSelection() {
   if (!providerKey) { flash('当前不在编辑 provider', 'warning'); return; }
   // 详情页 tab 用 onSave 回调路径（外部已经在 listener 处理）
   if (typeof state.modelBrowse?.onSave === 'function') {
-    const list = Array.from(state.modelBrowse?.checked || []);
-    try { await state.modelBrowse.onSave(list); } catch (_) {}
-    flash(`已加入 ${list.length} 个模型`, 'success');
+    const list = normalizeProviderModelList(Array.from(state.modelBrowse?.checked || []));
+    let saved = false;
+    try {
+      saved = await state.modelBrowse.onSave(list, { successMessage: `已保存 ${list.length} 个模型` });
+    } catch (_) {}
+    if (!saved) return;
     closeModelBrowseModal();
     return;
   }
-  const models = Array.from(state.modelBrowse?.checked || []);
+  const models = normalizeProviderModelList(Array.from(state.modelBrowse?.checked || []));
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
   try {
     const res = await api('/api/provider/saved-models', {
@@ -17871,19 +18398,16 @@ function getCodexTerminalProfiles() {
     : (Array.isArray(state.codexTerminalProfiles) ? state.codexTerminalProfiles : []);
   const platform = state.current?.launch?.platform || '';
   if (fromState.length) {
-    if (platform === 'darwin') {
-      const allowed = new Set(['auto', 'terminal', 'iterm', 'termius']);
-      const normalized = fromState
-        .filter((item) => allowed.has(String(item?.id || '').trim()))
-        .map((item) => {
-          const id = String(item?.id || '').trim();
-          if (id === 'terminal') return { ...item, id, label: '系统终端' };
-          if (id === 'termius') return { ...item, id, label: 'Termius' };
-          return { ...item, id };
-        });
-      if (normalized.length) return normalized;
-    }
-    return fromState;
+    return fromState
+      .map((item) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return null;
+        const label = String(item?.label || id).trim();
+        const available = item?.available !== false;
+        const command = String(item?.command || item?.appName || item?.appPath || '').trim();
+        return { ...item, id, label, available, command };
+      })
+      .filter(Boolean);
   }
 
   if (platform === 'darwin') {
@@ -17892,6 +18416,29 @@ function getCodexTerminalProfiles() {
       { id: 'terminal', label: '系统终端' },
       { id: 'iterm', label: 'iTerm' },
       { id: 'termius', label: 'Termius' },
+      { id: 'terminus', label: 'Terminus' },
+      { id: 'tabby', label: 'Tabby / Terminus' },
+      { id: 'warp', label: 'Warp' },
+      { id: 'hyper', label: 'Hyper' },
+      { id: 'wezterm', label: 'WezTerm' },
+      { id: 'ghostty', label: 'Ghostty' },
+      { id: 'alacritty', label: 'Alacritty' },
+      { id: 'kitty', label: 'kitty' },
+    ];
+  }
+  if (platform === 'linux') {
+    return [
+      { id: 'auto', label: '自动选择（推荐）' },
+      { id: 'x-terminal-emulator', label: '系统默认终端' },
+      { id: 'gnome-terminal', label: 'GNOME Terminal' },
+      { id: 'konsole', label: 'Konsole' },
+      { id: 'wezterm', label: 'WezTerm' },
+      { id: 'alacritty', label: 'Alacritty' },
+      { id: 'kitty', label: 'kitty' },
+      { id: 'tilix', label: 'Tilix' },
+      { id: 'xfce4-terminal', label: 'Xfce Terminal' },
+      { id: 'lxterminal', label: 'LXTerminal' },
+      { id: 'xterm', label: 'xterm' },
     ];
   }
   if (platform === 'win32') {
@@ -17900,6 +18447,23 @@ function getCodexTerminalProfiles() {
     ];
   }
   return [];
+}
+
+function describeCodexTerminalProfile(profile = {}) {
+  const id = String(profile.id || '').trim();
+  if (id === 'auto') return '自动选择已检测到的最佳终端并启动 Codex';
+  const parts = [];
+  if (profile.command) parts.push(profile.command);
+  if (profile.appName && profile.appName !== profile.label) parts.push(`${profile.appName}.app`);
+  if (profile.appPath && !parts.length) parts.push(profile.appPath);
+  const suffix = parts.length ? ` · ${parts[0]}` : '';
+  if (profile.launchMode === 'type-command') {
+    return `打开 ${profile.label} 后自动输入启动命令${suffix}`;
+  }
+  if (profile.launchMode === 'cli') {
+    return `通过命令行入口启动 ${profile.label}${suffix}`;
+  }
+  return `使用 ${profile.label} 启动 Codex${suffix}`;
 }
 
 function closeCodexTerminalMenu() {
@@ -17914,14 +18478,21 @@ function openCodexTerminalMenu() {
   if (!menu || !button || !profiles.length) return false;
 
   const selected = getSelectedCodexTerminalProfile();
-  menu.innerHTML = profiles.map((profile) => `
-    <button type="button" class="provider-option ${profile.id === selected ? 'active' : ''}" data-codex-terminal-launch="${escapeHtml(profile.id)}">
+  const availableCount = profiles.filter((profile) => profile.id !== 'auto').length;
+  menu.innerHTML = `
+    <div class="codex-terminal-menu-head">
+      <strong>选择启动终端</strong>
+      <span>检测到 ${escapeHtml(String(availableCount))} 个可用终端</span>
+    </div>
+    ${profiles.map((profile) => `
+    <button type="button" class="provider-option codex-terminal-option ${profile.id === selected ? 'active' : ''}" data-codex-terminal-launch="${escapeHtml(profile.id)}">
       <div class="provider-main">
         <strong>${escapeHtml(profile.label)}</strong>
-        <div class="provider-meta">${escapeHtml(profile.id === 'auto' ? '自动选择终端并启动 Codex' : `使用 ${profile.label} 启动 Codex`)}</div>
+        <div class="provider-meta">${escapeHtml(describeCodexTerminalProfile(profile))}</div>
       </div>
+      ${profile.id === selected ? '<span class="codex-terminal-selected">当前</span>' : ''}
     </button>
-  `).join('');
+  `).join('')}`;
 
   const rect = button.getBoundingClientRect();
   const width = Math.min(360, Math.max(260, rect.width + 80));
@@ -17948,7 +18519,7 @@ function renderCodexTerminalPicker() {
   if (!row || !hint) return;
 
   const platform = state.current?.launch?.platform || '';
-  const isSupported = platform === 'win32' || platform === 'darwin';
+  const isSupported = platform === 'win32' || platform === 'darwin' || platform === 'linux';
   const profiles = getCodexTerminalProfiles();
 
   state.codexTerminalProfiles = profiles;
@@ -17963,6 +18534,7 @@ function renderCodexTerminalPicker() {
   if (!profileIds.has(state.codexTerminalProfile)) {
     state.codexTerminalProfile = 'auto';
   }
+  try { localStorage.setItem('easyaiconfig_codex_terminal_profile', state.codexTerminalProfile); } catch (_) {}
 
   hint.textContent = '';
   row.classList.add('hide');
@@ -18943,116 +19515,216 @@ function trayHookOnHubRender() { scheduleTrayRefresh(); }
 // ─── Provider 详情视图（inline，非抽屉） ─────────────────────────────
 // 点击行 → 隐藏 hero/toolbar/ribbon/list-wrap，把 #chDetail 显示出来接管整个内容区。
 // 顶部一个 "← 返回" 按钮回列表。4 个 tab：概览 / 用量 / 测试 / 健康。
-let pdEventsBound = false;
-function ensureProviderDetailEvents() {
-  if (pdEventsBound) return;
+const PROVIDER_DETAIL_TABS = [
+  { id: 'overview', label: '概览' },
+  { id: 'models',   label: '模型支持' },
+  { id: 'usage',    label: '用量' },
+  { id: 'test',     label: '测试' },
+  { id: 'health',   label: '健康' },
+  { id: 'binding',  label: '项目绑定' },
+];
+const PROVIDER_DETAIL_TAB_IDS = new Set(PROVIDER_DETAIL_TABS.map((t) => t.id));
+const PROJECT_BINDINGS_CACHE_MS = 15000;
+let pdEventsContainer = null;
+let pdTabPointerCaptureBound = false;
+
+function normalizeProviderDetailTab(tab) {
+  const value = String(tab || '').trim();
+  return PROVIDER_DETAIL_TAB_IDS.has(value) ? value : 'overview';
+}
+
+function invalidateProviderDetailBindingsCache() {
+  state._allProjectBindingsFetchedAt = 0;
+  delete state._allProjectBindingsFetching;
+}
+
+function isCurrentProviderDetail(providerKey, tool = '', tab = '') {
+  const pd = state.providerDetail || {};
+  if (!pd.open || !providerKey || pd.providerKey !== providerKey) return false;
+  if (tool && (pd.tool || state.activeTool || 'codex') !== tool) return false;
+  if (tab && normalizeProviderDetailTab(pd.tab) !== normalizeProviderDetailTab(tab)) return false;
+  return true;
+}
+
+function switchProviderDetailTab(tab) {
+  const nextTab = normalizeProviderDetailTab(tab);
+  if (state.providerDetail.tab !== nextTab) {
+    state.providerDetail.tab = nextTab;
+    pdLastRenderSig = '';
+  }
+  renderProviderDetail({ force: true });
+}
+
+function getProviderDetailTabButtonAtPoint(clientX, clientY) {
+  if (!state.providerDetail?.open) return null;
   const container = document.getElementById('chDetail');
-  if (!container) return;
-  pdEventsBound = true;
-  // 项目绑定 tab 里 cwd 输入手动编辑后，把值同步到 launchCwdInput 并重查 binding
-  container.addEventListener('change', (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLInputElement) || target.id !== 'pdbCwdInput') return;
-    const v = target.value.trim();
-    const launchInput = el('launchCwdInput');
-    if (launchInput) launchInput.value = v;
-    refreshProjectBindingForCurrentCwd().then(() => {
+  if (!container || container.classList.contains('hide')) return null;
+  const buttons = container.querySelectorAll('[data-pd-tab]');
+  for (const button of buttons) {
+    const rect = button.getBoundingClientRect();
+    if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+      return button;
+    }
+  }
+  return null;
+}
+
+function handleProviderDetailTabPointerCapture(e) {
+  const button = getProviderDetailTabButtonAtPoint(e.clientX, e.clientY);
+  if (!button) return;
+  const nextTab = normalizeProviderDetailTab(button.getAttribute('data-pd-tab'));
+  if (nextTab === normalizeProviderDetailTab(state.providerDetail?.tab)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  switchProviderDetailTab(nextTab);
+}
+
+function handleProviderDetailChange(e) {
+  const target = e.target;
+  if (!(target instanceof HTMLInputElement) || target.id !== 'pdbCwdInput') return;
+  const v = target.value.trim();
+  const launchInput = el('launchCwdInput');
+  if (launchInput) launchInput.value = v;
+  refreshProjectBindingForCurrentCwd().then(() => {
+    renderProviderDetail({ force: true });
+    try { window.renderConnectionHub?.(); } catch (_) {}
+  });
+}
+
+function handleProviderDetailClick(e) {
+  const target = e.target instanceof Element ? e.target : null;
+  if (!target) return;
+  if (target.closest('[data-pd-back]') || target.closest('[data-pd-close]')) { closeProviderDetail(); return; }
+  const tabBtn = target.closest('[data-pd-tab]');
+  if (tabBtn) {
+    e.preventDefault();
+    switchProviderDetailTab(tabBtn.dataset.pdTab);
+    return;
+  }
+  const probeBtn = target.closest('[data-pd-probe-index]');
+  if (probeBtn) {
+    e.preventDefault();
+    const key = probeBtn.getAttribute('data-pd-probe-key') || '';
+    state.providerDetail.selectedProbeKey = state.providerDetail.selectedProbeKey === key ? '' : key;
+    pdLastRenderSig = '';
+    renderProviderDetail({ force: true });
+    return;
+  }
+  const usageWindowBtn = target.closest('[data-pd-usage-window]');
+  if (usageWindowBtn) {
+    e.preventDefault();
+    const nextWindow = normalizePdUsageWindow(usageWindowBtn.getAttribute('data-pd-usage-window'));
+    state.providerDetail.usageWindow = nextWindow;
+    state.providerDetail.usageModel = 'all';
+    try { localStorage.setItem('easyaiconfig_pd_usage_window', nextWindow); } catch {}
+    pdLastRenderSig = '';
+    renderProviderDetail({ force: true });
+    fetchDashboardMetricsForDetail(true).catch(() => {});
+    return;
+  }
+  const usageModelBtn = target.closest('[data-pd-usage-model]');
+  if (usageModelBtn) {
+    e.preventDefault();
+    state.providerDetail.usageModel = usageModelBtn.getAttribute('data-pd-usage-model') || 'all';
+    pdLastRenderSig = '';
+    renderProviderDetail({ force: true });
+    return;
+  }
+  if (target.closest('[data-pd-switch]')) { actionPdSwitch(); return; }
+  if (target.closest('[data-pd-edit]')) { actionPdEdit(); return; }
+  if (target.closest('[data-pd-delete]')) { actionPdDelete(); return; }
+  if (target.closest('[data-pd-test]')) { actionPdRunTest(); return; }
+  if (target.closest('[data-pd-refresh-health]')) { actionPdRefreshHealth(); return; }
+  if (target.closest('[data-pd-refresh-usage]')) { actionPdRefreshUsage(); return; }
+  if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
+  if (target.closest('[data-pd-copy-cmd]')) { actionPdCopyLaunchCmd(); return; }
+  // P0 #3：项目绑定 tab 的目录选择器
+  if (target.closest('[data-pdb-pick-dir]')) {
+    (async () => {
+      if (!window.__TAURI__ && !window.__TAURI_INTERNALS__) {
+        flash('Web 模式暂不支持原生目录选择，请手动输入路径', 'error');
+        return;
+      }
+      const cwdInput = document.getElementById('pdbCwdInput');
+      const initialPath = cwdInput?.value?.trim() || el('launchCwdInput')?.value?.trim() || '';
+      const res = await api('/api/path/pick-directory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '选择项目目录', initialPath }),
+      });
+      if (!res?.ok) { flash(res?.error || '打开目录选择器失败', 'error'); return; }
+      if (!res.data?.selected) return;
+      const picked = res.data.path || '';
+      if (!picked) return;
+      // 同步到 launchCwdInput（保持「项目绑定 / 启动 cwd」同源）
+      const launchInput = el('launchCwdInput');
+      if (launchInput) launchInput.value = picked;
+      if (cwdInput) cwdInput.value = picked;
+      await refreshProjectBindingForCurrentCwd();
       renderProviderDetail({ force: true });
       try { window.renderConnectionHub?.(); } catch (_) {}
-    });
-  });
-  container.addEventListener('click', (e) => {
-    const target = e.target instanceof Element ? e.target : null;
-    if (!target) return;
-    if (target.closest('[data-pd-back]') || target.closest('[data-pd-close]')) { closeProviderDetail(); return; }
-    const tabBtn = target.closest('[data-pd-tab]');
-    if (tabBtn) {
-      state.providerDetail.tab = tabBtn.dataset.pdTab;
-      renderProviderDetail();
-      return;
-    }
-    if (target.closest('[data-pd-switch]')) { actionPdSwitch(); return; }
-    if (target.closest('[data-pd-edit]')) { actionPdEdit(); return; }
-    if (target.closest('[data-pd-delete]')) { actionPdDelete(); return; }
-    if (target.closest('[data-pd-test]')) { actionPdRunTest(); return; }
-    if (target.closest('[data-pd-refresh-health]')) { actionPdRefreshHealth(); return; }
-    if (target.closest('[data-pd-refresh-usage]')) { actionPdRefreshUsage(); return; }
-    if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
-    if (target.closest('[data-pd-copy-cmd]')) { actionPdCopyLaunchCmd(); return; }
-    // P0 #3：项目绑定 tab 的目录选择器
-    if (target.closest('[data-pdb-pick-dir]')) {
-      (async () => {
-        if (!window.__TAURI__ && !window.__TAURI_INTERNALS__) {
-          flash('Web 模式暂不支持原生目录选择，请手动输入路径', 'error');
-          return;
-        }
-        const cwdInput = document.getElementById('pdbCwdInput');
-        const initialPath = cwdInput?.value?.trim() || el('launchCwdInput')?.value?.trim() || '';
-        const res = await api('/api/path/pick-directory', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: '选择项目目录', initialPath }),
-        });
-        if (!res?.ok) { flash(res?.error || '打开目录选择器失败', 'error'); return; }
-        if (!res.data?.selected) return;
-        const picked = res.data.path || '';
-        if (!picked) return;
-        // 同步到 launchCwdInput（保持「项目绑定 / 启动 cwd」同源）
-        const launchInput = el('launchCwdInput');
-        if (launchInput) launchInput.value = picked;
-        if (cwdInput) cwdInput.value = picked;
-        await refreshProjectBindingForCurrentCwd();
+    })();
+    return;
+  }
+  // P0 #3：项目绑定 tab 内的按钮
+  if (target.closest('[data-pd-bind]')) {
+    (async () => {
+      const row = lookupProviderDetailRow();
+      if (!row) return;
+      const ok = await setProjectBindingFor(row.key);
+      if (ok) {
+        // 刷新 allProjectBindings + 重画 detail
+        invalidateProviderDetailBindingsCache();
         renderProviderDetail({ force: true });
-        try { window.renderConnectionHub?.(); } catch (_) {}
-      })();
-      return;
-    }
-    // P0 #3：项目绑定 tab 内的按钮
-    if (target.closest('[data-pd-bind]')) {
-      (async () => {
-        const row = lookupProviderDetailRow();
-        if (!row) return;
-        const ok = await setProjectBindingFor(row.key);
-        if (ok) {
-          // 刷新 allProjectBindings + 重画 detail
-          delete state._allProjectBindingsFetching;
-          renderProviderDetail({ force: true });
-        }
-      })();
-      return;
-    }
-    if (target.closest('[data-pd-unbind]')) {
-      (async () => {
-        const ok = await clearProjectBindingFor();
-        if (ok) {
-          delete state._allProjectBindingsFetching;
-          renderProviderDetail({ force: true });
-        }
-      })();
-      return;
-    }
-    const unbindBtn = target.closest('[data-pd-unbind-cwd]');
-    if (unbindBtn) {
-      const cwd = unbindBtn.getAttribute('data-pd-unbind-cwd');
-      (async () => {
-        if (!cwd) return;
-        const tool = (state.activeTool || 'codex');
-        const res = await api('/api/project-binding', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cwd, tool }),
-        });
-        if (!res?.ok) { flash(res?.error || '解绑失败', 'error'); return; }
-        flash(`已解绑 ${cwd}`, 'info');
-        await refreshProjectBindingForCurrentCwd();
-        delete state._allProjectBindingsFetching;
+      }
+    })();
+    return;
+  }
+  if (target.closest('[data-pd-unbind]')) {
+    (async () => {
+      const ok = await clearProjectBindingFor();
+      if (ok) {
+        invalidateProviderDetailBindingsCache();
         renderProviderDetail({ force: true });
-        try { window.renderConnectionHub?.(); } catch (_) {}
-        try { renderProviders(); } catch (_) {}
-      })();
-      return;
-    }
-  });
+      }
+    })();
+    return;
+  }
+  const unbindBtn = target.closest('[data-pd-unbind-cwd]');
+  if (unbindBtn) {
+    const cwd = unbindBtn.getAttribute('data-pd-unbind-cwd');
+    (async () => {
+      if (!cwd) return;
+      const tool = (state.activeTool || 'codex');
+      const res = await api('/api/project-binding', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd, tool }),
+      });
+      if (!res?.ok) { flash(res?.error || '解绑失败', 'error'); return; }
+      flash(`已解绑 ${cwd}`, 'info');
+      await refreshProjectBindingForCurrentCwd();
+      invalidateProviderDetailBindingsCache();
+      renderProviderDetail({ force: true });
+      try { window.renderConnectionHub?.(); } catch (_) {}
+      try { renderProviders(); } catch (_) {}
+    })();
+    return;
+  }
+}
+
+function ensureProviderDetailEvents() {
+  const container = document.getElementById('chDetail');
+  if (!container) return;
+  if (container === pdEventsContainer) return;
+  pdEventsContainer = container;
+  // 项目绑定 tab 里 cwd 输入手动编辑后，把值同步到 launchCwdInput 并重查 binding
+  container.addEventListener('change', handleProviderDetailChange);
+  container.addEventListener('click', handleProviderDetailClick);
+  if (!pdTabPointerCaptureBound) {
+    pdTabPointerCaptureBound = true;
+    document.addEventListener('pointerdown', handleProviderDetailTabPointerCapture, true);
+  }
 }
 
 function lookupProviderDetailRow() {
@@ -19101,11 +19773,17 @@ function openProviderDetail(key) {
   state.providerDetail.tab = 'overview';
   state.providerDetail.summary = null;
   state.providerDetail.history = null;
+  state.providerDetail.selectedProbeKey = '';
   state.providerDetail.testResult = null;
   state.providerDetail.testRunning = false;
   state.providerDetail.loading = false;
   state.providerDetail.error = '';
   state.providerDetail.usageAutoRetried = false;
+  state.providerDetail.usageRefreshing = false;
+  state.providerDetail.usageModel = 'all';
+  state.providerDetail.usageMetrics = null;
+  state.providerDetail.usageMetricsFetchedAt = 0;
+  state.providerDetail.modelsLoading = false;
   const hub = document.getElementById('connectionHub');
   if (hub) hub.classList.add('ch-detail-on');
   const detail = document.getElementById('chDetail');
@@ -19117,9 +19795,12 @@ function openProviderDetail(key) {
   // 异步拉真数据：probe history + dashboard metrics
   const row = lookupProviderDetailRow();
   if (row && isCodexProviderDetail(row) && row.mode === 'apikey') {
+    const expectedKey = row.key;
+    const expectedTool = providerDetailTool(row);
     (async () => {
       await fetchProviderProbeData(row).catch(() => {});
       // 若 24h 内一条探测都没有 → 自动跑一次，让 uptime 不再空白
+      if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
       const t = Number(state.providerDetail.summary?.total || 0);
       if (t === 0 && row.hasCredential && row.baseUrl) {
         await actionPdRunTest().catch(() => {});
@@ -19131,20 +19812,36 @@ function openProviderDetail(key) {
 }
 
 async function fetchDashboardMetricsForDetail(force = false) {
-  // 即便已有 codex metrics，超过 60 秒就当过期重拉。
-  // 用户从详情页切 provider / 重启 dev / 切回 codex 等场景下，
-  // 没新数据 = 旧 providers 数组里可能没他刚用过的那个 key。
-  const fetchedAt = Number(state.dashboardMetricsFetchedAt || 0);
+  const expectedKey = state.providerDetail?.providerKey || '';
+  const expectedTool = state.providerDetail?.tool || state.activeTool || 'codex';
+  if (expectedTool !== 'codex') return;
+  // Provider 详情页自己持有一份 usage metrics，避免为了 90 天/全部筛选去污染全局 Dashboard 的时间窗。
+  const fetchedAt = Number(state.providerDetail.usageMetricsFetchedAt || 0);
   const isStale = !fetchedAt || (Date.now() - fetchedAt > 60 * 1000);
-  if (state.dashboardMetrics?.codex && !force && !isStale) return;
-  if (typeof refreshDashboardData === 'function') {
-    await refreshDashboardData({ force, silent: true, tool: 'codex' });
-    renderProviderDetail({ force: true });
+  if (state.providerDetail?.usageMetrics && !force && !isStale) return;
+  const requestDays = getPdUsageRequestDays();
+  const params = new URLSearchParams({
+    days: String(requestDays),
+    codexHome: getDashboardCodexHome(),
+  });
+  if (force) params.set('force', '1');
+  try {
+    const json = await api(`/api/dashboard/codex-usage?${params.toString()}`, { timeoutMs: force ? 120000 : 20000 });
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    if (json?.ok && json.data && json.data.totals && typeof json.data.totals === 'object') {
+      state.providerDetail.usageMetrics = { ...json.data, _providerDetailDays: requestDays };
+      state.providerDetail.usageMetricsFetchedAt = Date.now();
+    }
+  } finally {
+    if (isCurrentProviderDetail(expectedKey, expectedTool)) renderProviderDetail({ force: true });
   }
 }
 
 async function actionPdRefreshUsage() {
   const row = lookupProviderDetailRow();
+  if (!row) return;
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
   state.providerDetail.usageRefreshing = true;
   state.providerDetail.usageAutoRetried = true; // 用户手动刷过 → 不要再自动 retry
   renderProviderDetail();
@@ -19153,6 +19850,7 @@ async function actionPdRefreshUsage() {
   } else {
     await fetchDashboardMetricsForDetail(true).catch(() => {});
   }
+  if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
   state.providerDetail.usageRefreshing = false;
   renderProviderDetail();
 }
@@ -19174,6 +19872,9 @@ function closeProviderDetail() {
 
 async function fetchProviderProbeData(row) {
   if (!row || !isCodexProviderDetail(row)) return;
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
+  if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
   const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
   const params = new URLSearchParams({ providerKey: row.key, codexHome });
   state.providerDetail.loading = true;
@@ -19183,13 +19884,16 @@ async function fetchProviderProbeData(row) {
       api(`/api/provider/probe-summary?${params.toString()}&windowHours=24`),
       api(`/api/provider/probe-history?${params.toString()}&limit=120`),
     ]);
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
     state.providerDetail.summary = summary?.ok ? (summary.data || null) : null;
     state.providerDetail.history = history?.ok ? (history.data || null) : null;
   } catch (err) {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
     state.providerDetail.error = err?.message || String(err);
   } finally {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
     state.providerDetail.loading = false;
-    renderProviderDetail();
+    renderProviderDetail({ force: true });
   }
 }
 
@@ -19198,6 +19902,8 @@ function pdComputeRenderSig(row) {
   const pd = state.providerDetail;
   const sum = pd.summary;
   const histLen = Array.isArray(pd.history?.rows) ? pd.history.rows.length : 0;
+  const dashboardCodexMetrics = getDashboardMetricsForTool('codex');
+  const dashboardCodexFetchedAt = getDashboardMetricsFetchedAtForTool('codex');
   // 这些字段一致就不重画 → 这是去闪烁的关键
   return [
     row.key,
@@ -19213,14 +19919,18 @@ function pdComputeRenderSig(row) {
     sum?.avgLatencyMs ?? '-',
     sum?.p95LatencyMs ?? '-',
     histLen,
+    pd.selectedProbeKey || '',
+    pd.usageWindow || '',
+    pd.usageModel || '',
     pd.testRunning ? 'tr' : (pd.testResult?.ok ? 'tk' : pd.testResult?.error ? 'te' : 'tn'),
     pd.usageRefreshing ? 'ur' : 'us',
     pd.loading ? 'l' : '',
-    state.dashboardMetrics?.codex ? 'dm' : 'dn',
+    dashboardCodexMetrics ? 'dm' : 'dn',
+    pd.usageMetrics ? `pdm:${pd.usageMetrics._providerDetailDays || ''}:${pd.usageMetricsFetchedAt || 0}` : 'pdn',
     // 跟 dashboard 数据相关：providers 数量 + 该 row 是否能匹配上一条 provider 条目
-    Array.isArray(state.dashboardMetrics?.codex?.providers) ? state.dashboardMetrics.codex.providers.length : 0,
+    Array.isArray(dashboardCodexMetrics?.providers) ? dashboardCodexMetrics.providers.length : 0,
     isClaudeProviderDetail(row) ? (state.claudeCodeState?.usage?.generatedAt || '') : '',
-    Number(state.dashboardMetricsFetchedAt || 0),
+    Number(dashboardCodexFetchedAt || 0),
   ].join('|');
 }
 
@@ -19244,21 +19954,25 @@ function renderProviderDetail(options = {}) {
       </div>`;
     return;
   }
+  const tab = normalizeProviderDetailTab(state.providerDetail.tab);
+  state.providerDetail.tab = tab;
   // 计算签名：跟上次一样就跳过整个 innerHTML 重建 → 不闪
   const sig = pdComputeRenderSig(row);
   if (!options.force && sig === pdLastRenderSig) return;
   const tabChanged = state.providerDetail.tab !== pdLastTab;
   pdLastRenderSig = sig;
   pdLastTab = state.providerDetail.tab;
-  const tab = state.providerDetail.tab || 'overview';
-  const tabs = [
-    { id: 'overview', label: '概览' },
-    { id: 'models',   label: '模型支持' },
-    { id: 'usage',    label: '用量' },
-    { id: 'test',     label: '测试' },
-    { id: 'health',   label: '健康' },
-    { id: 'binding',  label: '项目绑定' },
-  ];
+  let tabHtml = '';
+  try {
+    tabHtml = renderPdTab(tab, row);
+  } catch (err) {
+    console.error('[provider detail] render tab failed', err);
+    tabHtml = `
+      <div class="pd-empty">
+        <div class="pd-empty-title-line">这个标签页渲染失败</div>
+        <p>${escapeHtml(err?.message || String(err) || '未知错误')}</p>
+      </div>`;
+  }
   // .pd-tab-anim 只在 tab 真切换 / 首次打开时加，平时数据刷新不再播 220ms 动画
   const animClass = tabChanged ? ' pd-tab-anim' : '';
   container.innerHTML = `
@@ -19271,13 +19985,13 @@ function renderProviderDetail(options = {}) {
     </div>
     ${renderPdHeader(row)}
     <nav class="pd-tabs" role="tablist">
-      ${tabs.map((t) => `
+      ${PROVIDER_DETAIL_TABS.map((t) => `
         <button type="button" role="tab" class="pd-tab ${tab === t.id ? 'is-active' : ''}" data-pd-tab="${t.id}" aria-selected="${tab === t.id}">
           ${escapeHtml(t.label)}
         </button>`).join('')}
     </nav>
     <section class="pd-tab-content${animClass} pd-tab-${tab}">
-      ${renderPdTab(tab, row)}
+      ${tabHtml}
     </section>
   `;
   // models tab 内的事件 (复选 / 搜索 / 保存 / 拉取)
@@ -19368,29 +20082,42 @@ function renderPdTab(tab, row) {
 // 自动切到这个 Provider。
 function renderPdBinding(row) {
   const esc = escapeHtml;
+  const providerKey = row.key;
+  const detailTool = providerDetailTool(row);
   const currentCwd = (el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '').trim();
   const isApiKey = row.mode !== 'oauth';
   const binding = state.projectBinding;
-  const isBoundToThisProvider = isApiKey && binding?.providerKey === row.key && binding?.cwd === currentCwd;
-  const hasOtherBinding = isApiKey && binding?.providerKey && binding.providerKey !== row.key && binding.cwd === currentCwd;
+  const isBoundToThisProvider = isApiKey && binding?.providerKey === providerKey && binding?.cwd === currentCwd;
+  const hasOtherBinding = isApiKey && binding?.providerKey && binding.providerKey !== providerKey && binding.cwd === currentCwd;
   const otherProviderName = hasOtherBinding
     ? ((state.current?.providers || []).find((p) => p.key === binding.providerKey)?.name || binding.providerKey)
     : '';
 
   const allBindings = Array.isArray(state.allProjectBindings) ? state.allProjectBindings : [];
   const myBindings = allBindings.filter((b) => {
-    return Object.entries(b.tools || {}).some(([t, v]) => t === 'codex' && v?.providerKey === row.key);
+    return Object.entries(b.tools || {}).some(([t, v]) => t === 'codex' && v?.providerKey === providerKey);
   });
 
-  if (!state._allProjectBindingsFetching) {
+  const bindingsFetchedAt = Number(state._allProjectBindingsFetchedAt || 0);
+  const bindingsCacheStale = !bindingsFetchedAt || (Date.now() - bindingsFetchedAt > PROJECT_BINDINGS_CACHE_MS);
+  const shouldFetchBindings = !Array.isArray(state.allProjectBindings) || bindingsCacheStale;
+  if (shouldFetchBindings && !state._allProjectBindingsFetching) {
+    const previousBindingsSig = JSON.stringify(allBindings);
     state._allProjectBindingsFetching = true;
     api('/api/project-bindings', { method: 'GET' }).then((res) => {
-      state._allProjectBindingsFetching = false;
+      state._allProjectBindingsFetchedAt = Date.now();
       if (res?.ok && Array.isArray(res.data?.bindings)) {
         state.allProjectBindings = res.data.bindings;
-        try { renderProviderDetail({ force: true }); } catch (_) {}
+        const nextBindingsSig = JSON.stringify(state.allProjectBindings);
+        if (nextBindingsSig !== previousBindingsSig && isCurrentProviderDetail(providerKey, detailTool, 'binding')) {
+          try { renderProviderDetail({ force: true }); } catch (_) {}
+        }
       }
-    }).catch(() => { state._allProjectBindingsFetching = false; });
+    }).catch(() => {
+      state._allProjectBindingsFetchedAt = Date.now();
+    }).finally(() => {
+      state._allProjectBindingsFetching = false;
+    });
   }
 
   if (!isApiKey) {
@@ -19453,14 +20180,219 @@ function renderPdBinding(row) {
     </div>`;
 }
 
+function buildProviderModelCatalogIndex() {
+  const index = new Map();
+  for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
+    for (const option of (group.options || [])) {
+      const value = String(option.value || '').trim();
+      if (!value) continue;
+      index.set(value.toLowerCase(), {
+        id: value,
+        label: option.label || value,
+        group: group.label || '预设模型',
+      });
+    }
+  }
+  return index;
+}
+
+function inferProviderModelGroup(model = '') {
+  const value = String(model || '').toLowerCase();
+  if (!value) return '自定义';
+  if (value.includes('claude')) return 'Anthropic / Claude';
+  if (value.includes('gemini')) return 'Google / Gemini';
+  if (value.includes('grok')) return 'xAI / Grok';
+  if (value.includes('deepseek')) return 'DeepSeek';
+  if (value.includes('qwen') || value.includes('qwq')) return 'Qwen (阿里)';
+  if (value.includes('kimi') || value.includes('moonshot')) return 'Kimi / Moonshot';
+  if (value.includes('glm') || value.includes('codegeex')) return 'GLM / 智谱';
+  if (value.includes('doubao')) return '豆包 / Doubao';
+  if (value.includes('hunyuan')) return '腾讯混元 / Hunyuan';
+  if (value.startsWith('o') && /^o\d/.test(value)) return 'OpenAI / o-系列 (推理)';
+  if (value.startsWith('gpt-')) return 'OpenAI / Codex 推荐';
+  return '自定义';
+}
+
+function getProviderModelMeta(model = '', catalogIndex = buildProviderModelCatalogIndex()) {
+  const raw = String(model || '').trim();
+  const key = raw.toLowerCase();
+  const preset = catalogIndex.get(key);
+  const pricingEntry = typeof lookupModelPricingEntry === 'function' ? lookupModelPricingEntry(raw) : null;
+  return {
+    id: raw,
+    label: preset?.label || pricingEntry?.pricing?.label || raw,
+    group: preset?.group || inferProviderModelGroup(raw),
+    pricingEntry,
+  };
+}
+
+function normalizeProviderModelKey(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeProviderModelList(models = []) {
+  const seen = new Set();
+  const list = [];
+  for (const value of models || []) {
+    const model = String(value || '').trim();
+    if (!model) continue;
+    const key = normalizeProviderModelKey(model);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    list.push(model);
+  }
+  return list;
+}
+
+function addProviderModelToList(models = [], model = '') {
+  const current = normalizeProviderModelList(models);
+  const next = String(model || '').trim();
+  if (!next) return current;
+  const key = normalizeProviderModelKey(next);
+  return current.some((item) => normalizeProviderModelKey(item) === key) ? current : [...current, next];
+}
+
+function removeProviderModelFromList(models = [], model = '') {
+  const key = normalizeProviderModelKey(model);
+  if (!key) return normalizeProviderModelList(models);
+  return normalizeProviderModelList(models).filter((item) => normalizeProviderModelKey(item) !== key);
+}
+
+function buildProviderModelGroups({ saved = [], liveModels = [], currentModel = '', catalogIndex = buildProviderModelCatalogIndex() } = {}) {
+  saved = normalizeProviderModelList(saved);
+  liveModels = normalizeProviderModelList(liveModels);
+  const currentKey = normalizeProviderModelKey(currentModel);
+  const savedSet = new Set(saved.map(normalizeProviderModelKey));
+  const liveSet = new Set(liveModels.map(normalizeProviderModelKey));
+  const seen = new Set();
+  const models = [];
+  const push = (model, source) => {
+    const id = String(model || '').trim();
+    if (!id) return;
+    const key = normalizeProviderModelKey(id);
+    const existing = models.find((m) => m.key === key);
+    if (existing) {
+      existing.sources.add(source);
+      return;
+    }
+    seen.add(key);
+    const meta = getProviderModelMeta(id, catalogIndex);
+    models.push({
+      ...meta,
+      key,
+      sources: new Set([source]),
+      isCurrent: currentKey && key === currentKey,
+      isSaved: savedSet.has(key),
+      isLive: liveSet.has(key),
+    });
+  };
+  push(currentModel, 'current');
+  for (const model of saved || []) push(model, 'saved');
+  for (const model of liveModels || []) push(model, 'live');
+  for (const model of models) {
+    model.isCurrent = currentKey && model.key === currentKey;
+    model.isSaved = model.isSaved || model.sources.has('saved');
+    model.isLive = model.isLive || model.sources.has('live');
+    if (model.isCurrent && !model.isSaved && !model.isLive) model.group = '当前默认';
+    else if (model.isLive && !catalogIndex.has(model.key) && !model.isSaved) model.group = 'Provider Live';
+  }
+  const order = new Map([
+    ['当前默认', 0],
+    ['OpenAI / Codex 推荐', 1],
+    ['OpenAI / o-系列 (推理)', 2],
+    ['OpenAI / Legacy', 3],
+    ['Anthropic / Claude (Fable + Mythos)', 4],
+    ['Anthropic / Claude', 4],
+    ['Google / Gemini', 5],
+    ['xAI / Grok', 6],
+    ['DeepSeek', 7],
+    ['Qwen (阿里)', 8],
+    ['Kimi / Moonshot (月之暗面)', 9],
+    ['Kimi / Moonshot', 9],
+    ['GLM / 智谱', 10],
+    ['豆包 / Doubao (字节)', 11],
+    ['豆包 / Doubao', 11],
+    ['腾讯混元 / Hunyuan', 12],
+    ['Provider Live', 90],
+    ['自定义', 99],
+  ]);
+  models.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+    if (a.isSaved !== b.isSaved) return a.isSaved ? -1 : 1;
+    if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
+    return a.id.localeCompare(b.id);
+  });
+  const groupMap = new Map();
+  for (const model of models) {
+    const group = model.group || '自定义';
+    if (!groupMap.has(group)) groupMap.set(group, []);
+    groupMap.get(group).push(model);
+  }
+  return [...groupMap.entries()]
+    .sort((a, b) => (order.get(a[0]) ?? 50) - (order.get(b[0]) ?? 50) || a[0].localeCompare(b[0]))
+    .map(([group, items]) => ({ group, items }));
+}
+
+function formatPdModelPricing(model) {
+  const entry = model?.pricingEntry || (typeof lookupModelPricingEntry === 'function' ? lookupModelPricingEntry(model?.id) : null);
+  if (!entry?.pricing) return { label: '无本地定价', title: '本地价格表没有这个模型，费用页不会把它混入主模型估算。', className: 'is-missing' };
+  const p = entry.pricing;
+  const fmt = (value) => value == null ? '—' : formatDashboardUsd(value, { min: value < 1 ? 3 : 2, max: 3 });
+  return {
+    label: `IN ${fmt(p.input)} · OUT ${fmt(p.output)} · CACHE ${fmt(p.cached)}`,
+    title: entry.fallback ? `${p.label} · 估算匹配` : `${p.label} · 精确匹配`,
+    className: entry.fallback ? 'is-fallback' : 'is-priced',
+  };
+}
+
+function renderPdModelCard(model, { mutable = true } = {}) {
+  const esc = escapeHtml;
+  const pricing = formatPdModelPricing(model);
+  const title = mutable
+    ? (model.isCurrent ? '当前默认模型' : '点击设为默认模型')
+    : `${model.isCurrent ? '当前默认模型' : '模型'} · ${model.sourceLabel || model.group || '可见'}`;
+  const actionHtml = mutable ? `
+    <div class="pdm-card-actions" aria-label="模型操作">
+      ${!model.isCurrent ? `<button type="button" class="pdm-action-btn" data-pd-model-set-default="${esc(model.id)}" title="设为默认模型">设默认</button>` : ''}
+      ${model.isSaved
+        ? `<button type="button" class="pdm-action-btn pdm-action-danger" data-pd-model-remove="${esc(model.id)}" title="从支持列表移除" aria-label="移除 ${esc(model.id)}">移除</button>`
+        : `<button type="button" class="pdm-action-btn pdm-action-primary" data-pd-model-add-one="${esc(model.id)}" title="加入支持列表" aria-label="加入 ${esc(model.id)}">加入</button>`}
+    </div>` : '';
+  return `
+    <div class="pdm-model-card ${model.isCurrent ? 'is-current' : ''} ${model.isSaved ? 'is-saved' : ''} ${model.isLive ? 'is-live' : ''}"
+      data-pd-model-card="${esc(model.id)}"
+      ${mutable ? `data-pd-model-set-default="${esc(model.id)}"` : ''}
+      title="${esc(title)}"
+      role="${mutable ? 'button' : 'listitem'}"
+      ${mutable ? 'tabindex="0"' : ''}>
+      <div class="pdm-card-top">
+        <div class="pdm-card-main">
+          <span class="pdm-row-dot" aria-hidden="true"></span>
+          <div class="pdm-card-text">
+            <div class="pdm-card-id">${esc(model.id)}</div>
+            <div class="pdm-card-label">${esc(model.label || model.group || '自定义模型')}</div>
+          </div>
+        </div>
+        ${actionHtml}
+      </div>
+      <div class="pdm-card-tags">
+        ${model.isCurrent ? '<span class="pdm-tag pdm-tag-default">当前</span>' : ''}
+        ${model.sourceLabel ? `<span class="pdm-tag pdm-tag-saved">${esc(model.sourceLabel)}</span>` : model.isSaved ? '<span class="pdm-tag pdm-tag-saved">已保存</span>' : '<span class="pdm-tag pdm-tag-muted">未加入</span>'}
+        ${model.isLive ? '<span class="pdm-tag pdm-tag-live">LIVE</span>' : ''}
+      </div>
+      <div class="pdm-card-price ${pricing.className}" title="${esc(pricing.title)}">${esc(pricing.label)}</div>
+    </div>`;
+}
+
 // "模型支持" tab —— 默认只展示用户保存的卡片，添加时弹窗。
 // 顶部 summary (当前默认 + LIVE 检测) → 已保存模型卡片 grid → "+ 添加模型" 触发选择 modal
 function renderPdModels(row) {
   if (isClaudeProviderDetail(row)) return renderClaudeProviderDetailModels(row);
   const providerKey = row.key;
+  const detailTool = providerDetailTool(row);
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
-  const liveModels = (state.providerDetail?.detected?.[providerKey]?.models) || [];
-  const saved = (state.providerSavedModels?.[providerKey]) || [];
+  const liveModels = normalizeProviderModelList((state.providerDetail?.detected?.[providerKey]?.models) || []);
+  const saved = normalizeProviderModelList((state.providerSavedModels?.[providerKey]) || []);
   const currentModel = getProviderDetailModel(row);
   const loading = state.providerDetail?.modelsLoading;
   // 异步首次拉 saved 列表（如果还没拉）
@@ -19469,41 +20401,37 @@ function renderPdModels(row) {
       .then((res) => {
         if (res?.ok) {
           state.providerSavedModels = state.providerSavedModels || {};
-          state.providerSavedModels[providerKey] = res.data?.models || [];
-          if (state.providerDetail?.tab === 'models') renderProviderDetail({ force: true });
+          state.providerSavedModels[providerKey] = normalizeProviderModelList(res.data?.models || []);
+          if (isCurrentProviderDetail(providerKey, detailTool, 'models')) renderProviderDetail({ force: true });
         }
       }).catch(() => {});
   }
-  const liveSet = new Set(liveModels);
   const esc = escapeHtml;
-  // 已保存模型 → 用 catalog meta 拿 label / group；catalog 找不到的就裸 id
-  const catalogIndex = {};
-  for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
-    for (const o of group.options) catalogIndex[o.value] = { label: o.label, group: group.label };
-  }
-  const rows = saved.map((m) => {
-    const meta = catalogIndex[m] || { label: '', group: '自定义' };
-    const isLive = liveSet.has(m);
-    const isDefault = m === currentModel;
-    const title = isDefault ? '当前默认模型' : '点击设为默认模型';
-    return `
-      <div class="pdm-row ${isDefault ? 'is-default' : ''}" data-pd-model-card="${esc(m)}" data-pd-model-set-default="${esc(m)}" title="${esc(title)}" role="button" tabindex="0">
-        <span class="pdm-row-dot" aria-hidden="true"></span>
-        <span class="pdm-row-id">${esc(m)}</span>
-        <span class="pdm-row-label">${esc(meta.label || '自定义模型')}</span>
-        <span class="pdm-row-tags">
-          ${isDefault ? '<span class="pdm-tag pdm-tag-default">默认</span>' : ''}
-          ${isLive ? '<span class="pdm-tag pdm-tag-live">LIVE</span>' : ''}
-        </span>
-        <button type="button" class="pdm-row-remove" data-pd-model-remove="${esc(m)}" title="移除" aria-label="移除">×</button>
-      </div>`;
-  }).join('');
+  const catalogIndex = buildProviderModelCatalogIndex();
+  const groups = buildProviderModelGroups({ saved, liveModels, currentModel, catalogIndex });
+  const allModels = groups.flatMap((g) => g.items);
+  const currentMeta = currentModel ? getProviderModelMeta(currentModel, catalogIndex) : null;
+  const currentIsSaved = currentModel && allModels.some((m) => m.isCurrent && m.isSaved);
+  const currentIsLive = currentModel && allModels.some((m) => m.isCurrent && m.isLive);
+  const groupHtml = groups.map(({ group, items }) => `
+    <section class="pdm-group" aria-label="${esc(group)}">
+      <div class="pdm-group-head">
+        <span>${esc(group)}</span>
+        <em>${esc(String(items.length))}</em>
+      </div>
+      <div class="pdm-grid">
+        ${items.map((model) => renderPdModelCard(model, { mutable: true })).join('')}
+      </div>
+    </section>`).join('');
   return `
     <div class="pd-models-page">
       <div class="pdm-bar">
         <div class="pdm-bar-item">
           <span class="pdm-bar-label">当前默认</span>
           ${currentModel ? `<code class="pdm-bar-model">${esc(currentModel)}</code>` : '<span class="pdm-bar-none">未设置</span>'}
+          ${currentMeta ? `<span class="pdm-bar-model-label">${esc(currentMeta.label)}</span>` : ''}
+          ${currentIsSaved ? '<span class="pdm-tag pdm-tag-saved">已保存</span>' : currentModel ? '<span class="pdm-tag pdm-tag-muted">未加入</span>' : ''}
+          ${currentIsLive ? '<span class="pdm-tag pdm-tag-live">LIVE</span>' : ''}
         </div>
         <div class="pdm-bar-item pdm-bar-right">
           ${liveModels.length ? `<span class="pdm-bar-live">Live 已检测 ${liveModels.length}</span>` : '<span class="pdm-bar-none">Live 未检测</span>'}
@@ -19512,12 +20440,15 @@ function renderPdModels(row) {
       </div>
 
       <div class="pdm-list-head">
-        <div class="pdm-list-title">支持的模型 <em>${saved.length}</em></div>
-        <button type="button" class="pdm-link-btn pdm-add-btn" data-pd-models-add>＋ 添加模型</button>
+        <div class="pdm-list-title">支持的模型 <em>${esc(String(saved.length))}</em>${allModels.length !== saved.length ? `<span class="pdm-list-meta">可见 ${esc(String(allModels.length))}</span>` : ''}</div>
+        <div class="pdm-list-actions">
+          ${saved.length ? '<button type="button" class="pdm-link-btn pdm-clear-btn" data-pd-models-clear>清空已保存</button>' : ''}
+          <button type="button" class="pdm-link-btn pdm-add-btn" data-pd-models-add>＋ 添加模型</button>
+        </div>
       </div>
 
-      ${saved.length ? `
-        <div class="pdm-list">${rows}</div>
+      ${allModels.length ? `
+        <div class="pdm-groups">${groupHtml}</div>
       ` : `
         <div class="pdm-empty">
           <div class="pdm-empty-text">还没有添加支持的模型</div>
@@ -19548,25 +20479,48 @@ function renderClaudeProviderDetailModels(row) {
     ...usageModels,
     ...(typeof CLAUDE_MODEL_PRESETS !== 'undefined' ? CLAUDE_MODEL_PRESETS : []),
   ]);
-  const rows = models.slice(0, 60).map((model) => {
+  const cardModels = models.slice(0, 80).map((model) => {
     const key = normalizeClaudeModelKey(model);
     const isDefault = key === normalizeClaudeModelKey(currentModel);
     const isProvider = providerModel && key === normalizeClaudeModelKey(providerModel);
     const isLive = liveModels.some((m) => normalizeClaudeModelKey(m) === key);
     const isUsed = usedModels.some((m) => normalizeClaudeModelKey(m) === key)
       || usageModels.some((m) => normalizeClaudeModelKey(m) === key);
-    return `
-      <div class="pdm-row ${isDefault ? 'is-default' : ''}">
-        <span class="pdm-row-dot" aria-hidden="true"></span>
-        <span class="pdm-row-id">${esc(model)}</span>
-        <span class="pdm-row-label">${esc(isLive ? 'Provider /models' : isProvider ? 'Provider 配置' : isUsed ? '使用历史' : 'Claude 预设')}</span>
-        <span class="pdm-row-tags">
-          ${isDefault ? '<span class="pdm-tag pdm-tag-default">默认</span>' : ''}
-          ${isLive ? '<span class="pdm-tag pdm-tag-live">LIVE</span>' : ''}
-          ${isProvider ? '<span class="pdm-tag pdm-tag-live">Provider</span>' : ''}
-        </span>
-      </div>`;
-  }).join('');
+    const group = isDefault ? '当前默认'
+      : isLive ? 'Provider Live'
+        : isProvider ? 'Provider 配置'
+          : isUsed ? '使用历史'
+            : 'Claude 预设';
+    return {
+      id: model,
+      label: isLive ? 'Provider /models' : isProvider ? 'Provider 配置' : isUsed ? '使用历史' : 'Claude 预设',
+      group,
+      pricingEntry: typeof lookupModelPricingEntry === 'function' ? lookupModelPricingEntry(model) : null,
+      isCurrent: isDefault,
+      isSaved: true,
+      isLive,
+      sourceLabel: isProvider ? 'Provider' : isUsed ? '历史' : '可见',
+    };
+  });
+  const groupOrder = new Map([['当前默认', 0], ['Provider Live', 1], ['Provider 配置', 2], ['使用历史', 3], ['Claude 预设', 4]]);
+  const groupMap = new Map();
+  for (const model of cardModels) {
+    if (!groupMap.has(model.group)) groupMap.set(model.group, []);
+    groupMap.get(model.group).push(model);
+  }
+  const groups = [...groupMap.entries()]
+    .sort((a, b) => (groupOrder.get(a[0]) ?? 99) - (groupOrder.get(b[0]) ?? 99))
+    .map(([group, items]) => ({ group, items }));
+  const groupHtml = groups.map(({ group, items }) => `
+    <section class="pdm-group" aria-label="${esc(group)}">
+      <div class="pdm-group-head">
+        <span>${esc(group)}</span>
+        <em>${esc(String(items.length))}</em>
+      </div>
+      <div class="pdm-grid">
+        ${items.map((model) => renderPdModelCard(model, { mutable: false })).join('')}
+      </div>
+    </section>`).join('');
   return `
     <div class="pd-models-page">
       <div class="pdm-bar">
@@ -19582,7 +20536,7 @@ function renderClaudeProviderDetailModels(row) {
       <div class="pdm-list-head">
         <div class="pdm-list-title">本地可见模型 <em>${models.length}</em></div>
       </div>
-      ${rows ? `<div class="pdm-list">${rows}</div>` : `
+      ${groupHtml ? `<div class="pdm-groups">${groupHtml}</div>` : `
         <div class="pdm-empty">
           <div class="pdm-empty-text">Claude Code 当前没有显式模型配置</div>
         </div>`}
@@ -19597,35 +20551,82 @@ async function bindPdModelsEvents() {
   if (!isCodexProviderDetail(row)) return;
   root._pdModelsBound = true;
   const providerKey = state.providerDetail?.providerKey || '';
+  const detailTool = state.providerDetail?.tool || state.activeTool || 'codex';
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
 
   // 移除单个卡片：直接落库 (provider_saved_models 整覆盖)
-  async function persistSet(newList) {
+  async function persistSet(newList, { successMessage = '' } = {}) {
+    const models = normalizeProviderModelList(newList);
     try {
       const res = await api('/api/provider/saved-models', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerKey, codexHome, models: newList }),
+        body: JSON.stringify({ providerKey, codexHome, models }),
       });
       if (res?.ok) {
         state.providerSavedModels = state.providerSavedModels || {};
-        state.providerSavedModels[providerKey] = newList;
-        renderProviderDetail({ force: true });
+        state.providerSavedModels[providerKey] = models;
+        if (successMessage) flash(successMessage, 'success');
+        if (isCurrentProviderDetail(providerKey, detailTool, 'models')) renderProviderDetail({ force: true });
+        return true;
       } else {
         flash(`保存失败: ${res?.error || '未知'}`, 'error');
       }
     } catch (err) { flash(`保存异常: ${err.message || err}`, 'error'); }
+    return false;
   }
 
   root.addEventListener('click', async (e) => {
+    const actionButton = e.target.closest('.pdm-card-actions button, [data-pd-models-clear]');
+    if (actionButton) e.stopPropagation();
     const remove = e.target.closest('[data-pd-model-remove]');
     if (remove) {
+      e.preventDefault();
       e.stopPropagation();
       const m = remove.dataset.pdModelRemove;
       const cur = (state.providerSavedModels?.[providerKey]) || [];
-      persistSet(cur.filter((x) => x !== m));
+      const next = removeProviderModelFromList(cur, m);
+      if (next.length === normalizeProviderModelList(cur).length) {
+        flash(`模型 ${m} 不在已保存列表里`, 'info');
+        return;
+      }
+      const row = lookupProviderDetailRow();
+      const currentModel = getProviderDetailModel(row);
+      const suffix = normalizeProviderModelKey(currentModel) === normalizeProviderModelKey(m)
+        ? '；当前默认模型不会被自动切走'
+        : '';
+      await persistSet(next, { successMessage: `已移除 ${m}${suffix}` });
+      return;
+    }
+    const addOne = e.target.closest('[data-pd-model-add-one]');
+    if (addOne) {
+      e.preventDefault();
+      e.stopPropagation();
+      const m = addOne.dataset.pdModelAddOne;
+      const cur = (state.providerSavedModels?.[providerKey]) || [];
+      const next = addProviderModelToList(cur, m);
+      if (next.length === normalizeProviderModelList(cur).length) {
+        flash(`模型 ${m} 已在支持列表`, 'info');
+        return;
+      }
+      await persistSet(next, { successMessage: `已加入 ${m}` });
+      return;
+    }
+    if (e.target.closest('[data-pd-models-clear]')) {
+      e.preventDefault();
+      const cur = normalizeProviderModelList((state.providerSavedModels?.[providerKey]) || []);
+      if (!cur.length) {
+        flash('当前没有已保存模型', 'info');
+        return;
+      }
+      const confirmed = typeof window.confirm === 'function'
+        ? window.confirm(`确定移除 ${cur.length} 个已保存模型？当前默认和 Live 检测结果仍会显示。`)
+        : true;
+      if (!confirmed) return;
+      await persistSet([], { successMessage: `已清空 ${cur.length} 个已保存模型` });
       return;
     }
     if (e.target.closest('[data-pd-models-add]')) {
+      e.preventDefault();
       openPdModelsPicker(providerKey, persistSet);
       return;
     }
@@ -19646,7 +20647,7 @@ async function bindPdModelsEvents() {
           if (state.current?.summary) state.current.summary.model = m;
           if (row) row.model = m;
           flash(`已切换默认为 ${m}`, 'success');
-          renderProviderDetail({ force: true });
+          if (isCurrentProviderDetail(providerKey, detailTool, 'models')) renderProviderDetail({ force: true });
           // 触发上层 hub 重新 build rows 让 row.model 同步
           if (typeof window.__chBuildRows === 'function') {
             try { state.detected = state.detected || {}; } catch (_) {}
@@ -19657,6 +20658,14 @@ async function bindPdModelsEvents() {
       } catch (err) { flash(`切换异常: ${err.message || err}`, 'error'); }
       return;
     }
+  });
+
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const card = e.target.closest('[data-pd-model-set-default]');
+    if (!card || e.target.closest('button')) return;
+    e.preventDefault();
+    card.click();
   });
 
   root.querySelector('[data-pd-models-refetch]')?.addEventListener('click', async (e) => {
@@ -19674,16 +20683,17 @@ async function bindPdModelsEvents() {
         body: JSON.stringify({ providerKey, tool: state.activeTool || 'codex', codexHome: codexHome || '' }),
       });
       // res.data.models 或 res.data.raw.data 都尝试
-      const models = (Array.isArray(res?.data?.models) && res.data.models)
+      const models = normalizeProviderModelList((Array.isArray(res?.data?.models) && res.data.models)
         || (Array.isArray(res?.data?.raw?.data) && res.data.raw.data.map((m) => m.id || m).filter(Boolean))
-        || [];
+        || []);
       if (res?.ok && models.length) {
+        if (!isCurrentProviderDetail(providerKey, detailTool, 'models')) return;
         detail.detected = detail.detected || {};
         detail.detected[providerKey] = { models, at: Date.now() };
         // 自动并入支持列表：live 模型默认就是这个 provider 支持的，加进去再 persist
         state.providerSavedModels = state.providerSavedModels || {};
-        const existingSaved = state.providerSavedModels[providerKey] || [];
-        const merged = Array.from(new Set([...existingSaved, ...models]));
+        const existingSaved = normalizeProviderModelList(state.providerSavedModels[providerKey] || []);
+        const merged = normalizeProviderModelList([...existingSaved, ...models]);
         const addedCount = merged.length - existingSaved.length;
         state.providerSavedModels[providerKey] = merged;
         // 静默落库（用户后续可以手动取消勾选）
@@ -19736,6 +20746,61 @@ function fmtLatency(ms) {
   return `${Math.round(ms)}ms`;
 }
 
+function getPdProbeKey(row) {
+  if (!row) return '';
+  return [
+    row.probedAt || '',
+    row.success ? '1' : '0',
+    row.latencyMs ?? '',
+    row.statusCode ?? '',
+    row.error || '',
+  ].join('|');
+}
+
+function formatPdProbeTime(value, mode = 'full') {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  if (mode === 'short') {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+  return date.toLocaleString();
+}
+
+function getPdProbeStatusText(row) {
+  if (!row) return '未探测';
+  if (row.statusCode) return `HTTP ${row.statusCode}`;
+  return row.success ? '连通' : '失败';
+}
+
+function renderPdProbeDetail(row, { selected = false } = {}) {
+  const esc = escapeHtml;
+  if (!row) {
+    return `
+      <div class="pd-probe-detail is-empty">
+        <div class="pd-probe-detail-title">暂无探测详情</div>
+        <div class="pd-probe-detail-muted">点“立即重检”或等待历史写入后会显示每次返回信息。</div>
+      </div>`;
+  }
+  const ok = Boolean(row.success);
+  const status = getPdProbeStatusText(row);
+  const error = row.error || row.message || '';
+  return `
+    <div class="pd-probe-detail ${ok ? 'is-ok' : 'is-bad'}">
+      <div class="pd-probe-detail-head">
+        <span class="pd-status ${ok ? 'ok' : 'bad'}">${ok ? '成功' : '失败'}</span>
+        <strong>${selected ? '选中探测' : '最近探测'}</strong>
+      </div>
+      <div class="pd-probe-detail-grid">
+        <span>时间</span><code>${esc(formatPdProbeTime(row.probedAt))}</code>
+        <span>延迟</span><code>${esc(fmtLatency(row.latencyMs))}</code>
+        <span>状态</span><code>${esc(status)}</code>
+        ${row.model ? `<span>模型</span><code>${esc(row.model)}</code>` : ''}
+      </div>
+      ${error ? `<pre class="pd-probe-detail-error">${esc(error)}</pre>` : '<div class="pd-probe-detail-muted">返回正常，没有错误信息。</div>'}
+    </div>`;
+}
+
 // 电量条：把最近 N 次探测画成横向格子，绿成功红失败灰未知。
 // 像电池能量条一样直观，旁边大字号显示 uptime %。
 function renderPdBatteryBar(history, segments = 40) {
@@ -19745,12 +20810,40 @@ function renderPdBatteryBar(history, segments = 40) {
   const success = Number(summary.success || 0);
   const failure = Number(summary.failure || 0);
   const total = Number(summary.total || 0);
+  const selectedKey = state.providerDetail.selectedProbeKey || '';
+  const selectedRow = rows.find((r) => getPdProbeKey(r) === selectedKey) || rows[rows.length - 1] || null;
+  const selectedIsExplicit = Boolean(selectedKey && rows.some((r) => getPdProbeKey(r) === selectedKey));
   // 填充未满 segments 的尾部用"未探测"占位
   const cells = [];
   for (let i = 0; i < segments; i++) {
     const r = rows[i];
     if (!r) cells.push('<span class="pd-bat-cell is-empty"></span>');
-    else cells.push(`<span class="pd-bat-cell ${r.success ? 'is-ok' : 'is-bad'}" title="${escapeHtml(`${new Date(r.probedAt).toLocaleString()}\n${fmtLatency(r.latencyMs)}${r.error ? '\n' + r.error.slice(0, 80) : ''}`)}"></span>`);
+    else {
+      const key = getPdProbeKey(r);
+      const isSelected = selectedKey && key === selectedKey;
+      const error = r.error || r.message || '';
+      const tip = [
+        r.success ? '成功' : '失败',
+        formatPdProbeTime(r.probedAt),
+        fmtLatency(r.latencyMs),
+        getPdProbeStatusText(r),
+        error ? error.slice(0, 180) : '',
+      ].filter(Boolean).join('\n');
+      cells.push(`
+        <button type="button"
+          class="pd-bat-cell ${r.success ? 'is-ok' : 'is-bad'} ${isSelected ? 'is-selected' : ''}"
+          data-pd-probe-index="${i}"
+          data-pd-probe-key="${escapeHtml(key)}"
+          aria-pressed="${isSelected ? 'true' : 'false'}"
+          title="${escapeHtml(tip)}">
+          <span class="pd-bat-tip" role="tooltip">
+            <strong>${r.success ? '成功' : '失败'}</strong>
+            <em>${escapeHtml(formatPdProbeTime(r.probedAt, 'short'))}</em>
+            <span>${escapeHtml(fmtLatency(r.latencyMs))} · ${escapeHtml(getPdProbeStatusText(r))}</span>
+            ${error ? `<code>${escapeHtml(error.slice(0, 120))}</code>` : ''}
+          </span>
+        </button>`);
+    }
   }
   const tier = uptime == null ? 'empty' : (uptime >= 99 ? 'good' : uptime >= 90 ? 'warn' : 'bad');
   const running = state.providerDetail.testRunning;
@@ -19779,6 +20872,7 @@ function renderPdBatteryBar(history, segments = 40) {
         <span>${escapeHtml(String(rows.length))} / ${segments} 段</span>
         <span>最近</span>
       </div>
+      ${renderPdProbeDetail(selectedRow, { selected: selectedIsExplicit })}
     </div>`;
 }
 
@@ -19927,11 +21021,189 @@ function pdNormalizeProviderKey(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
+const PD_USAGE_WINDOWS = [
+  { value: '7', label: '7 天', days: 7 },
+  { value: '30', label: '30 天', days: 30 },
+  { value: '90', label: '90 天', days: 90 },
+  { value: 'all', label: '全部', days: 366 },
+];
+
+function normalizePdUsageWindow(value) {
+  const raw = String(value || '').trim();
+  return PD_USAGE_WINDOWS.some((item) => item.value === raw) ? raw : '30';
+}
+
+function getPdUsageWindow() {
+  const value = normalizePdUsageWindow(state.providerDetail?.usageWindow || '30');
+  return PD_USAGE_WINDOWS.find((item) => item.value === value) || PD_USAGE_WINDOWS[1];
+}
+
+function getPdUsageRequestDays() {
+  return Math.min(366, Math.max(1, getPdUsageWindow().days || 30));
+}
+
+function getPdUsageSessionTime(session) {
+  const raw = session?.lastActiveAt || session?.updatedAt || session?.startedAt || session?.createdAt || '';
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function filterPdUsageSessionsByWindow(sessions = [], usageWindow = getPdUsageWindow()) {
+  const rows = Array.isArray(sessions) ? sessions : [];
+  if (usageWindow.value === 'all') return rows.slice();
+  const cutoff = Date.now() - Math.max(1, usageWindow.days || 30) * 86400000;
+  return rows.filter((session) => {
+    const ms = getPdUsageSessionTime(session);
+    return !ms || ms >= cutoff;
+  });
+}
+
+function createPdUsageTotals() {
+  return { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0 };
+}
+
+function addPdUsageTotals(totals, source = {}) {
+  totals.input += Number(source.input || 0);
+  totals.output += Number(source.output || 0);
+  totals.reasoning += Number(source.reasoning || 0);
+  totals.cachedInput += Number(source.cachedInput || source.cacheRead || 0);
+  totals.cacheRead += Number(source.cacheRead || 0);
+  totals.cacheCreation += Number(source.cacheCreation || 0);
+  totals.total += Number(source.total || 0);
+  return totals;
+}
+
+function aggregatePdUsageTotals(sessions = []) {
+  const totals = createPdUsageTotals();
+  for (const session of sessions || []) addPdUsageTotals(totals, session);
+  if (!totals.total) totals.total = totals.input + totals.output + totals.reasoning;
+  return totals;
+}
+
+function aggregatePdUsageByModel(sessions = []) {
+  const map = new Map();
+  for (const session of sessions || []) {
+    const model = String(session?.model || 'unknown').trim() || 'unknown';
+    const key = model.toLowerCase();
+    const cur = map.get(key) || { model, events: 0, firstAt: 0, lastAt: 0, totals: createPdUsageTotals() };
+    cur.events += 1;
+    addPdUsageTotals(cur.totals, session);
+    const ms = getPdUsageSessionTime(session);
+    if (ms) {
+      cur.firstAt = cur.firstAt ? Math.min(cur.firstAt, ms) : ms;
+      cur.lastAt = Math.max(cur.lastAt || 0, ms);
+    }
+    map.set(key, cur);
+  }
+  for (const entry of map.values()) {
+    if (!entry.totals.total) entry.totals.total = entry.totals.input + entry.totals.output + entry.totals.reasoning;
+  }
+  return [...map.values()].sort((a, b) => Number(b.totals.total || 0) - Number(a.totals.total || 0));
+}
+
+function summarizePdUsageModelCosts(models = []) {
+  const summary = { totalCost: 0, exactCost: 0, fallbackCost: 0, priced: 0, exact: 0, fallback: 0, missing: 0 };
+  for (const model of models || []) {
+    const cost = typeof calcModelCost === 'function' ? calcModelCost(model) : null;
+    const pricingEntry = typeof lookupModelPricingEntry === 'function' ? lookupModelPricingEntry(model.model) : null;
+    model._pdCost = cost;
+    model._pdPricingEntry = pricingEntry;
+    if (!cost || !pricingEntry) {
+      summary.missing += 1;
+      continue;
+    }
+    summary.totalCost += cost.totalCost;
+    summary.priced += 1;
+    if (pricingEntry.fallback) {
+      summary.fallback += 1;
+      summary.fallbackCost += cost.totalCost;
+    } else {
+      summary.exact += 1;
+      summary.exactCost += cost.totalCost;
+    }
+  }
+  return summary;
+}
+
+function renderPdUsageWindowControls(activeWindow, usageRefreshing) {
+  return `
+    <div class="pd-usage-toolbar">
+      <div class="pd-segmented" role="group" aria-label="用量时间范围">
+        ${PD_USAGE_WINDOWS.map((item) => `
+          <button type="button" class="pd-seg-btn ${item.value === activeWindow.value ? 'is-active' : ''}" data-pd-usage-window="${item.value}">
+            ${escapeHtml(item.label)}
+          </button>`).join('')}
+      </div>
+      <button type="button" class="pd-link ${usageRefreshing ? 'is-busy' : ''}" data-pd-refresh-usage ${usageRefreshing ? 'disabled' : ''}>${usageRefreshing ? '刷新中…' : '刷新用量'}</button>
+    </div>`;
+}
+
+function renderPdUsageModelFilter(models = [], activeModel = 'all') {
+  if (!models.length) return '';
+  const topModels = models.slice(0, 10);
+  return `
+    <div class="pd-section">
+      <div class="pd-section-title">
+        <span>模型筛选</span>
+        <span class="pd-section-meta">${escapeHtml(String(models.length))} 个模型</span>
+      </div>
+      <div class="pd-chip-row pd-chip-row-clickable">
+        <button type="button" class="pd-chip pd-chip-button ${activeModel === 'all' ? 'is-active' : ''}" data-pd-usage-model="all"><strong>全部模型</strong><em>${escapeHtml(String(models.reduce((a, m) => a + Number(m.events || 0), 0)))} 次</em></button>
+        ${topModels.map((model) => `
+          <button type="button" class="pd-chip pd-chip-button ${activeModel === model.model ? 'is-active' : ''}" data-pd-usage-model="${escapeHtml(model.model)}">
+            <strong>${escapeHtml(model.model)}</strong>
+            <em>${escapeHtml(String(model.events || 0))} 次</em>
+          </button>`).join('')}
+      </div>
+    </div>`;
+}
+
+function renderPdUsageModelCostTable(models = [], totalTokens = 0) {
+  const esc = escapeHtml;
+  if (!models.length) return '<div class="pd-empty pd-empty-small">当前筛选下没有模型用量。</div>';
+  const fmtM = (v) => (typeof formatDashboardMetric === 'function') ? formatDashboardMetric(v || 0) : String(v || 0);
+  const fmtUsd = (v, opts = { min: 4, max: 4 }) => (typeof formatDashboardUsd === 'function') ? formatDashboardUsd(v || 0, opts) : ('$' + Number(v || 0).toFixed(opts.max || 4));
+  return `
+    <div class="pd-model-cost-table">
+      <div class="pd-model-cost-row pd-model-cost-head">
+        <div>模型</div>
+        <div>Token</div>
+        <div>输入</div>
+        <div>输出 / 推理</div>
+        <div>缓存</div>
+        <div>费用</div>
+      </div>
+      ${models.map((model) => {
+        const totals = model.totals || {};
+        const pricingEntry = model._pdPricingEntry || (typeof lookupModelPricingEntry === 'function' ? lookupModelPricingEntry(model.model) : null);
+        const cost = model._pdCost || (typeof calcModelCost === 'function' ? calcModelCost(model) : null);
+        const tokens = Number(totals.total || 0);
+        const pct = totalTokens ? Math.round(tokens / totalTokens * 1000) / 10 : 0;
+        const cached = Number(totals.cachedInput || totals.cacheRead || 0);
+        const cacheWrite = Number(totals.cacheCreation || 0);
+        const matchText = !pricingEntry ? '未匹配定价' : pricingEntry.fallback ? '估算匹配' : '精确匹配';
+        return `
+          <div class="pd-model-cost-row ${pricingEntry?.fallback ? 'is-fallback' : ''} ${!pricingEntry ? 'is-missing' : ''}">
+            <div class="pd-model-cost-name">
+              <strong>${esc(pricingEntry?.fallback ? model.model : (pricingEntry?.pricing?.label || model.model))}</strong>
+              <span>${esc(model.model)} · ${esc(matchText)} · ${esc(String(model.events || 0))} 次</span>
+            </div>
+            <div><strong>${esc(fmtM(tokens))}</strong><span>${esc(String(pct))}%</span></div>
+            <div><strong>${esc(fmtM(totals.input || 0))}</strong><span>input</span></div>
+            <div><strong>${esc(fmtM(Number(totals.output || 0) + Number(totals.reasoning || 0)))}</strong><span>${totals.reasoning ? `reason ${esc(fmtM(totals.reasoning))}` : 'output'}</span></div>
+            <div><strong>${esc(fmtM(cached))}</strong><span>${cacheWrite ? `write ${esc(fmtM(cacheWrite))}` : 'read'}</span></div>
+            <div class="pd-model-cost-total"><strong>${cost ? esc(fmtUsd(cost.totalCost)) : '—'}</strong><span>${cost ? 'USD' : '无价格'}</span></div>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
 function renderPdUsage(row) {
   const esc = escapeHtml;
   if (isClaudeProviderDetail(row)) return renderClaudeProviderDetailUsage(row);
-  const codexMetrics = state.dashboardMetrics?.codex;
+  const codexMetrics = state.providerDetail?.usageMetrics || getDashboardMetricsForTool('codex');
   const usageRefreshing = state.providerDetail.usageRefreshing;
+  const usageWindow = getPdUsageWindow();
   if (!codexMetrics) {
     return `
       <div class="pd-empty">
@@ -19957,38 +21229,34 @@ function renderPdUsage(row) {
   const matched = providers.find((p) => matchProvider(p?.provider));
 
   const sessionList = Array.isArray(codexMetrics.sessions) ? codexMetrics.sessions : [];
-  const matchedSessions = sessionList.filter((s) => matchProvider(s?.provider));
+  const sessionsInWindow = filterPdUsageSessionsByWindow(sessionList, usageWindow);
+  const matchedSessionsAll = sessionsInWindow.filter((s) => matchProvider(s?.provider));
+  const allProviderSessions = sessionList.filter((s) => matchProvider(s?.provider));
 
   // 没匹配上 → 后台静悄悄 force 拉一次最新数据，避免用户手动按"强制刷新"
-  if (!matched && !state.providerDetail.usageAutoRetried) {
+  if (!matchedSessionsAll.length && !matched && !state.providerDetail.usageAutoRetried) {
     state.providerDetail.usageAutoRetried = true;
     fetchDashboardMetricsForDetail(true).catch(() => {});
   }
 
-  // 全局 models 数组用来配价（codex 里 sessions provider 写的不一定带模型聚合，
-  // 这里用 sessions 推断这个 provider 主要用了哪些模型）
-  const sessionModelCounts = new Map();
-  matchedSessions.forEach((s) => {
-    if (s.model) sessionModelCounts.set(s.model, (sessionModelCounts.get(s.model) || 0) + 1);
-  });
-  const topModels = [...sessionModelCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6);
-  const primaryModel = topModels[0]?.[0] || row.model || '';
-  const primaryPricing = typeof lookupModelPricing === 'function' ? lookupModelPricing(primaryModel) : null;
-
-  if (!matched || !matched.totals) {
+  if (!matchedSessionsAll.length && (!matched || !matched.totals)) {
     // 没匹配上 → 把本地 sessions 实际见到的 provider 列出来给用户看，
     // 大概率是 row.key 和 codex 里写的 provider 字段拼写不一致。
-    const providerKeysSeen = providers
-      .map((p) => p?.provider || '')
+    const providerCounts = new Map();
+    for (const session of sessionsInWindow) {
+      const provider = session?.provider || '';
+      if (!provider) continue;
+      providerCounts.set(provider, (providerCounts.get(provider) || 0) + 1);
+    }
+    const providerKeysSeen = [...providerCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
       .filter(Boolean)
       .slice(0, 20);
     const knownChips = providerKeysSeen.length
       ? `<div class="pd-empty-known">
-          <div class="pd-empty-known-label">本地 sessions 里出现过的 provider</div>
+          <div class="pd-empty-known-label">${esc(usageWindow.label)}内 sessions 里出现过的 provider</div>
           <div class="pd-chip-row">
-            ${providerKeysSeen.map((p) => `<span class="pd-chip pd-chip-soft"><strong>${esc(p)}</strong><em>${esc(String(providers.find((q) => q.provider === p)?.events || 0))}</em></span>`).join('')}
+            ${providerKeysSeen.map(([p, count]) => `<span class="pd-chip pd-chip-soft"><strong>${esc(p)}</strong><em>${esc(String(count))}</em></span>`).join('')}
           </div>
         </div>`
       : '';
@@ -19996,6 +21264,7 @@ function renderPdUsage(row) {
       <div class="pd-empty">
         <div class="pd-empty-title-line">没匹配到 ${esc(row.name || row.key)} 的会话</div>
         <p>当前 row.key = <code class="pd-empty-code">${esc(row.key || '')}</code>，但本地 codex sessions 的 provider 字段写的是另一个名字。可能是 OAuth profile 隔离了 CODEX_HOME，也可能是历史会话用了不同的 model_provider key。</p>
+        ${renderPdUsageWindowControls(usageWindow, usageRefreshing)}
         ${knownChips}
         <div class="pd-empty-actions">
           ${row.isActive ? '' : '<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-switch>切换为当前</button>'}
@@ -20004,58 +21273,57 @@ function renderPdUsage(row) {
       </div>`;
   }
 
-  const totals = matched.totals || {};
+  const allModelAgg = aggregatePdUsageByModel(matchedSessionsAll);
+  const requestedModel = state.providerDetail.usageModel || 'all';
+  const modelExists = requestedModel === 'all' || allModelAgg.some((m) => m.model === requestedModel);
+  const activeModel = modelExists ? requestedModel : 'all';
+  if (activeModel !== state.providerDetail.usageModel) state.providerDetail.usageModel = activeModel;
+  const matchedSessions = activeModel === 'all'
+    ? matchedSessionsAll
+    : matchedSessionsAll.filter((s) => String(s?.model || 'unknown') === activeModel);
+  const totals = matchedSessions.length ? aggregatePdUsageTotals(matchedSessions) : (matched?.totals || {});
   const input = Number(totals.input || 0);
   const cached = Number(totals.cachedInput || totals.cacheRead || 0);
   const output = Number(totals.output || 0);
   const reasoning = Number(totals.reasoning || 0);
   const grandTotal = Number(totals.total || input + output + reasoning);
-  const events = Number(matched.events || 0);
+  const events = matchedSessions.length || Number(matched?.events || 0);
 
-  // 总用量在所有 provider 里占比
-  const allTotal = providers.reduce((a, p) => a + Number(p?.totals?.total || 0), 0);
+  // 总用量在同一时间窗口所有 Codex sessions 里占比
+  const allTotal = sessionsInWindow.length
+    ? aggregatePdUsageTotals(sessionsInWindow).total
+    : providers.reduce((a, p) => a + Number(p?.totals?.total || 0), 0);
   const sharePct = allTotal > 0 ? Math.round(grandTotal / allTotal * 1000) / 10 : 0;
-
-  // 费用：用 primary 模型单价拟合（OpenAI: input 含 cached 要扣）
-  let estCostUsd = null;
-  if (primaryPricing) {
-    const provider = primaryPricing.provider || 'openai';
-    let inCost, outCost, cacheCost = 0, writeCost = 0;
-    if (provider === 'anthropic') {
-      inCost = (input / 1e6) * primaryPricing.input;
-      outCost = ((output + reasoning) / 1e6) * primaryPricing.output;
-      cacheCost = (cached / 1e6) * primaryPricing.cached;
-    } else {
-      const nonCached = Math.max(0, input - cached);
-      inCost = (nonCached / 1e6) * primaryPricing.input;
-      outCost = ((output + reasoning) / 1e6) * primaryPricing.output;
-      cacheCost = (cached / 1e6) * primaryPricing.cached;
-    }
-    estCostUsd = inCost + outCost + cacheCost + writeCost;
-  }
 
   const fmtM = (v) => (typeof formatDashboardMetric === 'function') ? formatDashboardMetric(v) : String(v);
   const fmtUsd = (v) => (typeof formatDashboardUsd === 'function') ? formatDashboardUsd(v, { min: 2, max: 2 }) : ('$' + (v || 0).toFixed(2));
+  const modelAgg = aggregatePdUsageByModel(matchedSessions);
+  const costSummary = summarizePdUsageModelCosts(modelAgg);
+  const pricingSub = costSummary.missing
+    ? `${costSummary.exact} 精确 / ${costSummary.fallback} 估算 / ${costSummary.missing} 无价格`
+    : costSummary.fallback
+      ? `${costSummary.exact} 精确 / ${costSummary.fallback} 估算`
+      : `${costSummary.exact} 个模型精确匹配`;
+  const unavailableCost = modelAgg
+    .filter((m) => !m._pdCost)
+    .reduce((a, m) => a + Number(m.totals?.total || 0), 0);
 
-  // 模型 chip：用 sessions 推断 + 单价
-  const modelChips = topModels.map(([m, count]) => {
-    const pricing = typeof lookupModelPricing === 'function' ? lookupModelPricing(m) : null;
-    const rate = pricing ? `${fmtUsd(pricing.input)}/${fmtUsd(pricing.output)}` : '—';
-    return `<span class="pd-chip" title="输入 ${rate.split('/')[0]} · 输出 ${rate.split('/')[1]}"><strong>${esc(m)}</strong><em>${esc(String(count))} 次</em></span>`;
-  }).join('');
+  const latestMetricsAt = state.providerDetail?.usageMetricsFetchedAt || getDashboardMetricsFetchedAtForTool('codex') || 0;
+  const metricsNote = latestMetricsAt ? `更新 ${formatRelativeTime(new Date(latestMetricsAt).toISOString())}` : '本地缓存';
 
   return `
     <div class="pd-usage">
+      ${renderPdUsageWindowControls(usageWindow, usageRefreshing)}
       <div class="pd-stat-rail">
         <div class="pd-stat-mini pd-stat-mini-hero">
-          <div class="pd-stat-mini-label">预估费用</div>
-          <div class="pd-stat-mini-value pd-cost-hero">${esc(estCostUsd == null ? '—' : fmtUsd(estCostUsd))}</div>
-          <div class="pd-stat-mini-sub">${primaryModel ? `按 ${esc(primaryModel)} 单价拟合` : '缺主模型单价'}</div>
+          <div class="pd-stat-mini-label">模型聚合费用</div>
+          <div class="pd-stat-mini-value pd-cost-hero">${esc(costSummary.priced ? fmtUsd(costSummary.totalCost) : '—')}</div>
+          <div class="pd-stat-mini-sub">${esc(pricingSub)}</div>
         </div>
         <div class="pd-stat-mini">
           <div class="pd-stat-mini-label">总 Token</div>
           <div class="pd-stat-mini-value">${esc(fmtM(grandTotal))}</div>
-          <div class="pd-stat-mini-sub">${esc(String(events))} 次调用</div>
+          <div class="pd-stat-mini-sub">${esc(String(events))} 次会话 · ${esc(usageWindow.label)}</div>
         </div>
         <div class="pd-stat-mini">
           <div class="pd-stat-mini-label">输入 / 缓存</div>
@@ -20069,22 +21337,24 @@ function renderPdUsage(row) {
         </div>
       </div>
 
+      ${renderPdUsageModelFilter(allModelAgg, activeModel)}
+
       <div class="pd-section">
         <div class="pd-section-title">
           <span>Token 构成</span>
-          <span class="pd-section-meta">${esc(sharePct + '%')} of all codex</span>
+          <span class="pd-section-meta">${esc(sharePct + '%')} of all codex · ${esc(metricsNote)}</span>
         </div>
         ${renderPdTokenSplitBar({ input, cached, output, reasoning })}
       </div>
 
-      ${modelChips ? `
-        <div class="pd-section">
-          <div class="pd-section-title">
-            <span>使用模型</span>
-            <span class="pd-section-meta">单价 USD / 1M tokens</span>
-          </div>
-          <div class="pd-chip-row">${modelChips}</div>
-        </div>` : ''}
+      <div class="pd-section">
+        <div class="pd-section-title">
+          <span>模型费用明细</span>
+          <span class="pd-section-meta">USD / 1M tokens · 按模型分别计算</span>
+        </div>
+        ${renderPdUsageModelCostTable(modelAgg, grandTotal)}
+        ${unavailableCost ? `<div class="pd-usage-note">有 ${esc(fmtM(unavailableCost))} tokens 的模型没有本地定价，未并入费用合计，避免错误估算。</div>` : ''}
+      </div>
 
       ${matchedSessions.length ? `
         <div class="pd-section">
@@ -20093,7 +21363,7 @@ function renderPdUsage(row) {
             <span class="pd-section-meta">${esc(String(Math.min(8, matchedSessions.length)))} / ${esc(String(matchedSessions.length))}</span>
           </div>
           <div class="pd-session-list">
-            ${matchedSessions.slice(0, 8).map((s) => {
+            ${matchedSessions.slice().sort((a, b) => getPdUsageSessionTime(b) - getPdUsageSessionTime(a)).slice(0, 10).map((s) => {
               const totalTokens = Number(s.total || 0);
               return `
               <div class="pd-session">
@@ -20107,7 +21377,8 @@ function renderPdUsage(row) {
               </div>`;
             }).join('')}
           </div>
-        </div>` : ''}
+        </div>` : '<div class="pd-empty pd-empty-small">当前筛选下没有会话。可以切换时间范围或模型筛选。</div>'}
+      ${allProviderSessions.length > matchedSessionsAll.length ? `<div class="pd-usage-note">该 provider 全量可见 ${esc(String(allProviderSessions.length))} 条会话，当前时间窗口命中 ${esc(String(matchedSessionsAll.length))} 条。</div>` : ''}
     </div>`;
 }
 
@@ -20380,12 +21651,15 @@ async function actionPdDelete() {
 async function actionPdRunTest() {
   const row = lookupProviderDetailRow();
   if (!row || row.mode === 'oauth') return;
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
   state.providerDetail.testRunning = true;
   state.providerDetail.testResult = null;
   renderProviderDetail();
   if (isClaudeProviderDetail(row)) {
     try {
       const res = await testClaudeProviderConnectivity(row.ref || row, { delayMs: 0 });
+      if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
       const data = res?.data || res || {};
       const models = (Array.isArray(data.models) && data.models)
         || (Array.isArray(data.raw?.data) && data.raw.data.map((m) => m?.id || m).filter(Boolean))
@@ -20394,37 +21668,47 @@ async function actionPdRunTest() {
         ? { ok: false, error: res?.error || data?.error || '检测失败' }
         : { ok: true, models, latencyMs: data.latencyMs ?? data.elapsedMs ?? null };
     } catch (err) {
+      if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
       state.providerDetail.testResult = { ok: false, error: err?.message || String(err) };
     } finally {
+      if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
       state.providerDetail.testRunning = false;
-      renderProviderDetail();
+      renderProviderDetail({ force: true });
     }
     return;
   }
   const codexHome = state.current?.codexHome || '';
-  const res = await api('/api/provider/test-saved', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      scope: el('scopeSelect')?.value || 'global',
-      projectPath: el('projectPathInput')?.value?.trim() || '',
-      codexHome,
-      providerKey: row.key,
-      timeoutMs: 8000,
-    }),
-    timeoutMs: 12000,
-  });
-  state.providerDetail.testRunning = false;
-  if (res?.ok && res.data?.status === 'ok') {
-    state.providerDetail.testResult = {
-      ok: true,
-      models: res.data.models || [],
-      latencyMs: res.data.latencyMs ?? null,
-    };
-  } else {
-    state.providerDetail.testResult = { ok: false, error: res?.error || res?.data?.error || '检测失败' };
+  try {
+    const res = await api('/api/provider/test-saved', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: el('scopeSelect')?.value || 'global',
+        projectPath: el('projectPathInput')?.value?.trim() || '',
+        codexHome,
+        providerKey: row.key,
+        timeoutMs: 8000,
+      }),
+      timeoutMs: 12000,
+    });
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    if (res?.ok && res.data?.status === 'ok') {
+      state.providerDetail.testResult = {
+        ok: true,
+        models: res.data.models || [],
+        latencyMs: res.data.latencyMs ?? null,
+      };
+    } else {
+      state.providerDetail.testResult = { ok: false, error: res?.error || res?.data?.error || '检测失败' };
+    }
+  } catch (err) {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.testResult = { ok: false, error: err?.message || String(err) };
+  } finally {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.testRunning = false;
+    renderProviderDetail({ force: true });
   }
-  renderProviderDetail();
   // 测试也算一次探测 → 刷新 health 数据
   fetchProviderProbeData(row).catch(() => {});
 }
@@ -20750,16 +22034,14 @@ async function saveConfigOnly() {
   if (!saved.ok) return flash(saved.error || '保存失败', 'error');
   const savedKey = String(saved.data?.savedProviderKey || '').trim();
   const isStillNotActive = Boolean(saved.data?.needsActivation);
+  const configPath = saved.data?.paths?.configPath || state.current?.configPath || '';
   if (isStillNotActive && savedKey) {
-    flash(`已保存「${savedKey}」（当前活跃 provider 未改动，点列表切换）`, 'success');
+    flashCodexSavedNeedsRestart(
+      saved,
+      `已保存「${savedKey}」${configPath ? `到 ${configPath}` : ''}（当前活跃 provider 未改动，点列表切换）`,
+    );
   } else {
-    flash('配置已保存', 'success');
-  }
-  const hints = saved.data?.hints;
-  if (Array.isArray(hints) && hints.length) {
-    for (const hint of hints) {
-      if (hint?.message) flash(hint.message, 'info');
-    }
+    flashCodexSavedNeedsRestart(saved);
   }
   const savedBaseUrl = String(saved.data?.baseUrl || '').trim();
   if (savedBaseUrl) {
@@ -20840,7 +22122,7 @@ async function saveOpenClawConfigOnly() {
   setBusy('saveBtn', false);
   if (!saved.ok) return flash(saved.error || '保存失败', 'error');
 
-  flash('OpenClaw 配置已保存：协议、URL、模型、Token 都已自动适配', 'success');
+  flashToolSavedNeedsRestart('OpenClaw', 'OpenClaw 配置已保存：协议、URL、模型、Token 都已自动适配');
   await loadOpenClawQuickState();
 }
 
@@ -20866,7 +22148,8 @@ async function saveClaudeCodeConfigOnly() {
     renderCurrentConfig();
     const activeProvider = getClaudeProviderByKey(state.claudeSelectedProviderKey);
     const providerLabel = activeProvider?.name || state.claudeSelectedProviderKey || '当前';
-    flash(`Claude Code 配置已保存，当前 Provider：${providerLabel}`, 'success');
+    flashClaudeCodeSavedNeedsRestart(saved);
+    flash(`当前 Provider：${providerLabel}`, 'info');
   } finally {
     setBusy('saveBtn', false);
   }
@@ -22484,12 +23767,12 @@ function bindEvents() {
     if (state.activeTool === 'codex') {
       let platform = state.current?.launch?.platform || '';
       let profiles = getCodexTerminalProfiles();
-      if ((platform === 'win32' || platform === 'darwin') && !profiles.length) {
+      if ((platform === 'win32' || platform === 'darwin' || platform === 'linux') && !profiles.length) {
         await loadState({ preserveForm: true });
         platform = state.current?.launch?.platform || platform;
         profiles = getCodexTerminalProfiles();
       }
-      if (platform === 'win32' || platform === 'darwin') {
+      if ((platform === 'win32' || platform === 'darwin' || platform === 'linux') && profiles.length) {
         if (state.codexTerminalMenuOpen) closeCodexTerminalMenu();
         else openCodexTerminalMenu();
         return false;
@@ -22581,6 +23864,32 @@ function bindEvents() {
   el('uninstallCodexBtn')?.addEventListener('click', uninstallCodex);
   el('refreshBtn').addEventListener('click', () => loadState({ preserveForm: true }));
   el('reloadBackupsBtn').addEventListener('click', loadBackups);
+  let scopedConfigReloadSeq = 0;
+  const reloadScopedCodexConfig = async () => {
+    const seq = ++scopedConfigReloadSeq;
+    await loadState({ preserveForm: false });
+    if (seq !== scopedConfigReloadSeq) return;
+    await loadBackups();
+    if (seq !== scopedConfigReloadSeq) return;
+    populateConfigEditor();
+    if (window.refreshCustomSelects) window.refreshCustomSelects();
+  };
+  el('scopeSelect')?.addEventListener('change', () => {
+    syncCodexProjectScopeUi();
+    const scope = el('scopeSelect')?.value || 'global';
+    const projectPath = el('projectPathInput')?.value?.trim() || '';
+    if (scope === 'project' && !projectPath) return;
+    reloadScopedCodexConfig().catch((error) => {
+      flash(`读取配置失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    });
+  });
+  el('projectPathInput')?.addEventListener('blur', () => {
+    if ((el('scopeSelect')?.value || 'global') !== 'project') return;
+    if (!el('projectPathInput')?.value?.trim()) return;
+    reloadScopedCodexConfig().catch((error) => {
+      flash(`读取项目配置失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+    });
+  });
   el('codexResumeRefreshBtn')?.addEventListener('click', () => loadCodexResumeSessions({ silent: false }));
   el('codexResumeLastBtn')?.addEventListener('click', async (event) => {
     await triggerCodexResumeAction('resume', event.currentTarget, { last: true });
@@ -22604,6 +23913,7 @@ function bindEvents() {
     if (!option) return;
     const selectedProfile = String(option.dataset.codexTerminalLaunch || 'auto').trim() || 'auto';
     state.codexTerminalProfile = selectedProfile;
+    try { localStorage.setItem('easyaiconfig_codex_terminal_profile', selectedProfile); } catch (_) {}
     renderCodexTerminalPicker();
     closeCodexTerminalMenu();
     await launchActiveTool(selectedProfile);
@@ -22785,7 +24095,7 @@ function bindEvents() {
     }
     // 自定义入口：弹出输入框收集模型名
     if (event.target.value === '__custom__') {
-      const custom = window.prompt('输入自定义模型名（如 gpt-5.5-turbo / claude-opus-4-x）');
+      const custom = window.prompt('输入自定义模型名（如 gpt-5.5 / claude-opus-4-x）');
       const v = (custom || '').trim();
       if (v) {
         renderModelOptions(state.detected?.models || [], v);
@@ -22884,7 +24194,7 @@ function bindEvents() {
   el('ccProviderFormApplyBtn')?.addEventListener('click', () => {
     const result = applyClaudeProviderFormToConfigEditor({ includeSecrets: true });
     if (!result.providerKey) return flash('Provider Key 无效', 'error');
-    flash('已载入到主表单，点击“保存配置”后生效', 'success');
+    flash('已载入到主表单，点击“保存”后写入 settings.json', 'success');
   });
   el('ccProviderFormSwitchBtn')?.addEventListener('click', async () => {
     setBusy('ccProviderFormSwitchBtn', true, '切换中...');
@@ -23667,7 +24977,8 @@ function bindEvents() {
       if (state.dashboardTool === 'claudecode') {
         ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
       } else {
-        refreshDashboardData({ force: true, tool: state.dashboardTool });
+        const hasCachedData = Boolean(getDashboardMetricsForTool(state.dashboardTool));
+        refreshDashboardData({ force: true, silent: hasCachedData, tool: state.dashboardTool });
       }
       renderDashboardPage();
       return;
@@ -23731,7 +25042,8 @@ function bindEvents() {
       if (state.dashboardTool === 'claudecode') {
         ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
       } else {
-        refreshDashboardData({ force: true, tool: state.dashboardTool });
+        const hasCachedData = Boolean(getDashboardMetricsForTool(state.dashboardTool));
+        refreshDashboardData({ force: true, silent: hasCachedData, tool: state.dashboardTool });
       }
       renderDashboardPage();
       return;
@@ -23770,6 +25082,14 @@ function bindEvents() {
     if (daysSelect) {
       state.dashboardDays = Number(daysSelect.value) || 30;
       localStorage.setItem('easyaiconfig_dashboard_days', String(state.dashboardDays));
+      state.dashboardRange = null;
+      localStorage.removeItem('easyaiconfig_dashboard_range');
+      if (state.dashboardTool === 'claudecode') {
+        ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
+      } else {
+        const hasCachedData = Boolean(getDashboardMetricsForTool(state.dashboardTool));
+        refreshDashboardData({ force: true, silent: hasCachedData, tool: state.dashboardTool });
+      }
       renderDashboardPage();
       return;
     }
@@ -24669,6 +25989,160 @@ loadTools();
     { id: 'oauth-login',      title: 'OAuth 官方登录',             desc: '打开浏览器走 ChatGPT 登录流程',     flags: ['login'] },
   ];
 
+  function primaryAddMode() {
+    const s = hubState();
+    const tool = s?.activeTool || 'codex';
+    const filter = s?.chFilter || 'all';
+    if ((tool === 'codex' || tool === 'claudecode') && filter === 'all') return 'choice';
+    if (tool === 'claudecode' && filter === 'oauth') return 'claudecode-oauth';
+    if (tool === 'codex' && filter === 'oauth') return 'codex-oauth';
+    return 'provider';
+  }
+
+  function primaryAddCopy() {
+    const mode = primaryAddMode();
+    if (mode === 'choice') {
+      return {
+        label: '新增',
+        title: '选择新增方式',
+        emptyTitle: '还没有连接配置',
+        emptySub: '点击右上角新增，选择浏览器授权或 API Key Provider。',
+        emptyAction: '新增',
+      };
+    }
+    if (mode === 'claudecode-oauth') {
+      return {
+        label: '浏览器授权',
+        title: '新增 Claude Code OAuth 账号 (claude auth login)',
+        emptyTitle: '还没有 Claude 账号',
+        emptySub: '点击右上角浏览器授权，创建独立 profile 并完成授权。',
+        emptyAction: '浏览器授权',
+      };
+    }
+    if (mode === 'codex-oauth') {
+      return {
+        label: '浏览器授权',
+        title: '新增 Codex OAuth 账号 (codex login)',
+        emptyTitle: '还没有 OAuth 账号',
+        emptySub: '点击右上角浏览器授权，完成官方 OAuth 登录。',
+        emptyAction: '浏览器授权',
+      };
+    }
+    return {
+      label: '新增 Provider',
+      title: '新增 API Key Provider',
+      emptyTitle: '还没有 provider',
+      emptySub: '点击右上角新增 Provider 开始配置。',
+      emptyAction: '新增',
+    };
+  }
+
+  function syncPrimaryAddUi() {
+    const copy = primaryAddCopy();
+    const addBtn = document.getElementById('chAddBtn');
+    if (addBtn) {
+      addBtn.title = copy.title;
+      addBtn.setAttribute('aria-label', copy.title);
+      addBtn.innerHTML = `
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M8 3v10M3 8h10"/>
+        </svg>
+        <span class="ch-add-btn-label">${safeEscape(copy.label)}</span>`;
+    }
+
+    const s = hubState();
+    const tool = s?.activeTool || 'codex';
+    const filter = s?.chFilter || 'all';
+    const search = document.getElementById('chSearchInput');
+    if (search) {
+      search.placeholder = (tool === 'claudecode' && filter !== 'apikey')
+        ? '搜索账号 / URL / 模型'
+        : '搜索 provider / URL / 模型';
+    }
+
+    const emptyEl = document.getElementById('chEmpty');
+    if (emptyEl) {
+      emptyEl.innerHTML = `
+        <div class="ch-empty-title">${safeEscape(copy.emptyTitle)}</div>
+        <div class="ch-empty-sub">${safeEscape(copy.emptySub)}</div>`;
+    }
+  }
+
+  async function handlePrimaryAdd() {
+    const mode = primaryAddMode();
+    if (mode === 'choice') {
+      const chosen = await openAddChoiceDialog();
+      if (chosen === 'oauth') {
+        const tool = hubState()?.activeTool || 'codex';
+        if (tool === 'claudecode') await addNewClaudeCodeOauthProfile();
+        else await addNewOauthAccount();
+      } else if (chosen === 'provider') {
+        openSlideover('add');
+      }
+      return;
+    }
+    if (mode === 'claudecode-oauth') {
+      await addNewClaudeCodeOauthProfile();
+      return;
+    }
+    if (mode === 'codex-oauth') {
+      await addNewOauthAccount();
+      return;
+    }
+    openSlideover('add');
+  }
+
+  async function openAddChoiceDialog() {
+    const s = hubState();
+    const tool = s?.activeTool || 'codex';
+    const toolLabel = TOOL_LABELS[tool] || tool;
+    const oauthLabel = tool === 'claudecode' ? 'Claude Code OAuth' : '官方 OAuth';
+    const oauthDesc = tool === 'claudecode'
+      ? '浏览器授权，保存为独立 Claude profile'
+      : '浏览器授权，保存为独立 Codex profile';
+    const providerDesc = tool === 'claudecode'
+      ? 'Base URL / API Key / 模型配置'
+      : 'Base URL / API Key / 默认模型配置';
+    const body = `
+      <div class="ch-add-choice" role="radiogroup" aria-label="新增方式">
+        <label class="ch-add-choice-card">
+          <input type="radio" name="ch-add-kind-choice" value="oauth" checked />
+          <span class="ch-add-choice-icon oauth" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+              <circle cx="12" cy="12" r="3.4"/>
+            </svg>
+          </span>
+          <span class="ch-add-choice-text">
+            <span class="ch-add-choice-title">${safeEscape(oauthLabel)}</span>
+            <span class="ch-add-choice-desc">${safeEscape(oauthDesc)}</span>
+          </span>
+        </label>
+        <label class="ch-add-choice-card">
+          <input type="radio" name="ch-add-kind-choice" value="provider" />
+          <span class="ch-add-choice-icon provider" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              <path d="M3.29 7 12 12l8.71-5M12 22V12"/>
+            </svg>
+          </span>
+          <span class="ch-add-choice-text">
+            <span class="ch-add-choice-title">API Key Provider</span>
+            <span class="ch-add-choice-desc">${safeEscape(providerDesc)}</span>
+          </span>
+        </label>
+      </div>`;
+    const ok = await openUpdateDialog({
+      eyebrow: toolLabel,
+      title: '新增连接',
+      body,
+      confirmText: '继续',
+      cancelText: '取消',
+    });
+    if (!ok) return '';
+    return document.querySelector('input[name="ch-add-kind-choice"]:checked')?.value || 'oauth';
+  }
+
   // 默认输出最短形式：`codex <flags>`。
   // 当 withPrefix=true 时才补全安全前缀（用于多账号 / OPENAI_API_KEY 残留场景）：
   //   - OAuth profile：unset OPENAI_API_KEY OPENAI_BASE_URL + 内联 CODEX_HOME
@@ -24738,16 +26212,17 @@ loadTools();
   // ── Hero HTML ─────────────────────────────────────────────────────
   function renderHeroHTML(active, tool) {
     if (!active) {
+      const copy = primaryAddCopy();
       return `
         <div class="ch-hero-info">
           <div class="ch-hero-eyebrow">CURRENT SESSION</div>
-          <div class="ch-hero-empty-title">还没有激活的 Provider</div>
-          <div class="ch-hero-empty-sub">点击下方任意一项切换，或 <strong>新增 Provider</strong> 开始配置。</div>
+          <div class="ch-hero-empty-title">${safeEscape(copy.emptyTitle)}</div>
+          <div class="ch-hero-empty-sub">${safeEscape(copy.emptySub)}</div>
         </div>
         <div class="ch-hero-actions">
-          <button type="button" class="ch-hero-ghost" data-ch-add>
+          <button type="button" class="ch-hero-ghost" data-ch-add title="${safeEscape(copy.title)}">
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
-            新增
+            ${safeEscape(copy.emptyAction)}
           </button>
         </div>`;
     }
@@ -24944,7 +26419,7 @@ loadTools();
         </span>
         <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}" title="${safeEscape(dotTip)}">${safeEscape(statusTxt)}</span>` : ''}${(() => {
           const up = state.providerUptime?.[r.key];
-          if (r.mode !== 'apikey' || up == null || up.uptimePct == null) return '';
+          if (r.tool !== 'codex' || r.mode !== 'apikey' || up == null || up.uptimePct == null) return '';
           const v = Number(up.uptimePct);
           const tier = v >= 99 ? 'is-good' : v >= 90 ? 'is-warn' : 'is-bad';
           return `<span class="ch-row-uptime ${tier}" title="近 24h 可用率 (${up.total || 0} 次探测)"><span class="ch-row-uptime-bar" style="--up:${v}%"></span>${v}%</span>`;
@@ -24957,24 +26432,25 @@ loadTools();
   function renderListHTML(rows) {
     const s = hubState();
     const tool = s?.activeTool || 'codex';
+    const filter = s?.chFilter || 'all';
     const oauth = rows.filter((r) => r.mode === 'oauth');
     const apikey = rows.filter((r) => r.mode === 'apikey');
     const pieces = [];
 
-    // For Codex / ClaudeCode we always render the OAuth group header (even
-    // when empty) so the "+ 新增 OAuth 账号" button is discoverable.
-    const showOauthGroup = oauth.length || tool === 'codex' || tool === 'claudecode';
+    // For Codex / ClaudeCode we render the OAuth group header outside the API
+    // Key filter, even when empty, so browser authorization stays discoverable.
+    const showOauthGroup = filter !== 'apikey' && (oauth.length || tool === 'codex' || tool === 'claudecode');
     if (showOauthGroup) {
       let addBtn = '';
       if (tool === 'codex') {
-        addBtn = `<button type="button" class="ch-group-head-add" data-ch-oauth-add title="新增 OAuth 账号 (codex login)" aria-label="新增 OAuth 账号">
+        addBtn = `<button type="button" class="ch-group-head-add" data-ch-oauth-add title="浏览器授权新增 OAuth 账号 (codex login)" aria-label="浏览器授权新增 OAuth 账号">
              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
-             <span class="ch-group-head-add-label">新增</span>
+             <span class="ch-group-head-add-label">浏览器授权</span>
            </button>`;
       } else if (tool === 'claudecode') {
-        addBtn = `<button type="button" class="ch-group-head-add" data-ch-cc-oauth-add title="新增 Claude 账号 (claude auth login)" aria-label="新增 Claude 账号">
+        addBtn = `<button type="button" class="ch-group-head-add" data-ch-cc-oauth-add title="浏览器授权新增 Claude 账号 (claude auth login)" aria-label="浏览器授权新增 Claude 账号">
              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
-             <span class="ch-group-head-add-label">新增</span>
+             <span class="ch-group-head-add-label">浏览器授权</span>
            </button>`;
       }
       pieces.push(`<div class="ch-group-head"><span class="ch-group-head-text">OAUTH<span class="count">· ${oauth.length}</span></span>${addBtn}</div>`);
@@ -24985,8 +26461,9 @@ loadTools();
       pieces.push(`<div class="ch-group-head">API KEY<span class="count">· ${apikey.length}</span></div>`);
       pieces.push(apikey.map(rowHTML).join(''));
     }
-    if (!rows.length && tool !== 'codex') {
-      return '<div class="ch-list-empty">没有匹配的 provider</div>';
+    if (!pieces.length) {
+      const noun = (tool === 'claudecode' && filter !== 'apikey') ? '账号' : 'provider';
+      return `<div class="ch-list-empty">没有匹配的 ${noun}</div>`;
     }
     return pieces.join('');
   }
@@ -25015,6 +26492,8 @@ loadTools();
 
     const tool = s.activeTool || 'codex';
     if (toolTitleEl) toolTitleEl.textContent = TOOL_LABELS[tool] || tool;
+    syncPrimaryAddUi();
+    applyAutodetectUi(readAutodetectInterval());
 
     // Shell 集成 banner is self-hiding on non-claudecode tabs / non-unix
     // platforms; safe to call unconditionally before the loading short-circuit.
@@ -25043,6 +26522,7 @@ loadTools();
 
     const allRows = buildProviderRows(tool);
     updateRibbonCounts(allRows);
+    applyAutodetectUi(readAutodetectInterval());
 
     // Apply search + filter
     const search = (s.chSearch || '').trim().toLowerCase();
@@ -25077,7 +26557,7 @@ loadTools();
     }
 
     // 懒加载每条 API key 行的 24h uptime（5 分钟缓存）
-    fetchRowUptimeSummaries(filtered.filter((r) => r.mode === 'apikey' && !r.historyOnly));
+    fetchRowUptimeSummaries(filtered.filter((r) => r.tool === 'codex' && r.mode === 'apikey' && !r.historyOnly));
 
     // 同步托盘菜单（每次 hub 重渲染时 push 最新 provider 列表）
     try { if (typeof trayHookOnHubRender === 'function') trayHookOnHubRender(); } catch (_) {}
@@ -25085,6 +26565,8 @@ loadTools();
 
   async function fetchRowUptimeSummaries(rows) {
     if (!Array.isArray(rows) || !rows.length) return;
+    rows = rows.filter((r) => r.tool === 'codex' && r.mode === 'apikey' && !r.historyOnly);
+    if (!rows.length) return;
     const codexHome = state.current?.codexHome || '';
     const FRESH_MS = 5 * 60 * 1000;
     const now = Date.now();
@@ -26074,7 +27556,7 @@ loadTools();
 
   // ── Auto-detect frequency ────────────────────────────────────────
   // Persist user's preferred cadence in localStorage. When > 0, schedules a
-  // refreshProviderHealth(true) tick so every saved provider gets re-tested.
+  // refreshProviderHealth(true) tick for eligible Codex API Key providers only.
   const AUTODETECT_LS_KEY = 'easyaiconfig_ch_autodetect_interval_sec';
   const AUTODETECT_MIN_SEC = 30; // guard against <30s cadence (server-side pressure)
   let autodetectTimerId = 0;
@@ -26090,11 +27572,8 @@ loadTools();
     clearAutodetectTimer();
     if (!sec || sec < AUTODETECT_MIN_SEC) return;
     autodetectTimerId = setInterval(() => {
-      // Only run for tools that have a health-check function wired
-      const s = hubState();
-      if (!s) return;
       if (document.hidden) return; // skip when window backgrounded
-      if (typeof refreshProviderHealth === 'function' && (s.activeTool || 'codex') === 'codex') {
+      if (canRunAutodetect()) {
         try { refreshProviderHealth(true); } catch (_) {}
       }
     }, sec * 1000);
@@ -26113,14 +27592,80 @@ loadTools();
     return opt ? opt.label : '关闭';
   }
 
+  function readAutodetectInterval() {
+    let saved = 0;
+    try {
+      const raw = localStorage.getItem(AUTODETECT_LS_KEY);
+      if (raw != null) saved = Math.max(0, parseInt(raw, 10) || 0);
+    } catch (_) { /* localStorage may be denied; fall back to off */ }
+    const allowed = AUTODETECT_OPTIONS.map((o) => o.value);
+    return allowed.includes(saved) ? saved : 0;
+  }
+
+  function autodetectEligibleRows(tool = hubState()?.activeTool || 'codex') {
+    if (tool !== 'codex') return [];
+    return buildProviderRows('codex').filter((row) => (
+      row.tool === 'codex'
+      && row.mode === 'apikey'
+      && row.hasCredential
+      && !row.historyOnly
+      && row.baseUrl
+    ));
+  }
+
+  function canRunAutodetect(tool = hubState()?.activeTool || 'codex') {
+    return typeof refreshProviderHealth === 'function' && autodetectEligibleRows(tool).length > 0;
+  }
+
+  function autodetectAvailability() {
+    const s = hubState();
+    const tool = s?.activeTool || 'codex';
+    const rows = buildProviderRows(tool);
+    const apiKeyRows = rows.filter((row) => row.mode === 'apikey' && !row.historyOnly);
+    const canRun = canRunAutodetect(tool);
+    if (canRun) {
+      return {
+        canRun: true,
+        valueLabel: null,
+        title: '仅探测 Codex API Key Provider；官方 OAuth 不参与连通性探测。',
+      };
+    }
+    if (tool !== 'codex') {
+      return {
+        canRun: false,
+        valueLabel: apiKeyRows.length ? '仅 Codex' : '无 API Key',
+        title: '自动检测当前仅支持 Codex API Key Provider；官方 OAuth 不参与连通性探测。',
+      };
+    }
+    return {
+      canRun: false,
+      valueLabel: apiKeyRows.length ? '缺 Key' : '无 API Key',
+      title: '自动检测只用于已保存 Key 的 Codex API Key Provider；官方 OAuth 不参与连通性探测。',
+    };
+  }
+
   function applyAutodetectUi(sec) {
+    const availability = autodetectAvailability();
     const container = document.getElementById('chAutodetect');
-    if (container) container.classList.toggle('is-on', sec > 0);
+    if (container) {
+      container.classList.toggle('is-on', availability.canRun && sec > 0);
+      container.classList.toggle('is-disabled', !availability.canRun);
+      container.title = availability.title;
+      if (!availability.canRun) container.dataset.open = 'false';
+    }
+    const trigger = document.getElementById('chAutodetectTrigger');
+    if (trigger) {
+      trigger.disabled = !availability.canRun;
+      trigger.setAttribute('aria-disabled', availability.canRun ? 'false' : 'true');
+      trigger.title = availability.title;
+      if (!availability.canRun) trigger.setAttribute('aria-expanded', 'false');
+    }
     const valueEl = document.getElementById('chAutodetectValue');
-    if (valueEl) valueEl.textContent = labelForInterval(sec);
+    if (valueEl) valueEl.textContent = availability.canRun ? labelForInterval(sec) : availability.valueLabel;
     document.querySelectorAll('#chAutodetectMenu [data-ad-value]').forEach((btn) => {
       btn.classList.toggle('active', Number(btn.getAttribute('data-ad-value')) === sec);
     });
+    if (!availability.canRun) document.getElementById('chAutodetectMenu')?.classList.add('hide');
   }
 
   function closeAutodetectMenu() {
@@ -26133,6 +27678,10 @@ loadTools();
   }
 
   function openAutodetectMenu() {
+    if (!autodetectAvailability().canRun) {
+      closeAutodetectMenu();
+      return;
+    }
     const menu = document.getElementById('chAutodetectMenu');
     const trigger = document.getElementById('chAutodetectTrigger');
     const container = document.getElementById('chAutodetect');
@@ -26146,13 +27695,7 @@ loadTools();
     const menu = document.getElementById('chAutodetectMenu');
     if (!trigger || !menu) return;
 
-    let saved = 0;
-    try {
-      const raw = localStorage.getItem(AUTODETECT_LS_KEY);
-      if (raw != null) saved = Math.max(0, parseInt(raw, 10) || 0);
-    } catch (_) { /* localStorage may be denied; fall back to off */ }
-    const allowed = AUTODETECT_OPTIONS.map((o) => o.value);
-    if (!allowed.includes(saved)) saved = 0;
+    const saved = readAutodetectInterval();
     applyAutodetectUi(saved);
     scheduleAutodetect(saved);
 
@@ -26172,6 +27715,10 @@ loadTools();
 
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (!autodetectAvailability().canRun) {
+        applyAutodetectUi(readAutodetectInterval());
+        return;
+      }
       const isOpen = !menu.classList.contains('hide');
       if (isOpen) closeAutodetectMenu();
       else openAutodetectMenu();
@@ -26185,7 +27732,7 @@ loadTools();
       applyAutodetectUi(sec);
       scheduleAutodetect(sec);
       closeAutodetectMenu();
-      if (sec > 0 && typeof refreshProviderHealth === 'function') {
+      if (sec > 0 && canRunAutodetect()) {
         try { refreshProviderHealth(true); } catch (_) {}
       }
     });
@@ -26210,7 +27757,9 @@ loadTools();
     hub.dataset.chWired = '1';
 
     // Add button
-    document.getElementById('chAddBtn')?.addEventListener('click', () => openSlideover('add'));
+    document.getElementById('chAddBtn')?.addEventListener('click', () => {
+      handlePrimaryAdd().catch((err) => console.warn('[ch] primary add failed', err));
+    });
 
     // Hero actions
     const hero = document.getElementById('chHero');
@@ -26257,7 +27806,10 @@ loadTools();
         return;
       }
       const add = target.closest('[data-ch-add]');
-      if (add) { openSlideover('add'); return; }
+      if (add) {
+        handlePrimaryAdd().catch((err) => console.warn('[ch] primary add failed', err));
+        return;
+      }
       // Codex 启动命令面板开/关（"安全前缀"无论 OAuth/API 默认都关，
       // 用户自己点上去才补 unset / CODEX_HOME）
       const cmdToggle = target.closest('[data-ch-cmd-toggle]');

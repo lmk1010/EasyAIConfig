@@ -5,16 +5,20 @@
 export const CODEX_CONFIG_RECIPES = [
   // ── Model Presets ──
   {
-    id: 'cx-model-o3', name: '使用 o3 模型', cat: '模型', desc: '切换默认模型为 o3', kw: 'o3 model 模型 openai', tool: 'codex',
-    apply: () => ({ model: 'o3' })
+    id: 'cx-model-gpt55', name: '使用 GPT-5.5', cat: '模型', desc: '切换默认模型为 Codex 当前推荐的 GPT-5.5', kw: 'gpt-5.5 model 模型 openai 推荐 latest', tool: 'codex',
+    apply: () => ({ model: 'gpt-5.5' })
   },
   {
-    id: 'cx-model-o4-mini', name: '使用 o4-mini 模型', cat: '模型', desc: '切换到更快速的 o4-mini 模型', kw: 'o4-mini model 模型 openai fast 快速', tool: 'codex',
-    apply: () => ({ model: 'o4-mini' })
+    id: 'cx-model-gpt54-mini', name: '使用 GPT-5.4 mini', cat: '模型', desc: '切换到更快、更低成本的 GPT-5.4 mini', kw: 'gpt-5.4-mini model 模型 openai fast 快速 低成本', tool: 'codex',
+    apply: () => ({ model: 'gpt-5.4-mini' })
+  },
+  {
+    id: 'cx-model-spark', name: '使用 Codex Spark', cat: '模型', desc: '切换到 GPT-5.3 Codex Spark 预览模型', kw: 'gpt-5.3-codex-spark model 模型 openai preview spark 快速', tool: 'codex',
+    apply: () => ({ model: 'gpt-5.3-codex-spark' })
   },
   {
     id: 'cx-model-custom', name: '自定义模型', cat: '模型', desc: '设置自定义模型名称', kw: 'model 模型 自定义 custom', tool: 'codex',
-    fields: [{ key: 'model', label: '模型名称', placeholder: '如: gpt-5.1, deepseek-r3' }],
+    fields: [{ key: 'model', label: '模型名称', placeholder: '如: gpt-5.5, deepseek-r3' }],
     apply: (v) => ({ model: v.model })
   },
   // ── Reasoning ──
@@ -46,11 +50,11 @@ export const CODEX_CONFIG_RECIPES = [
   // ── Sandbox / Approval ──
   {
     id: 'cx-sandbox-full', name: '完全访问模式', cat: '安全', desc: '关闭沙箱限制，允许完全文件系统访问', kw: '沙箱 sandbox full access 完全 访问 danger', tool: 'codex',
-    apply: () => ({ sandbox_mode: 'danger-full-access', approval_policy: 'on-failure' })
+    apply: () => ({ sandbox_mode: 'danger-full-access', approval_policy: 'never' })
   },
   {
-    id: 'cx-sandbox-safe', name: '安全模式', cat: '安全', desc: '只读沙箱 + suggest 审批策略', kw: '安全 sandbox safe 只读 readonly suggest', tool: 'codex',
-    apply: () => ({ sandbox_mode: 'read-only', approval_policy: 'suggest' })
+    id: 'cx-sandbox-safe', name: '安全模式', cat: '安全', desc: '只读沙箱 + untrusted 审批策略', kw: '安全 sandbox safe 只读 readonly untrusted', tool: 'codex',
+    apply: () => ({ sandbox_mode: 'read-only', approval_policy: 'untrusted' })
   },
   {
     id: 'cx-workspace-write', name: '工作区写入模式', cat: '安全', desc: '允许向工作区写入文件', kw: '工作区 workspace write 写入', tool: 'codex',
@@ -89,6 +93,23 @@ export const CODEX_CONFIG_RECIPES = [
   },
   {
     id: 'cx-reset-defaults', name: '恢复默认', cat: '工作流', desc: '将所有设置重置为 Codex 默认值', kw: '默认 reset 恢复 重置 default', tool: 'codex',
-    apply: () => ({ model_reasoning_effort: null, plan_mode_reasoning_effort: null, model_context_window: null, model_auto_compact_token_limit: null, service_tier: null, sandbox_mode: null, approval_policy: null, personality: null, compact_prompt: false })
+    apply: () => ({
+      model: null,
+      model_reasoning_effort: null,
+      plan_mode_reasoning_effort: null,
+      model_reasoning_summary: null,
+      model_verbosity: null,
+      model_context_window: null,
+      model_auto_compact_token_limit: null,
+      service_tier: null,
+      sandbox_mode: null,
+      approval_policy: null,
+      approvals_reviewer: null,
+      personality: null,
+      web_search: null,
+      allow_login_shell: null,
+      default_permissions: null,
+      compact_prompt: false,
+    })
   },
 ];

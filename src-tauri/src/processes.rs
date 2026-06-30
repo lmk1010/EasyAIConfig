@@ -1,8 +1,8 @@
 // Lightweight process listing for the console page.
 //
 // Lists OS processes whose command line contains a given needle (e.g. "codex"
-// or "claude"), with CPU / memory / elapsed-time metrics. Read-only; we never
-// expose a "kill" endpoint — users should use their OS tools for that.
+// or "claude"), with CPU / memory / elapsed-time metrics and a best-effort
+// process-role classifier for the console page.
 //
 // Platform notes:
 // - macOS / Linux: shell out to `ps -axo pid,pcpu,pmem,etime,command` which
@@ -36,6 +36,299 @@ fn process_command(program: &str) -> Command {
   }
 }
 
+#[derive(Debug, Clone)]
+struct PosixProcessRow {
+  pid: u64,
+  cpu: f64,
+  mem_pct: f64,
+  elapsed: String,
+  command: String,
+}
+
+#[derive(Debug, Clone)]
+struct ProcessClassification {
+  kind: &'static str,
+  role: &'static str,
+  label: &'static str,
+  detail: &'static str,
+  group: &'static str,
+  group_label: &'static str,
+  group_short: &'static str,
+  order: u32,
+}
+
+fn parse_posix_process_line(line: &str) -> Option<PosixProcessRow> {
+  let raw = line.trim_start();
+  if raw.is_empty() { return None; }
+
+  let bytes = raw.as_bytes();
+  let mut index = 0usize;
+  let mut fields: Vec<&str> = Vec::with_capacity(4);
+
+  for _ in 0..4 {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+      index += 1;
+    }
+    let start = index;
+    while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+      index += 1;
+    }
+    if start == index { return None; }
+    fields.push(&raw[start..index]);
+  }
+
+  while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+    index += 1;
+  }
+  if index >= bytes.len() { return None; }
+
+  let command = raw[index..].trim().to_string();
+  if command.is_empty() { return None; }
+
+  Some(PosixProcessRow {
+    pid: fields[0].parse().unwrap_or(0),
+    cpu: fields[1].parse().unwrap_or(0.0),
+    mem_pct: fields[2].parse().unwrap_or(0.0),
+    elapsed: fields[3].to_string(),
+    command,
+  })
+}
+
+fn first_argv_token(command: &str) -> &str {
+  command.split_whitespace().next().unwrap_or(command)
+}
+
+fn argv_basename(command: &str) -> String {
+  let argv0 = first_argv_token(command);
+  argv0.rsplit('/').next().unwrap_or(argv0).to_ascii_lowercase()
+}
+
+fn command_matches_known_app_bundle(lower: &str, needle_l: &str) -> bool {
+  let markers: &[&str] = match needle_l {
+    "codex" => &["/codex.app/contents/", "/codex computer use.app/contents/"],
+    "claude" | "claudecode" => &["/claude.app/contents/", "/claude code.app/contents/"],
+    "opencode" => &["/opencode.app/contents/", "/open code.app/contents/"],
+    "openclaw" => &["/openclaw.app/contents/", "/open claw.app/contents/"],
+    _ => &[],
+  };
+  markers.iter().any(|marker| lower.contains(marker))
+}
+
+fn codex_utility_label(lower: &str) -> Option<(&'static str, &'static str, &'static str)> {
+  if lower.contains("--type=gpu-process") {
+    return Some(("codex-desktop-gpu", "GPU", "Codex 桌面 GPU 进程"));
+  }
+  if lower.contains("--type=renderer") || lower.contains("codex (renderer)") {
+    return Some(("codex-desktop-renderer", "RENDERER", "Codex 桌面渲染进程"));
+  }
+  if lower.contains("network.mojom.networkservice") {
+    return Some(("codex-desktop-network", "NETWORK", "Codex 桌面网络服务"));
+  }
+  if lower.contains("storage.mojom.storageservice") {
+    return Some(("codex-desktop-storage", "STORAGE", "Codex 桌面存储服务"));
+  }
+  if lower.contains("audio.mojom.audioservice") {
+    return Some(("codex-desktop-audio", "AUDIO", "Codex 桌面音频服务"));
+  }
+  if lower.contains("video_capture.mojom.videocaptureservice") {
+    return Some(("codex-desktop-video", "VIDEO", "Codex 桌面视频采集服务"));
+  }
+  if lower.contains("--type=utility") || lower.contains("codex (service)") {
+    return Some(("codex-desktop-utility", "UTILITY", "Codex 桌面 Utility 服务"));
+  }
+  None
+}
+
+fn classify_codex_process(command: &str) -> ProcessClassification {
+  let lower = command.to_ascii_lowercase();
+
+  if lower.contains("skycomputeruseservice") || lower.contains("/codex computer use.app/contents/") {
+    return ProcessClassification {
+      kind: "service",
+      role: "codex-computer-use",
+      label: "COMPUTER USE",
+      detail: "Codex Computer Use 服务",
+      group: "service",
+      group_label: "Codex 后台服务",
+      group_short: "服务",
+      order: 30,
+    };
+  }
+
+  if lower.contains("/contents/resources/codex app-server") || lower.contains(" codex app-server") {
+    return ProcessClassification {
+      kind: "service",
+      role: "codex-app-server",
+      label: "APP SERVER",
+      detail: "Codex 桌面 app-server",
+      group: "service",
+      group_label: "Codex 后台服务",
+      group_short: "服务",
+      order: 31,
+    };
+  }
+
+  if lower.contains("/contents/resources/cua_node/bin/node_repl") {
+    return ProcessClassification {
+      kind: "service",
+      role: "codex-cua-node-repl",
+      label: "CUA NODE",
+      detail: "Codex CUA Node REPL",
+      group: "service",
+      group_label: "Codex 后台服务",
+      group_short: "服务",
+      order: 32,
+    };
+  }
+
+  if lower.contains("bare-modifier-monitor") {
+    return ProcessClassification {
+      kind: "service",
+      role: "codex-hotkey-monitor",
+      label: "HOTKEY",
+      detail: "Codex 快捷键监听",
+      group: "service",
+      group_label: "Codex 后台服务",
+      group_short: "服务",
+      order: 33,
+    };
+  }
+
+  if lower.contains("sparkle.framework") || lower.contains("autoupdate com.openai.codex") {
+    return ProcessClassification {
+      kind: "service",
+      role: "codex-updater",
+      label: "UPDATER",
+      detail: "Codex 自动更新进程",
+      group: "service",
+      group_label: "Codex 后台服务",
+      group_short: "服务",
+      order: 34,
+    };
+  }
+
+  if lower.contains("browser_crashpad_handler") || lower.contains("crashpad") {
+    return ProcessClassification {
+      kind: "helper",
+      role: "codex-crashpad",
+      label: "CRASHPAD",
+      detail: "Codex 崩溃报告辅助进程",
+      group: "helper",
+      group_label: "Codex 桌面辅助进程",
+      group_short: "辅助",
+      order: 50,
+    };
+  }
+
+  if let Some((role, label, detail)) = codex_utility_label(&lower) {
+    return ProcessClassification {
+      kind: "helper",
+      role,
+      label,
+      detail,
+      group: "helper",
+      group_label: "Codex 桌面辅助进程",
+      group_short: "辅助",
+      order: 51,
+    };
+  }
+
+  if lower.contains("/codex.app/contents/macos/codex") {
+    return ProcessClassification {
+      kind: "desktop",
+      role: "codex-desktop-main",
+      label: "DESKTOP",
+      detail: "Codex 桌面主进程",
+      group: "desktop",
+      group_label: "Codex 桌面应用",
+      group_short: "桌面",
+      order: 20,
+    };
+  }
+
+  if command_matches_known_app_bundle(&lower, "codex") || lower.contains(".app/contents/") {
+    return ProcessClassification {
+      kind: "desktop",
+      role: "codex-desktop-app",
+      label: "APP",
+      detail: "Codex 桌面应用进程",
+      group: "desktop",
+      group_label: "Codex 桌面应用",
+      group_short: "桌面",
+      order: 21,
+    };
+  }
+
+  if lower.contains("@openai/codex") || lower.contains("openai-codex") {
+    return ProcessClassification {
+      kind: "cli",
+      role: "codex-node-cli",
+      label: "NODE CLI",
+      detail: "Node 包装的 Codex CLI",
+      group: "cli",
+      group_label: "Codex CLI 会话",
+      group_short: "CLI",
+      order: 10,
+    };
+  }
+
+  ProcessClassification {
+    kind: "cli",
+    role: "codex-cli",
+    label: "CLI",
+    detail: "Codex CLI 会话",
+    group: "cli",
+    group_label: "Codex CLI 会话",
+    group_short: "CLI",
+    order: 11,
+  }
+}
+
+fn classify_process(tool: &str, command: &str) -> ProcessClassification {
+  let tool_l = tool.to_ascii_lowercase();
+  if tool_l == "codex" {
+    return classify_codex_process(command);
+  }
+
+  let lower = command.to_ascii_lowercase();
+  if lower.contains(".app/contents/") {
+    return ProcessClassification {
+      kind: "app",
+      role: "desktop-app",
+      label: "APP",
+      detail: "桌面 GUI 应用",
+      group: "app",
+      group_label: "桌面应用",
+      group_short: "App",
+      order: 20,
+    };
+  }
+
+  ProcessClassification {
+    kind: "cli",
+    role: "cli",
+    label: "CLI",
+    detail: "命令行 CLI",
+    group: "cli",
+    group_label: "CLI 会话",
+    group_short: "CLI",
+    order: 10,
+  }
+}
+
+fn insert_classification(row: &mut Value, classification: &ProcessClassification) {
+  if let Some(obj) = row.as_object_mut() {
+    obj.insert("kind".to_string(), json!(classification.kind));
+    obj.insert("processKind".to_string(), json!(classification.role));
+    obj.insert("processLabel".to_string(), json!(classification.label));
+    obj.insert("processDetail".to_string(), json!(classification.detail));
+    obj.insert("processGroup".to_string(), json!(classification.group));
+    obj.insert("processGroupLabel".to_string(), json!(classification.group_label));
+    obj.insert("processGroupShort".to_string(), json!(classification.group_short));
+    obj.insert("processOrder".to_string(), json!(classification.order));
+  }
+}
+
 // Does this `ps` line really represent the tool we're looking for?
 //
 // Naïve substring match is wrong: the user's own repo path ("codex-config-ui")
@@ -43,39 +336,27 @@ fn process_command(program: &str) -> Command {
 // and any shell with the project as cwd will match too. We need a stricter
 // check: look at the command binary's basename (or the script filename, for
 // node-wrapped CLIs like Claude Code).
-fn filter_matches(line: &str, needle: &str, self_pid: u32) -> bool {
-  let raw = line.trim_start();
-  if raw.is_empty() { return false; }
+fn filter_matches(pid: u64, command: &str, needle: &str, self_pid: u32) -> bool {
+  if command.trim().is_empty() { return false; }
 
-  let lower = raw.to_ascii_lowercase();
+  let lower = command.to_ascii_lowercase();
   if lower.contains("grep ") || lower.starts_with("grep") { return false; }
   if lower.contains("easy_ai_config") { return false; }
   if lower.contains("easyaiconfig") { return false; }
   if lower.contains("codex-config-ui") { return false; }
   if lower.contains("config-editor") { return false; }
+  if pid > 0 && pid == self_pid as u64 { return false; }
 
-  // .app bundles 不再整段排除 —— 它们是 GUI app，用户也想看到。
-  // 在 enrich 阶段加 kind:"app" 区分；这里只过滤明确无关的进程。
-
-  let parts: Vec<&str> = raw.split_whitespace().collect();
-  if parts.len() < 5 { return false; }
-  let pid: u32 = parts[0].parse().unwrap_or(0);
-  if pid > 0 && pid == self_pid { return false; }
-
-  let cmd_argv0 = parts[4];
-  let basename = cmd_argv0.rsplit('/').next().unwrap_or(cmd_argv0).to_ascii_lowercase();
+  let basename = argv_basename(command);
   let needle_l = needle.to_ascii_lowercase();
 
-  // Case 0: macOS .app bundle main binary：basename 跟 needle 一样 + 路径含 .app/contents
-  // 都算 match（让 Codex.app / Claude.app GUI 进程也被列出来，前端按 kind 分组展示）
+  // .app bundles are visible in the console because they often explain why a
+  // tool keeps using old config. Match only known bundle paths, not unrelated
+  // updaters that merely receive "Codex.app" as an argument.
+  if command_matches_known_app_bundle(&lower, &needle_l) {
+    return true;
+  }
   if lower.contains(".app/contents/") {
-    // 主二进制名要跟 needle 接近：basename 完全等于 needle，或包含 needle 作为前缀
-    // 排除 Helper / Renderer 之类的子进程（用户看不需要）
-    if basename == needle_l { return true; }
-    // 也接受像 "Codex Helper" 这种 → 但 basename 会包含空格 + helper，先放过
-    if basename.starts_with(&needle_l) && !basename.contains("helper") && !basename.contains("renderer") && !basename.contains("gpu") {
-      return true;
-    }
     return false;
   }
 
@@ -85,8 +366,6 @@ fn filter_matches(line: &str, needle: &str, self_pid: u32) -> bool {
   // should then appear as a path segment OR filename later in argv.
   let is_interp = matches!(basename.as_str(), "node" | "bun" | "deno" | "npx" | "pnpm" | "yarn");
   if is_interp {
-    let rest = parts[5..].join(" ");
-    let rest_l = rest.to_ascii_lowercase();
     // Match the canonical install paths / package names.
     let codex_markers = ["@openai/codex", "openai-codex", "/codex/bin/", "/codex.js", "/codex-cli"];
     let claude_markers = ["@anthropic-ai/claude", "claude-code", "/claude/bin/", "/cli.js"];
@@ -99,7 +378,7 @@ fn filter_matches(line: &str, needle: &str, self_pid: u32) -> bool {
       "openclaw" => &openclaw_markers,
       _ => &[],
     };
-    if markers.iter().any(|m| rest_l.contains(m)) { return true; }
+    if markers.iter().any(|m| lower.contains(m)) { return true; }
     return false;
   }
 
@@ -236,7 +515,7 @@ fn enrich_claude_process_rows(rows: Vec<Value>) -> Vec<Value> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn list_posix(needle: &str) -> Vec<Value> {
+fn list_posix(needle: &str, tool: &str) -> Vec<Value> {
   use std::process::Command;
   let self_pid = std::process::id();
   let out = match Command::new("ps")
@@ -254,51 +533,26 @@ fn list_posix(needle: &str) -> Vec<Value> {
   for line in text.lines() {
     if first { first = false; continue; } // header
     let raw = line.trim_start();
-    if !filter_matches(raw, needle, self_pid) { continue; }
+    let Some(parsed) = parse_posix_process_line(raw) else { continue; };
+    if !filter_matches(parsed.pid, &parsed.command, needle, self_pid) { continue; }
 
-    // Split into 5 columns: pid, cpu, mem, etime, command (command can have spaces)
-    let mut parts = raw.splitn(5, char::is_whitespace).collect::<Vec<_>>();
-    // splitn with char::is_whitespace leaves empty strings for runs; collapse:
-    parts.retain(|p| !p.is_empty());
-    if parts.len() < 5 {
-      // Fallback: try 5-way split on runs of whitespace
-      let s: Vec<&str> = raw.split_whitespace().collect();
-      if s.len() < 5 { continue; }
-      let pid: u64 = s[0].parse().unwrap_or(0);
-      let cpu: f64 = s[1].parse().unwrap_or(0.0);
-      let mem: f64 = s[2].parse().unwrap_or(0.0);
-      let etime = s[3].to_string();
-      let command = s[4..].join(" ");
-      rows.push(json!({
-        "pid": pid,
-        "cpu": cpu,
-        "memPct": mem,
-        "elapsed": etime,
-        "command": command,
-      }));
-      continue;
-    }
-    let pid: u64 = parts[0].parse().unwrap_or(0);
-    let cpu: f64 = parts[1].parse().unwrap_or(0.0);
-    let mem: f64 = parts[2].parse().unwrap_or(0.0);
-    let etime = parts[3].to_string();
-    let command = parts[4].trim().to_string();
-    let kind = if command.to_ascii_lowercase().contains(".app/contents/") { "app" } else { "cli" };
-    rows.push(json!({
-      "pid": pid,
-      "cpu": cpu,
-      "memPct": mem,
-      "elapsed": etime,
-      "command": command,
-      "kind": kind,
-    }));
+    let classification = classify_process(tool, &parsed.command);
+    let mut row = json!({
+      "pid": parsed.pid,
+      "cpu": parsed.cpu,
+      "memPct": parsed.mem_pct,
+      "elapsed": parsed.elapsed,
+      "command": parsed.command,
+    });
+    insert_classification(&mut row, &classification);
+    rows.push(row);
   }
 
   enrich_with_cwd_and_mem(rows)
 }
 
 #[cfg(target_os = "windows")]
-fn list_posix(_needle: &str) -> Vec<Value> { Vec::new() }
+fn list_posix(_needle: &str, _tool: &str) -> Vec<Value> { Vec::new() }
 
 // Upgrade each row with absolute memory (MB) and cwd when cheaply available.
 #[cfg(target_os = "macos")]
@@ -374,7 +628,7 @@ fn enrich_with_cwd_and_mem(rows: Vec<Value>) -> Vec<Value> {
 fn enrich_with_cwd_and_mem(rows: Vec<Value>) -> Vec<Value> { rows }
 
 #[cfg(target_os = "windows")]
-fn list_windows(needle: &str) -> Vec<Value> {
+fn list_windows(needle: &str, tool: &str) -> Vec<Value> {
   let self_pid = std::process::id();
   let out = match process_command("tasklist")
     .args(["/fo", "csv", "/nh"])
@@ -401,14 +655,18 @@ fn list_windows(needle: &str) -> Vec<Value> {
     if pid == self_pid as u64 { continue; }
     let mem_pretty = parts[4].replace(",", "").replace(" K", "").trim().to_string();
     let mem_kb: u64 = mem_pretty.parse().unwrap_or(0);
-    rows.push(json!({
+    let command = parts[0].clone();
+    let classification = classify_process(tool, &command);
+    let mut row = json!({
       "pid": pid,
       "cpu": 0.0,
       "memPct": 0.0,
       "memMB": mem_kb / 1024,
       "elapsed": "",
-      "command": parts[0],
-    }));
+      "command": command,
+    });
+    insert_classification(&mut row, &classification);
+    rows.push(row);
   }
   rows
 }
@@ -481,11 +739,11 @@ pub(crate) fn list_processes(query: &Value) -> Result<Value, String> {
 
   let rows = if cfg!(target_os = "windows") {
     #[cfg(target_os = "windows")]
-    { list_windows(&effective_needle) }
+    { list_windows(&effective_needle, &tool) }
     #[cfg(not(target_os = "windows"))]
     { Vec::new() }
   } else {
-    list_posix(&effective_needle)
+    list_posix(&effective_needle, &tool)
   };
   let rows = if matches!(tool.as_str(), "claudecode" | "claude") {
     enrich_claude_process_rows(rows)
@@ -498,4 +756,51 @@ pub(crate) fn list_processes(query: &Value) -> Result<Value, String> {
     "needle": effective_needle,
     "rows": rows,
   }))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn parses_posix_rows_with_spaced_app_paths() {
+    let row = parse_posix_process_line(
+      "10546  19.6  0.3 01-14:27:21 /Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Versions/149.0/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service) --type=gpu-process",
+    )
+    .expect("row should parse");
+
+    assert_eq!(row.pid, 10546);
+    assert_eq!(row.elapsed, "01-14:27:21");
+    assert!(row.command.contains("Codex Framework.framework"));
+    assert!(row.command.contains("Codex (Service) --type=gpu-process"));
+  }
+
+  #[test]
+  fn matches_codex_bundle_paths_without_matching_unrelated_updater_args() {
+    let self_pid = 99999;
+    let codex_helper = "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Versions/149.0/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --type=renderer";
+    let updater_with_codex_arg = "/Users/me/Library/Caches/com.openai.codex/Updater.app/Contents/MacOS/Updater /Applications/Codex.app 0";
+
+    assert!(filter_matches(10546, codex_helper, "codex", self_pid));
+    assert!(!filter_matches(89125, updater_with_codex_arg, "codex", self_pid));
+  }
+
+  #[test]
+  fn classifies_codex_desktop_service_and_helper_processes() {
+    let app_server = classify_codex_process("/Applications/Codex.app/Contents/Resources/codex app-server --analytics-default-enabled");
+    assert_eq!(app_server.kind, "service");
+    assert_eq!(app_server.label, "APP SERVER");
+
+    let computer_use = classify_codex_process("/Users/me/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService");
+    assert_eq!(computer_use.kind, "service");
+    assert_eq!(computer_use.label, "COMPUTER USE");
+
+    let renderer = classify_codex_process("/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Versions/149.0/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer) --type=renderer");
+    assert_eq!(renderer.kind, "helper");
+    assert_eq!(renderer.label, "RENDERER");
+
+    let cli = classify_codex_process("/opt/homebrew/bin/codex --model gpt-5");
+    assert_eq!(cli.kind, "cli");
+    assert_eq!(cli.label, "CLI");
+  }
 }

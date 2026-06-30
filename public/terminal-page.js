@@ -57,8 +57,8 @@ async function installTermEventListeners() {
       chunk = chunk.replace(/^(?:\r?\n)+/, '');
     }
     inst.term.write(chunk);
-    inst.recvBytes += chunk.length;
-    inst.cursor += chunk.length;
+    inst.recvBytes += utf8ByteLength(chunk);
+    inst.cursor += utf8ByteLength(chunk);
 
     // 不再 regex 解 TUI 文本（容易把 "output_tokens" 字样误判）。
     // 真 token 走 terminal-tokens 事件（Rust 直接 tail codex jsonl）
@@ -136,6 +136,51 @@ function api(path, opts) { return window.api(path, opts); }
 function flash(msg, type) { return typeof window.flash === 'function' ? window.flash(msg, type) : console.log(`[flash:${type || ''}] ${msg}`); }
 function escapeHtml(v) { return typeof window.escapeHtml === 'function' ? window.escapeHtml(v) : String(v ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c] || c)); }
 
+const UTF8_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+const UTF8_DECODER = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
+
+function isApplePlatform() {
+  const platform = typeof navigator !== 'undefined' ? (navigator.platform || '') : '';
+  return /Mac|iPhone|iPad|iPod/i.test(platform);
+}
+
+function terminalShortcutModifier(event) {
+  return isApplePlatform() ? event.metaKey : (event.ctrlKey && event.shiftKey);
+}
+
+function isEditableTarget(target) {
+  if (!(target instanceof Element)) return false;
+  if (target.closest('.xterm')) return false;
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+}
+
+function utf8ByteLength(text) {
+  const value = String(text || '');
+  if (!value) return 0;
+  if (UTF8_ENCODER) return UTF8_ENCODER.encode(value).length;
+  try { return unescape(encodeURIComponent(value)).length; } catch (_) { return value.length; }
+}
+
+function dropUtf8PrefixBytes(text, byteCount) {
+  const value = String(text || '');
+  const count = Math.max(0, Number(byteCount || 0));
+  if (!value || count <= 0) return value;
+  if (!UTF8_ENCODER || !UTF8_DECODER) return value.slice(count);
+  const bytes = UTF8_ENCODER.encode(value);
+  if (count >= bytes.length) return '';
+  return UTF8_DECODER.decode(bytes.slice(count));
+}
+
+function normalizeTerminalPaste(text) {
+  return String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function shellQuotePath(path) {
+  const text = String(path || '');
+  if (!text) return '';
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
 function renderTermSidebar() {
   const tp = getState()?.terminalPage;
   if (!tp) return;
@@ -172,15 +217,21 @@ function renderTermSidebar() {
     </button>`;
   const sessionRows = tp.sessions.map((s) => {
     const isActive = s.id === tp.activeSessionId;
+    const deleteLabel = s._ghost || !s.running ? '删除会话记录' : '结束并删除会话';
     return `
-      <button type="button" class="sec-item ${isActive ? 'active' : ''}" data-eat-sec-tab="${esc(s.id)}" style="${toolAccent(s.tool)}">
-        <span class="sec-ico">${toolIcon(s.tool)}</span>
-        <span class="sec-text">
-          <span class="sec-name">${esc(s.title || s.command || s.id.slice(0,8))}</span>
-          <span class="sec-subtitle"><span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>${esc(toolLabel(s.tool))}${s.running ? '' : ' · 已退出'}</span>
-        </span>
-        <span class="sec-chev" aria-hidden="true">›</span>
-      </button>`;
+      <div class="sec-item sec-item-session ${isActive ? 'active' : ''}" style="${toolAccent(s.tool)}">
+        <button type="button" class="sec-main" data-eat-sec-tab="${esc(s.id)}" title="切换到 ${esc(s.title || s.command || s.id.slice(0,8))}">
+          <span class="sec-ico">${toolIcon(s.tool)}</span>
+          <span class="sec-text">
+            <span class="sec-name">${esc(s.title || s.command || s.id.slice(0,8))}</span>
+            <span class="sec-subtitle"><span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>${esc(toolLabel(s.tool))}${s.running ? '' : ' · 已退出'}</span>
+          </span>
+          <span class="sec-chev" aria-hidden="true">›</span>
+        </button>
+        <button type="button" class="sec-session-delete" data-eat-session-delete="${esc(s.id)}" title="${deleteLabel}" aria-label="${deleteLabel}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>
+        </button>
+      </div>`;
   }).join('');
   listEl.innerHTML = newSessionRow + sessionRows;
   // 状态栏的实时用量也同步刷新
@@ -875,6 +926,13 @@ function bindEvents(host) {
         renderTerminalPage();
         return;
       }
+      const deleteBtn = target?.closest('[data-eat-session-delete]');
+      if (deleteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        deleteTerminalSession(deleteBtn.dataset.eatSessionDelete);
+        return;
+      }
       const secTab = target?.closest('[data-eat-sec-tab]');
       if (secTab) {
         tp.activeSessionId = secTab.dataset.eatSecTab;
@@ -909,6 +967,13 @@ function onClick(e) {
   if (paletteAct) { handlePaletteAction(paletteAct.dataset.eatPaletteAct); return; }
   const tabClose = t.closest('[data-eat-tab-close]');
   if (tabClose) { e.stopPropagation(); closeSession(tabClose.dataset.eatTabClose); return; }
+  const sessionDelete = t.closest('[data-eat-session-delete]');
+  if (sessionDelete) {
+    e.preventDefault();
+    e.stopPropagation();
+    deleteTerminalSession(sessionDelete.dataset.eatSessionDelete);
+    return;
+  }
   const resume = t.closest('[data-eat-resume]');
   if (resume) { resumeGhostSession(resume.dataset.eatResume); return; }
   // 刷新模型列表
@@ -1008,29 +1073,30 @@ function onGlobalKey(e) {
   const st = getState();
   if (!st.terminalPage) return;
   if (st.activePage !== 'terminal') return;
-  const meta = e.metaKey || e.ctrlKey;
+  const shortcut = terminalShortcutModifier(e);
+  const targetIsEditable = isEditableTarget(e.target);
   // ⌘K 命令面板
-  if (meta && e.key.toLowerCase() === 'k') {
+  if (!targetIsEditable && shortcut && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     st.terminalPage.paletteOpen = !st.terminalPage.paletteOpen;
     renderTerminalPage();
     return;
   }
   // ⌘F 搜索（针对当前 active session）
-  if (meta && e.key.toLowerCase() === 'f') {
+  if (!targetIsEditable && shortcut && e.key.toLowerCase() === 'f') {
     e.preventDefault();
     openSearch();
     return;
   }
   // ⌘+/⌘- 字号微调
-  if (meta && (e.key === '=' || e.key === '+')) {
+  if (!targetIsEditable && shortcut && (e.key === '=' || e.key === '+')) {
     e.preventDefault(); bumpFontSize(+1); return;
   }
-  if (meta && e.key === '-') {
+  if (!targetIsEditable && shortcut && e.key === '-') {
     e.preventDefault(); bumpFontSize(-1); return;
   }
   // ⌘T 新建终端
-  if (meta && e.key.toLowerCase() === 't') {
+  if (!targetIsEditable && shortcut && e.key.toLowerCase() === 't') {
     e.preventDefault();
     st.terminalPage.launcherOpen = !st.terminalPage.launcherOpen;
     renderTerminalPage();
@@ -1129,6 +1195,7 @@ export function disposeTerminalInstances() {
   if (!tp) return;
   for (const inst of Object.values(tp.instances || {})) {
     try { inst.resizeObserver?.disconnect(); inst.resizeObserver = null; } catch (_) {}
+    try { inst.hostCleanup?.(); inst.hostCleanup = null; inst.boundHost = null; } catch (_) {}
     // mountedTo 标记清除，下次回 terminal 页强制 re-attach
     inst.mountedTo = null;
   }
@@ -1391,6 +1458,17 @@ function forgetGhostSession(sessionId) {
   renderTerminalPage();
 }
 
+function deleteTerminalSession(sessionId) {
+  const tp = getState()?.terminalPage;
+  if (!tp || !sessionId) return;
+  const sess = tp.sessions.find((s) => s.id === sessionId);
+  if (sess?._ghost) {
+    forgetGhostSession(sessionId);
+    return;
+  }
+  closeSession(sessionId);
+}
+
 async function closeSession(sessionId) {
   const tp = getState().terminalPage;
   try {
@@ -1497,13 +1575,24 @@ function mountTerminal(sessionId) {
       const term = new Terminal({
         cursorBlink: true,
         cursorStyle: isDark ? 'block' : 'bar',
+        cursorInactiveStyle: 'outline',
         fontFamily: '"MesloLGS NF", "JetBrainsMono Nerd Font", "FiraCode Nerd Font Mono", "SF Mono", "Menlo", "Consolas", monospace',
-        fontSize: 12.5,
-        scrollback: 5000,
+        fontSize: 13,
+        lineHeight: 1.15,
+        letterSpacing: 0,
+        scrollback: 10000,
+        scrollSensitivity: 1,
+        fastScrollModifier: 'alt',
+        fastScrollSensitivity: 5,
         theme: currentTermTheme(),
         allowProposedApi: true,
         macOptionIsMeta: true,
+        altClickMovesCursor: true,
         rightClickSelectsWord: true,
+        minimumContrastRatio: 4.5,
+        drawBoldTextInBrightColors: true,
+        tabStopWidth: 8,
+        customGlyphs: true,
       });
       const fit = new FitAddon();
       const webLinks = new WebLinksAddon((event, uri) => {
@@ -1513,12 +1602,17 @@ function mountTerminal(sessionId) {
         } catch (_) { window.open(uri, '_blank'); }
       });
       const search = new SearchAddon();
+      const unicode = new Unicode11Addon();
       term.loadAddon(fit);
       term.loadAddon(webLinks);
       term.loadAddon(search);
+      try {
+        term.loadAddon(unicode);
+        term.unicode.activeVersion = '11';
+      } catch (_) {}
 
       const instance = {
-        term, fit, search,
+        term, fit, search, unicode,
         cursor: 0,
         mountedTo: null,
         pollTimer: 0,
@@ -1526,39 +1620,26 @@ function mountTerminal(sessionId) {
         recvBytes: 0,
         lastResize: { cols: 0, rows: 0 },
         resizeObserver: null,
+        hostCleanup: null,
+        boundHost: null,
+        keyHandlerInstalled: false,
+        webgl: null,
         firstChunk: true,
       };
       tp.instances[sessionId] = instance;
 
       const target = document.getElementById('eaTermHost');
       if (!target) return;
-      term.open(target);
-      instance.mountedTo = target;
-      // 字体 metrics 稳定后再 fit
-      setTimeout(() => {
-        try {
-          // 守卫 0×0（display:none 时容器塌陷会让 PTY cols 设成 0 / 1，shell 排版乱）
-          if (target.clientWidth === 0 || target.clientHeight === 0) return;
-          fit.fit();
-          notifyResize(sessionId, instance);
-        } catch (_) {}
-      }, 0);
-      // 从 Rust 拉一次完整 PTY 缓存 — re-mount / 切 tab / 新挂载都把历史灌回来
-      api(`/api/terminal/buffer?sessionId=${encodeURIComponent(sessionId)}&cursor=0`).then((res) => {
-        const data = res?.ok && res.data?.data ? res.data.data : '';
-        if (!data) return;
-        try {
-          // 把 base64/raw 写进 xterm（terminal_buffer 返回的是 base64 编码的字节）
-          const bytes = typeof data === 'string' && /^[A-Za-z0-9+/=]+$/.test(data)
-            ? atob(data)
-            : data;
-          term.write(bytes);
-          instance.cursor = res.data.cursor || bytes.length;
-        } catch (_) {}
-      }).catch(() => {});
+      if (!attachTerminalElement(sessionId, instance, target)) return;
+      installTerminalKeyHandler(sessionId, instance);
+      bindTerminalHostInteractions(sessionId, instance, target);
+      enableTerminalRenderAddons(instance);
+      scheduleTerminalFit(sessionId, instance, target);
+      // 从 Rust 拉一次完整 PTY 缓存 — 新挂载时把已经输出的内容灌回来。
+      readTerminalOutput(sessionId, instance, { cursor: 0 });
 
       term.onData((data) => {
-        instance.sentBytes += data.length;
+        instance.sentBytes += utf8ByteLength(data);
         sendInput(sessionId, data).catch(() => {});
       });
 
@@ -1585,11 +1666,13 @@ function mountTerminal(sessionId) {
     return;
   }
 
-  // 已有实例但 mountedTo 是旧 host（被 innerHTML 替换掉了）→ re-attach 到当前 host
-  // 但 NOT 重新初始化 — buffer / 状态全部保留
+  // 已有实例但 mountedTo 是旧 host（被 innerHTML 替换掉了）→ re-attach 到当前 host。
+  // xterm 的 open() 不是可靠的二次挂载 API；直接移动已存在的 DOM，保留 buffer / PTY / scrollback。
   try { inst.term.options.theme = currentTermTheme(); } catch (_) {}
-  try { inst.term.open(hostEl); } catch (_) {}
-  inst.mountedTo = hostEl;
+  if (!attachTerminalElement(sessionId, inst, hostEl)) return;
+  installTerminalKeyHandler(sessionId, inst);
+  bindTerminalHostInteractions(sessionId, inst, hostEl);
+  enableTerminalRenderAddons(inst);
   // ResizeObserver 之前断开了，要重新接上，否则切回来 size 变化不响应
   if (typeof ResizeObserver === 'function' && !inst.resizeObserver) {
     let rafId = 0;
@@ -1604,8 +1687,231 @@ function mountTerminal(sessionId) {
     });
     inst.resizeObserver.observe(hostEl);
   }
+  scheduleTerminalFit(sessionId, inst, hostEl);
+  // 切页回来时事件流可能已经写进 xterm，但 canvas 脱离 DOM 后不会自动重绘；
+  // 再补一次后端 buffer 增量，保证 Tauri 事件丢帧时也能恢复。
+  readTerminalOutput(sessionId, inst);
   try { inst.term.focus(); } catch (_) {}
 }
+
+function attachTerminalElement(sessionId, inst, hostEl) {
+  if (!inst?.term || !hostEl) return false;
+  try {
+    const existingElement = inst.term.element;
+    if (existingElement) {
+      if (existingElement.parentElement !== hostEl) {
+        hostEl.replaceChildren(existingElement);
+      }
+    } else {
+      inst.term.open(hostEl);
+    }
+    inst.mountedTo = hostEl;
+    return true;
+  } catch (error) {
+    console.warn('[terminal] attach failed', sessionId, error);
+    return false;
+  }
+}
+
+function installTerminalKeyHandler(sessionId, inst) {
+  if (!inst?.term || inst.keyHandlerInstalled) return;
+  inst.keyHandlerInstalled = true;
+  try {
+    inst.term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true;
+      const key = String(event.key || '').toLowerCase();
+      const apple = isApplePlatform();
+      const copyShortcut = (apple && event.metaKey && key === 'c') || (!apple && event.ctrlKey && event.shiftKey && key === 'c');
+      const pasteShortcut = (apple && event.metaKey && key === 'v') || (!apple && event.ctrlKey && event.shiftKey && key === 'v');
+      const selectAllShortcut = apple && event.metaKey && key === 'a';
+      if (copyShortcut) {
+        const selection = inst.term.getSelection?.() || '';
+        if (selection) copyTerminalSelection(inst);
+        return false;
+      }
+      if (pasteShortcut) {
+        pasteFromClipboard(sessionId, inst);
+        return false;
+      }
+      if (selectAllShortcut) {
+        try { inst.term.selectAll(); } catch (_) {}
+        return false;
+      }
+      return true;
+    });
+  } catch (_) {}
+}
+
+function bindTerminalHostInteractions(sessionId, inst, hostEl) {
+  if (!inst?.term || !hostEl) return;
+  if (inst.boundHost === hostEl) return;
+  try { inst.hostCleanup?.(); } catch (_) {}
+  const focusTerm = () => {
+    try { inst.term.focus(); } catch (_) {}
+  };
+  const onCopy = (event) => {
+    const selection = inst.term.getSelection?.() || '';
+    if (!selection) return;
+    try {
+      event.clipboardData?.setData('text/plain', selection);
+      event.preventDefault();
+    } catch (_) {}
+  };
+  const onPaste = (event) => {
+    const text = event.clipboardData?.getData('text/plain') || '';
+    if (!text) return;
+    event.preventDefault();
+    pasteTextToTerminal(sessionId, inst, text);
+  };
+  const onContextMenu = (event) => {
+    if (isEditableTarget(event.target)) return;
+    event.preventDefault();
+    const selection = inst.term.getSelection?.() || '';
+    if (selection) {
+      copyTerminalSelection(inst);
+      return;
+    }
+    pasteFromClipboard(sessionId, inst);
+  };
+  const onAuxClick = (event) => {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    pasteFromClipboard(sessionId, inst);
+  };
+  const onDragOver = (event) => {
+    if (!event.dataTransfer) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+  const onDrop = (event) => {
+    if (!event.dataTransfer) return;
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer.files || []);
+    const paths = files
+      .map((file) => file.path || file.webkitRelativePath || file.name || '')
+      .filter(Boolean);
+    const plainText = event.dataTransfer.getData('text/plain') || '';
+    const text = paths.length ? paths.map(shellQuotePath).join(' ') : plainText;
+    if (text) pasteTextToTerminal(sessionId, inst, text);
+  };
+  hostEl.addEventListener('mousedown', focusTerm);
+  hostEl.addEventListener('copy', onCopy);
+  hostEl.addEventListener('paste', onPaste);
+  hostEl.addEventListener('contextmenu', onContextMenu);
+  hostEl.addEventListener('auxclick', onAuxClick);
+  hostEl.addEventListener('dragover', onDragOver);
+  hostEl.addEventListener('drop', onDrop);
+  inst.boundHost = hostEl;
+  inst.hostCleanup = () => {
+    hostEl.removeEventListener('mousedown', focusTerm);
+    hostEl.removeEventListener('copy', onCopy);
+    hostEl.removeEventListener('paste', onPaste);
+    hostEl.removeEventListener('contextmenu', onContextMenu);
+    hostEl.removeEventListener('auxclick', onAuxClick);
+    hostEl.removeEventListener('dragover', onDragOver);
+    hostEl.removeEventListener('drop', onDrop);
+  };
+}
+
+function enableTerminalRenderAddons(inst) {
+  if (!inst?.term || inst.webgl || inst.webglUnavailable) return;
+  const attach = () => {
+    if (inst.webgl || inst.webglUnavailable) return;
+    if (!inst.term.element?.isConnected) return;
+    try {
+      const webgl = new WebglAddon();
+      inst.term.loadAddon(webgl);
+      if (typeof webgl.onContextLoss === 'function') {
+        webgl.onContextLoss((event) => {
+          try { event?.preventDefault?.(); } catch (_) {}
+          try { webgl.dispose(); } catch (_) {}
+          inst.webgl = null;
+          inst.webglUnavailable = true;
+        });
+      }
+      inst.webgl = webgl;
+    } catch (_) {
+      inst.webglUnavailable = true;
+    }
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(attach);
+  else setTimeout(attach, 0);
+}
+
+function copyTerminalSelection(inst) {
+  const selection = inst?.term?.getSelection?.() || '';
+  if (!selection) return false;
+  try {
+    navigator.clipboard?.writeText(selection).catch(() => {});
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function pasteFromClipboard(sessionId, inst) {
+  try {
+    const text = await navigator.clipboard?.readText?.();
+    if (text) pasteTextToTerminal(sessionId, inst, text);
+  } catch (_) {}
+}
+
+function pasteTextToTerminal(sessionId, inst, text) {
+  const data = normalizeTerminalPaste(text);
+  if (!data) return;
+  try {
+    if (typeof inst.term.paste === 'function') inst.term.paste(data);
+    else sendInput(sessionId, data).catch(() => {});
+  } catch (_) {
+    sendInput(sessionId, data).catch(() => {});
+  }
+  try { inst.term.focus(); } catch (_) {}
+}
+
+function scheduleTerminalFit(sessionId, inst, hostEl) {
+  const fitOnce = () => {
+    try {
+      if (!hostEl?.isConnected || hostEl.clientWidth === 0 || hostEl.clientHeight === 0) return;
+      inst.fit.fit();
+      inst.term.refresh(0, Math.max(0, inst.term.rows - 1));
+      notifyResize(sessionId, inst);
+    } catch (_) {}
+  };
+  requestAnimationFrame(fitOnce);
+  setTimeout(fitOnce, 0);
+  setTimeout(fitOnce, 80);
+}
+
+function scheduleMountedTerminalFits() {
+  const tp = getState()?.terminalPage;
+  if (!tp || getState()?.activePage !== 'terminal') return;
+  for (const [sessionId, inst] of Object.entries(tp.instances || {})) {
+    const hostEl = inst?.mountedTo;
+    if (!hostEl?.isConnected) continue;
+    scheduleTerminalFit(sessionId, inst, hostEl);
+  }
+}
+
+function installTerminalViewportListeners() {
+  if (window.__eaTermViewportBound) return;
+  window.__eaTermViewportBound = true;
+  let timer = 0;
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = 0;
+      scheduleMountedTerminalFits();
+    }, 40);
+  };
+  window.addEventListener('resize', schedule);
+  window.addEventListener('focus', schedule);
+  window.addEventListener('pageshow', schedule);
+  window.addEventListener('orientationchange', schedule);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) schedule();
+  });
+}
+installTerminalViewportListeners();
 
 function notifyResize(sessionId, inst) {
   try {
@@ -1633,13 +1939,23 @@ async function pollOutput(sessionId) {
   const tp = getState().terminalPage;
   const inst = tp.instances[sessionId];
   if (!inst) return;
+  await readTerminalOutput(sessionId, inst);
+}
+
+async function readTerminalOutput(sessionId, inst, opts = {}) {
+  const tp = getState().terminalPage;
   if (inst._reading) return;
   inst._reading = true;
   try {
-    const params = new URLSearchParams({ sessionId, cursor: String(inst.cursor || 0) });
+    const startCursor = opts.cursor != null ? opts.cursor : (inst.cursor || 0);
+    const params = new URLSearchParams({ sessionId, cursor: String(startCursor) });
     const res = await api(`/api/terminal/read?${params.toString()}`);
     if (res?.ok && res.data) {
       let data = res.data.data || '';
+      const currentCursor = Number(inst.cursor || 0);
+      if (currentCursor > startCursor && data) {
+        data = dropUtf8PrefixBytes(data, currentCursor - startCursor);
+      }
       // 首条数据去掉前导 \n / \r\n（shell rc / starship 习惯先打空行让 prompt 错开行）
       if (data && inst.firstChunk) {
         inst.firstChunk = false;
@@ -1647,17 +1963,19 @@ async function pollOutput(sessionId) {
       }
       if (data) {
         inst.term.write(data);
-        inst.recvBytes += data.length;
+        inst.recvBytes += utf8ByteLength(data);
       }
-      if (typeof res.data.cursor === 'number') inst.cursor = res.data.cursor;
+      if (typeof res.data.cursor === 'number') inst.cursor = Math.max(Number(inst.cursor || 0), res.data.cursor);
       const sess = tp.sessions.find((s) => s.id === sessionId);
       if (sess && res.data.session) {
         sess.running = Boolean(res.data.session.running);
         sess.exitCode = res.data.session.exitCode ?? sess.exitCode;
       }
     }
-  } catch (_) {}
-  inst._reading = false;
+  } catch (_) {
+  } finally {
+    inst._reading = false;
+  }
 }
 
 function writeToActive(data) {

@@ -2208,6 +2208,7 @@ function scopePaths({ scope, projectPath, codexHome }) {
       rootPath: normalizedProjectPath,
       configPath: path.join(normalizedProjectPath, '.codex', 'config.toml'),
       envPath: path.join(normalizedCodexHome, '.env'),
+      authPath: path.join(normalizedCodexHome, 'auth.json'),
     };
   }
 
@@ -2216,6 +2217,7 @@ function scopePaths({ scope, projectPath, codexHome }) {
     rootPath: normalizedCodexHome,
     configPath: path.join(normalizedCodexHome, 'config.toml'),
     envPath: path.join(normalizedCodexHome, '.env'),
+    authPath: path.join(normalizedCodexHome, 'auth.json'),
   };
 }
 
@@ -2535,6 +2537,31 @@ function normalizeSettingsPatch(patch) {
   return normalized;
 }
 
+const PROJECT_IGNORED_CODEX_CONFIG_KEYS = [
+  'openai_base_url',
+  'chatgpt_base_url',
+  'apps_mcp_product_sku',
+  'model_provider',
+  'model_providers',
+  'notify',
+  'profile',
+  'profiles',
+  'experimental_realtime_ws_base_url',
+  'otel',
+];
+
+function normalizeSettingsPatchForScope(patch, scope = 'global') {
+  const normalized = normalizeSettingsPatch(patch);
+  if (scope !== 'project') return normalized;
+  for (const key of PROJECT_IGNORED_CODEX_CONFIG_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(normalized, key)) {
+      if (normalized[key] === null) continue;
+      delete normalized[key];
+    }
+  }
+  return normalized;
+}
+
 function parseEnv(content) {
   const entries = {};
   for (const line of content.split(/\r?\n/)) {
@@ -2660,9 +2687,8 @@ function inferEnvKey(providerKey) {
     .toUpperCase() + '_API_KEY';
 }
 
-async function readAuthJson(codexHome) {
-  const raw = await readText(path.join(codexHome, 'auth.json'));
-  if (!raw.trim()) {
+function parseJsonSafe(raw) {
+  if (!String(raw || '').trim()) {
     return {};
   }
   try {
@@ -2670,6 +2696,11 @@ async function readAuthJson(codexHome) {
   } catch {
     return {};
   }
+}
+
+async function readAuthJson(codexHome) {
+  const raw = await readText(path.join(codexHome, 'auth.json'));
+  return parseJsonSafe(raw);
 }
 
 function isEnvStyleAuthKey(key) {
@@ -3007,26 +3038,29 @@ async function readScopeState({ scope = 'global', projectPath = '', codexHome = 
   const paths = scopePaths({ scope, projectPath, codexHome: normalizedCodexHome });
   await ensureDir(normalizedCodexHome);
 
-  const [configContent, envContent, authJson] = await Promise.all([
+  const [configContent, envContent, authContent] = await Promise.all([
     readText(paths.configPath),
     readText(paths.envPath),
-    readAuthJson(normalizedCodexHome),
+    readText(paths.authPath),
   ]);
+  const authJson = parseJsonSafe(authContent);
 
   return {
     normalizedCodexHome,
     paths,
     configContent,
     envContent,
+    authContent,
     authJson,
     config: parseToml(configContent),
     env: parseEnv(envContent),
   };
 }
 
-async function createBackup({ configPath, envPath, scope }) {
+async function createBackup({ configPath, envPath, authPath, scope }) {
   // 备份根目录 0700、备份子目录 0700、备份文件 0600 ——
-  // .env.bak 含 API key，config.toml.bak 可能含自定义 env / 路径
+  // .env.bak / auth.json.bak 含 API key / OAuth token，
+  // config.toml.bak 可能含自定义 env / 路径
   const root = backupsRoot();
   await ensureDir(root);
   if (process.platform !== 'win32') {
@@ -3039,6 +3073,9 @@ async function createBackup({ configPath, envPath, scope }) {
   }
   await writeText(path.join(targetDir, 'config.toml.bak'), await readText(configPath));
   await writeText(path.join(targetDir, '.env.bak'), await readText(envPath));
+  if (authPath && await pathExists(authPath)) {
+    await writeText(path.join(targetDir, 'auth.json.bak'), await readText(authPath));
+  }
   return targetDir;
 }
 
@@ -3124,46 +3161,109 @@ function firstWindowsCommand(commands = []) {
   return '';
 }
 
+function findDarwinApplication(appNames = []) {
+  if (process.platform !== 'darwin') return null;
+  const roots = [
+    '/Applications',
+    '/Applications/Utilities',
+    '/System/Applications',
+    '/System/Applications/Utilities',
+    path.join(os.homedir(), 'Applications'),
+  ];
+  for (const appName of appNames) {
+    const cleanName = String(appName || '').replace(/\.app$/i, '').trim();
+    if (!cleanName) continue;
+    for (const root of roots) {
+      const appPath = path.join(root, `${cleanName}.app`);
+      if (existsSync(appPath)) return { appName: cleanName, appPath };
+    }
+  }
+  return null;
+}
+
+function findDarwinCommandOrBundle(commandNames = [], appInfo = null, executableNames = commandNames) {
+  for (const command of commandNames) {
+    const found = commandExists(command);
+    if (found) return found;
+  }
+  if (appInfo?.appPath) {
+    for (const executable of executableNames) {
+      const candidate = path.join(appInfo.appPath, 'Contents', 'MacOS', executable);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return '';
+}
+
+function makeDarwinAppProfile({ id, label, appNames, launchMode = 'type-command', command = '' }) {
+  const appInfo = findDarwinApplication(appNames);
+  return {
+    id,
+    label,
+    available: Boolean(appInfo?.appPath),
+    command: command || appInfo?.appName || '',
+    appName: appInfo?.appName || appNames?.[0] || '',
+    appPath: appInfo?.appPath || '',
+    launchMode,
+  };
+}
+
 function listDarwinTerminalProfiles() {
   if (process.platform !== 'darwin') return [];
 
-  const homeApplications = path.join(os.homedir(), 'Applications');
-  const wezterm = commandExists('wezterm');
-  const ghostty = commandExists('ghostty');
-  const alacritty = commandExists('alacritty');
-  const kitty = commandExists('kitty');
+  const terminalApp = findDarwinApplication(['Terminal']);
+  const itermApp = findDarwinApplication(['iTerm', 'iTerm2']);
+  const weztermApp = findDarwinApplication(['WezTerm']);
+  const ghosttyApp = findDarwinApplication(['Ghostty']);
+  const alacrittyApp = findDarwinApplication(['Alacritty']);
+  const kittyApp = findDarwinApplication(['kitty']);
+  const wezterm = findDarwinCommandOrBundle(['wezterm'], weztermApp, ['wezterm']);
+  const ghostty = findDarwinCommandOrBundle(['ghostty'], ghosttyApp, ['ghostty']);
+  const alacritty = findDarwinCommandOrBundle(['alacritty'], alacrittyApp, ['alacritty']);
+  const kitty = findDarwinCommandOrBundle(['kitty'], kittyApp, ['kitty']);
 
   const profiles = [
     { id: 'auto', label: '自动选择（推荐）', available: true, command: '' },
     {
       id: 'terminal',
       label: 'Terminal.app',
-      available: Boolean(firstExistingPath([
-        '/System/Applications/Utilities/Terminal.app',
-        '/Applications/Utilities/Terminal.app',
-      ])),
+      available: Boolean(terminalApp?.appPath),
       command: 'Terminal',
+      appName: 'Terminal',
+      appPath: terminalApp?.appPath || '',
+      launchMode: 'applescript',
     },
     {
       id: 'iterm',
-      label: 'iTerm',
-      available: Boolean(firstExistingPath([
-        '/Applications/iTerm.app',
-        '/Applications/iTerm2.app',
-        path.join(homeApplications, 'iTerm.app'),
-        path.join(homeApplications, 'iTerm2.app'),
-      ])),
+      label: itermApp?.appName === 'iTerm2' ? 'iTerm2' : 'iTerm',
+      available: Boolean(itermApp?.appPath),
       command: 'iTerm',
+      appName: itermApp?.appName || 'iTerm',
+      appPath: itermApp?.appPath || '',
+      launchMode: 'applescript',
     },
-    { id: 'wezterm', label: 'WezTerm', available: Boolean(wezterm), command: wezterm || '' },
-    { id: 'ghostty', label: 'Ghostty', available: Boolean(ghostty), command: ghostty || '' },
-    { id: 'alacritty', label: 'Alacritty', available: Boolean(alacritty), command: alacritty || '' },
-    { id: 'kitty', label: 'kitty', available: Boolean(kitty), command: kitty || '' },
+    makeDarwinAppProfile({ id: 'termius', label: 'Termius', appNames: ['Termius'] }),
+    makeDarwinAppProfile({ id: 'terminus', label: 'Terminus', appNames: ['Terminus'] }),
+    makeDarwinAppProfile({ id: 'tabby', label: 'Tabby / Terminus', appNames: ['Tabby'] }),
+    makeDarwinAppProfile({ id: 'warp', label: 'Warp', appNames: ['Warp'] }),
+    makeDarwinAppProfile({ id: 'hyper', label: 'Hyper', appNames: ['Hyper'] }),
+    { id: 'wezterm', label: 'WezTerm', available: Boolean(wezterm), command: wezterm || '', appName: weztermApp?.appName || 'WezTerm', appPath: weztermApp?.appPath || '', launchMode: 'cli' },
+    { id: 'ghostty', label: 'Ghostty', available: Boolean(ghostty), command: ghostty || '', appName: ghosttyApp?.appName || 'Ghostty', appPath: ghosttyApp?.appPath || '', launchMode: 'cli' },
+    { id: 'alacritty', label: 'Alacritty', available: Boolean(alacritty), command: alacritty || '', appName: alacrittyApp?.appName || 'Alacritty', appPath: alacrittyApp?.appPath || '', launchMode: 'cli' },
+    { id: 'kitty', label: 'kitty', available: Boolean(kitty), command: kitty || '', appName: kittyApp?.appName || 'kitty', appPath: kittyApp?.appPath || '', launchMode: 'cli' },
   ];
 
   return profiles
     .filter((profile) => profile.id === 'auto' || profile.available)
-    .map((profile) => ({ id: profile.id, label: profile.label, command: profile.command, available: profile.available }));
+    .map((profile) => ({
+      id: profile.id,
+      label: profile.label,
+      command: profile.command,
+      available: profile.available,
+      appName: profile.appName || '',
+      appPath: profile.appPath || '',
+      launchMode: profile.launchMode || '',
+    }));
 }
 
 function escapeAppleScriptText(value = '') {
@@ -3178,8 +3278,35 @@ function resolveDarwinTerminalProfile(profileId = 'auto') {
     || profiles.find((profile) => profile.id === 'terminal')
     || profiles.find((profile) => profile.id === 'wezterm')
     || profiles.find((profile) => profile.id === 'ghostty')
+    || profiles.find((profile) => profile.id === 'alacritty')
+    || profiles.find((profile) => profile.id === 'kitty')
+    || profiles.find((profile) => profile.id === 'termius')
+    || profiles.find((profile) => profile.id === 'terminus')
+    || profiles.find((profile) => profile.id === 'tabby')
+    || profiles.find((profile) => profile.id === 'warp')
+    || profiles.find((profile) => profile.id === 'hyper')
     || profiles.find((profile) => profile.id !== 'auto')
     || { id: 'terminal', label: 'Terminal.app', command: 'Terminal', available: true };
+}
+
+function launchDarwinAppAndTypeCommand(profile, shellCommand, toolLabel) {
+  const appName = String(profile.appName || profile.command || profile.label || '').replace(/\.app$/i, '').trim();
+  if (!appName) throw new Error(`当前终端 ${profile.label} 缺少 App 名称`);
+  const opened = spawnSync('open', ['-a', appName], { encoding: 'utf8' });
+  if (opened.status !== 0) {
+    throw new Error((opened.stderr || opened.stdout || `Failed to open ${appName}`).trim());
+  }
+  const appleScript = [
+    `tell application "${escapeAppleScriptText(appName)}" to activate`,
+    'delay 0.35',
+    'tell application "System Events"',
+    `keystroke "${escapeAppleScriptText(shellCommand)}"`,
+    'key code 36',
+    'end tell',
+  ].join('\n');
+  const typed = spawnSync('osascript', ['-e', appleScript], { encoding: 'utf8' });
+  if (typed.status === 0) return `${toolLabel} 已在 ${profile.label} 中启动`;
+  return `${toolLabel} 已打开 ${profile.label}，请在其中执行：${shellCommand}`;
 }
 
 function launchDarwinTerminal(cwd, commandText, { toolLabel = 'Codex', terminalProfile = 'auto' } = {}) {
@@ -3222,6 +3349,9 @@ function launchDarwinTerminal(cwd, commandText, { toolLabel = 'Codex', terminalP
     alacritty: [profile.command || 'alacritty', ['--working-directory', normalizedCwd, '-e', 'bash', '-lc', shellCommand]],
     kitty: [profile.command || 'kitty', ['--directory', normalizedCwd, 'bash', '-lc', shellCommand]],
   };
+  if (profile.launchMode === 'type-command' || ['termius', 'terminus', 'tabby', 'warp', 'hyper'].includes(profile.id)) {
+    return launchDarwinAppAndTypeCommand(profile, shellCommand, toolLabel);
+  }
   const [command, args] = terminalMap[profile.id] || [];
   if (!command) {
     throw new Error(`当前终端 ${profile.label} 暂不支持自动启动命令`);
@@ -3324,6 +3454,89 @@ function launchWindowsTerminal(cwd, commandText, { toolLabel = 'Codex', terminal
   return `${toolLabel} 已在 ${profile.label} 中启动`;
 }
 
+function listLinuxTerminalProfiles() {
+  if (process.platform !== 'linux') return [];
+  const specs = [
+    { id: 'x-terminal-emulator', label: '系统默认终端', command: 'x-terminal-emulator' },
+    { id: 'gnome-terminal', label: 'GNOME Terminal', command: 'gnome-terminal' },
+    { id: 'konsole', label: 'Konsole', command: 'konsole' },
+    { id: 'wezterm', label: 'WezTerm', command: 'wezterm' },
+    { id: 'alacritty', label: 'Alacritty', command: 'alacritty' },
+    { id: 'kitty', label: 'kitty', command: 'kitty' },
+    { id: 'tilix', label: 'Tilix', command: 'tilix' },
+    { id: 'xfce4-terminal', label: 'Xfce Terminal', command: 'xfce4-terminal' },
+    { id: 'lxterminal', label: 'LXTerminal', command: 'lxterminal' },
+    { id: 'xterm', label: 'xterm', command: 'xterm' },
+  ];
+  const profiles = specs
+    .map((profile) => ({ ...profile, command: commandExists(profile.command) || '' }))
+    .filter((profile) => Boolean(profile.command));
+  return [
+    { id: 'auto', label: '自动选择（推荐）', command: '', available: true },
+    ...profiles.map((profile) => ({
+      id: profile.id,
+      label: profile.label,
+      command: profile.command,
+      available: true,
+      launchMode: 'cli',
+    })),
+  ];
+}
+
+function resolveLinuxTerminalProfile(profileId = 'auto') {
+  const profiles = listLinuxTerminalProfiles();
+  const requested = profiles.find((profile) => profile.id === String(profileId || 'auto').trim());
+  if (requested && requested.id !== 'auto') return requested;
+  return profiles.find((profile) => profile.id === 'x-terminal-emulator')
+    || profiles.find((profile) => profile.id === 'gnome-terminal')
+    || profiles.find((profile) => profile.id === 'konsole')
+    || profiles.find((profile) => profile.id === 'wezterm')
+    || profiles.find((profile) => profile.id === 'alacritty')
+    || profiles.find((profile) => profile.id === 'kitty')
+    || profiles.find((profile) => profile.id !== 'auto')
+    || null;
+}
+
+function linuxTerminalArgs(profileId, cwd, shellCommand) {
+  const cwdText = String(cwd || process.cwd());
+  switch (profileId) {
+    case 'gnome-terminal':
+      return ['--', 'bash', '-lc', shellCommand];
+    case 'wezterm':
+      return ['start', '--cwd', cwdText, '--', 'bash', '-lc', shellCommand];
+    case 'alacritty':
+      return ['--working-directory', cwdText, '-e', 'bash', '-lc', shellCommand];
+    case 'kitty':
+      return ['--directory', cwdText, 'bash', '-lc', shellCommand];
+    case 'tilix':
+      return ['--working-directory', cwdText, '-e', 'bash', '-lc', shellCommand];
+    case 'xfce4-terminal':
+      return ['--working-directory', cwdText, '-e', `bash -lc ${quotePosixShellArg(shellCommand)}`];
+    case 'lxterminal':
+      return ['--working-directory', cwdText, '-e', 'bash', '-lc', shellCommand];
+    case 'konsole':
+    case 'x-terminal-emulator':
+    case 'xterm':
+    default:
+      return ['-e', 'bash', '-lc', shellCommand];
+  }
+}
+
+function launchLinuxTerminal(cwd, commandText, { toolLabel = 'Codex', terminalProfile = 'auto' } = {}) {
+  const profile = resolveLinuxTerminalProfile(terminalProfile);
+  if (!profile?.command) {
+    throw new Error(`没有找到可用终端，请先手动运行 ${commandText}`);
+  }
+  const normalizedCwd = String(cwd || process.cwd());
+  const shellCommand = `cd ${quotePosixShellArg(normalizedCwd)} && ${commandText}`;
+  const child = spawn(profile.command, linuxTerminalArgs(profile.id, normalizedCwd, shellCommand), {
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  return `${toolLabel} 已在 ${profile.label} 中启动`;
+}
+
 // Build a POSIX shell prefix that exports given env vars before running cmd.
 // 用于把 per-provider 的 HTTPS_PROXY 注入到 AppleScript / bash -lc 的新终端会话。
 // 输出形如: `export HTTPS_PROXY='http://proxy:8080' HTTP_PROXY='http://proxy:8080'; `
@@ -3359,6 +3572,10 @@ function launchTerminalCommand(cwd, { binaryPath, binaryName = 'codex', toolLabe
       .join('');
     const winCmd = winEnvSet ? `${winEnvSet}${windowsBin}` : windowsBin;
     return launchWindowsTerminal(cwd, winCmd, { toolLabel, terminalProfile });
+  }
+
+  if (process.platform === 'linux') {
+    return launchLinuxTerminal(cwd, posixBin, { toolLabel, terminalProfile });
   }
 
   const quotedCwd = quotePosixShellArg(String(cwd || process.cwd()));
@@ -3668,7 +3885,7 @@ export async function checkSetupEnvironment({ codexHome = defaultCodexHome() } =
 }
 
 export async function loadState({ scope = 'global', projectPath = '', codexHome = defaultCodexHome() } = {}) {
-  const { normalizedCodexHome, paths, configContent, envContent, authJson, config, env } = await readScopeState({
+  const { normalizedCodexHome, paths, configContent, envContent, authContent, authJson, config, env } = await readScopeState({
     scope,
     projectPath,
     codexHome,
@@ -3693,6 +3910,7 @@ export async function loadState({ scope = 'global', projectPath = '', codexHome 
     configExists: Boolean(configContent.trim()),
     envExists: Boolean(envContent.trim()),
     configToml: configContent,
+    authJsonRaw: authContent,
     config,
     providers,
     activeProvider,
@@ -3715,7 +3933,9 @@ export async function loadState({ scope = 'global', projectPath = '', codexHome 
         ? listWindowsTerminalProfiles({ passive: true })
         : process.platform === 'darwin'
           ? listDarwinTerminalProfiles()
-          : [],
+          : process.platform === 'linux'
+            ? listLinuxTerminalProfiles()
+            : [],
     },
   }
 }
@@ -4128,7 +4348,7 @@ export async function saveSettings(payload) {
   const configContent = await readText(paths.configPath);
   const config = parseToml(configContent);
   const originalConfig = structuredClone(config);
-  applyPatch(config, normalizeSettingsPatch(payload.settings || {}));
+  applyPatch(config, normalizeSettingsPatchForScope(payload.settings || {}, paths.scope));
 
   const changed = JSON.stringify(config) !== JSON.stringify(originalConfig);
   const backupPath = changed ? await createBackup(paths) : null;
@@ -4165,16 +4385,33 @@ export async function saveRawConfig(payload) {
 
   const currentContent = await readText(paths.configPath);
   const changed = currentContent !== configToml;
-  const backupPath = changed ? await createBackup(paths) : null;
+
+  const hasAuthJsonPayload = Object.prototype.hasOwnProperty.call(payload, 'authJson');
+  const authJsonRaw = hasAuthJsonPayload ? String(payload.authJson || '') : '';
+  let authChanged = false;
+  if (authJsonRaw.trim()) {
+    try {
+      JSON.parse(authJsonRaw);
+    } catch (error) {
+      throw new Error(`auth.json 解析失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    const currentAuth = await readText(paths.authPath);
+    authChanged = currentAuth !== authJsonRaw;
+  }
+
+  const backupPath = changed || authChanged ? await createBackup(paths) : null;
   if (changed) {
     await writeText(paths.configPath, configToml);
+  }
+  if (authChanged) {
+    await writeText(paths.authPath, authJsonRaw);
   }
 
   return {
     saved: true,
     backupPath,
     paths,
-    changed,
+    changed: changed || authChanged,
   };
 }
 
@@ -4194,6 +4431,7 @@ export async function restoreBackup({ backupName, scope = 'global', projectPath 
   const normalizedCodexHome = assertAllowedPath(codexHome, 'codexHome');
   const paths = scopePaths({ scope, projectPath, codexHome: normalizedCodexHome });
   const backupDir = resolveBackupDir(backupName);
+  const authBackupPath = path.join(backupDir, 'auth.json.bak');
   const [configContent, envContent] = await Promise.all([
     readText(path.join(backupDir, 'config.toml.bak')),
     readText(path.join(backupDir, '.env.bak')),
@@ -4201,6 +4439,9 @@ export async function restoreBackup({ backupName, scope = 'global', projectPath 
 
   await writeText(paths.configPath, configContent);
   await writeText(paths.envPath, envContent);
+  if (await pathExists(authBackupPath)) {
+    await writeText(paths.authPath, await readText(authBackupPath));
+  }
   return { restored: true, paths };
 }
 
