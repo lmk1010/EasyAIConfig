@@ -10,6 +10,7 @@ use crate::provider::{
   infer_env_key, infer_provider_label, infer_provider_seed, normalize_base_url,
   reveal_provider_api_key, slugify_provider_key, summarize_providers,
 };
+use crate::provider_eval::run_model_authenticity_eval;
 use crate::{
   app_home, apply_patch, backups_root, default_codex_home, ensure_dir, ensure_secret_dir,
   expand_home_path, home_dir, normalize_settings_patch, parse_env, parse_json_object,
@@ -496,6 +497,53 @@ pub(crate) async fn test_saved_provider(body: &Value) -> Result<Value, String> {
     timeout_ms,
     &codex_home.to_string_lossy(),
   ).await
+}
+
+pub(crate) async fn model_eval_saved_provider(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let provider_key = get_string(&object, "providerKey");
+  if provider_key.trim().is_empty() {
+    return Err("providerKey is required".to_string());
+  }
+
+  let codex_home = {
+    let input = get_string(&object, "codexHome");
+    expand_home_path(&input).map_or_else(default_codex_home, Ok)?
+  };
+  let scope = get_string(&object, "scope");
+  let project_path = get_string(&object, "projectPath");
+  let timeout_ms = object.get("timeoutMs").and_then(Value::as_u64).unwrap_or(30000);
+  let profile = get_string(&object, "profile");
+  let paths = scope_paths(if scope.is_empty() { "global" } else { &scope }, &project_path, &codex_home)?;
+  let config_content = read_text(&paths.config_path)?;
+  let env_content = read_text(&paths.env_path)?;
+  let auth_content = read_text(&paths.auth_path)?;
+  let auth_json = serde_json::from_str::<Value>(&auth_content).unwrap_or_else(|_| json!({}));
+  let config = parse_toml_config(&config_content)?;
+  let env = parse_env(&env_content);
+  let flat_auth = flatten_auth_json(&auth_json);
+  let secret = reveal_provider_api_key(&config, &env, &flat_auth, &provider_key)?;
+  let model = {
+    let explicit = get_string(&object, "model");
+    if !explicit.trim().is_empty() {
+      explicit
+    } else {
+      config.get("model").and_then(Value::as_str).unwrap_or_default().to_string()
+    }
+  };
+
+  run_model_authenticity_eval(
+    secret.get("baseUrl").and_then(Value::as_str).unwrap_or_default(),
+    secret.get("apiKey").and_then(Value::as_str).unwrap_or_default(),
+    "",
+    &model,
+    secret.get("providerKey").and_then(Value::as_str).unwrap_or(&provider_key),
+    secret.get("providerName").and_then(Value::as_str).unwrap_or(&provider_key),
+    if profile.trim().is_empty() { "quick" } else { &profile },
+    timeout_ms,
+    secret.get("wireApi").and_then(Value::as_str).unwrap_or("responses"),
+  )
+  .await
 }
 
 pub(crate) fn pick_directory(app: tauri::AppHandle, body: &Value) -> Result<Value, String> {

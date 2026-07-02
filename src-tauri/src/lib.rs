@@ -370,6 +370,7 @@ mod network;
 mod processes;
 mod usage_stats;
 mod app_settings;
+mod provider_eval;
 mod provider_health;
 mod provider_models;
 mod project_bindings;

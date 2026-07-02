@@ -458,6 +458,9 @@
                 <path d="M12 3a9 9 0 0 1 0 18" fill="currentColor" opacity="0.4" stroke="none"/>
               </svg>
             </button>
+            <button id="languageToggleBtn" class="topbar-icon-btn lang-toggle-btn" title="切换语言" aria-label="切换语言" data-language-toggle>
+              <span data-language-toggle-label>中</span>
+            </button>
             <button id="openSystemSettingsBtn" class="secondary subtle-btn">系统设置</button>
             <button id="openAdvancedBtn" class="secondary subtle-btn">配置编辑</button>
             <button id="openAboutBtn" class="secondary subtle-btn">关于</button>
@@ -578,7 +581,7 @@
                         <button type="button" role="menuitem" data-ad-value="3600">1 小时</button>
                       </div>
                     </div>
-                    <button type="button" class="ch-autodetect-trigger af-trig" id="chAutoFailoverTrigger" title="自动故障转移：active provider 连续失败时自动切到优先级表里下一档">
+                    <button type="button" class="ch-autodetect-trigger af-trig" id="chAutoFailoverTrigger" title="自动故障转移：active 连续失败后切到优先级列表中的第一条可用备用">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M3 12a9 9 0 0 1 16.36-5.36L22 9M21 12a9 9 0 0 1-16.36 5.36L2 15"/>
                       </svg>
@@ -1020,11 +1023,17 @@
 
           <section class="page-view" data-page="systemSettings">
             <div class="sys-page">
-              <div class="sys-layout">
-                <div class="sys-column">
-                  <section class="sys-section">
-                    <div class="sys-section-head">
-                      <h3>外观模式</h3>
+              <section class="sys-panel sys-preferences-panel">
+                <div class="sys-panel-head">
+                  <div>
+                    <div class="sys-panel-kicker">Preferences</div>
+                    <h3>偏好设置</h3>
+                  </div>
+                </div>
+                <div class="sys-setting-list">
+                  <div class="sys-setting-row">
+                    <div class="sys-setting-copy">
+                      <h4>外观模式</h4>
                       <p>切换浅色 / 深色 / 自动模式（自动模式按时间切换）。</p>
                     </div>
                     <div class="sys-theme-modes" id="sysThemeModes">
@@ -1032,48 +1041,79 @@
                       <button class="sys-theme-btn" data-sys-theme="light" type="button">浅色</button>
                       <button class="sys-theme-btn" data-sys-theme="dark" type="button">深色</button>
                     </div>
-                  </section>
+                  </div>
 
-                  <section class="sys-section sys-storage-section">
-                    <div class="sys-section-head">
+                  <div class="sys-setting-row">
+                    <div class="sys-setting-copy">
+                      <h4>界面语言</h4>
+                      <p>切换中文 / English，设置会保存在本机。</p>
+                    </div>
+                    <div class="sys-theme-modes sys-language-modes" id="sysLanguageModes">
+                      <button class="sys-theme-btn" data-sys-language="zh-CN" type="button">中文</button>
+                      <button class="sys-theme-btn" data-sys-language="en-US" type="button">English</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div class="sys-layout">
+                <section class="sys-panel sys-storage-section">
+                  <div class="sys-panel-head">
+                    <div>
+                      <div class="sys-panel-kicker">Storage</div>
                       <h3>存储占用</h3>
-                      <p>本地缓存（仅界面）：<strong id="sysLocalStorageUsage">-</strong></p>
                     </div>
-                    <div class="sys-storage-summary">
-                      <div class="sys-storage-summary-row">
-                        <span>本地占用</span>
-                        <strong id="sysStorageLocalTotal">-</strong>
-                        <span>文件 <strong id="sysStorageLocalFiles">-</strong></span>
-                      </div>
-                      <div class="sys-storage-summary-row">
-                        <span>第三方编程工具占用</span>
-                        <strong id="sysStorageToolsTotal">-</strong>
-                        <span>文件 <strong id="sysStorageToolsFiles">-</strong></span>
-                      </div>
-                    </div>
-                    <div class="sys-storage-split">
-                      <section class="sys-storage-group">
-                        <div class="sys-storage-group-title">本地占用</div>
-                        <div id="sysStorageLocalList" class="sys-storage-list"></div>
-                      </section>
-                      <section class="sys-storage-group">
-                        <div class="sys-storage-group-title">第三方编程工具占用</div>
-                        <div id="sysStorageToolsList" class="sys-storage-list"></div>
-                      </section>
-                    </div>
-                    <div class="sys-actions">
+                    <div class="sys-actions sys-panel-actions">
                       <button id="sysRefreshStorageBtn" class="secondary tiny-btn" type="button">刷新占用</button>
+                    </div>
+                  </div>
+                  <div class="sys-storage-summary">
+                    <div class="sys-storage-summary-row">
+                      <span>本地占用</span>
+                      <strong id="sysStorageLocalTotal">-</strong>
+                      <span>文件 <strong id="sysStorageLocalFiles">-</strong></span>
+                    </div>
+                    <div class="sys-storage-summary-row">
+                      <span>第三方编程工具占用</span>
+                      <strong id="sysStorageToolsTotal">-</strong>
+                      <span>文件 <strong id="sysStorageToolsFiles">-</strong></span>
+                    </div>
+                    <div class="sys-storage-summary-row">
+                      <span>界面缓存</span>
+                      <strong id="sysLocalStorageUsage">-</strong>
+                      <span>localStorage</span>
+                    </div>
+                  </div>
+                  <div class="sys-storage-cleanup">
+                    <span class="sys-storage-cleanup-label">清理操作</span>
+                    <div class="sys-actions">
                       <button id="sysClearCacheBtn" class="secondary tiny-btn" type="button">清理缓存</button>
                       <button id="sysClearBackupsBtn" class="secondary tiny-btn" type="button">清理备份</button>
                       <button id="sysClearUiCacheBtn" class="secondary tiny-btn" type="button">清理界面缓存</button>
                     </div>
-                  </section>
-                </div>
+                  </div>
+                  <div class="sys-storage-split">
+                    <section class="sys-storage-group">
+                      <div class="sys-storage-group-title">本地占用</div>
+                      <div id="sysStorageLocalList" class="sys-storage-list"></div>
+                    </section>
+                    <section class="sys-storage-group">
+                      <div class="sys-storage-group-title">第三方编程工具占用</div>
+                      <div id="sysStorageToolsList" class="sys-storage-list"></div>
+                    </section>
+                  </div>
+                </section>
 
-                <div class="sys-column">
-                  <section class="sys-section">
-                    <div class="sys-section-head">
-                      <h3>工具卸载</h3>
+                <section class="sys-panel sys-management-panel">
+                  <div class="sys-panel-head">
+                    <div>
+                      <div class="sys-panel-kicker">Management</div>
+                      <h3>常用操作</h3>
+                    </div>
+                  </div>
+                  <div class="sys-management-group">
+                    <div class="sys-setting-copy">
+                      <h4>工具卸载</h4>
                       <p>卸载当前通过本应用安装的 CLI 工具（Codex / Claude Code / OpenClaw）。</p>
                     </div>
                     <div class="sys-actions">
@@ -1082,19 +1122,19 @@
                       <button id="sysUninstallOpenClawBtn" class="secondary tiny-btn" type="button">卸载 OpenClaw</button>
                       <button id="sysUninstallAllToolsBtn" class="secondary tiny-btn danger" type="button">全部卸载</button>
                     </div>
-                  </section>
+                  </div>
 
-                  <section class="sys-section">
-                    <div class="sys-section-head">
-                      <h3>应用管理</h3>
+                  <div class="sys-management-group">
+                    <div class="sys-setting-copy">
+                      <h4>应用管理</h4>
                       <p>EasyAIConfig 需要在系统应用管理里卸载；问题反馈直接跳转 Issue 页面。</p>
                     </div>
                     <div class="sys-actions">
                       <button id="sysOpenUninstallEntryBtn" class="secondary tiny-btn" type="button">打开系统卸载入口</button>
                       <button id="sysOpenIssueBtn" class="secondary tiny-btn" type="button">问题反馈（Issue）</button>
                     </div>
-                  </section>
-                </div>
+                  </div>
+                </section>
               </div>
             </div>
           </section>
@@ -3757,6 +3797,7 @@
 
     <div id="toastContainer" class="toast-container"></div>
   </main>
+  <script src="/i18n.js?v=20260701a"></script>
   <script src="/vendor/ace/ace.js"></script>
   <script type="module" src="/app.js?v=20260625v"></script>
   <script type="module" src="/terminal-page.js"></script>

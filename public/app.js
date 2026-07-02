@@ -137,6 +137,18 @@ const state = {
     usageMetricsFetchedAt: 0,
     testResult: null,          // { ok, models, latencyMs, error }
     testRunning: false,
+    evalResult: null,          // { summary, evidence, capabilities, error }
+    evalRunning: false,
+    evalExpanded: { channel: false, upstream: false },
+    evalCasePage: 0,
+    evalView: localStorage.getItem('easyaiconfig_pd_eval_view') || 'single',
+    evalHistory: [],
+    evalBatchSelected: {},
+    evalBatchRunning: false,
+    evalBatchPaused: false,
+    evalBatchResults: [],
+    evalBatchProgress: null,
+    evalBatchRunId: '',
     loading: false,
     error: '',
   },
@@ -486,6 +498,70 @@ function toggleTheme() {
   const labels = { dark: '已切换：暗黑模式', light: '已切换：浅色模式', auto: '已切换：自动模式（跟随时间）' };
   flash(labels[state.themePreference] || '', 'success');
 }
+
+function getAppLanguage() {
+  return window.EasyAIConfigI18n?.getLanguage?.() || 'zh-CN';
+}
+
+function isEnglishAppLanguage() {
+  return getAppLanguage() === 'en-US';
+}
+
+function appText(text, vars) {
+  const translator = window.EasyAIConfigI18n?.translate || window.EasyAIConfigI18n?.t || window.t;
+  if (typeof translator === 'function') return translator(text, vars);
+  let out = String(text == null ? '' : text);
+  if (vars && typeof vars === 'object') {
+    Object.entries(vars).forEach(([key, value]) => {
+      out = out.split(`{${key}}`).join(String(value));
+    });
+  }
+  return out;
+}
+
+function applyAppLanguage(language, { silent = false } = {}) {
+  const i18n = window.EasyAIConfigI18n;
+  if (!i18n) return;
+  const before = i18n.getLanguage();
+  const next = i18n.setLanguage(language);
+  state.language = next;
+  if (!silent && next !== before) {
+    flash(next === 'en-US' ? 'Language switched to English' : '已切换到中文', 'success');
+  }
+}
+
+function toggleAppLanguage() {
+  const next = getAppLanguage() === 'en-US' ? 'zh-CN' : 'en-US';
+  applyAppLanguage(next);
+}
+
+function refreshLanguageSensitiveViews() {
+  state.language = getAppLanguage();
+  window.EasyAIConfigI18n?.apply?.();
+  try { setPage(state.activePage || 'quick'); } catch (_) {}
+  try { window.refreshCustomSelects?.(); } catch (_) {}
+  try { renderQuickRailSupportPanel(); } catch (_) {}
+  try { renderSidebarTasks(); } catch (_) {}
+  try { renderTasksPage(); } catch (_) {}
+  try { renderToolsPage(); } catch (_) {}
+  try { if (typeof renderSystemSettingsPage === 'function') renderSystemSettingsPage(); } catch (_) {}
+  try { window.renderConnectionHub?.(); } catch (_) {}
+  if (state.activePage === 'console') {
+    try { renderToolConsole(); } catch (_) {}
+  }
+  if (state.activePage === 'dashboard') {
+    try { renderDashboardPage(); } catch (_) {}
+  }
+  if (state.activePage === 'terminal') {
+    try { if (typeof window.renderTerminalPage === 'function') window.renderTerminalPage(); } catch (_) {}
+  }
+  if (state.configEditorOpen || state.activePage === 'configEditor') {
+    try { if (typeof renderConfigEditor === 'function') renderConfigEditor(); } catch (_) {}
+  }
+  requestAnimationFrame(() => window.EasyAIConfigI18n?.apply?.());
+}
+
+window.addEventListener('easyaiconfig:languagechange', refreshLanguageSensitiveViews);
 
 // Apply theme before any rendering to prevent flash
 initTheme();
@@ -6375,7 +6451,25 @@ function formatDashboardUpdatedAt(value) {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return `上次更新 ${date.toLocaleString()}`;
+  if (isEnglishAppLanguage()) return `Last updated ${date.toLocaleString('en-US')}`;
+  return `上次更新 ${date.toLocaleString('zh-CN')}`;
+}
+
+function formatDashboardWindowLabel(win = getDashboardWindow()) {
+  if (win?.custom) return win.from === win.to ? win.from : `${win.from} ~ ${win.to}`;
+  const days = Math.max(1, Number(win?.days) || 30);
+  return isEnglishAppLanguage() ? `${days} days` : `${days} 天`;
+}
+
+function formatDashboardRecentWindowLabel(win = getDashboardWindow()) {
+  if (win?.custom) return formatDashboardWindowLabel(win);
+  const days = Math.max(1, Number(win?.days) || 30);
+  return isEnglishAppLanguage() ? `Last ${days} days` : `近 ${days} 天`;
+}
+
+function formatDashboardModelCount(count) {
+  const n = Number(count) || 0;
+  return isEnglishAppLanguage() ? `${n} models` : `${n} 个模型`;
 }
 
 function stopDashboardAutoRefresh() {
@@ -6532,8 +6626,8 @@ function renderDashboardLoadingCard() {
     <div class="dashboard-grid dashboard-grid-single dashboard-grid-loading">
       <section class="dashboard-card dashboard-panel span-12 dashboard-loading-panel">
         <div class="dashboard-loading-copy">
-          <div class="dashboard-loading-badge">快速统计中</div>
-          <div class="dashboard-loading-text">正在读取本地统计缓存…</div>
+          <div class="dashboard-loading-badge">${escapeHtml(appText('快速统计中'))}</div>
+          <div class="dashboard-loading-text">${escapeHtml(appText('正在读取本地统计缓存…'))}</div>
         </div>
         <div class="dashboard-loading-title"></div>
         <div class="dashboard-loading-sub"></div>
@@ -6741,24 +6835,26 @@ function renderRangePickerPanel() {
     cells.push(`<button type="button" class="${cls}" data-range-day="${ds}" ${isFuture ? 'disabled' : ''}>${d}</button>`);
   }
 
-  const weekdays = ['日', '一', '二', '三', '四', '五', '六']
+  const weekdays = (isEnglishAppLanguage() ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] : ['日', '一', '二', '三', '四', '五', '六'])
     .map((w) => `<div class="db2-range-wkd">${w}</div>`).join('');
 
   const preview = fromDraft && toDraft
-    ? `${fromDraft} → ${toDraft} · 共 ${Math.round((Date.parse(toDraft + 'T00:00:00Z') - Date.parse(fromDraft + 'T00:00:00Z')) / 86400000) + 1} 天`
+    ? (isEnglishAppLanguage()
+      ? `${fromDraft} -> ${toDraft} · ${Math.round((Date.parse(toDraft + 'T00:00:00Z') - Date.parse(fromDraft + 'T00:00:00Z')) / 86400000) + 1} days`
+      : `${fromDraft} → ${toDraft} · 共 ${Math.round((Date.parse(toDraft + 'T00:00:00Z') - Date.parse(fromDraft + 'T00:00:00Z')) / 86400000) + 1} 天`)
     : fromDraft
-      ? `${fromDraft} → <em>请选结束日期</em>`
-      : '<em>点击选择起始日期</em>';
+      ? (isEnglishAppLanguage() ? `${fromDraft} -> <em>Select end date</em>` : `${fromDraft} → <em>请选结束日期</em>`)
+      : (isEnglishAppLanguage() ? '<em>Select start date</em>' : '<em>点击选择起始日期</em>');
 
   const canApply = fromDraft && toDraft;
   return `
     <div class="db2-range-picker" data-period-custom>
       <div class="db2-range-head">
-        <button type="button" class="db2-range-nav" data-range-nav="prev" aria-label="上个月">
+        <button type="button" class="db2-range-nav" data-range-nav="prev" aria-label="${escapeHtml(appText('上个月'))}">
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6.5 1.5L3 5l3.5 3.5"/></svg>
         </button>
-        <span class="db2-range-title">${year} 年 ${String(month).padStart(2, '0')} 月</span>
-        <button type="button" class="db2-range-nav" data-range-nav="next" aria-label="下个月">
+        <span class="db2-range-title">${isEnglishAppLanguage() ? `${year}-${String(month).padStart(2, '0')}` : `${year} 年 ${String(month).padStart(2, '0')} 月`}</span>
+        <button type="button" class="db2-range-nav" data-range-nav="next" aria-label="${escapeHtml(appText('下个月'))}">
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3.5 1.5L7 5l-3.5 3.5"/></svg>
         </button>
       </div>
@@ -6766,8 +6862,8 @@ function renderRangePickerPanel() {
       <div class="db2-range-grid">${cells.join('')}</div>
       <div class="db2-range-preview">${preview}</div>
       <div class="db2-range-actions">
-        <button type="button" class="db2-range-reset" data-range-reset>清空</button>
-        <button type="button" class="db2-range-apply" data-range-apply ${canApply ? '' : 'disabled'}>应用</button>
+        <button type="button" class="db2-range-reset" data-range-reset>${escapeHtml(appText('清空'))}</button>
+        <button type="button" class="db2-range-apply" data-range-apply ${canApply ? '' : 'disabled'}>${escapeHtml(appText('应用'))}</button>
       </div>
     </div>`;
 }
@@ -6879,15 +6975,15 @@ function renderPricingStandardsCards(models = [], preferredKeys = []) {
   const keys = [...new Set([...detectedKeys, ...(preferredKeys || [])])]
     .filter((key) => CODEX_MODEL_PRICING[key])
     .slice(0, 6);
-  if (!keys.length) return '<div class="db2-empty">暂无可识别的官方计费标准。</div>';
+  if (!keys.length) return `<div class="db2-empty">${escapeHtml(appText('暂无可识别的官方计费标准。'))}</div>`;
   return `
-    <div class="db3-standards-note">USD / 1M tokens · 仅供参考</div>
+    <div class="db3-standards-note">${escapeHtml(appText('USD / 1M tokens · 仅供参考'))}</div>
     <div class="db3-rate-table">
       <div class="db3-rate-table-head">
-        <div>模型</div>
-        <div>输入</div>
-        <div>输出</div>
-        <div>缓存读</div>
+        <div>${escapeHtml(appText('模型'))}</div>
+        <div>${escapeHtml(appText('输入'))}</div>
+        <div>${escapeHtml(appText('输出'))}</div>
+        <div>${escapeHtml(appText('缓存读'))}</div>
       </div>
       ${keys.map((key) => {
         const pricing = CODEX_MODEL_PRICING[key];
@@ -6906,7 +7002,7 @@ function renderPricingStandardsCards(models = [], preferredKeys = []) {
 }
 
 function renderModelCostRows(models = [], totalTokens = 0) {
-  if (!models.length) return '<div class="db2-empty">暂无模型计费数据。</div>';
+  if (!models.length) return `<div class="db2-empty">${escapeHtml(appText('暂无模型计费数据。'))}</div>`;
   const totals = {
     input: 0,
     output: 0,
@@ -6941,66 +7037,68 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     // 状态文案：精准命中 / 家族兜底 / 未匹配
     const matchTag = !pricingEntry
       ? '未匹配定价'
-      : (pricingEntry.fallback ? `按 ${pricingEntry.pricing.label} 估算` : '已匹配');
+      : (pricingEntry.fallback
+        ? (isEnglishAppLanguage() ? `Estimated as ${pricingEntry.pricing.label}` : `按 ${pricingEntry.pricing.label} 估算`)
+        : '已匹配');
 
     return `<div class="db3-price-row">
       <div class="db3-price-model-cell">
         <div class="db3-price-model-main">${escapeHtml(modelLabel)}</div>
         <div class="db3-price-model-meta">
           <span>${pct}%</span>
-          <span>${escapeHtml(matchTag)}</span>
+          <span>${escapeHtml(appText(matchTag))}</span>
         </div>
       </div>
       <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(input))}">
         <strong>${escapeHtml(formatDashboardMetric(input))}</strong>
-        <span>输入</span>
+        <span>${escapeHtml(appText('输入'))}</span>
       </div>
       <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(output + reasoning))}">
         <strong>${escapeHtml(formatDashboardMetric(output + reasoning))}</strong>
-        <span>${reasoning ? `推理 ${escapeHtml(formatDashboardMetric(reasoning))}` : '输出'}</span>
+        <span>${reasoning ? `${escapeHtml(appText('推理'))} ${escapeHtml(formatDashboardMetric(reasoning))}` : escapeHtml(appText('输出'))}</span>
       </div>
       <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(cachedRead))}">
         <strong>${escapeHtml(formatDashboardMetric(cachedRead))}</strong>
-        <span>${cacheWrite ? `写 ${escapeHtml(formatDashboardMetric(cacheWrite))}` : '缓存读'}</span>
+        <span>${cacheWrite ? `${escapeHtml(appText('写'))} ${escapeHtml(formatDashboardMetric(cacheWrite))}` : escapeHtml(appText('缓存读'))}</span>
       </div>
       <div class="db3-price-total ${cost ? '' : 'db3-price-total--na'}">
         <strong>${escapeHtml(cost ? formatDashboardUsd(cost.totalCost, { min: 4, max: 4 }) : '—')}</strong>
-        <span>${escapeHtml(cost ? '预估' : '无估算')}</span>
+        <span>${escapeHtml(cost ? appText('预估') : appText('无估算'))}</span>
       </div>
     </div>`;
   });
   rows.push(`<div class="db3-price-row db3-price-row--total">
     <div class="db3-price-model-cell">
-      <div class="db3-price-model-main">合计</div>
+      <div class="db3-price-model-main">${escapeHtml(appText('合计'))}</div>
       <div class="db3-price-model-meta">
-        <span>${totals.matched}/${models.length} 个匹配</span>
+        <span>${escapeHtml(isEnglishAppLanguage() ? `${totals.matched}/${models.length} matched` : `${totals.matched}/${models.length} 个匹配`)}</span>
       </div>
     </div>
     <div class="db3-price-metric">
       <strong>${escapeHtml(formatDashboardMetric(totals.input))}</strong>
-      <span>输入</span>
+      <span>${escapeHtml(appText('输入'))}</span>
     </div>
     <div class="db3-price-metric">
       <strong>${escapeHtml(formatDashboardMetric(totals.output + totals.reasoning))}</strong>
-      <span>${totals.reasoning ? `推理 ${escapeHtml(formatDashboardMetric(totals.reasoning))}` : '输出'}</span>
+      <span>${totals.reasoning ? `${escapeHtml(appText('推理'))} ${escapeHtml(formatDashboardMetric(totals.reasoning))}` : escapeHtml(appText('输出'))}</span>
     </div>
     <div class="db3-price-metric">
       <strong>${escapeHtml(formatDashboardMetric(totals.cachedRead))}</strong>
-      <span>${totals.cacheWrite ? `写 ${escapeHtml(formatDashboardMetric(totals.cacheWrite))}` : '缓存读'}</span>
+      <span>${totals.cacheWrite ? `${escapeHtml(appText('写'))} ${escapeHtml(formatDashboardMetric(totals.cacheWrite))}` : escapeHtml(appText('缓存读'))}</span>
     </div>
     <div class="db3-price-total">
       <strong>${escapeHtml(totals.totalCost ? formatDashboardUsd(totals.totalCost, { min: 4, max: 4 }) : '—')}</strong>
-      <span>累计</span>
+      <span>${escapeHtml(appText('累计'))}</span>
     </div>
   </div>`);
   return `<div class="db3-price-table">
     <div class="db3-price-grid">
       <div class="db3-price-row db3-price-row--head">
-        <div>模型</div>
-        <div>输入</div>
-        <div>输出 / 推理</div>
-        <div>缓存</div>
-        <div>预估费用</div>
+        <div>${escapeHtml(appText('模型'))}</div>
+        <div>${escapeHtml(appText('输入'))}</div>
+        <div>${escapeHtml(appText('输出 / 推理'))}</div>
+        <div>${escapeHtml(appText('缓存'))}</div>
+        <div>${escapeHtml(appText('预估费用'))}</div>
       </div>
       ${rows.join('')}
     </div>
@@ -7142,7 +7240,8 @@ function renderDashboardPage() {
   const daysWindow = win.days;
   const winFrom = win.from;
   const winTo = win.to;
-  const winLabel = win.label;
+  const winLabel = formatDashboardWindowLabel(win);
+  const winRecentLabel = formatDashboardRecentWindowLabel(win);
   const dashboardStatusText = dashboardTool === 'claudecode'
     ? (isLoading ? '正在统计本地 Claude Code token…' : (claudeLastUpdated || '统计已完成'))
     : dashboardTool === 'opencode'
@@ -7156,11 +7255,11 @@ function renderDashboardPage() {
     { key: 'openclaw', label: 'OpenClaw', dot: '#fbbf24', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>' },
   ];
   const toolLabel = (tabs.find((t) => t.key === dashboardTool) || tabs[0]).label;
-  if (el('pageTitle')) el('pageTitle').textContent = '数据看板';
+  if (el('pageTitle')) el('pageTitle').textContent = appText('数据看板');
   if (el('pageSubtitle')) {
     el('pageSubtitle').textContent = dashboardTool === 'openclaw'
-      ? `${toolLabel} · Gateway、渠道与 Provider 状态`
-      : `${toolLabel} · ${dashboardStatusText} · ${winLabel.includes('~') ? winLabel : '最近 ' + winLabel}`;
+      ? (isEnglishAppLanguage() ? `${toolLabel} · Gateway, channels, and provider status` : `${toolLabel} · Gateway、渠道与 Provider 状态`)
+      : `${toolLabel} · ${appText(dashboardStatusText)} · ${isEnglishAppLanguage() ? winRecentLabel : (win.custom ? winLabel : '最近 ' + winLabel)}`;
   }
 
   // ── Stat strip ──
@@ -7168,9 +7267,9 @@ function renderDashboardPage() {
     <div class="db2-stat-cards">
       ${items.map(({ label, value, sub, accent, isCost }) => `
         <div class="db2-stat-card ${accent ? 'db2-stat-card--accent' : ''} ${isCost ? 'db2-stat-card--cost' : ''}">
-          <div class="db2-sc-label">${escapeHtml(label)}</div>
+          <div class="db2-sc-label">${escapeHtml(appText(label))}</div>
           <div class="db2-sc-value">${escapeHtml(String(value))}</div>
-          ${sub ? `<div class="db2-sc-sub">${escapeHtml(String(sub))}</div>` : ''}
+          ${sub ? `<div class="db2-sc-sub">${escapeHtml(appText(String(sub)))}</div>` : ''}
         </div>
       `).join('')}
     </div>`;
@@ -7179,7 +7278,7 @@ function renderDashboardPage() {
       ${stats.map((s) => `
         <div class="db3-hero-stat ${s.emphasis ? 'db3-hero-stat-emph' : ''}">
           <div class="db3-hero-value">${escapeHtml(String(s.value))}</div>
-          <div class="db3-hero-label">${escapeHtml(s.label)}</div>
+          <div class="db3-hero-label">${escapeHtml(appText(s.label))}</div>
         </div>`).join('')}
     </div>`;
 
@@ -7191,7 +7290,7 @@ function renderDashboardPage() {
         const width = rawWidth > 0 ? Math.max(4, rawWidth) : 0;
         const meta = formatDashboardMeta(item.meta ?? item.value ?? 0);
         const fullMeta = typeof (item.meta ?? item.value) === 'number' ? formatDashboardMetricFull(item.meta ?? item.value) : meta;
-        return `<div class="dashboard-mini-bar"><span>${escapeHtml(item.label)}</span><div class="dashboard-mini-bar-track"><div class="dashboard-mini-bar-fill" style="width:${width}%"></div></div><strong title="${escapeHtml(fullMeta)}">${escapeHtml(meta)}</strong></div>`;
+        return `<div class="dashboard-mini-bar"><span>${escapeHtml(appText(item.label))}</span><div class="dashboard-mini-bar-track"><div class="dashboard-mini-bar-fill" style="width:${width}%"></div></div><strong title="${escapeHtml(fullMeta)}">${escapeHtml(meta)}</strong></div>`;
       }).join('')}
     </div>`;
 
@@ -7200,8 +7299,8 @@ function renderDashboardPage() {
     <div class="db2-kv-list">
       ${rows.map(({ label, value, accent }) => `
         <div class="db2-kv-row">
-          <span class="db2-kv-label">${escapeHtml(label)}</span>
-          <span class="db2-kv-value ${accent ? 'db2-kv-value--accent' : ''}">${escapeHtml(String(value))}</span>
+          <span class="db2-kv-label">${escapeHtml(appText(label))}</span>
+          <span class="db2-kv-value ${accent ? 'db2-kv-value--accent' : ''}">${escapeHtml(appText(String(value)))}</span>
         </div>
       `).join('')}
     </div>`;
@@ -7248,8 +7347,8 @@ function renderDashboardPage() {
         ${heroStatsHtml(codexHeroStats)}
         <div class="db3-hero-chart-wrap">
           <div class="db3-hero-chart-head">
-            <span class="db3-hero-chart-title">Token 用量趋势</span>
-            <span class="db3-hero-chart-meta">${winLabel.includes('~') ? winLabel : '近 ' + winLabel} · ${codexModels.length} 个模型 · ${escapeHtml(codexTopModel)}</span>
+            <span class="db3-hero-chart-title">${escapeHtml(appText('Token 用量趋势'))}</span>
+            <span class="db3-hero-chart-meta">${escapeHtml(winRecentLabel)} · ${escapeHtml(formatDashboardModelCount(codexModels.length))} · ${escapeHtml(codexTopModel)}</span>
           </div>
           ${renderDashboardInteractiveChart(codexDaily.map((item) => ({ label: item.date.slice(5), value: item.total || 0, input: item.input || 0, output: item.output || 0, cached: item.cachedInput || 0 })), { stroke: '#5b8cff', showCost: true, models: codexModels })}
         </div>
@@ -7260,9 +7359,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
           <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
-              GPT 计费标准
+              ${escapeHtml(appText('GPT 计费标准'))}
             </div>
-            <div class="db2-card-meta">GPT-5.4 / GPT-5.3 Codex 检测结果</div>
+            <div class="db2-card-meta">${escapeHtml(appText('GPT-5.4 / GPT-5.3 Codex 检测结果'))}</div>
           </div>
           ${renderPricingStandardsCards(codexModels, ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex'])}
         </section>
@@ -7271,9 +7370,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
-              模型计费明细
+              ${escapeHtml(appText('模型计费明细'))}
             </div>
-            <div class="db2-card-meta">按 OpenAI 官方定价估算 · 单位 USD / 1M tokens</div>
+            <div class="db2-card-meta">${escapeHtml(appText('按 OpenAI 官方定价估算 · 单位 USD / 1M tokens'))}</div>
           </div>
           ${renderModelCostRows(codexModels, codexModelTotal)}
         </section>
@@ -7282,9 +7381,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10.5h12M3.5 8.5l2-2 2.5 2 4.5-4"/></svg>
-              Token 构成
+              ${escapeHtml(appText('Token 构成'))}
             </div>
-            <div class="db2-card-meta">输入 / 输出 / 缓存 / 推理</div>
+            <div class="db2-card-meta">${escapeHtml(appText('输入 / 输出 / 缓存 / 推理'))}</div>
           </div>
           ${miniBars(codexBreakdownItems)}
         </section>
@@ -7293,9 +7392,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
-              费用趋势
+              ${escapeHtml(appText('费用趋势'))}
             </div>
-            <div class="db2-card-meta">每日预估消耗</div>
+            <div class="db2-card-meta">${escapeHtml(appText('每日预估消耗'))}</div>
           </div>
           ${renderDashboardCostTrendChart(codexDaily, codexModels)}
         </section>
@@ -7304,9 +7403,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
-              模型分布
+              ${escapeHtml(appText('模型分布'))}
             </div>
-            <div class="db2-card-meta">累计扫描 ${codexModels.length} 个模型</div>
+            <div class="db2-card-meta">${escapeHtml(isEnglishAppLanguage() ? `Scanned ${codexModels.length} models` : `累计扫描 ${codexModels.length} 个模型`)}</div>
           </div>
           ${renderDashboardModelDistChart(codexModels, codexModelTotal)}
         </section>
@@ -7350,8 +7449,8 @@ function renderDashboardPage() {
         ${heroStatsHtml(opencodeHeroStats)}
         <div class="db3-hero-chart-wrap">
           <div class="db3-hero-chart-head">
-            <span class="db3-hero-chart-title">Token 用量趋势</span>
-            <span class="db3-hero-chart-meta">${winLabel.includes('~') ? winLabel : '近 ' + winLabel} · ${opencodeModels.length} 个模型 · ${escapeHtml(opencodeTopModel)}</span>
+            <span class="db3-hero-chart-title">${escapeHtml(appText('Token 用量趋势'))}</span>
+            <span class="db3-hero-chart-meta">${escapeHtml(winRecentLabel)} · ${escapeHtml(formatDashboardModelCount(opencodeModels.length))} · ${escapeHtml(opencodeTopModel)}</span>
           </div>
           ${renderDashboardInteractiveChart(opencodeDaily.map((item) => ({ label: item.date.slice(5), value: item.total || 0, input: item.input || 0, output: (item.output || 0) + (item.reasoning || 0), cached: item.cacheRead || 0 })), { stroke: '#6b86ff' })}
         </div>
@@ -7362,9 +7461,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
-              官方计费标准
+              ${escapeHtml(appText('官方计费标准'))}
             </div>
-            <div class="db2-card-meta">按已检测模型匹配 OpenAI / Anthropic 官方价目</div>
+            <div class="db2-card-meta">${escapeHtml(appText('按已检测模型匹配 OpenAI / Anthropic 官方价目'))}</div>
           </div>
           ${renderPricingStandardsCards(opencodeModels, ['gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'])}
         </section>
@@ -7373,9 +7472,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
-              模型计费明细
+              ${escapeHtml(appText('模型计费明细'))}
             </div>
-            <div class="db2-card-meta">本地会话 token 统计 + 官方价目映射</div>
+            <div class="db2-card-meta">${escapeHtml(appText('本地会话 token 统计 + 官方价目映射'))}</div>
           </div>
           ${renderModelCostRows(opencodeModels, opencodeModelTotal)}
         </section>
@@ -7384,9 +7483,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10.5h12M3.5 8.5l2-2 2.5 2 4.5-4"/></svg>
-              Token 构成
+              ${escapeHtml(appText('Token 构成'))}
             </div>
-            <div class="db2-card-meta">输入 / 输出 / 推理 / 缓存读写</div>
+            <div class="db2-card-meta">${escapeHtml(appText('输入 / 输出 / 推理 / 缓存读写'))}</div>
           </div>
           ${miniBars(opencodeBreakdownItems)}
         </section>
@@ -7395,20 +7494,20 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
-              费用趋势
+              ${escapeHtml(appText('费用趋势'))}
             </div>
-            <div class="db2-card-meta">来自 OpenCode 本地会话的实际 cost 字段</div>
+            <div class="db2-card-meta">${escapeHtml(appText('来自 OpenCode 本地会话的实际 cost 字段'))}</div>
           </div>
-          ${renderCostTrendPanel(opencodeDaily.map((item) => ({ label: (item.date || '').slice(5), value: item.cost || 0 })), `${winLabel.includes('~') ? winLabel : '近 ' + winLabel}合计`, '#5b8cff')}
+          ${renderCostTrendPanel(opencodeDaily.map((item) => ({ label: (item.date || '').slice(5), value: item.cost || 0 })), isEnglishAppLanguage() ? `${winRecentLabel} total` : `${winRecentLabel}合计`, '#5b8cff')}
         </section>
 
         <section class="db2-section db3-panel">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
-              模型分布
+              ${escapeHtml(appText('模型分布'))}
             </div>
-            <div class="db2-card-meta">累计扫描 ${opencodeModels.length} 个模型</div>
+            <div class="db2-card-meta">${escapeHtml(isEnglishAppLanguage() ? `Scanned ${opencodeModels.length} models` : `累计扫描 ${opencodeModels.length} 个模型`)}</div>
           </div>
           ${renderDashboardModelDistChart(opencodeModels, opencodeModelTotal)}
         </section>
@@ -7524,8 +7623,8 @@ function renderDashboardPage() {
         ${heroStatsHtml(claudeHeroStats)}
         <div class="db3-hero-chart-wrap">
           <div class="db3-hero-chart-head">
-            <span class="db3-hero-chart-title">Token 用量趋势</span>
-            <span class="db3-hero-chart-meta">${winLabel.includes('~') ? winLabel : '近 ' + winLabel} · 悬停看当日详情</span>
+            <span class="db3-hero-chart-title">${escapeHtml(appText('Token 用量趋势'))}</span>
+            <span class="db3-hero-chart-meta">${escapeHtml(winRecentLabel)} · ${escapeHtml(appText('悬停看当日详情'))}</span>
           </div>
           ${renderDashboardInteractiveChart(claudeFilledSeries, { stroke: '#7c3aed', showCost: true, models: claudeModels })}
         </div>
@@ -7536,9 +7635,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
-              费用趋势
+              ${escapeHtml(appText('费用趋势'))}
             </div>
-            <div class="db2-card-meta">按 Anthropic 官方定价估算</div>
+            <div class="db2-card-meta">${escapeHtml(appText('按 Anthropic 官方定价估算'))}</div>
           </div>
           ${renderClaudeCostTrendChart(claudeDailySliced, daysWindow)}
         </section>
@@ -7547,9 +7646,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
-              模型分布
+              ${escapeHtml(appText('模型分布'))}
             </div>
-            <div class="db2-card-meta">${winLabel.includes('~') ? winLabel : '近 ' + winLabel} · ${claudeModels.length} 个模型</div>
+            <div class="db2-card-meta">${escapeHtml(winRecentLabel)} · ${escapeHtml(formatDashboardModelCount(claudeModels.length))}</div>
           </div>
           ${renderDashboardModelDistChart(claudeModels, claudeModelTotal)}
         </section>
@@ -7558,9 +7657,9 @@ function renderDashboardPage() {
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
-              模型消耗明细
+              ${escapeHtml(appText('模型消耗明细'))}
             </div>
-            <div class="db2-card-meta">按 Anthropic 定价估算</div>
+            <div class="db2-card-meta">${escapeHtml(appText('按 Anthropic 定价估算'))}</div>
           </div>
           ${renderModelCostRows(claudeModels, claudeModelTotal)}
         </section>
@@ -7582,7 +7681,7 @@ function renderDashboardPage() {
         <div class="db2-col">
           <div class="db2-section">
             <div class="db2-card-head">
-              <div class="db2-card-title">Gateway 状态详情</div>
+              <div class="db2-card-title">${escapeHtml(appText('Gateway 状态详情'))}</div>
             </div>
             ${kvList([
               { label: 'Gateway 状态', value: getOpenClawGatewayStatusLabel(openclaw) },
@@ -7598,23 +7697,23 @@ function renderDashboardPage() {
         <div class="db2-col">
           <div class="db2-section">
             <div class="db2-card-head">
-              <div class="db2-card-title">渠道列表</div>
-              <div class="db2-card-meta">${openclawChannels.length} 个</div>
+              <div class="db2-card-title">${escapeHtml(appText('渠道列表'))}</div>
+              <div class="db2-card-meta">${escapeHtml(isEnglishAppLanguage() ? `${openclawChannels.length} items` : `${openclawChannels.length} 个`)}</div>
             </div>
-            ${openclawChannels.length ? kvList(openclawChannels.map(c => ({ label: c.label, value: c.key }))) : '<div class="db2-empty">暂无已配置渠道</div>'}
+            ${openclawChannels.length ? kvList(openclawChannels.map(c => ({ label: c.label, value: c.key }))) : `<div class="db2-empty">${escapeHtml(appText('暂无已配置渠道'))}</div>`}
           </div>
 
           <div class="db2-section">
             <div class="db2-card-head">
-              <div class="db2-card-title">Provider 列表</div>
-              <div class="db2-card-meta">${openclawProviders.length} 个</div>
+              <div class="db2-card-title">${escapeHtml(appText('Provider 列表'))}</div>
+              <div class="db2-card-meta">${escapeHtml(isEnglishAppLanguage() ? `${openclawProviders.length} items` : `${openclawProviders.length} 个`)}</div>
             </div>
             ${openclawProviders.length
     ? kvList(openclawProviders.slice(0, 12).map((provider) => ({
       label: provider.key,
-      value: provider.api || '未知协议',
-    })))
-    : '<div class="db2-empty">暂无已配置 Provider</div>'}
+	      value: provider.api || '未知协议',
+	    })))
+	    : `<div class="db2-empty">${escapeHtml(appText('暂无已配置 Provider'))}</div>`}
           </div>
         </div>
       </div>
@@ -7639,7 +7738,7 @@ function renderDashboardPage() {
     <div class="dashboard-shell ${isLoading ? 'is-loading' : ''}">
       <div class="db3-toolbar db3-toolbar--page">
         <div class="db3-toolbar-status">
-          ${showDashboardRefresh ? `<span class="dashboard-fetch-state ${isLoading ? 'loading' : ''}">${escapeHtml(dashboardStatusText)}</span>` : ''}
+	          ${showDashboardRefresh ? `<span class="dashboard-fetch-state ${isLoading ? 'loading' : ''}">${escapeHtml(appText(dashboardStatusText))}</span>` : ''}
         </div>
         <div class="db3-toolbar-actions">
           ${dashboardTool === 'claudecode' ? renderClaudeScopeDropdown() : ''}
@@ -7647,11 +7746,13 @@ function renderDashboardPage() {
           ${(dashboardTool === 'codex' || dashboardTool === 'opencode') ? renderDashboardModelFilter(dashboardTool === 'codex' ? codexMetricsRaw : opencodeMetricsRaw) : ''}
           <span class="db2-period-wrap">
             <div class="db2-period-dropdown ${state.dashboardPeriodOpen ? 'open' : ''}" data-period-dropdown>
-              <button type="button" class="db2-period-trigger" data-period-trigger>${escapeHtml(winLabel)} <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
+	              <button type="button" class="db2-period-trigger" data-period-trigger>${escapeHtml(winLabel)} <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
               <div class="db2-period-menu" data-period-menu>
                 <div class="db2-period-presets">
                   ${[7, 14, 30, 90, 180, 365].map((d) => {
-                    const labels = { 7: '7 天', 14: '14 天', 30: '30 天', 90: '近 3 个月', 180: '近半年', 365: '近一年' };
+	                    const labels = isEnglishAppLanguage()
+	                      ? { 7: '7 days', 14: '14 days', 30: '30 days', 90: '3 months', 180: '6 months', 365: '1 year' }
+	                      : { 7: '7 天', 14: '14 天', 30: '30 天', 90: '近 3 个月', 180: '近半年', 365: '近一年' };
                     const isActive = !state.dashboardRange && state.dashboardDays === d;
                     return `<button type="button" class="db2-period-option ${isActive ? 'active' : ''}" data-dashboard-days="${d}">${labels[d]}</button>`;
                   }).join('')}
@@ -7661,12 +7762,13 @@ function renderDashboardPage() {
               </div>
             </div>
           </span>
-          ${showDashboardRefresh ? `<button type="button" class="dashboard-refresh-btn ${dashboardRefreshing ? 'is-busy' : ''}" data-dashboard-refresh ${dashboardRefreshing ? 'disabled' : ''}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${escapeHtml(dashboardRefreshing ? '刷新中' : '刷新')}</button>` : ''}
+	          ${showDashboardRefresh ? `<button type="button" class="dashboard-refresh-btn ${dashboardRefreshing ? 'is-busy' : ''}" data-dashboard-refresh ${dashboardRefreshing ? 'disabled' : ''}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${escapeHtml(appText(dashboardRefreshing ? '刷新中' : '刷新'))}</button>` : ''}
         </div>
       </div>
       ${content}
     </div>
-  `;
+	  `;
+  requestAnimationFrame(() => window.EasyAIConfigI18n?.apply?.(root));
 }
 
 function renderDashboardProviderFilter(metrics) {
@@ -7674,14 +7776,14 @@ function renderDashboardProviderFilter(metrics) {
   const current = state.dashboardFilter.provider || 'all';
   const open = Boolean(state.dashboardFilter.providerOpen);
   if (!opts.providers.length) return '';
-  const label = current === 'all' ? '全部 Provider' : current;
+  const label = current === 'all' ? appText('全部 Provider') : current;
   return `
     <span class="db2-period-wrap">
       <div class="db2-period-dropdown ${open ? 'open' : ''}" data-dashboard-filter="provider">
-        <button type="button" class="db2-period-trigger" data-dashboard-filter-trigger="provider" title="按 provider 筛选 (基于 session.provider 字段)">${escapeHtml(label)}<svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
+        <button type="button" class="db2-period-trigger" data-dashboard-filter-trigger="provider" title="${escapeHtml(appText('按 provider 筛选 (基于 session.provider 字段)'))}">${escapeHtml(label)}<svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
         <div class="db2-period-menu" data-dashboard-filter-menu="provider">
           <div class="db2-period-presets">
-            <button type="button" class="db2-period-option ${current === 'all' ? 'active' : ''}" data-dashboard-filter-value="provider:all">全部 Provider</button>
+            <button type="button" class="db2-period-option ${current === 'all' ? 'active' : ''}" data-dashboard-filter-value="provider:all">${escapeHtml(appText('全部 Provider'))}</button>
             ${opts.providers.map((p) => `<button type="button" class="db2-period-option ${current === p ? 'active' : ''}" data-dashboard-filter-value="provider:${escapeHtml(p)}">${escapeHtml(p)}</button>`).join('')}
           </div>
         </div>
@@ -7694,14 +7796,14 @@ function renderDashboardModelFilter(metrics) {
   const current = state.dashboardFilter.model || 'all';
   const open = Boolean(state.dashboardFilter.modelOpen);
   if (!opts.models.length) return '';
-  const label = current === 'all' ? '全部模型' : current;
+  const label = current === 'all' ? appText('全部模型') : current;
   return `
     <span class="db2-period-wrap">
       <div class="db2-period-dropdown ${open ? 'open' : ''}" data-dashboard-filter="model">
-        <button type="button" class="db2-period-trigger" data-dashboard-filter-trigger="model" title="按 model 筛选 (基于 session.model 字段)">${escapeHtml(label)}<svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
+        <button type="button" class="db2-period-trigger" data-dashboard-filter-trigger="model" title="${escapeHtml(appText('按 model 筛选 (基于 session.model 字段)'))}">${escapeHtml(label)}<svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
         <div class="db2-period-menu" data-dashboard-filter-menu="model">
           <div class="db2-period-presets">
-            <button type="button" class="db2-period-option ${current === 'all' ? 'active' : ''}" data-dashboard-filter-value="model:all">全部模型</button>
+            <button type="button" class="db2-period-option ${current === 'all' ? 'active' : ''}" data-dashboard-filter-value="model:all">${escapeHtml(appText('全部模型'))}</button>
             ${opts.models.map((m) => `<button type="button" class="db2-period-option ${current === m ? 'active' : ''}" data-dashboard-filter-value="model:${escapeHtml(m)}">${escapeHtml(m)}</button>`).join('')}
           </div>
         </div>
@@ -7717,17 +7819,17 @@ function renderClaudeScopeDropdown() {
   if (scopes.length < 2) return '';
   const current = st?.usageScope || 'active';
   const currentLabel = (() => {
-    if (current === 'all') return '全部聚合';
+    if (current === 'all') return appText('全部聚合');
     if (current === 'active') {
-      const activeLabel = st?.activeProfile?.label || st?.activeProfile?.name || st?.activeProfile?.email || st?.activeProfile?.id || '默认';
-      return `当前 · ${escapeHtml(activeLabel)}`;
+      const activeLabel = st?.activeProfile?.label || st?.activeProfile?.name || st?.activeProfile?.email || st?.activeProfile?.id || appText('默认');
+      return isEnglishAppLanguage() ? `Current · ${escapeHtml(activeLabel)}` : `当前 · ${escapeHtml(activeLabel)}`;
     }
     const hit = scopes.find(s => s.scopeId === current);
-    return hit ? escapeHtml(hit.label) : '当前';
+    return hit ? escapeHtml(hit.label) : appText('当前');
   })();
   const items = [
-    { id: 'active', label: '当前激活账号' },
-    { id: 'all', label: `全部聚合(${scopes.length})` },
+    { id: 'active', label: appText('当前激活账号') },
+    { id: 'all', label: isEnglishAppLanguage() ? `All profiles (${scopes.length})` : `全部聚合(${scopes.length})` },
     ...scopes.map(s => ({ id: s.scopeId, label: s.label })),
   ];
   return `
@@ -7755,7 +7857,7 @@ function renderDashboardStatCard(label, value, sub = '') {
 let __dbChartId = 0;
 
 function renderDashboardInteractiveChart(series = [], { stroke = '#5b8cff', showCost = false, models = [] } = {}) {
-  if (!series.length) return '<div class="dashboard-empty-note">暂无趋势数据。</div>';
+  if (!series.length) return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无趋势数据。'))}</div>`;
   const chartId = 'dbCanvas_' + (++__dbChartId);
   const tooltipId = chartId + '_tip';
   const dataAttr = `data-db-chart-series="${escapeHtml(JSON.stringify(series))}" data-db-chart-stroke="${escapeHtml(stroke)}" data-db-chart-show-cost="${showCost ? '1' : ''}" data-db-chart-models="${escapeHtml(JSON.stringify(models))}"`;
@@ -7961,7 +8063,7 @@ function _initDbInteractiveChart(chartId) {
                   + dayCached * pricing.cached
                   + dayOutput * pricing.output) / 1e6;
               }
-              costLine = `<div class="db2-tip-row db2-tip-cost"><span>预估费用</span><strong>${escapeHtml(formatDashboardUsd(dayCost, { min: 2, max: 4 }))}</strong></div>`;
+              costLine = `<div class="db2-tip-row db2-tip-cost"><span>${escapeHtml(appText('预估费用'))}</span><strong>${escapeHtml(formatDashboardUsd(dayCost, { min: 2, max: 4 }))}</strong></div>`;
             }
           }
         }
@@ -7969,9 +8071,9 @@ function _initDbInteractiveChart(chartId) {
         tooltip.innerHTML = `
           <div class="db2-tip-date">${escapeHtml(s.label)}</div>
           <div class="db2-tip-total">${escapeHtml(total)} tokens</div>
-          <div class="db2-tip-row"><span style="color:#5b8cff">● 输入</span><strong>${escapeHtml(inp)}</strong></div>
-          <div class="db2-tip-row"><span style="color:#22c55e">● 输出</span><strong>${escapeHtml(out)}</strong></div>
-          <div class="db2-tip-row"><span style="color:#7c3aed">● 缓存</span><strong>${escapeHtml(cached)}</strong></div>
+	          <div class="db2-tip-row"><span style="color:#5b8cff">● ${escapeHtml(appText('输入'))}</span><strong>${escapeHtml(inp)}</strong></div>
+	          <div class="db2-tip-row"><span style="color:#22c55e">● ${escapeHtml(appText('输出'))}</span><strong>${escapeHtml(out)}</strong></div>
+	          <div class="db2-tip-row"><span style="color:#7c3aed">● ${escapeHtml(appText('缓存'))}</span><strong>${escapeHtml(cached)}</strong></div>
           ${costLine}
         `;
         tooltip.style.display = '';
@@ -8006,7 +8108,7 @@ function _initDbInteractiveChart(chartId) {
 
 // Model distribution donut/bar chart
 function renderDashboardModelDistChart(models = [], totalTokens = 0) {
-  if (!models.length) return '<div class="dashboard-empty-note">暂无模型分布数据。</div>';
+  if (!models.length) return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无模型分布数据。'))}</div>`;
   const chartId = 'dbModelDist_' + (++__dbChartId);
   const sorted = [...models].sort((a, b) => (b.totals?.total || 0) - (a.totals?.total || 0));
   const colors = ['#5b8cff', '#7c3aed', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316'];
@@ -8040,7 +8142,7 @@ function renderDashboardModelDistChart(models = [], totalTokens = 0) {
 // 重做版费用趋势图：放弃丑陋的柱状条，改成柔和 SVG 面积图（和 Token 用量趋势同风格）。
 // 三条参数：data 数组、汇总文案、主色（默认蓝紫，可被覆盖）。
 function renderCostTrendPanel(costSeries = [], summaryLabel = '', accentColor = '#7c3aed') {
-  if (!costSeries.length) return '<div class="dashboard-empty-note">暂无费用趋势数据。</div>';
+  if (!costSeries.length) return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无费用趋势数据。'))}</div>`;
   const chartId = `costTrend_${Math.random().toString(36).slice(2, 9)}`;
   const values = costSeries.map((s) => Number(s.value || 0));
   const maxCost = Math.max(...values, 0.001);
@@ -8129,7 +8231,7 @@ function renderCostTrendPanel(costSeries = [], summaryLabel = '', accentColor = 
       <div class="db3-cost-area-foot">
         <span class="db3-cost-area-summary">${escapeHtml(summaryLabel)}</span>
         <div class="db3-cost-area-totals">
-          <em>峰值 ${escapeHtml(usdFmt(maxCost))}</em>
+	          <em>${escapeHtml(appText('峰值'))} ${escapeHtml(usdFmt(maxCost))}</em>
           <strong>${escapeHtml(usdFmt(totalCost))}</strong>
         </div>
       </div>
@@ -8138,20 +8240,20 @@ function renderCostTrendPanel(costSeries = [], summaryLabel = '', accentColor = 
 
 // Claude cost trend uses actual cost from telemetry (not estimated)
 function renderClaudeCostTrendChart(dailySlice = [], windowDays = 30) {
-  if (!dailySlice.length) return '<div class="dashboard-empty-note">暂无费用趋势数据。</div>';
+  if (!dailySlice.length) return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无费用趋势数据。'))}</div>`;
   const costSeries = dailySlice.map((item) => ({
     label: (item.date || '').slice(5),
     value: item.cost || 0,
   }));
   return renderCostTrendPanel(
     costSeries,
-    `近 ${windowDays} 天合计`,
+	    isEnglishAppLanguage() ? `Last ${windowDays} days total` : `近 ${windowDays} 天合计`,
     '#7c3aed'
   );
 }
 
 function renderDashboardCostTrendChart(daily = [], models = []) {
-  if (!daily.length || !models.length) return '<div class="dashboard-empty-note">暂无费用趋势数据。</div>';
+  if (!daily.length || !models.length) return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无费用趋势数据。'))}</div>`;
   // 改用 estimateCostByDaily 单点直算（每个 daily item 走一次主模型单价），
   // 跟 tooltip / hero stat 同口径。旧实现用"占比 × 总量"会双计 cached 段。
   const costSeries = daily.map((item) => ({
@@ -8160,7 +8262,7 @@ function renderDashboardCostTrendChart(daily = [], models = []) {
   }));
   return renderCostTrendPanel(
     costSeries,
-    `近 ${costSeries.length} 天合计`,
+	    isEnglishAppLanguage() ? `Last ${costSeries.length} days total` : `近 ${costSeries.length} 天合计`,
     '#5b8cff'
   );
 }
@@ -8171,7 +8273,7 @@ function renderDashboardLineChart(series = [], { stroke = '#5b8cff' } = {}) {
 }
 
 function renderDashboardStackChart(items = []) {
-  if (!items.length) return '<div class="dashboard-empty-note">暂无结构分布数据。</div>';
+  if (!items.length) return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无结构分布数据。'))}</div>`;
   const total = items.reduce((sum, item) => sum + Number(item.value || 0), 0) || 1;
   return `
     <div class="dashboard-chart">
@@ -19520,10 +19622,12 @@ const PROVIDER_DETAIL_TABS = [
   { id: 'models',   label: '模型支持' },
   { id: 'usage',    label: '用量' },
   { id: 'test',     label: '测试' },
+  { id: 'eval',     label: '验真' },
   { id: 'health',   label: '健康' },
   { id: 'binding',  label: '项目绑定' },
 ];
 const PROVIDER_DETAIL_TAB_IDS = new Set(PROVIDER_DETAIL_TABS.map((t) => t.id));
+const PROVIDER_DETAIL_EVAL_VIEWS = new Set(['single', 'history', 'batch']);
 const PROJECT_BINDINGS_CACHE_MS = 15000;
 let pdEventsContainer = null;
 let pdTabPointerCaptureBound = false;
@@ -19531,6 +19635,23 @@ let pdTabPointerCaptureBound = false;
 function normalizeProviderDetailTab(tab) {
   const value = String(tab || '').trim();
   return PROVIDER_DETAIL_TAB_IDS.has(value) ? value : 'overview';
+}
+
+function normalizeProviderDetailEvalView(view) {
+  const value = String(view || '').trim();
+  return PROVIDER_DETAIL_EVAL_VIEWS.has(value) ? value : 'single';
+}
+
+function setProviderDetailEvalView(view) {
+  const nextView = normalizeProviderDetailEvalView(view);
+  state.providerDetail.evalView = nextView;
+  try { localStorage.setItem('easyaiconfig_pd_eval_view', nextView); } catch {}
+  if (nextView === 'history') {
+    const row = lookupProviderDetailRow();
+    if (row) state.providerDetail.evalHistory = readPdEvalHistory(row);
+  }
+  pdLastRenderSig = '';
+  renderProviderDetail({ force: true });
 }
 
 function invalidateProviderDetailBindingsCache() {
@@ -19581,7 +19702,21 @@ function handleProviderDetailTabPointerCapture(e) {
 
 function handleProviderDetailChange(e) {
   const target = e.target;
-  if (!(target instanceof HTMLInputElement) || target.id !== 'pdbCwdInput') return;
+  if (!(target instanceof HTMLInputElement)) return;
+  const batchToggle = target.closest('[data-pd-batch-toggle]');
+  if (batchToggle) {
+    const id = batchToggle.getAttribute('data-pd-batch-toggle') || '';
+    if (id) {
+      state.providerDetail.evalBatchSelected = {
+        ...(state.providerDetail.evalBatchSelected || {}),
+        [id]: Boolean(target.checked),
+      };
+      pdLastRenderSig = '';
+      renderProviderDetail({ force: true });
+    }
+    return;
+  }
+  if (target.id !== 'pdbCwdInput') return;
   const v = target.value.trim();
   const launchInput = el('launchCwdInput');
   if (launchInput) launchInput.value = v;
@@ -19634,6 +19769,90 @@ function handleProviderDetailClick(e) {
   if (target.closest('[data-pd-edit]')) { actionPdEdit(); return; }
   if (target.closest('[data-pd-delete]')) { actionPdDelete(); return; }
   if (target.closest('[data-pd-test]')) { actionPdRunTest(); return; }
+  if (target.closest('[data-pd-run-eval]')) { actionPdRunEval(); return; }
+  if (target.closest('[data-pd-export-eval]')) { actionPdExportEvalReport(); return; }
+  const evalViewBtn = target.closest('[data-pd-eval-view]');
+  if (evalViewBtn) {
+    e.preventDefault();
+    setProviderDetailEvalView(evalViewBtn.getAttribute('data-pd-eval-view'));
+    return;
+  }
+  const historyExportBtn = target.closest('[data-pd-export-eval-history]');
+  if (historyExportBtn) {
+    e.preventDefault();
+    const index = Math.max(0, Number(historyExportBtn.getAttribute('data-pd-export-eval-history')) || 0);
+    actionPdExportEvalHistory(index);
+    return;
+  }
+  const historyLoadBtn = target.closest('[data-pd-load-eval-history]');
+  if (historyLoadBtn) {
+    e.preventDefault();
+    const index = Math.max(0, Number(historyLoadBtn.getAttribute('data-pd-load-eval-history')) || 0);
+    const item = state.providerDetail.evalHistory?.[index];
+    if (item?.result) {
+      state.providerDetail.evalResult = cloneJson(item.result);
+      state.providerDetail.evalView = 'single';
+      state.providerDetail.evalCasePage = 0;
+      state.providerDetail.evalExpanded = { channel: false, upstream: false };
+      renderProviderDetail({ force: true });
+    }
+    return;
+  }
+  if (target.closest('[data-pd-clear-eval-history]')) {
+    const row = lookupProviderDetailRow();
+    if (row) writePdEvalHistory(row, []);
+    state.providerDetail.evalHistory = [];
+    flash('验真历史已清空', 'success');
+    renderProviderDetail({ force: true });
+    return;
+  }
+  if (target.closest('[data-pd-batch-select-all]')) {
+    const row = lookupProviderDetailRow();
+    const next = {};
+    for (const item of getPdEvalBatchCandidates(row)) next[item.id] = true;
+    state.providerDetail.evalBatchSelected = next;
+    renderProviderDetail({ force: true });
+    return;
+  }
+  if (target.closest('[data-pd-batch-clear]')) {
+    state.providerDetail.evalBatchSelected = {};
+    renderProviderDetail({ force: true });
+    return;
+  }
+  if (target.closest('[data-pd-batch-run]')) { actionPdRunBatchEval(); return; }
+  if (target.closest('[data-pd-batch-pause]')) { actionPdPauseBatchEval(); return; }
+  if (target.closest('[data-pd-batch-resume]')) { actionPdResumeBatchEval(); return; }
+  if (target.closest('[data-pd-batch-stop]')) { actionPdStopBatchEval(); return; }
+  if (target.closest('[data-pd-batch-export]')) { actionPdExportBatchReport(); return; }
+  const batchLoadBtn = target.closest('[data-pd-batch-load-result]');
+  if (batchLoadBtn) {
+    const id = batchLoadBtn.getAttribute('data-pd-batch-load-result') || '';
+    const item = (state.providerDetail.evalBatchResults || []).find((r) => r.id === id);
+    if (item?.result) {
+      state.providerDetail.evalResult = cloneJson(item.result);
+      state.providerDetail.evalView = 'single';
+      state.providerDetail.evalCasePage = 0;
+      state.providerDetail.evalExpanded = { channel: false, upstream: false };
+      renderProviderDetail({ force: true });
+    }
+    return;
+  }
+  const likelihoodToggle = target.closest('[data-pd-toggle-likelihood]');
+  if (likelihoodToggle) {
+    const key = likelihoodToggle.getAttribute('data-pd-toggle-likelihood');
+    state.providerDetail.evalExpanded = {
+      ...(state.providerDetail.evalExpanded || {}),
+      [key]: !Boolean(state.providerDetail.evalExpanded?.[key]),
+    };
+    renderProviderDetail({ force: true });
+    return;
+  }
+  const casePageBtn = target.closest('[data-pd-case-page]');
+  if (casePageBtn) {
+    state.providerDetail.evalCasePage = Math.max(0, Number(casePageBtn.getAttribute('data-pd-case-page')) || 0);
+    renderProviderDetail({ force: true });
+    return;
+  }
   if (target.closest('[data-pd-refresh-health]')) { actionPdRefreshHealth(); return; }
   if (target.closest('[data-pd-refresh-usage]')) { actionPdRefreshUsage(); return; }
   if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
@@ -19776,6 +19995,18 @@ function openProviderDetail(key) {
   state.providerDetail.selectedProbeKey = '';
   state.providerDetail.testResult = null;
   state.providerDetail.testRunning = false;
+  state.providerDetail.evalResult = null;
+  state.providerDetail.evalRunning = false;
+  state.providerDetail.evalExpanded = { channel: false, upstream: false };
+  state.providerDetail.evalCasePage = 0;
+  state.providerDetail.evalView = normalizeProviderDetailEvalView(localStorage.getItem('easyaiconfig_pd_eval_view') || state.providerDetail.evalView || 'single');
+  state.providerDetail.evalHistory = [];
+  state.providerDetail.evalBatchSelected = {};
+  state.providerDetail.evalBatchRunning = false;
+  state.providerDetail.evalBatchPaused = false;
+  state.providerDetail.evalBatchResults = [];
+  state.providerDetail.evalBatchProgress = null;
+  state.providerDetail.evalBatchRunId = '';
   state.providerDetail.loading = false;
   state.providerDetail.error = '';
   state.providerDetail.usageAutoRetried = false;
@@ -19794,6 +20025,10 @@ function openProviderDetail(key) {
   requestAnimationFrame(() => requestAnimationFrame(() => detail?.classList.add('is-in')));
   // 异步拉真数据：probe history + dashboard metrics
   const row = lookupProviderDetailRow();
+  if (row) {
+    state.providerDetail.evalHistory = readPdEvalHistory(row);
+    seedPdEvalBatchSelection(row);
+  }
   if (row && isCodexProviderDetail(row) && row.mode === 'apikey') {
     const expectedKey = row.key;
     const expectedTool = providerDetailTool(row);
@@ -19904,6 +20139,21 @@ function pdComputeRenderSig(row) {
   const histLen = Array.isArray(pd.history?.rows) ? pd.history.rows.length : 0;
   const dashboardCodexMetrics = getDashboardMetricsForTool('codex');
   const dashboardCodexFetchedAt = getDashboardMetricsFetchedAtForTool('codex');
+  const batchSelectedSig = Object.entries(pd.evalBatchSelected || {})
+    .filter(([, selected]) => Boolean(selected))
+    .map(([key]) => key)
+    .sort()
+    .join(',');
+  const batchResultsSig = Array.isArray(pd.evalBatchResults)
+    ? pd.evalBatchResults.map((item) => [
+      item.id,
+      item.status,
+      item.result?.status || item.result?.summary?.status || '',
+      item.result?.summary?.totalScore ?? '',
+      item.result?.summary?.riskLevel ?? '',
+      item.error || '',
+    ].join(':')).join(',')
+    : '';
   // 这些字段一致就不重画 → 这是去闪烁的关键
   return [
     row.key,
@@ -19923,6 +20173,17 @@ function pdComputeRenderSig(row) {
     pd.usageWindow || '',
     pd.usageModel || '',
     pd.testRunning ? 'tr' : (pd.testResult?.ok ? 'tk' : pd.testResult?.error ? 'te' : 'tn'),
+    pd.evalRunning ? 'er' : (pd.evalResult?.summary ? `ek:${pd.evalResult.status || pd.evalResult.summary.status || ''}:${pd.evalResult.summary.totalScore}:${pd.evalResult.summary.riskLevel}` : pd.evalResult?.error ? 'ee' : 'en'),
+    pd.evalExpanded?.channel ? 'cx' : 'cc',
+    pd.evalExpanded?.upstream ? 'ux' : 'uc',
+    `cp:${pd.evalCasePage || 0}`,
+    `ev:${normalizeProviderDetailEvalView(pd.evalView)}`,
+    Array.isArray(pd.evalHistory) ? `eh:${pd.evalHistory.length}` : 'eh:0',
+    pd.evalBatchRunning ? 'ebr' : 'ebi',
+    pd.evalBatchPaused ? 'ebpaused' : 'ebactive',
+    `ebs:${batchSelectedSig}`,
+    `ebp:${pd.evalBatchProgress?.completed ?? 0}/${pd.evalBatchProgress?.total ?? 0}:${pd.evalBatchProgress?.currentLabel || ''}`,
+    `ebr:${batchResultsSig}`,
     pd.usageRefreshing ? 'ur' : 'us',
     pd.loading ? 'l' : '',
     dashboardCodexMetrics ? 'dm' : 'dn',
@@ -20073,6 +20334,7 @@ function renderPdTab(tab, row) {
   if (tab === 'models') return renderPdModels(row);
   if (tab === 'usage') return renderPdUsage(row);
   if (tab === 'test') return renderPdTest(row);
+  if (tab === 'eval') return renderPdEval(row);
   if (tab === 'health') return renderPdHealth(row);
   if (tab === 'binding') return renderPdBinding(row);
   return '';
@@ -21535,6 +21797,975 @@ function renderPdTestResult(result) {
     </div>`;
 }
 
+function providerEvalProtocolLabel(row) {
+  if (isClaudeProviderDetail(row)) return 'Anthropic /v1/messages';
+  const wireApi = String(row?.ref?.wireApi || row?.wireApi || '').trim().toLowerCase();
+  if (wireApi === 'responses') return 'OpenAI /responses';
+  if (wireApi === 'chat' || wireApi === 'completions' || wireApi === 'chat-completions') {
+    return 'OpenAI-compatible /chat/completions';
+  }
+  return 'OpenAI /responses';
+}
+
+function formatTokenCount(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num) || num <= 0) return '—';
+  if (num >= 1000000) return `${(num / 1000000).toFixed(num >= 10000000 ? 1 : 2)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(num >= 10000 ? 1 : 2)}k`;
+  return String(Math.round(num));
+}
+
+function normalizeEvalTokenUsage(result = {}) {
+  const summary = result.summary || {};
+  const usage = result.tokenUsage || result.rawMeta?.tokenUsage || {};
+  const totalTokens = Number(usage.totalTokens ?? summary.tokenTotal ?? 0) || 0;
+  const inputTokens = Number(usage.inputTokens ?? summary.tokenInput ?? 0) || 0;
+  const outputTokens = Number(usage.outputTokens ?? summary.tokenOutput ?? 0) || 0;
+  const reasoningTokens = Number(usage.reasoningTokens ?? summary.tokenReasoning ?? 0) || 0;
+  const cachedTokens = Number(usage.cachedTokens ?? 0) || 0;
+  const requests = Number(usage.requests ?? 0) || 0;
+  return { totalTokens, inputTokens, outputTokens, reasoningTokens, cachedTokens, requests, usageAvailable: Boolean(usage.usageAvailable || totalTokens) };
+}
+
+function normalizePdEvalRunStatus(result = {}) {
+  const raw = String(result?.status || result?.summary?.status || '').trim().toLowerCase();
+  if (raw === 'ok' || raw === 'degraded' || raw === 'fail') return raw;
+  if (result?.error) return 'fail';
+  const evidenceFailures = Number(result?.summary?.evidenceFailures ?? 0) || (Array.isArray(result?.evidence) ? result.evidence.filter((item) => item?.status === 'fail').length : 0);
+  const requestFailures = Number(result?.summary?.requestFailures ?? 0) || (Array.isArray(result?.capabilities) ? result.capabilities.filter((item) => item?.error).length : 0);
+  if (evidenceFailures || requestFailures) return 'degraded';
+  return result?.summary ? 'ok' : 'fail';
+}
+
+function getPdEvalStatusMeta(resultOrStatus = {}) {
+  const status = typeof resultOrStatus === 'string' ? resultOrStatus : normalizePdEvalRunStatus(resultOrStatus);
+  if (status === 'ok') return { status, text: '检测完整', cls: 'ok', detail: '关键请求完成，未发现请求级失败。' };
+  if (status === 'degraded') {
+    const detail = typeof resultOrStatus === 'string'
+      ? '有请求或关键线索异常，本轮结果需要结合明细复核。'
+      : (resultOrStatus?.summary?.statusDetail || '有请求或关键线索异常，本轮结果需要结合明细复核。');
+    return { status, text: '部分异常', cls: 'warn', detail };
+  }
+  const detail = typeof resultOrStatus === 'string'
+    ? '关键探测未完成。'
+    : (resultOrStatus?.summary?.statusDetail || resultOrStatus?.error || '关键探测未完成。');
+  return { status: 'fail', text: '探测失败', cls: 'bad', detail };
+}
+
+function getPdEvalDiagnosticSummary(result = {}) {
+  const evidence = Array.isArray(result?.evidence) ? result.evidence : [];
+  const capabilities = Array.isArray(result?.capabilities) ? result.capabilities : [];
+  const evidencePass = evidence.filter((item) => item?.status === 'pass').length;
+  const evidenceFail = evidence.filter((item) => item?.status === 'fail').length;
+  const evidenceWarn = evidence.filter((item) => item?.status === 'warn').length;
+  const capabilityPass = capabilities.filter((item) => item?.passed).length;
+  const capabilityErrors = capabilities.filter((item) => item?.error).length;
+  const firstEvidenceProblem = evidence.find((item) => item?.status === 'fail') || evidence.find((item) => item?.status === 'warn');
+  const firstCapabilityProblem = capabilities.find((item) => item?.error) || capabilities.find((item) => item && item.passed === false);
+  const firstProblem = firstEvidenceProblem?.detail || firstCapabilityProblem?.error || firstCapabilityProblem?.observed || '';
+  return {
+    evidencePass,
+    evidenceFail,
+    evidenceWarn,
+    evidenceTotal: evidence.length,
+    capabilityPass,
+    capabilityTotal: capabilities.length,
+    capabilityErrors,
+    firstProblem: String(firstProblem || '').slice(0, 180),
+  };
+}
+
+function normalizePdEvalEvidenceText(value = '') {
+  return String(value ?? '')
+    .replace(/\/responses 可用/g, '/responses 生成探测通过')
+    .replace(/\/chat\/completions 可用/g, '/chat/completions 生成探测通过')
+    .replace(/\/v1\/messages 可用/g, '/v1/messages 生成探测通过')
+    .replace(/生成端点可用/g, '生成端点探测通过')
+    .replace(/端点返回成功/g, '端点返回成功（只证明请求打通）');
+}
+
+function getPdEvalEvidenceDisplay(item = {}) {
+  return {
+    label: normalizePdEvalEvidenceText(item?.label || item?.id || '线索'),
+    detail: normalizePdEvalEvidenceText(item?.detail || ''),
+  };
+}
+
+function renderPdEvalTokenUsage(result) {
+  const esc = escapeHtml;
+  const usage = normalizeEvalTokenUsage(result);
+  return `
+    <div class="pd-token-strip">
+      <span>请求 <strong>${esc(String(usage.requests || '—'))}</strong></span>
+      <span>输入 <strong>${esc(formatTokenCount(usage.inputTokens))}</strong></span>
+      <span>输出 <strong>${esc(formatTokenCount(usage.outputTokens))}</strong></span>
+      <span>推理 <strong>${esc(formatTokenCount(usage.reasoningTokens))}</strong></span>
+      <span>缓存 <strong>${esc(formatTokenCount(usage.cachedTokens))}</strong></span>
+    </div>`;
+}
+
+function pdEvalHistoryStorageKey(row = lookupProviderDetailRow()) {
+  const tool = providerDetailTool(row);
+  const key = String(row?.key || '').trim() || 'unknown';
+  return `easyaiconfig_model_eval_history_v1:${tool}:${key}`;
+}
+
+function readPdEvalHistory(row = lookupProviderDetailRow()) {
+  try {
+    const raw = localStorage.getItem(pdEvalHistoryStorageKey(row));
+    const list = JSON.parse(raw || '[]');
+    return Array.isArray(list) ? list.filter((item) => item?.result).slice(0, 12) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function writePdEvalHistory(row, history) {
+  const list = (Array.isArray(history) ? history : []).filter((item) => item?.result).slice(0, 12);
+  try {
+    localStorage.setItem(pdEvalHistoryStorageKey(row), JSON.stringify(list));
+    return true;
+  } catch (_) {
+    try {
+      localStorage.setItem(pdEvalHistoryStorageKey(row), JSON.stringify(list.slice(0, 6)));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function formatPdEvalProbability(value) {
+  if (value == null || value === '') return '—';
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  return `${Math.max(0, Math.min(100, Math.round(num)))}%`;
+}
+
+function formatPdEvalScore(value) {
+  if (value == null || value === '') return '—';
+  return String(value);
+}
+
+function getPdEvalResultSnapshot(result = {}) {
+  const summary = result.summary || {};
+  const channelTop = result.channelLikelihood?.top || {};
+  const upstreamTop = result.upstreamLikelihood?.top || {};
+  const iq = result.iq || {};
+  const capabilities = Array.isArray(result.capabilities) ? result.capabilities : [];
+  const usage = normalizeEvalTokenUsage(result);
+  const durationMs = summary.durationMs ?? result.rawMeta?.durationMs ?? null;
+  return {
+    status: normalizePdEvalRunStatus(result),
+    statusLabel: summary.statusLabel || getPdEvalStatusMeta(result).text,
+    statusDetail: summary.statusDetail || getPdEvalStatusMeta(result).detail,
+    riskLevel: summary.riskLevel || '',
+    riskLabel: summary.riskLabel || (summary.riskLevel === 'normal' ? '基本正常' : summary.riskLevel === 'high' ? '高度可疑' : '可疑'),
+    totalScore: summary.totalScore ?? null,
+    channelLabel: channelTop.label || '',
+    channelProbability: channelTop.probability ?? null,
+    upstreamLabel: upstreamTop.label || summary.upstreamLabel || '',
+    upstreamProbability: upstreamTop.probability ?? summary.upstreamScore ?? null,
+    iqScore: summary.iqScore ?? iq.score ?? null,
+    iqLabel: summary.iqLabel || iq.label || '',
+    capabilityScore: summary.capabilityScore ?? null,
+    passed: summary.passed ?? capabilities.filter((item) => item?.passed).length,
+    total: summary.total ?? capabilities.length,
+    tokenTotal: usage.totalTokens || 0,
+    tokenRequests: usage.requests || 0,
+    durationMs,
+    durationText: durationMs != null ? fmtLatency(durationMs) : '—',
+    completedAt: summary.completedAt || '',
+    providerName: result.provider?.name || result.provider?.key || '',
+    model: result.model?.selected || result.model?.requested || '',
+  };
+}
+
+function rememberPdEvalHistory(row, result) {
+  if (!row || !result || result.error) return readPdEvalHistory(row);
+  const snapshot = getPdEvalResultSnapshot(result);
+  const item = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    savedAt: new Date().toISOString(),
+    summary: {
+      riskLabel: snapshot.riskLabel || '',
+      riskLevel: snapshot.riskLevel || '',
+      totalScore: snapshot.totalScore,
+      channelLabel: snapshot.channelLabel || '',
+      channelProbability: snapshot.channelProbability,
+      upstreamLabel: snapshot.upstreamLabel || '',
+      upstreamProbability: snapshot.upstreamProbability,
+      iqScore: snapshot.iqScore,
+      iqLabel: snapshot.iqLabel || '',
+      capabilityScore: snapshot.capabilityScore,
+      passed: snapshot.passed,
+      total: snapshot.total,
+      tokenTotal: snapshot.tokenTotal,
+      tokenRequests: snapshot.tokenRequests,
+      durationMs: snapshot.durationMs,
+      model: snapshot.model || getProviderDetailModel(row) || '',
+      providerName: snapshot.providerName || row.name || row.key || '',
+    },
+    result: cloneJson(result),
+  };
+  const previous = readPdEvalHistory(row);
+  const next = [item, ...previous].slice(0, 12);
+  writePdEvalHistory(row, next);
+  return next;
+}
+
+function renderPdEvalSubnav({ historyCount = 0, selectedCount = 0, resultCount = 0 } = {}) {
+  const esc = escapeHtml;
+  const view = normalizeProviderDetailEvalView(state.providerDetail.evalView);
+  const items = [
+    { id: 'single', label: '单次验真', meta: state.providerDetail.evalResult?.summary ? '已出结果' : '' },
+    { id: 'history', label: '历史记录', meta: historyCount ? `${historyCount}` : '' },
+    { id: 'batch', label: '批量对比', meta: selectedCount ? `${selectedCount} 选中` : (resultCount ? `${resultCount} 结果` : '') },
+  ];
+  return `
+    <nav class="pd-eval-subnav" role="tablist" aria-label="验真页面">
+      ${items.map((item) => `
+        <button type="button" role="tab" class="pd-eval-subtab ${view === item.id ? 'is-active' : ''}" data-pd-eval-view="${esc(item.id)}" aria-selected="${view === item.id}">
+          <span>${esc(item.label)}</span>
+          ${item.meta ? `<em>${esc(item.meta)}</em>` : ''}
+        </button>`).join('')}
+    </nav>`;
+}
+
+function renderPdEvalHistoryPage(row) {
+  const esc = escapeHtml;
+  const history = Array.isArray(state.providerDetail.evalHistory) ? state.providerDetail.evalHistory : [];
+  if (!history.length) {
+    return `
+      <div class="pd-eval-view pd-eval-history-page">
+        <div class="pd-eval-page-head">
+          <div>
+            <strong>历史记录</strong>
+            <span>${esc(row.name || row.key)} · 0 条</span>
+          </div>
+        </div>
+        <div class="pd-empty pd-empty-small">暂无历史记录。</div>
+      </div>`;
+  }
+  return `
+    <div class="pd-eval-view pd-eval-history-page">
+      <div class="pd-eval-page-head">
+        <div>
+          <strong>历史记录</strong>
+          <span>${esc(row.name || row.key)} · ${esc(String(history.length))} 条</span>
+        </div>
+        <button type="button" class="pd-link" data-pd-clear-eval-history>清空</button>
+      </div>
+      <div class="pd-eval-table-wrap">
+        <table class="pd-eval-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>结论</th>
+              <th>接入渠道</th>
+              <th>疑似上游</th>
+              <th>能力 / IQ</th>
+              <th>Token / 耗时</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${history.map((item, index) => {
+              const summary = item.summary || {};
+              const snapshot = getPdEvalResultSnapshot(item.result || {});
+              const channelLabel = summary.channelLabel || snapshot.channelLabel || '-';
+              const upstreamLabel = summary.upstreamLabel || snapshot.upstreamLabel || '-';
+              const channelProbability = summary.channelProbability ?? snapshot.channelProbability;
+              const upstreamProbability = summary.upstreamProbability ?? snapshot.upstreamProbability;
+              const tokenTotal = summary.tokenTotal ?? snapshot.tokenTotal;
+              const durationMs = summary.durationMs ?? snapshot.durationMs;
+              const capability = summary.capabilityScore ?? snapshot.capabilityScore;
+              const iq = summary.iqScore ?? snapshot.iqScore;
+              const passed = summary.passed ?? snapshot.passed;
+              const total = summary.total ?? snapshot.total;
+              const risk = summary.riskLabel || snapshot.riskLabel || '检测结果';
+              return `
+                <tr>
+                  <td><span>${esc(item.savedAt ? formatRelativeTime(item.savedAt) : '未知')}</span></td>
+                  <td><strong>${esc(risk)}</strong><em>总分 ${esc(formatPdEvalScore(summary.totalScore ?? snapshot.totalScore))}</em></td>
+                  <td><strong>${esc(formatPdEvalProbability(channelProbability))}</strong><em title="${esc(channelLabel)}">${esc(channelLabel)}</em></td>
+                  <td><strong>${esc(formatPdEvalProbability(upstreamProbability))}</strong><em title="${esc(upstreamLabel)}">${esc(upstreamLabel)}</em></td>
+                  <td><strong>${esc(formatPdEvalScore(capability))}</strong><em>IQ ${esc(formatPdEvalScore(iq))} · ${esc(String(passed ?? '-'))}/${esc(String(total ?? '-'))}</em></td>
+                  <td><strong>${esc(formatTokenCount(tokenTotal))}</strong><em>${esc(durationMs != null ? fmtLatency(durationMs) : snapshot.durationText || '—')}</em></td>
+                  <td class="pd-eval-table-actions">
+                    <button type="button" class="pd-show-more" data-pd-load-eval-history="${esc(String(index))}">查看</button>
+                    <button type="button" class="pd-show-more" data-pd-export-eval-history="${esc(String(index))}">导出</button>
+                  </td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function getPdEvalBatchCandidateId(row = {}) {
+  const tool = providerDetailTool(row);
+  const key = String(row?.key || '').trim();
+  return key ? `${tool}:${key}` : '';
+}
+
+function getPdEvalBatchCandidates(currentRow = lookupProviderDetailRow()) {
+  const rows = [];
+  const seen = new Set();
+  for (const tool of ['codex', 'claudecode']) {
+    const toolRows = typeof window.__chBuildRows === 'function' ? window.__chBuildRows(tool) : [];
+    for (const row of toolRows || []) {
+      const id = getPdEvalBatchCandidateId(row);
+      if (!id || seen.has(id)) continue;
+      if (row.mode !== 'apikey' || !row.hasCredential || row.historyOnly) continue;
+      if (!isCodexProviderDetail(row) && !isClaudeProviderDetail(row)) continue;
+      seen.add(id);
+      rows.push({
+        id,
+        row,
+        tool,
+        toolLabel: tool === 'claudecode' ? 'Claude' : 'GPT',
+        name: row.name || row.key,
+        key: row.key,
+        model: getProviderDetailModel(row) || '自动选择',
+        baseUrl: row.baseUrl || '',
+        isCurrent: currentRow && id === getPdEvalBatchCandidateId(currentRow),
+      });
+    }
+  }
+  rows.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+    if (a.tool !== b.tool) return a.tool.localeCompare(b.tool);
+    return String(a.name || a.key).localeCompare(String(b.name || b.key));
+  });
+  return rows;
+}
+
+function seedPdEvalBatchSelection(row = lookupProviderDetailRow()) {
+  const id = getPdEvalBatchCandidateId(row);
+  state.providerDetail.evalBatchSelected = id ? { [id]: true } : {};
+}
+
+function getPdEvalBatchSelection(candidates = []) {
+  const validIds = new Set(candidates.map((item) => item.id));
+  const current = state.providerDetail.evalBatchSelected || {};
+  const next = {};
+  for (const [id, selected] of Object.entries(current)) {
+    if (selected && validIds.has(id)) next[id] = true;
+  }
+  if (!Object.keys(next).length) {
+    const currentId = getPdEvalBatchCandidateId(lookupProviderDetailRow());
+    if (currentId && validIds.has(currentId)) next[currentId] = true;
+  }
+  state.providerDetail.evalBatchSelected = next;
+  return next;
+}
+
+function getSelectedPdEvalBatchCandidates(row = lookupProviderDetailRow()) {
+  const candidates = getPdEvalBatchCandidates(row);
+  const selection = getPdEvalBatchSelection(candidates);
+  return candidates.filter((item) => selection[item.id]);
+}
+
+function renderPdEvalSingleView(row) {
+  const esc = escapeHtml;
+  const running = state.providerDetail.evalRunning;
+  const result = state.providerDetail.evalResult;
+  const model = getProviderDetailModel(row);
+  return `
+    <div class="pd-eval-view">
+      <div class="pd-info-grid pd-eval-target">
+        <div class="pd-info-row"><span>Provider</span><code>${esc(row.name || row.key)}</code></div>
+        <div class="pd-info-row"><span>模型</span><code>${esc(model || '未显式配置，将从 /models 自动选择')}</code></div>
+        <div class="pd-info-row"><span>协议</span><code>${esc(providerEvalProtocolLabel(row))}</code></div>
+      </div>
+      ${running ? renderPdEvalRunning() : ''}
+      ${result ? renderPdEvalResult(result) : (!running ? '<div class="pd-empty pd-empty-small">点“开始快测”运行低 token 探针。</div>' : '')}
+    </div>`;
+}
+
+function renderPdEvalBatchPage(row) {
+  const esc = escapeHtml;
+  const candidates = getPdEvalBatchCandidates(row);
+  const selection = getPdEvalBatchSelection(candidates);
+  const selectedCount = candidates.filter((item) => selection[item.id]).length;
+  const running = Boolean(state.providerDetail.evalBatchRunning);
+  const paused = Boolean(state.providerDetail.evalBatchPaused);
+  const progress = state.providerDetail.evalBatchProgress || {};
+  const results = Array.isArray(state.providerDetail.evalBatchResults) ? state.providerDetail.evalBatchResults : [];
+  const progressLabel = String(progress.currentLabel || '').trim();
+  const progressHtml = running
+    ? `<div class="pd-batch-progress ${paused ? 'is-paused' : ''}">${
+      paused
+        ? (progressLabel ? `已暂停，当前渠道 <strong>${esc(progressLabel)}</strong> 结束后停止推进` : '已暂停，点击继续运行剩余渠道')
+        : (progressLabel ? `正在检测 <strong>${esc(progressLabel)}</strong>` : '准备检测下一渠道')
+    }</div>`
+    : '';
+  return `
+    <div class="pd-eval-view pd-eval-batch-page">
+      <div class="pd-eval-page-head">
+        <div>
+          <strong>批量渠道对比</strong>
+          <span>${esc(String(selectedCount))} / ${esc(String(candidates.length))} 个渠道选中${running && progress.total ? ` · ${esc(String(progress.completed || 0))}/${esc(String(progress.total))}${paused ? ' · 已暂停' : ''}` : ''}</span>
+        </div>
+        <div class="pd-eval-page-actions">
+          <button type="button" class="pd-show-more" data-pd-batch-select-all ${running ? 'disabled' : ''}>全选</button>
+          <button type="button" class="pd-show-more" data-pd-batch-clear ${running ? 'disabled' : ''}>清空</button>
+          ${results.length ? '<button type="button" class="pd-show-more" data-pd-batch-export>导出对比</button>' : ''}
+          ${running
+            ? `<button type="button" class="pd-show-more" ${paused ? 'data-pd-batch-resume' : 'data-pd-batch-pause'}>${paused ? '继续' : '暂停'}</button>
+              <button type="button" class="pd-show-more" data-pd-batch-stop>停止</button>`
+            : `<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-batch-run ${!selectedCount ? 'disabled' : ''}>开始对比</button>`}
+        </div>
+      </div>
+      ${progressHtml}
+      <div class="pd-batch-picker">
+        ${candidates.length ? candidates.map((item) => `
+          <label class="pd-batch-row ${selection[item.id] ? 'is-selected' : ''}">
+            <input type="checkbox" data-pd-batch-toggle="${esc(item.id)}" ${selection[item.id] ? 'checked' : ''} ${running ? 'disabled' : ''} />
+            <span class="pd-batch-main">
+              <strong>${esc(item.name)}</strong>
+              <em title="${esc(item.baseUrl || item.key)}">${esc(item.toolLabel)} · ${esc(item.model)} · ${esc(item.baseUrl || item.key)}</em>
+            </span>
+            <span class="pd-batch-tag">${esc(item.toolLabel)}</span>
+          </label>`).join('') : '<div class="pd-empty pd-empty-small">没有可批量检测的 GPT / Claude API Key 渠道。</div>'}
+      </div>
+      ${renderPdEvalBatchOverview(results)}
+      ${renderPdEvalBatchComparison(results)}
+      ${renderPdEvalBatchDiagnostics(results)}
+      ${renderPdEvalBatchDetailMatrix(results)}
+    </div>`;
+}
+
+function renderPdEvalBatchOverview(results = []) {
+  const esc = escapeHtml;
+  if (!Array.isArray(results) || !results.length) return '';
+  const done = results.filter((item) => !['queued', 'running'].includes(String(item.status || 'queued'))).length;
+  const ok = results.filter((item) => item.result && normalizePdEvalRunStatus(item.result) === 'ok').length;
+  const degraded = results.filter((item) => item.result && normalizePdEvalRunStatus(item.result) === 'degraded').length;
+  const failed = results.filter((item) => ['fail', 'timeout', 'error', 'cancelled', 'skipped'].includes(String(item.status || '')) && !item.result).length
+    + results.filter((item) => item.result && normalizePdEvalRunStatus(item.result) === 'fail').length;
+  const running = results.filter((item) => item.status === 'running' || item.status === 'queued').length;
+  return `
+    <div class="pd-batch-overview">
+      <div><span>进度</span><strong>${esc(String(done))}/${esc(String(results.length))}</strong><em>${running ? `${esc(String(running))} 个待完成` : '已结束'}</em></div>
+      <div><span>检测完整</span><strong>${esc(String(ok))}</strong><em>无请求级失败</em></div>
+      <div><span>部分异常</span><strong>${esc(String(degraded))}</strong><em>可用但需复核</em></div>
+      <div><span>失败/超时</span><strong>${esc(String(failed))}</strong><em>查看错误原因</em></div>
+    </div>`;
+}
+
+function getPdBatchStatusMeta(item = {}) {
+  const status = String(item.status || 'queued');
+  if (item.result) return getPdEvalStatusMeta(item.result);
+  if (status === 'ok') return { text: '检测完整', cls: 'ok', status: 'ok' };
+  if (status === 'degraded') return { text: '部分异常', cls: 'warn', status: 'degraded' };
+  if (status === 'fail') return { text: '探测失败', cls: 'bad', status: 'fail' };
+  if (status === 'running') return { text: '检测中', cls: 'warn' };
+  if (status === 'timeout') return { text: '超时', cls: 'bad' };
+  if (status === 'cancelled') return { text: '已停止', cls: 'muted' };
+  if (status === 'skipped') return { text: '已跳过', cls: 'muted' };
+  if (status === 'error') return { text: '失败', cls: 'bad' };
+  return { text: '排队', cls: 'muted' };
+}
+
+function renderPdEvalBatchComparison(results = []) {
+  const esc = escapeHtml;
+  if (!Array.isArray(results) || !results.length) {
+    return '<div class="pd-empty pd-empty-small">运行后这里显示不同渠道的渠道可能性、疑似上游、总分、能力分、IQ 和 token 消耗。</div>';
+  }
+  return `
+    <div class="pd-eval-table-wrap pd-batch-table-wrap">
+      <table class="pd-eval-table pd-batch-table">
+        <thead>
+          <tr>
+            <th>渠道</th>
+            <th>状态</th>
+            <th>接入渠道</th>
+            <th>疑似上游</th>
+            <th>总分 / 风险</th>
+            <th>能力 / IQ</th>
+            <th>探测 / 耗时</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${results.map((item) => {
+            const snapshot = item.result ? getPdEvalResultSnapshot(item.result) : {};
+            const hasResult = Boolean(item.result);
+            const statusMeta = getPdBatchStatusMeta(item);
+            const diag = item.result ? getPdEvalDiagnosticSummary(item.result) : null;
+            const elapsedText = item.elapsedMs != null ? fmtLatency(item.elapsedMs) : (snapshot.durationText || '—');
+            return `
+              <tr class="pd-batch-result-row is-${esc(item.status || 'queued')}">
+                <td><strong>${esc(item.provider?.name || item.provider?.key || item.id)}</strong><em>${esc(item.provider?.toolLabel || item.provider?.tool || '')} · ${esc(item.provider?.model || '-')}</em></td>
+                <td class="pd-eval-table-actions">
+                  <span class="pd-status ${statusMeta.cls}">${esc(statusMeta.text)}</span>
+                  <em title="${esc(hasResult ? (statusMeta.detail || '') : (item.error || statusMeta.text))}">${esc(hasResult ? (statusMeta.detail || '') : (item.error || statusMeta.text))}</em>
+                  ${hasResult ? `<button type="button" class="pd-show-more" data-pd-batch-load-result="${esc(item.id)}">查看</button>` : ''}
+                </td>
+                <td><strong>${esc(hasResult ? formatPdEvalProbability(snapshot.channelProbability) : '—')}</strong><em title="${esc(snapshot.channelLabel || '')}">${esc(snapshot.channelLabel || '-')}</em></td>
+                <td><strong>${esc(hasResult ? formatPdEvalProbability(snapshot.upstreamProbability) : '—')}</strong><em title="${esc(snapshot.upstreamLabel || '')}">${esc(snapshot.upstreamLabel || '-')}</em></td>
+                <td><strong>${esc(hasResult ? formatPdEvalScore(snapshot.totalScore) : '—')}</strong><em>${esc(hasResult ? snapshot.riskLabel : (item.error || statusMeta.text))}</em></td>
+                <td><strong>${esc(hasResult ? formatPdEvalScore(snapshot.capabilityScore) : '—')}</strong><em>${esc(hasResult ? `${diag.capabilityPass}/${diag.capabilityTotal} 题 · IQ ${formatPdEvalScore(snapshot.iqScore)}` : 'IQ —')}</em></td>
+                <td><strong>${esc(hasResult ? `${diag.evidencePass}/${diag.evidenceTotal} 线索` : '—')}</strong><em title="${esc(hasResult ? (diag.firstProblem || `${formatTokenCount(snapshot.tokenTotal)} · ${elapsedText}`) : (item.error || ''))}">${esc(hasResult ? (diag.firstProblem || `${formatTokenCount(snapshot.tokenTotal)} · ${elapsedText}`) : '—')}</em></td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function getPdBatchDiagnosticLines(item = {}) {
+  const lines = [];
+  if (!item.result) {
+    const statusMeta = getPdBatchStatusMeta(item);
+    const detail = item.error || statusMeta.detail || statusMeta.text || '';
+    if (detail) lines.push(detail);
+    return lines;
+  }
+  const result = item.result || {};
+  const statusMeta = getPdEvalStatusMeta(result);
+  const summary = result.summary || {};
+  const evidence = Array.isArray(result.evidence) ? result.evidence : [];
+  const capabilities = Array.isArray(result.capabilities) ? result.capabilities : [];
+  if (statusMeta.detail) lines.push(statusMeta.detail);
+  const evidenceProblems = evidence
+    .filter((entry) => entry?.status === 'fail' || entry?.status === 'warn')
+    .slice(0, 3)
+    .map((entry) => {
+      const display = getPdEvalEvidenceDisplay(entry);
+      return `${display.label}: ${display.detail}`;
+    });
+  const capabilityProblems = capabilities
+    .filter((entry) => entry?.error || entry?.passed === false)
+    .slice(0, 3)
+    .map((entry) => `${entry?.label || entry?.id || '能力探针'}: ${entry?.error || entry?.observed || '未通过'}`);
+  lines.push(...evidenceProblems, ...capabilityProblems);
+  if (summary.requestFailures || summary.capabilityRequestFailures || summary.evidenceFailures) {
+    lines.push(`异常计数: 请求 ${summary.requestFailures || 0}，能力请求 ${summary.capabilityRequestFailures || 0}，线索失败 ${summary.evidenceFailures || 0}`);
+  }
+  return [...new Set(lines.filter(Boolean).map((line) => String(line).slice(0, 260)))].slice(0, 5);
+}
+
+function renderPdEvalBatchDiagnostics(results = []) {
+  const esc = escapeHtml;
+  if (!Array.isArray(results) || !results.length) return '';
+  const visible = results.filter((item) => item.result || !['queued', 'running'].includes(String(item.status || 'queued')));
+  if (!visible.length) return '';
+  return `
+    <div class="pd-batch-diagnostics">
+      <div class="pd-section-title">批量诊断摘要 <span class="pd-section-meta">${esc(String(visible.length))} 项</span></div>
+      <div class="pd-batch-diagnostic-list">
+        ${visible.map((item) => {
+          const statusMeta = getPdBatchStatusMeta(item);
+          const snapshot = item.result ? getPdEvalResultSnapshot(item.result) : {};
+          const lines = getPdBatchDiagnosticLines(item);
+          const upstream = item.result ? `${formatPdEvalProbability(snapshot.upstreamProbability)} · ${snapshot.upstreamLabel || '待判断'}` : '无验真明细';
+          return `
+            <div class="pd-batch-diagnostic is-${esc(statusMeta.status || item.status || 'queued')}">
+              <div class="pd-batch-diagnostic-head">
+                <strong>${esc(item.provider?.name || item.provider?.key || item.id)}</strong>
+                <span class="pd-status ${esc(statusMeta.cls)}">${esc(statusMeta.text)}</span>
+              </div>
+              <div class="pd-batch-diagnostic-meta">
+                <span>${esc(item.provider?.toolLabel || item.provider?.tool || '')} · ${esc(item.provider?.model || '-')}</span>
+                <span>${esc(upstream)}</span>
+                <span>${esc(item.elapsedMs != null ? fmtLatency(item.elapsedMs) : (snapshot.durationText || '-'))}</span>
+              </div>
+              ${lines.length ? `<ul>${lines.map((line) => `<li>${esc(normalizePdEvalEvidenceText(line))}</li>`).join('')}</ul>` : '<p>未发现请求级异常。</p>'}
+            </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+function shortPdBatchDetail(value = '', max = 190) {
+  const text = normalizePdEvalEvidenceText(String(value ?? '').replace(/\s+/g, ' ').trim());
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function getPdBatchProblemGroups(item = {}) {
+  const result = item.result || null;
+  if (!result) {
+    return {
+      evidence: [shortPdBatchDetail(item.error || getPdBatchStatusMeta(item).detail || getPdBatchStatusMeta(item).text)].filter(Boolean),
+      capabilities: [],
+      signals: [],
+    };
+  }
+
+  const evidence = Array.isArray(result.evidence) ? result.evidence : [];
+  const capabilities = Array.isArray(result.capabilities) ? result.capabilities : [];
+  const rawMeta = result.rawMeta || {};
+  const signals = [];
+  if (rawMeta.officialSignalHeaders) signals.push(`官方头: ${rawMeta.officialSignalHeaders}`);
+  if (rawMeta.requestId) signals.push(`request id: ${rawMeta.requestIdSource ? `${rawMeta.requestIdSource}=` : ''}${rawMeta.requestId}`);
+  if (rawMeta.systemFingerprint) signals.push(`fingerprint: ${rawMeta.systemFingerprint}`);
+  if (rawMeta.server) signals.push(`server: ${rawMeta.server}`);
+  if (rawMeta.protocolFallback) signals.push(`协议适配: ${rawMeta.protocolFallback}`);
+  if (rawMeta.metadataStatusCode != null || rawMeta.modelsStatusCode != null) {
+    signals.push(`/models ${rawMeta.modelsStatusCode ?? '-'} · 生成 ${rawMeta.metadataStatusCode ?? rawMeta.chatStatusCode ?? '-'}`);
+  }
+
+  return {
+    evidence: evidence
+      .filter((entry) => entry?.status !== 'pass')
+      .map((entry) => {
+        const display = getPdEvalEvidenceDisplay(entry);
+        return shortPdBatchDetail(`${display.label}: ${display.detail}`);
+      })
+      .filter(Boolean),
+    capabilities: capabilities
+      .filter((entry) => entry?.error || entry?.passed === false)
+      .map((entry) => {
+        const observed = entry?.error || entry?.observed || '未通过';
+        const suffix = entry?.statusCode ? `HTTP ${entry.statusCode} · ${observed}` : observed;
+        return shortPdBatchDetail(`${entry?.label || entry?.id || '能力探针'}: ${suffix}`);
+      })
+      .filter(Boolean),
+    signals: signals.map((line) => shortPdBatchDetail(line, 220)).filter(Boolean),
+  };
+}
+
+function renderPdBatchInlineList(lines = [], emptyText = '无') {
+  const esc = escapeHtml;
+  const visible = Array.isArray(lines) ? lines.filter(Boolean) : [];
+  if (!visible.length) return `<span class="pd-batch-detail-empty">${esc(emptyText)}</span>`;
+  return `
+    <ul class="pd-batch-detail-list">
+      ${visible.map((line) => `<li title="${esc(line)}">${esc(line)}</li>`).join('')}
+    </ul>`;
+}
+
+function renderPdEvalBatchDetailMatrix(results = []) {
+  const esc = escapeHtml;
+  if (!Array.isArray(results) || !results.length) return '';
+  const visible = results.filter((item) => item.result || !['queued', 'running'].includes(String(item.status || 'queued')));
+  if (!visible.length) return '';
+  return `
+    <div class="pd-batch-detail-matrix">
+      <div class="pd-section-title">批量检测明细 <span class="pd-section-meta">${esc(String(visible.length))} 项</span></div>
+      <div class="pd-eval-table-wrap pd-batch-detail-wrap">
+        <table class="pd-eval-table pd-batch-detail-table">
+          <thead>
+            <tr>
+              <th>渠道</th>
+              <th>状态 / 上游</th>
+              <th>失败或提示线索</th>
+              <th>能力未通过</th>
+              <th>官方信号</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${visible.map((item) => {
+              const statusMeta = getPdBatchStatusMeta(item);
+              const snapshot = item.result ? getPdEvalResultSnapshot(item.result) : {};
+              const groups = getPdBatchProblemGroups(item);
+              return `
+                <tr class="pd-batch-detail-row is-${esc(statusMeta.status || item.status || 'queued')}">
+                  <td>
+                    <strong>${esc(item.provider?.name || item.provider?.key || item.id)}</strong>
+                    <em>${esc(item.provider?.toolLabel || item.provider?.tool || '')} · ${esc(item.provider?.model || '-')}</em>
+                    <em title="${esc(item.provider?.baseUrl || '')}">${esc(item.provider?.baseUrl || '')}</em>
+                  </td>
+                  <td>
+                    <span class="pd-status ${esc(statusMeta.cls)}">${esc(statusMeta.text)}</span>
+                    <strong>${esc(item.result ? formatPdEvalProbability(snapshot.upstreamProbability) : '—')}</strong>
+                    <em title="${esc(item.result ? (snapshot.upstreamLabel || '') : (item.error || statusMeta.detail || ''))}">${esc(item.result ? (snapshot.upstreamLabel || '-') : (item.error || statusMeta.detail || '-'))}</em>
+                    <em>${esc(item.elapsedMs != null ? fmtLatency(item.elapsedMs) : (snapshot.durationText || '-'))}</em>
+                  </td>
+                  <td>${renderPdBatchInlineList(groups.evidence, '无失败线索')}</td>
+                  <td>${renderPdBatchInlineList(groups.capabilities, '能力题均通过')}</td>
+                  <td>${renderPdBatchInlineList(groups.signals, '未暴露官方头/指纹')}</td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function renderPdEval(row) {
+  const esc = escapeHtml;
+  const running = state.providerDetail.evalRunning;
+  const historyCount = Array.isArray(state.providerDetail.evalHistory) ? state.providerDetail.evalHistory.length : 0;
+  const isApiKey = row.mode === 'apikey';
+  const isCodex = isCodexProviderDetail(row);
+  const isClaude = isClaudeProviderDetail(row);
+
+  if (!isApiKey) {
+    return '<div class="pd-empty"><div class="pd-empty-title-line">OAuth 不支持模型验真</div><p>这里只检测 API Key Provider；OAuth 登录态不在这里做协议探针。</p></div>';
+  }
+  if (!isCodex && !isClaude) {
+    return '<div class="pd-empty"><div class="pd-empty-title-line">当前支持 Codex / Claude Code Provider</div><p>OpenCode / OpenClaw 的 provider 协议后续单独接入。</p></div>';
+  }
+  if (!row.hasCredential) {
+    return '<div class="pd-empty"><div class="pd-empty-title-line">缺少 API Key</div><p>保存 Key 后才能运行模型真实性和能力快测。</p></div>';
+  }
+
+  const evalView = normalizeProviderDetailEvalView(state.providerDetail.evalView);
+  state.providerDetail.evalView = evalView;
+  const batchCandidates = getPdEvalBatchCandidates(row);
+  const batchSelection = getPdEvalBatchSelection(batchCandidates);
+  const selectedCount = batchCandidates.filter((item) => batchSelection[item.id]).length;
+  const batchResults = Array.isArray(state.providerDetail.evalBatchResults) ? state.providerDetail.evalBatchResults : [];
+  const viewHtml = evalView === 'history'
+    ? renderPdEvalHistoryPage(row)
+    : evalView === 'batch'
+      ? renderPdEvalBatchPage(row)
+      : renderPdEvalSingleView(row);
+
+  return `
+    <div class="pd-eval">
+      <div class="pd-eval-hero">
+        <div>
+          <div class="pd-eval-kicker">MODEL AUTHENTICITY</div>
+          <div class="pd-eval-title">接入渠道 + 疑似上游 + 能力快测</div>
+          <div class="pd-eval-sub">检测渠道、上游线索、token 消耗和多维能力。</div>
+        </div>
+        <div class="pd-eval-actions">
+          <button type="button" class="pd-btn pd-btn-primary ${running ? 'is-busy' : ''}" data-pd-run-eval ${running ? 'disabled' : ''}>
+            ${running ? '快测中…' : '开始快测'}
+          </button>
+        </div>
+      </div>
+      ${renderPdEvalSubnav({ historyCount, selectedCount, resultCount: batchResults.length })}
+      ${viewHtml}
+    </div>`;
+}
+
+function renderPdEvalRunning() {
+  return `
+    <div class="pd-eval-running">
+      <div class="pd-eval-spinner"></div>
+      <div>
+        <strong>正在运行快测</strong>
+        <span>检测渠道、上游、token 和能力探针。</span>
+      </div>
+    </div>`;
+}
+
+function renderPdEvalResult(result) {
+  const esc = escapeHtml;
+  if (result.error) {
+    return `
+      <div class="pd-test-card is-bad">
+        <div class="pd-test-card-head"><span class="pd-status bad">快测失败</span></div>
+        <pre class="pd-test-error">${esc(result.error)}</pre>
+      </div>`;
+  }
+  const summary = result.summary || {};
+  const model = result.model || {};
+  const provider = result.provider || {};
+  const channel = result.channelLikelihood || {};
+  const channelTop = channel.top || {};
+  const upstream = result.upstreamLikelihood || {};
+  const upstreamTop = upstream.top || {};
+  const iq = result.iq || {};
+  const evidence = Array.isArray(result.evidence) ? result.evidence : [];
+  const capabilities = Array.isArray(result.capabilities) ? result.capabilities : [];
+  const tokenUsage = normalizeEvalTokenUsage(result);
+  const risk = summary.riskLevel || 'suspicious';
+  const riskText = summary.riskLabel || (risk === 'normal' ? '基本正常' : risk === 'high' ? '高度可疑' : '可疑');
+  const statusMeta = getPdEvalStatusMeta(result);
+  const completed = summary.completedAt ? formatRelativeTime(summary.completedAt) : '';
+  const duration = summary.durationMs != null ? fmtLatency(summary.durationMs) : '—';
+
+  return `
+    <div class="pd-eval-result is-${esc(risk)} is-${esc(statusMeta.status)}">
+      <div class="pd-eval-result-head">
+        <div>
+          <strong>检测结果</strong>
+          <span>${esc(provider.name || provider.key || '')}${completed ? ` · ${esc(completed)}` : ''}</span>
+        </div>
+        <div class="pd-eval-result-actions">
+          <span class="pd-status ${esc(statusMeta.cls)}" title="${esc(statusMeta.detail)}">${esc(statusMeta.text)}</span>
+          <button type="button" class="pd-btn pd-btn-small" data-pd-export-eval>导出报告</button>
+        </div>
+      </div>
+      <div class="pd-eval-score-grid">
+        <div class="pd-eval-score-main">
+          <div class="pd-eval-score-label">风险结论</div>
+          <div class="pd-eval-score-value">${esc(riskText)}</div>
+          <div class="pd-eval-score-sub">总分 ${esc(String(summary.totalScore ?? '—'))} · ${esc(statusMeta.text)} · ${esc(duration)}${completed ? ` · ${esc(completed)}` : ''}</div>
+        </div>
+        <div class="pd-eval-score" title="${esc(channelTop.label || '待判断')}">
+          <span>接入渠道</span>
+          <strong>${esc(channelTop.probability != null ? `${channelTop.probability}%` : '—')}</strong>
+          <small>${esc(channelTop.label || '待判断')}</small>
+        </div>
+        <div class="pd-eval-score" title="${esc(upstreamTop.label || summary.upstreamLabel || '待判断')}">
+          <span>疑似上游</span>
+          <strong>${esc(upstreamTop.probability != null ? `${upstreamTop.probability}%` : (summary.upstreamScore != null ? `${summary.upstreamScore}%` : '—'))}</strong>
+          <small>${esc(upstreamTop.label || summary.upstreamLabel || '待判断')}</small>
+        </div>
+        <div class="pd-eval-score">
+          <span>智商分</span>
+          <strong>${esc(String(summary.iqScore ?? iq.score ?? '—'))}</strong>
+          <small>${esc(summary.iqLabel || iq.label || 'IQ-like')}</small>
+        </div>
+        <div class="pd-eval-score">
+          <span>Token</span>
+          <strong>${esc(formatTokenCount(tokenUsage.totalTokens))}</strong>
+          <small>请求 ${esc(String(tokenUsage.requests || '—'))} 次</small>
+        </div>
+        <div class="pd-eval-score">
+          <span>能力快测</span>
+          <strong>${esc(String(summary.capabilityScore ?? '—'))}</strong>
+          <small>${esc(String(summary.passed ?? 0))}/${esc(String(summary.total ?? capabilities.length))} 题通过</small>
+        </div>
+      </div>
+
+      ${renderPdEvalTokenUsage(result)}
+      ${statusMeta.status !== 'ok' ? `
+        <div class="pd-eval-alert is-${esc(statusMeta.cls)}">
+          <strong>${esc(statusMeta.text)}</strong>
+          <span>${esc(statusMeta.detail)}</span>
+        </div>` : ''}
+
+      <div class="pd-section">
+        <div class="pd-section-title">模型回显</div>
+        <div class="pd-info-grid">
+          <div class="pd-info-row"><span>测试协议</span><code>${esc(provider.protocolLabel || result.rawMeta?.protocolLabel || '—')}</code></div>
+          <div class="pd-info-row"><span>请求模型</span><code>${esc(model.selected || model.requested || '—')}</code></div>
+          <div class="pd-info-row"><span>响应 model</span><code>${esc(model.responseModel || '未返回')}</code></div>
+          <div class="pd-info-row"><span>/models 命中</span><code>${model.listed ? '是' : '否'}</code></div>
+          <div class="pd-info-row"><span>家族匹配</span><code>${model.familyMatch ? '是' : (model.responseModel ? '否' : '无回显')}</code></div>
+        </div>
+      </div>
+
+      ${renderPdEvalChannelLikelihood(channel)}
+      ${renderPdEvalUpstreamLikelihood(upstream)}
+
+      <div class="pd-section">
+        <div class="pd-section-title">真实性线索 <span class="pd-section-meta">${esc(String(evidence.length))} 条</span></div>
+        <div class="pd-eval-evidence">
+          ${evidence.map((item) => renderPdEvalEvidence(item)).join('')}
+        </div>
+      </div>
+
+      <div class="pd-section">
+        ${renderPdEvalCapabilityPager(capabilities)}
+      </div>
+    </div>`;
+}
+
+function renderPdEvalChannelLikelihood(channel) {
+  return renderPdEvalLikelihoodSection(channel, '接入渠道', '渠道', 'channel');
+}
+
+function renderPdEvalUpstreamLikelihood(upstream) {
+  return renderPdEvalLikelihoodSection(upstream, '疑似上游模型', '上游', 'upstream');
+}
+
+function renderPdEvalLikelihoodSection(likelihood, title, fallbackLabel, stateKey = '') {
+  const esc = escapeHtml;
+  const candidates = Array.isArray(likelihood?.candidates) ? likelihood.candidates : [];
+  const notes = Array.isArray(likelihood?.notes) ? likelihood.notes : [];
+  const top = likelihood?.top || null;
+  if (!candidates.length) return '';
+  const expanded = Boolean(stateKey && state.providerDetail.evalExpanded?.[stateKey]);
+  const visible = expanded ? candidates : candidates.slice(0, 3);
+  const visibleNotes = expanded ? notes : notes.slice(0, 1);
+  return `
+    <div class="pd-section">
+      <div class="pd-section-title">
+        <span>${esc(title)}</span>
+        <span class="pd-section-meta">${esc(top?.label || '')}${top?.probability != null ? ` · ${esc(String(top.probability))}%` : ''}</span>
+      </div>
+      <div class="pd-channel-list">
+        ${visible.map((item) => renderPdEvalChannelCandidate(item, fallbackLabel)).join('')}
+      </div>
+      ${candidates.length > 3 ? `
+        <div class="pd-section-actions">
+          <button type="button" class="pd-show-more" data-pd-toggle-likelihood="${esc(stateKey)}">${expanded ? '收起' : `展开 ${candidates.length - 3} 项`}</button>
+        </div>` : ''}
+      ${visibleNotes.length ? `<div class="pd-eval-notes">${visibleNotes.map((note) => `<p>${esc(note)}</p>`).join('')}</div>` : ''}
+    </div>`;
+}
+
+function renderPdEvalChannelCandidate(item, fallbackLabel = '渠道') {
+  const esc = escapeHtml;
+  const probability = Math.max(0, Math.min(100, Number(item?.probability ?? item?.score ?? 0) || 0));
+  const evidence = Array.isArray(item?.evidence) ? item.evidence : [];
+  const counters = Array.isArray(item?.counterEvidence) ? item.counterEvidence : [];
+  const detail = evidence[0] || counters[0] || item?.probe || '';
+  return `
+    <div class="pd-channel-row">
+      <div class="pd-channel-head">
+        <strong>${esc(item?.label || item?.id || fallbackLabel)}</strong>
+        <span>${esc(String(probability))}%</span>
+      </div>
+      <div class="pd-channel-bar"><i style="width:${esc(String(probability))}%"></i></div>
+      <p>${esc(detail)}</p>
+    </div>`;
+}
+
+function renderPdEvalEvidence(item) {
+  const esc = escapeHtml;
+  const status = item?.status || 'warn';
+  const statusText = status === 'pass' ? '通过' : status === 'fail' ? '失败' : '提示';
+  const display = getPdEvalEvidenceDisplay(item);
+  return `
+    <div class="pd-eval-evidence-row is-${esc(status)}">
+      <span class="pd-status ${status === 'pass' ? 'ok' : status === 'fail' ? 'bad' : 'warn'}">${esc(statusText)}</span>
+      <strong>${esc(display.label)}</strong>
+      <p>${esc(display.detail)}</p>
+    </div>`;
+}
+
+function renderPdEvalCase(item) {
+  const esc = escapeHtml;
+  const passed = Boolean(item?.passed);
+  const observed = item?.observed || item?.error || '';
+  const usage = item?.usage || {};
+  const meta = [
+    item?.dimension || '',
+    item?.weight != null ? `权重 ${item.weight}` : '',
+    item?.latencyMs != null ? fmtLatency(item.latencyMs) : '',
+    usage.totalTokens ? `${formatTokenCount(usage.totalTokens)} tok` : '',
+  ].filter(Boolean);
+  return `
+    <div class="pd-eval-case ${passed ? 'is-pass' : 'is-fail'}">
+      <div class="pd-eval-case-head">
+        <span class="pd-status ${passed ? 'ok' : 'bad'}">${passed ? '通过' : '未过'}</span>
+        <strong>${esc(item?.label || item?.id || '探针')}</strong>
+        ${item?.dimension ? `<span class="pd-mini-badge">${esc(item.dimension)}</span>` : ''}
+      </div>
+      ${meta.length ? `<div class="pd-case-meta">${meta.map((value) => `<span>${esc(value)}</span>`).join('')}</div>` : ''}
+      <div class="pd-eval-case-body">
+        ${item?.expected ? `<span>期望 <code>${esc(item.expected)}</code></span>` : ''}
+        ${observed ? `<span>观察 <code>${esc(String(observed).slice(0, 220))}</code></span>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderPdEvalCapabilityPager(capabilities = []) {
+  const esc = escapeHtml;
+  const items = Array.isArray(capabilities) ? capabilities : [];
+  const passed = items.filter((item) => item.passed).length;
+  const pageSize = 4;
+  const maxPage = Math.max(0, Math.ceil(items.length / pageSize) - 1);
+  const page = Math.min(Math.max(0, Number(state.providerDetail.evalCasePage || 0) || 0), maxPage);
+  const slice = items.slice(page * pageSize, page * pageSize + pageSize);
+  return `
+    <div class="pd-section-title">
+      <span>能力快测</span>
+      <span class="pd-section-meta">${esc(String(passed))} / ${esc(String(items.length))}</span>
+    </div>
+    <div class="pd-eval-cases">
+      ${slice.map((item) => renderPdEvalCase(item)).join('') || '<div class="pd-empty pd-empty-small">没有能力题结果。</div>'}
+    </div>
+    ${items.length > pageSize ? `
+      <div class="pd-case-pager">
+        <button type="button" data-pd-case-page="${esc(String(page - 1))}" ${page <= 0 ? 'disabled' : ''}>上一页</button>
+        <span>${esc(String(page + 1))} / ${esc(String(maxPage + 1))}</span>
+        <button type="button" data-pd-case-page="${esc(String(page + 1))}" ${page >= maxPage ? 'disabled' : ''}>下一页</button>
+      </div>` : ''}`;
+}
+
 function renderPdHealth(row) {
   const esc = escapeHtml;
   if (isClaudeProviderDetail(row)) return renderClaudeProviderDetailHealth(row);
@@ -21713,6 +22944,502 @@ async function actionPdRunTest() {
   fetchProviderProbeData(row).catch(() => {});
 }
 
+const PD_EVAL_SINGLE_PROVIDER_TIMEOUT_MS = 30000;
+const PD_EVAL_SINGLE_FRONTEND_TIMEOUT_MS = 210000;
+const PD_EVAL_BATCH_PROVIDER_TIMEOUT_MS = 12000;
+const PD_EVAL_BATCH_FRONTEND_TIMEOUT_MS = 45000;
+
+async function requestPdModelEvalForRow(row, options = {}) {
+  if (!row || row.mode !== 'apikey') return { ok: false, error: '缺少 API Key Provider' };
+  const isCodex = isCodexProviderDetail(row);
+  const isClaude = isClaudeProviderDetail(row);
+  if (!isCodex && !isClaude) return { ok: false, error: '当前快测支持 Codex / Claude Code API Provider' };
+  const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
+  const isBatch = options.mode === 'batch';
+  return api('/api/provider/model-eval', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: el('scopeSelect')?.value || 'global',
+      projectPath: el('projectPathInput')?.value?.trim() || '',
+      codexHome,
+      tool: isClaude ? 'claudecode' : 'codex',
+      providerKey: row.key,
+      model: getProviderDetailModel(row),
+      profile: isBatch ? 'batch' : 'quick',
+      timeoutMs: isBatch ? PD_EVAL_BATCH_PROVIDER_TIMEOUT_MS : PD_EVAL_SINGLE_PROVIDER_TIMEOUT_MS,
+    }),
+    timeoutMs: isBatch ? PD_EVAL_BATCH_FRONTEND_TIMEOUT_MS : PD_EVAL_SINGLE_FRONTEND_TIMEOUT_MS,
+  });
+}
+
+async function actionPdRunEval() {
+  const row = lookupProviderDetailRow();
+  if (!row || row.mode !== 'apikey') return;
+  const isCodex = isCodexProviderDetail(row);
+  const isClaude = isClaudeProviderDetail(row);
+  if (!isCodex && !isClaude) {
+    flash('当前快测支持 Codex / Claude Code API Provider', 'error');
+    return;
+  }
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
+  state.providerDetail.evalRunning = true;
+  state.providerDetail.evalResult = null;
+  state.providerDetail.evalView = 'single';
+  try { localStorage.setItem('easyaiconfig_pd_eval_view', 'single'); } catch {}
+  state.providerDetail.evalExpanded = { channel: false, upstream: false };
+  state.providerDetail.evalCasePage = 0;
+  renderProviderDetail({ force: true });
+
+  try {
+    const res = await requestPdModelEvalForRow(row);
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    if (res?.ok && res.data?.summary) {
+      state.providerDetail.evalResult = res.data;
+      state.providerDetail.evalHistory = rememberPdEvalHistory(row, res.data);
+      const status = normalizePdEvalRunStatus(res.data);
+      if (status === 'ok') {
+        flash('模型验真完成：请求完整', 'success');
+      } else if (status === 'degraded') {
+        flash('模型验真完成，但存在请求或线索异常', 'warning');
+      } else {
+        flash('模型验真失败：关键探测未完成', 'error');
+      }
+    } else {
+      state.providerDetail.evalResult = { error: res?.error || res?.data?.error || '模型快测失败' };
+      flash(state.providerDetail.evalResult.error, 'error');
+    }
+  } catch (err) {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.evalResult = { error: err?.message || String(err) };
+    flash(state.providerDetail.evalResult.error, 'error');
+  } finally {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.evalRunning = false;
+    renderProviderDetail({ force: true });
+  }
+}
+
+function pdBatchErrorLooksTimeout(value = '') {
+  return /超时|timeout|timed out|aborted/i.test(String(value || ''));
+}
+
+function makePdBatchFailurePatch(error, elapsedMs) {
+  const text = String(error || '模型快测失败');
+  if (pdBatchErrorLooksTimeout(text)) {
+    return {
+      status: 'timeout',
+      result: null,
+      error: '超时，已自动跳过',
+      elapsedMs,
+    };
+  }
+  return {
+    status: 'error',
+    result: null,
+    error: text,
+    elapsedMs,
+  };
+}
+
+function isPdBatchRunActive(runId) {
+  return Boolean(
+    runId
+      && state.providerDetail.evalBatchRunId === runId
+      && state.providerDetail.evalBatchRunning
+  );
+}
+
+async function waitPdBatchResume(runId) {
+  while (isPdBatchRunActive(runId) && state.providerDetail.evalBatchPaused) {
+    await sleep(180);
+  }
+  return isPdBatchRunActive(runId);
+}
+
+function actionPdPauseBatchEval() {
+  if (!state.providerDetail.evalBatchRunning) return;
+  state.providerDetail.evalBatchPaused = true;
+  renderProviderDetail({ force: true });
+}
+
+function actionPdResumeBatchEval() {
+  if (!state.providerDetail.evalBatchRunning) return;
+  state.providerDetail.evalBatchPaused = false;
+  renderProviderDetail({ force: true });
+}
+
+function actionPdStopBatchEval() {
+  if (!state.providerDetail.evalBatchRunning) return;
+  const results = Array.isArray(state.providerDetail.evalBatchResults) ? state.providerDetail.evalBatchResults : [];
+  state.providerDetail.evalBatchRunId = `${Date.now()}-stopped-${Math.random().toString(36).slice(2, 8)}`;
+  state.providerDetail.evalBatchRunning = false;
+  state.providerDetail.evalBatchPaused = false;
+  state.providerDetail.evalBatchResults = results.map((item) => {
+    if (item.status === 'queued' || item.status === 'running') {
+      return {
+        ...item,
+        status: 'cancelled',
+        error: '用户停止',
+      };
+    }
+    return item;
+  });
+  state.providerDetail.evalBatchProgress = {
+    completed: state.providerDetail.evalBatchResults.length,
+    total: state.providerDetail.evalBatchResults.length,
+    currentLabel: '',
+  };
+  flash('批量对比已停止', 'success');
+  renderProviderDetail({ force: true });
+}
+
+async function actionPdRunBatchEval() {
+  if (state.providerDetail.evalBatchRunning) return;
+  const row = lookupProviderDetailRow();
+  const selected = getSelectedPdEvalBatchCandidates(row);
+  if (!selected.length) {
+    flash('先选中要验证的渠道', 'error');
+    return;
+  }
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  state.providerDetail.evalBatchRunId = runId;
+  state.providerDetail.evalBatchRunning = true;
+  state.providerDetail.evalBatchPaused = false;
+  state.providerDetail.evalBatchProgress = { completed: 0, total: selected.length, currentLabel: '' };
+  state.providerDetail.evalBatchResults = selected.map((item) => ({
+    id: item.id,
+    status: 'queued',
+    provider: {
+      key: item.key,
+      name: item.name,
+      tool: item.tool,
+      toolLabel: item.toolLabel,
+      model: item.model,
+      baseUrl: item.baseUrl,
+    },
+    result: null,
+    error: '',
+    elapsedMs: null,
+  }));
+  state.providerDetail.evalView = 'batch';
+  try { localStorage.setItem('easyaiconfig_pd_eval_view', 'batch'); } catch {}
+  renderProviderDetail({ force: true });
+
+  for (let index = 0; index < selected.length; index += 1) {
+    if (!await waitPdBatchResume(runId)) return;
+    const item = selected[index];
+    const resultIndex = state.providerDetail.evalBatchResults.findIndex((r) => r.id === item.id);
+    if (resultIndex >= 0) {
+      state.providerDetail.evalBatchResults[resultIndex] = {
+        ...state.providerDetail.evalBatchResults[resultIndex],
+        status: 'running',
+        error: '',
+      };
+    }
+    state.providerDetail.evalBatchProgress = {
+      completed: index,
+      total: selected.length,
+      currentLabel: item.name || item.key,
+    };
+    renderProviderDetail({ force: true });
+
+    const startedAt = Date.now();
+    try {
+      const res = await requestPdModelEvalForRow(item.row, { mode: 'batch' });
+      if (!isPdBatchRunActive(runId)) return;
+      const elapsedMs = Date.now() - startedAt;
+      const nextPatch = res?.ok && res.data?.summary
+        ? { status: normalizePdEvalRunStatus(res.data), result: res.data, error: '', elapsedMs }
+        : makePdBatchFailurePatch(res?.error || res?.data?.error || '模型快测失败', elapsedMs);
+      const idx = state.providerDetail.evalBatchResults.findIndex((r) => r.id === item.id);
+      if (idx >= 0) {
+        state.providerDetail.evalBatchResults[idx] = {
+          ...state.providerDetail.evalBatchResults[idx],
+          ...nextPatch,
+        };
+      }
+      if (nextPatch.result) {
+        const history = rememberPdEvalHistory(item.row, res.data);
+        if (item.id === getPdEvalBatchCandidateId(row)) state.providerDetail.evalHistory = history;
+      }
+    } catch (err) {
+      if (!isPdBatchRunActive(runId)) return;
+      const idx = state.providerDetail.evalBatchResults.findIndex((r) => r.id === item.id);
+      if (idx >= 0) {
+        state.providerDetail.evalBatchResults[idx] = {
+          ...state.providerDetail.evalBatchResults[idx],
+          ...makePdBatchFailurePatch(err?.message || String(err), Date.now() - startedAt),
+        };
+      }
+    }
+    state.providerDetail.evalBatchProgress = {
+      completed: index + 1,
+      total: selected.length,
+      currentLabel: '',
+    };
+    renderProviderDetail({ force: true });
+  }
+
+  if (!isPdBatchRunActive(runId)) return;
+  state.providerDetail.evalBatchRunning = false;
+  state.providerDetail.evalBatchPaused = false;
+  state.providerDetail.evalBatchProgress = { completed: selected.length, total: selected.length, currentLabel: '' };
+  const finalResults = Array.isArray(state.providerDetail.evalBatchResults) ? state.providerDetail.evalBatchResults : [];
+  const okCount = finalResults.filter((item) => item.result && normalizePdEvalRunStatus(item.result) === 'ok').length;
+  const degradedCount = finalResults.filter((item) => item.result && normalizePdEvalRunStatus(item.result) === 'degraded').length;
+  const failCount = finalResults.length - okCount - degradedCount;
+  flash(`批量对比完成：完整 ${okCount}，部分异常 ${degradedCount}，失败/超时 ${failCount}`, failCount || degradedCount ? 'warning' : 'success');
+  renderProviderDetail({ force: true });
+}
+
+function pdEvalReportSafeName(value = '') {
+  return String(value || 'provider').trim().replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'provider';
+}
+
+function pdEvalReportDate(value = '') {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return new Date().toLocaleString();
+  return date.toLocaleString();
+}
+
+function renderPdEvalReportCandidateTable(title, likelihood = {}) {
+  const esc = escapeHtml;
+  const candidates = Array.isArray(likelihood?.candidates) ? likelihood.candidates : [];
+  if (!candidates.length) return '';
+  return `
+    <section>
+      <h2>${esc(title)}</h2>
+      <table>
+        <thead><tr><th>候选</th><th>概率</th><th>主要线索</th></tr></thead>
+        <tbody>
+          ${candidates.map((item) => {
+            const evidence = Array.isArray(item?.evidence) ? item.evidence : [];
+            const counters = Array.isArray(item?.counterEvidence) ? item.counterEvidence : [];
+            const detail = normalizePdEvalEvidenceText(evidence[0] || counters[0] || item?.probe || '');
+            const probability = Math.max(0, Math.min(100, Number(item?.probability ?? item?.score ?? 0) || 0));
+            return `<tr><td>${esc(item?.label || item?.id || '-')}</td><td>${esc(String(probability))}%</td><td>${esc(detail)}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </section>`;
+}
+
+function buildPdEvalReportHtml(result = {}, row = {}) {
+  const esc = escapeHtml;
+  const summary = result.summary || {};
+  const provider = result.provider || {};
+  const model = result.model || {};
+  const channelTop = result.channelLikelihood?.top || {};
+  const upstreamTop = result.upstreamLikelihood?.top || {};
+  const tokenUsage = normalizeEvalTokenUsage(result);
+  const evidence = Array.isArray(result.evidence) ? result.evidence : [];
+  const capabilities = Array.isArray(result.capabilities) ? result.capabilities : [];
+  const completedAt = summary.completedAt || new Date().toISOString();
+  const riskText = summary.riskLabel || summary.riskLevel || '未定';
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${esc(row.name || provider.name || provider.key || 'Provider')} 模型验真报告</title>
+  <style>
+    :root { color-scheme: light; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --soft:#f8fafc; --blue:#2563eb; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:#f4f6fb; }
+    main { max-width:1040px; margin:0 auto; padding:34px 26px 46px; }
+    header { padding:24px; border:1px solid var(--line); border-radius:12px; background:white; }
+    .kicker { font-size:12px; font-weight:750; letter-spacing:.04em; color:var(--muted); }
+    h1 { margin:8px 0 6px; font-size:28px; line-height:1.2; }
+    .sub { color:var(--muted); font-size:14px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-top:16px; }
+    .card { padding:14px; border:1px solid var(--line); border-radius:10px; background:white; }
+    .card span { display:block; font-size:12px; color:var(--muted); font-weight:700; }
+    .card strong { display:block; margin-top:6px; font-size:24px; line-height:1.05; }
+    .card small { display:block; margin-top:6px; color:var(--muted); line-height:1.35; }
+    section { margin-top:16px; padding:18px; border:1px solid var(--line); border-radius:12px; background:white; }
+    h2 { margin:0 0 12px; font-size:17px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { padding:9px 8px; border-top:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-size:12px; }
+    code { padding:2px 5px; border-radius:5px; background:var(--soft); overflow-wrap:anywhere; }
+    .kv { display:grid; grid-template-columns:150px minmax(0,1fr); gap:8px 12px; font-size:13px; }
+    .kv span { color:var(--muted); font-weight:700; }
+    .note { color:var(--muted); font-size:13px; line-height:1.55; }
+    .status-pass { color:#16a34a; font-weight:750; }
+    .status-warn { color:#d97706; font-weight:750; }
+    .status-fail { color:#dc2626; font-weight:750; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="kicker">MODEL AUTHENTICITY REPORT</div>
+      <h1>${esc(row.name || provider.name || provider.key || 'Provider')} 模型验真报告</h1>
+      <div class="sub">${esc(pdEvalReportDate(completedAt))} · ${esc(provider.protocolLabel || result.rawMeta?.protocolLabel || provider.protocol || '-')}</div>
+      <div class="grid">
+        <div class="card"><span>风险结论</span><strong>${esc(riskText)}</strong><small>总分 ${esc(String(summary.totalScore ?? '-'))}</small></div>
+        <div class="card"><span>接入渠道</span><strong>${esc(channelTop.probability != null ? `${channelTop.probability}%` : '-')}</strong><small>${esc(channelTop.label || '-')}</small></div>
+        <div class="card"><span>疑似上游</span><strong>${esc(upstreamTop.probability != null ? `${upstreamTop.probability}%` : '-')}</strong><small>${esc(upstreamTop.label || summary.upstreamLabel || '-')}</small></div>
+        <div class="card"><span>智商分</span><strong>${esc(String(summary.iqScore ?? result.iq?.score ?? '-'))}</strong><small>${esc(summary.iqLabel || result.iq?.label || 'IQ-like')}</small></div>
+        <div class="card"><span>Token</span><strong>${esc(formatTokenCount(tokenUsage.totalTokens))}</strong><small>请求 ${esc(String(tokenUsage.requests || '-'))} 次</small></div>
+        <div class="card"><span>能力快测</span><strong>${esc(String(summary.capabilityScore ?? '-'))}</strong><small>${esc(String(summary.passed ?? 0))}/${esc(String(summary.total ?? capabilities.length))} 题通过</small></div>
+      </div>
+    </header>
+
+    <section>
+      <h2>模型与 token</h2>
+      <div class="kv">
+        <span>Base URL</span><code>${esc(provider.baseUrl || row.baseUrl || '-')}</code>
+        <span>请求模型</span><code>${esc(model.selected || model.requested || row.model || '-')}</code>
+        <span>响应 model</span><code>${esc(model.responseModel || '未返回')}</code>
+        <span>Token 明细</span><code>输入 ${esc(formatTokenCount(tokenUsage.inputTokens))} / 输出 ${esc(formatTokenCount(tokenUsage.outputTokens))} / 推理 ${esc(formatTokenCount(tokenUsage.reasoningTokens))} / 缓存 ${esc(formatTokenCount(tokenUsage.cachedTokens))}</code>
+      </div>
+    </section>
+
+    ${renderPdEvalReportCandidateTable('接入渠道可能性', result.channelLikelihood)}
+    ${renderPdEvalReportCandidateTable('疑似上游模型', result.upstreamLikelihood)}
+
+    <section>
+      <h2>真实性线索</h2>
+      <table>
+        <thead><tr><th>状态</th><th>线索</th><th>说明</th></tr></thead>
+        <tbody>
+          ${evidence.map((item) => {
+            const display = getPdEvalEvidenceDisplay(item);
+            return `<tr><td class="status-${esc(item?.status || 'warn')}">${esc(item?.status || 'warn')}</td><td>${esc(display.label)}</td><td>${esc(display.detail)}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>能力快测明细</h2>
+      <table>
+        <thead><tr><th>题目</th><th>维度</th><th>结果</th><th>耗时</th><th>Token</th><th>期望 / 观察</th></tr></thead>
+        <tbody>
+          ${capabilities.map((item) => {
+            const usage = item?.usage || {};
+            const observed = item?.observed || item?.error || '';
+            return `<tr><td>${esc(item?.label || item?.id || '-')}</td><td>${esc(item?.dimension || '-')}</td><td class="${item?.passed ? 'status-pass' : 'status-fail'}">${item?.passed ? '通过' : '未过'}</td><td>${esc(item?.latencyMs != null ? fmtLatency(item.latencyMs) : '-')}</td><td>${esc(formatTokenCount(usage.totalTokens))}</td><td><code>${esc(item?.expected || '-')}</code><br /><code>${esc(String(observed).slice(0, 300) || '-')}</code></td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>判读边界</h2>
+      <p class="note">“疑似上游模型”基于协议、模型 ID、响应结构、usage 字段、指纹/请求头和能力表现推断。中转入口下即使高度相似，也不能替代上游账单、云厂商调用记录或中转商供应链证明。</p>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function actionPdExportEvalReport() {
+  const row = lookupProviderDetailRow();
+  const result = state.providerDetail.evalResult;
+  if (!result || result.error) {
+    flash('没有可导出的检测结果', 'error');
+    return;
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const name = pdEvalReportSafeName(row?.name || row?.key || result.provider?.key || 'provider');
+  const html = buildPdEvalReportHtml(result, row || {});
+  downloadTextFile(`model-eval-${name}-${stamp}.html`, html, 'text/html;charset=utf-8');
+  flash('报告已导出', 'success');
+}
+
+function actionPdExportEvalHistory(index = 0) {
+  const row = lookupProviderDetailRow();
+  const history = Array.isArray(state.providerDetail.evalHistory) ? state.providerDetail.evalHistory : readPdEvalHistory(row);
+  const item = history[index];
+  if (!item?.result || item.result.error) {
+    flash('这条历史没有可导出的检测结果', 'error');
+    return;
+  }
+  const stamp = (item.savedAt || new Date().toISOString()).replace(/[:.]/g, '-').slice(0, 19);
+  const name = pdEvalReportSafeName(row?.name || row?.key || item.result.provider?.key || 'provider');
+  const html = buildPdEvalReportHtml(item.result, row || {});
+  downloadTextFile(`model-eval-${name}-${stamp}.html`, html, 'text/html;charset=utf-8');
+  flash('历史报告已导出', 'success');
+}
+
+function buildPdEvalBatchReportHtml(results = []) {
+  const esc = escapeHtml;
+  const reportResults = Array.isArray(results) ? results : [];
+  const completedAt = new Date().toLocaleString();
+  const rows = reportResults.map((item) => {
+    const hasResult = Boolean(item.result);
+    const snapshot = hasResult ? getPdEvalResultSnapshot(item.result) : {};
+    const statusMeta = getPdBatchStatusMeta(item);
+    const diag = hasResult ? getPdEvalDiagnosticSummary(item.result) : null;
+    const issue = hasResult
+      ? (diag?.firstProblem || statusMeta.detail || '-')
+      : (item.error || statusMeta.detail || statusMeta.text || '-');
+    return `
+      <tr>
+        <td>${esc(item.provider?.name || item.provider?.key || item.id)}<br><small>${esc(item.provider?.toolLabel || item.provider?.tool || '')} · ${esc(item.provider?.model || '-')}</small></td>
+        <td>${esc(statusMeta.text)}<br><small>${esc(statusMeta.detail || '-')}</small></td>
+        <td>${esc(hasResult ? formatPdEvalProbability(snapshot.channelProbability) : '-')}<br><small>${esc(hasResult ? (snapshot.channelLabel || '-') : '-')}</small></td>
+        <td>${esc(hasResult ? formatPdEvalProbability(snapshot.upstreamProbability) : '-')}<br><small>${esc(hasResult ? (snapshot.upstreamLabel || '-') : '-')}</small></td>
+        <td>${esc(hasResult ? formatPdEvalScore(snapshot.totalScore) : '-')}<br><small>${esc(hasResult ? (snapshot.riskLabel || '-') : (item.error || '-'))}</small></td>
+        <td>${esc(hasResult ? formatPdEvalScore(snapshot.capabilityScore) : '-')}<br><small>${esc(hasResult ? `IQ ${formatPdEvalScore(snapshot.iqScore)} · ${diag?.capabilityPass ?? '-'}/${diag?.capabilityTotal ?? '-'}` : 'IQ -')}</small></td>
+        <td>${esc(hasResult ? formatTokenCount(snapshot.tokenTotal) : '-')}<br><small>${esc(item.elapsedMs != null ? fmtLatency(item.elapsedMs) : snapshot.durationText || '-')}</small></td>
+        <td>${esc(normalizePdEvalEvidenceText(issue))}</td>
+      </tr>`;
+  }).join('');
+  const detailedCount = reportResults.filter((item) => item.result).length;
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>模型验真批量对比报告</title>
+  <style>
+    :root { color-scheme: light; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --soft:#f8fafc; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:#f4f6fb; }
+    main { max-width:1120px; margin:0 auto; padding:34px 26px 46px; }
+    header, section { border:1px solid var(--line); border-radius:12px; background:white; }
+    header { padding:24px; }
+    section { margin-top:16px; padding:18px; }
+    .kicker { font-size:12px; font-weight:750; color:var(--muted); }
+    h1 { margin:8px 0 6px; font-size:28px; line-height:1.2; }
+    .sub, small { color:var(--muted); }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { padding:10px 8px; border-top:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-size:12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="kicker">MODEL AUTHENTICITY BATCH REPORT</div>
+      <h1>模型验真批量对比报告</h1>
+      <div class="sub">${esc(completedAt)} · ${esc(String(reportResults.length))} 个渠道 · ${esc(String(detailedCount))} 个有验真明细</div>
+    </header>
+    <section>
+      <table>
+        <thead><tr><th>渠道</th><th>状态</th><th>接入渠道</th><th>疑似上游</th><th>总分 / 风险</th><th>能力 / IQ</th><th>Token / 耗时</th><th>诊断</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8">暂无检测结果</td></tr>'}</tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function actionPdExportBatchReport() {
+  const results = Array.isArray(state.providerDetail.evalBatchResults) ? state.providerDetail.evalBatchResults : [];
+  if (!results.length) {
+    flash('没有可导出的批量对比结果', 'error');
+    return;
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  downloadTextFile(`model-eval-batch-${stamp}.html`, buildPdEvalBatchReportHtml(results), 'text/html;charset=utf-8');
+  flash('批量对比报告已导出', 'success');
+}
+
 async function actionPdRefreshHealth() {
   const row = lookupProviderDetailRow();
   if (row && isClaudeProviderDetail(row)) {
@@ -21840,7 +23567,7 @@ function removeFromAutoFailoverPriority(key) {
 function getAutoFailoverCandidates() {
   // 只考虑 API key provider（OAuth profile 切换路径不同，第一版先不混进来）
   const rows = (typeof window.__chBuildRows === 'function' ? window.__chBuildRows('codex') : [])
-    .filter((r) => r.mode === 'apikey' && !r.historyOnly);
+    .filter((r) => r.mode === 'apikey' && r.hasCredential && r.baseUrl && !r.historyOnly);
   return rows;
 }
 
@@ -21883,21 +23610,24 @@ function renderAutoFailoverPanel() {
     .filter(Boolean);
   const remaining = candidates.filter((c) => !inList.has(c.key));
   const esc = escapeHtml;
+  const lastSwitchText = cfg.lastSwitchAt
+    ? appText(formatRelativeTime(new Date(cfg.lastSwitchAt).toISOString()))
+    : appText('从未');
   panel.innerHTML = `
     <div class="af-head">
       <div class="af-head-title">
         <span class="af-eyebrow">AUTO FAILOVER</span>
-        <div class="af-title">自动故障转移</div>
+        <div class="af-title">${esc(appText('自动故障转移'))}</div>
       </div>
-      <button type="button" class="af-close" data-af-close aria-label="关闭">
+      <button type="button" class="af-close" data-af-close aria-label="${esc(appText('关闭弹窗'))}">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
       </button>
     </div>
     <div class="af-body">
       <label class="af-toggle">
         <span>
-          <strong>开启自动切换</strong>
-          <em>active provider 连续失败 N 次时自动按优先级切换</em>
+          <strong>${esc(appText('开启自动切换'))}</strong>
+          <em>${esc(appText('active provider 连续失败 N 次时，切到下方优先级中的第一条可用备用。'))}</em>
         </span>
         <button type="button" class="af-switch ${cfg.enabled ? 'is-on' : ''}" data-af-toggle-enabled aria-pressed="${cfg.enabled}">
           <span class="af-switch-thumb"></span>
@@ -21905,15 +23635,15 @@ function renderAutoFailoverPanel() {
       </label>
       <div class="af-row">
         <label class="af-field">
-          <span>失败阈值（次）</span>
+          <span>${esc(appText('失败阈值（次）'))}</span>
           <input type="number" min="1" max="10" step="1" value="${cfg.failThreshold}" data-af-field="failThreshold" />
         </label>
         <div class="af-field af-field-readonly">
-          <span>最近自动切换</span>
-          <code>${esc(cfg.lastSwitchAt ? formatRelativeTime(new Date(cfg.lastSwitchAt).toISOString()) : '从未')}</code>
+          <span>${esc(appText('最近自动切换'))}</span>
+          <code>${esc(lastSwitchText)}</code>
         </div>
       </div>
-      <div class="af-section-title">优先级顺序</div>
+      <div class="af-section-title">${esc(appText('优先级顺序'))}</div>
       ${orderedKnown.length ? `
         <ol class="af-prio-list">
           ${orderedKnown.map((row, i) => `
@@ -21924,20 +23654,20 @@ function renderAutoFailoverPanel() {
                 <em>${esc(row.baseUrl || '')}</em>
               </span>
               <span class="af-prio-actions">
-                <button type="button" class="af-icon" data-af-move="${esc(row.key)}" data-af-dir="up" ${i === 0 ? 'disabled' : ''} title="上移">
+                <button type="button" class="af-icon" data-af-move="${esc(row.key)}" data-af-dir="up" ${i === 0 ? 'disabled' : ''} title="${esc(appText('上移'))}">
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1.5 6.5L5 3l3.5 3.5"/></svg>
                 </button>
-                <button type="button" class="af-icon" data-af-move="${esc(row.key)}" data-af-dir="down" ${i === orderedKnown.length - 1 ? 'disabled' : ''} title="下移">
+                <button type="button" class="af-icon" data-af-move="${esc(row.key)}" data-af-dir="down" ${i === orderedKnown.length - 1 ? 'disabled' : ''} title="${esc(appText('下移'))}">
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1.5 3.5L5 7l3.5-3.5"/></svg>
                 </button>
-                <button type="button" class="af-icon af-icon-danger" data-af-remove="${esc(row.key)}" title="移出优先级表">
+                <button type="button" class="af-icon af-icon-danger" data-af-remove="${esc(row.key)}" title="${esc(appText('移出优先级表'))}">
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l4 4M7 3L3 7"/></svg>
                 </button>
               </span>
             </li>`).join('')}
-        </ol>` : '<div class="af-empty">还没有优先级 — 从下面挑几条加入。</div>'}
+        </ol>` : `<div class="af-empty">${esc(appText('还没有优先级 — 先把备用 Provider 加入列表。'))}</div>`}
       ${remaining.length ? `
-        <div class="af-section-title af-section-title-sub">备选 provider</div>
+        <div class="af-section-title af-section-title-sub">${esc(appText('备选 provider'))}</div>
         <div class="af-add-grid">
           ${remaining.map((row) => `
             <button type="button" class="af-add-chip" data-af-add="${esc(row.key)}">
@@ -21947,7 +23677,7 @@ function renderAutoFailoverPanel() {
         </div>` : ''}
     </div>
     <div class="af-foot">
-      <span class="af-foot-hint">仅作用于 Codex API Key provider；OAuth 不参与。</span>
+      <span class="af-foot-hint">${esc(appText('列表可只放备用；active 不必加入。仅作用于 Codex API Key provider；OAuth 不参与。'))}</span>
     </div>
   `;
 }
@@ -21956,10 +23686,11 @@ function renderAutoFailoverTrigger() {
   const trig = document.getElementById('chAutoFailoverTrigger');
   if (!trig) return;
   trig.classList.toggle('is-on', Boolean(state.autoFailover.enabled));
+  trig.title = appText('自动故障转移：active 连续失败后切到优先级列表中的第一条可用备用');
   const label = trig.querySelector('.af-trig-label');
   if (label) label.textContent = state.autoFailover.enabled
-    ? `自动切换 · 阈值 ${state.autoFailover.failThreshold}`
-    : '自动切换 关';
+    ? appText('自动切换 · 阈值 {count}', { count: state.autoFailover.failThreshold })
+    : appText('自动切换 关');
 }
 
 // 每次 refreshProviderHealth 完后调用：累计当前 active 的连续失败，触发 failover
@@ -21972,7 +23703,6 @@ function evaluateAutoFailover() {
   const candidates = getAutoFailoverCandidates();
   const active = candidates.find((c) => c.isActive);
   if (!active) return;
-  if (!cfg.priority.includes(active.key)) return; // active 不在监控范围
 
   const h = state.providerHealth?.[active.key] || {};
   const streakMap = state.providerFailureStreak;
@@ -21985,13 +23715,14 @@ function evaluateAutoFailover() {
   streakMap[active.key] = (streakMap[active.key] || 0) + 1;
   if (streakMap[active.key] < cfg.failThreshold) return;
 
-  // 在优先级表里找下一档"已通"且不是当前 active 的 provider
+  // 允许 priority 只填写备用 provider；如果 active 本身在列表里，则从它后面开始找。
   const activeIdx = cfg.priority.indexOf(active.key);
+  const orderedKeys = activeIdx >= 0
+    ? cfg.priority.slice(activeIdx + 1).concat(cfg.priority.slice(0, activeIdx))
+    : cfg.priority.slice();
   let target = null;
-  for (let offset = 1; offset <= cfg.priority.length; offset++) {
-    const idx = (activeIdx + offset) % cfg.priority.length;
-    if (idx === activeIdx) break;
-    const k = cfg.priority[idx];
+  for (const k of orderedKeys) {
+    if (k === active.key) continue;
     const row = candidates.find((c) => c.key === k);
     if (!row) continue;
     const rowHealth = state.providerHealth?.[row.key] || {};
@@ -22002,7 +23733,11 @@ function evaluateAutoFailover() {
   cfg.lastSwitchAt = Date.now();
   streakMap[active.key] = 0;
   saveAutoFailoverConfig();
-  flash(`自动切换：${active.name || active.key} 连续失败 ${cfg.failThreshold} 次 → ${target.name || target.key}`, 'warning');
+  flash(appText('自动切换：{from} 连续失败 {count} 次 → {to}', {
+    from: active.name || active.key,
+    count: cfg.failThreshold,
+    to: target.name || target.key,
+  }), 'warning');
   if (typeof quickSwitchCodexProvider === 'function') {
     quickSwitchCodexProvider(target).catch((err) => console.warn('[auto-failover] switch failed', err));
   }
@@ -24435,6 +26170,9 @@ function bindEvents() {
   document.querySelectorAll('[data-role="theme-toggle"]').forEach((node) => {
     node.addEventListener('click', toggleTheme);
   });
+  document.querySelectorAll('[data-language-toggle]').forEach((node) => {
+    node.addEventListener('click', toggleAppLanguage);
+  });
   el('configEditorBtn').addEventListener('click', () => setConfigEditorOpen(true));
   el('closeConfigEditorBtn').addEventListener('click', () => setConfigEditorOpen(false));
   el('resetConfigEditorBtn')?.addEventListener('click', resetConfigEditorPreservingProviders);
@@ -25292,6 +27030,12 @@ function bindEvents() {
     applyTheme(state.theme);
     const labels = { auto: '已切换：自动模式', light: '已切换：浅色模式', dark: '已切换：深色模式' };
     flash(labels[next] || '已更新主题', 'success');
+  });
+
+  el('sysLanguageModes')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-sys-language]');
+    if (!button) return;
+    applyAppLanguage(String(button.dataset.sysLanguage || 'zh-CN'));
   });
 
   el('sysRefreshStorageBtn')?.addEventListener('click', async () => {

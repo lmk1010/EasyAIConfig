@@ -4008,12 +4008,73 @@ export async function getProviderSecret({ scope = 'global', projectPath = '', co
     providerKey: base.key,
     providerName: base.name,
     baseUrl: base.baseUrl,
+    wireApi: base.wireApi,
     hasApiKey: true,
     maskedApiKey: maskSecretValue(secret.value),
     apiKey: secret.value,
     keySource: secret.source,
     resolvedKeyName: secret.key,
   };
+}
+
+function resolveClaudeCodeProviderSecret(settings = {}, providerKey = '') {
+  const safeKey = String(providerKey || '').trim();
+  if (!safeKey) {
+    throw new Error('providerKey is required');
+  }
+  const settingsEnv = settings?.env && typeof settings.env === 'object' ? settings.env : {};
+  const easy = settings?.easyaiconfig && typeof settings.easyaiconfig === 'object' ? settings.easyaiconfig : {};
+  const providers = easy.providers && typeof easy.providers === 'object' ? easy.providers : {};
+  const activeProvider = String(easy.activeProvider || '').trim();
+  const configured = providers[safeKey] && typeof providers[safeKey] === 'object' ? providers[safeKey] : null;
+  const officialKey = !String(settingsEnv.ANTHROPIC_BASE_URL || '').trim() || /anthropic\.com/i.test(String(settingsEnv.ANTHROPIC_BASE_URL || ''));
+  const envKey = activeProvider || (officialKey ? 'official' : slugifyProviderKey(inferProviderSeed(String(settingsEnv.ANTHROPIC_BASE_URL || ''))));
+
+  if (!configured && safeKey !== envKey && !(safeKey === 'official' && officialKey)) {
+    throw new Error(`未找到 Claude Code Provider：${safeKey}`);
+  }
+
+  const useEnvFallback = !configured || safeKey === activeProvider || safeKey === envKey;
+  const baseUrl = String(
+    configured?.baseUrl
+    || (useEnvFallback ? settingsEnv.ANTHROPIC_BASE_URL : '')
+    || process.env.ANTHROPIC_BASE_URL
+    || 'https://api.anthropic.com'
+  ).trim();
+  const authToken = String(
+    configured?.authToken
+    || (useEnvFallback ? settingsEnv.ANTHROPIC_AUTH_TOKEN : '')
+    || process.env.ANTHROPIC_AUTH_TOKEN
+    || ''
+  ).trim();
+  const apiKey = String(
+    configured?.apiKey
+    || (useEnvFallback ? settingsEnv.ANTHROPIC_API_KEY : '')
+    || process.env.ANTHROPIC_API_KEY
+    || ''
+  ).trim();
+  const secret = authToken || apiKey;
+  if (!secret) {
+    throw new Error(`Claude Code Provider ${configured?.name || safeKey} 未找到 API Key / Auth Token`);
+  }
+
+  return {
+    providerKey: safeKey,
+    providerName: String(configured?.name || inferProviderLabel(baseUrl, safeKey) || safeKey),
+    baseUrl,
+    model: String(configured?.model || settings.model || '').trim(),
+    apiKey: secret,
+    credentialType: authToken ? 'auth_token' : 'api_key',
+    keySource: authToken ? 'ANTHROPIC_AUTH_TOKEN' : 'ANTHROPIC_API_KEY',
+    maskedApiKey: maskSecretValue(secret),
+  };
+}
+
+export async function getClaudeCodeProviderSecret({ providerKey = '' } = {}) {
+  const home = claudeCodeHome();
+  const settingsPath = path.join(home, 'settings.json');
+  const settings = await readJsonFile(settingsPath);
+  return resolveClaudeCodeProviderSecret(settings, providerKey);
 }
 
 export async function testSavedProvider({

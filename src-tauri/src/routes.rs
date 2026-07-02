@@ -6,7 +6,7 @@ use crate::codex::{
   list_codex_session_homes, migrate_codex_sessions,
   resume_codex_session, fork_codex_session, export_codex_session,
   get_codex_app_state, install_codex_app, open_codex_app,
-  list_tools, load_claudecode_state, save_claudecode_config, save_claudecode_raw_config,
+  list_tools, load_claudecode_state, model_eval_claudecode_provider, save_claudecode_config, save_claudecode_raw_config,
   delete_claudecode_provider,
   launch_claudecode, login_claudecode, load_opencode_state, save_opencode_config,
   save_opencode_raw_config, install_opencode, reinstall_opencode, update_opencode,
@@ -24,7 +24,7 @@ use crate::codex::{
 use crate::config::{
   delete_codex_provider, get_provider_secret, list_backups, load_state, pick_directory,
   read_config_file, restore_backup, save_config, save_raw_config, save_settings, set_default_model,
-  test_saved_provider, use_oauth_config, write_config_file,
+  test_saved_provider, model_eval_saved_provider, use_oauth_config, write_config_file,
 };
 
 use crate::oauth_profiles::{
@@ -57,6 +57,14 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/provider/test", "POST") => detect_provider(body).await,
     ("/api/provider/secret", "POST") => get_provider_secret(body),
     ("/api/provider/test-saved", "POST") => test_saved_provider(body).await,
+    ("/api/provider/model-eval", "POST") => {
+      let tool = body.get("tool").and_then(Value::as_str).unwrap_or("codex").trim().to_lowercase();
+      if tool == "claudecode" {
+        model_eval_claudecode_provider(body).await
+      } else {
+        model_eval_saved_provider(body).await
+      }
+    },
     ("/api/config/read-file", "GET") => read_config_file(query),
     ("/api/config/write-file", "POST") => write_config_file(body),
     ("/api/config/save", "POST") => save_config(body),

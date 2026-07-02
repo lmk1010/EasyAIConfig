@@ -391,6 +391,7 @@ pub(crate) fn reveal_provider_api_key(
     "providerKey": provider.key,
     "providerName": provider.name,
     "baseUrl": provider.base_url,
+    "wireApi": provider.wire_api,
     "hasApiKey": true,
     "maskedApiKey": mask_secret_value(&secret.value),
     "apiKey": secret.value,

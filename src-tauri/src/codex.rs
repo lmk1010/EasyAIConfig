@@ -5631,6 +5631,169 @@ pub(crate) fn load_claudecode_state(query: &Value) -> Result<Value, String> {
   }))
 }
 
+fn infer_claude_eval_provider_key(base_url: &str) -> String {
+  let normalized = base_url.trim();
+  if normalized.is_empty() || normalized.contains("api.anthropic.com") || normalized.contains("anthropic.com") {
+    return "official".to_string();
+  }
+  let with_scheme = if normalized.contains("://") { normalized.to_string() } else { format!("https://{normalized}") };
+  let host = url::Url::parse(&with_scheme)
+    .ok()
+    .and_then(|url| url.host_str().map(|host| host.trim_start_matches("www.").to_lowercase()))
+    .unwrap_or_else(|| normalized.to_lowercase());
+  let ignored = ["api", "anthropic", "claude", "gateway", "chat", "www"];
+  let seed = host
+    .split('.')
+    .find(|part| !ignored.contains(part) && part.chars().any(|ch| ch.is_ascii_alphabetic()))
+    .unwrap_or(&host);
+  let slug = seed
+    .chars()
+    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+    .collect::<String>()
+    .trim_matches('-')
+    .to_string();
+  if slug.is_empty() {
+    "custom".to_string()
+  } else if slug.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+    format!("provider-{slug}")
+  } else {
+    slug
+  }
+}
+
+pub(crate) async fn model_eval_claudecode_provider(body: &Value) -> Result<Value, String> {
+  let object = parse_json_object(body);
+  let provider_key = get_string(&object, "providerKey");
+  if provider_key.trim().is_empty() {
+    return Err("providerKey is required".to_string());
+  }
+
+  let home = effective_claude_code_home()?;
+  let settings_path = home.join("settings.json");
+  let settings = read_json_file(&settings_path)?;
+  let settings_env = settings.get("env").cloned().unwrap_or_else(|| json!({}));
+  let shell_env = read_shell_anthropic_env();
+  let env_value = |var: &str| -> String {
+    settings_env
+      .get(var)
+      .and_then(Value::as_str)
+      .map(ToString::to_string)
+      .or_else(|| shell_env.get(var).cloned())
+      .or_else(|| std::env::var(var).ok())
+      .unwrap_or_default()
+  };
+
+  let easy = settings.get("easyaiconfig").cloned().unwrap_or_else(|| json!({}));
+  let providers = easy.get("providers").and_then(Value::as_object).cloned().unwrap_or_default();
+  let active_provider_key = easy.get("activeProvider").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+  let configured = providers.get(&provider_key).cloned().unwrap_or(Value::Null);
+
+  let env_base_url = env_value("ANTHROPIC_BASE_URL");
+  let env_provider_key = if !active_provider_key.is_empty() {
+    active_provider_key.clone()
+  } else {
+    infer_claude_eval_provider_key(&env_base_url)
+  };
+  if configured.is_null()
+    && provider_key != env_provider_key
+    && !(provider_key == "official" && (env_base_url.is_empty() || env_base_url.contains("anthropic.com")))
+  {
+    return Err(format!("未找到 Claude Code Provider：{provider_key}"));
+  }
+
+  let use_env_fallback = configured.is_null() || provider_key == active_provider_key || provider_key == env_provider_key;
+  let configured_object = configured.as_object().cloned().unwrap_or_default();
+  let configured_string = |key: &str| -> String {
+    configured_object.get(key).and_then(Value::as_str).unwrap_or_default().trim().to_string()
+  };
+  let base_url = {
+    let direct = configured_string("baseUrl");
+    if !direct.is_empty() {
+      direct
+    } else if use_env_fallback && !env_base_url.trim().is_empty() {
+      env_base_url.clone()
+    } else {
+      "https://api.anthropic.com".to_string()
+    }
+  };
+  let auth_token = {
+    let direct = configured_string("authToken");
+    if !direct.is_empty() {
+      direct
+    } else if use_env_fallback {
+      env_value("ANTHROPIC_AUTH_TOKEN")
+    } else {
+      String::new()
+    }
+  };
+  let api_key = {
+    let direct = configured_string("apiKey");
+    if !direct.is_empty() {
+      direct
+    } else if use_env_fallback {
+      env_value("ANTHROPIC_API_KEY")
+    } else {
+      String::new()
+    }
+  };
+  let (secret, credential_type) = if !auth_token.trim().is_empty() {
+    (auth_token, "auth_token")
+  } else if !api_key.trim().is_empty() {
+    (api_key, "api_key")
+  } else {
+    return Err(format!(
+      "Claude Code Provider {} 未找到 API Key / Auth Token",
+      configured_string("name").if_empty_then(&provider_key)
+    ));
+  };
+  let explicit_model = get_string(&object, "model");
+  let model = if !explicit_model.trim().is_empty() {
+    explicit_model
+  } else {
+    let provider_model = configured_string("model");
+    if !provider_model.is_empty() {
+      provider_model
+    } else {
+      settings.get("model").and_then(Value::as_str).unwrap_or_default().to_string()
+    }
+  };
+  let provider_name = {
+    let name = configured_string("name");
+    if !name.is_empty() {
+      name
+    } else if provider_key == "official" {
+      "Anthropic Official".to_string()
+    } else {
+      provider_key.clone()
+    }
+  };
+  let profile = get_string(&object, "profile");
+  let timeout_ms = object.get("timeoutMs").and_then(Value::as_u64).unwrap_or(30000);
+
+  crate::provider_eval::run_model_authenticity_eval(
+    &base_url,
+    &secret,
+    credential_type,
+    &model,
+    &provider_key,
+    &provider_name,
+    if profile.trim().is_empty() { "quick" } else { &profile },
+    timeout_ms,
+    "anthropic-messages",
+  )
+  .await
+}
+
+trait IfEmptyThen {
+  fn if_empty_then(self, fallback: &str) -> String;
+}
+
+impl IfEmptyThen for String {
+  fn if_empty_then(self, fallback: &str) -> String {
+    if self.trim().is_empty() { fallback.to_string() } else { self }
+  }
+}
+
 pub(crate) fn save_claudecode_config(body: &Value) -> Result<Value, String> {
   let home = effective_claude_code_home()?;
   let settings_path = home.join("settings.json");
