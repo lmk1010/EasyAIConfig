@@ -102,7 +102,19 @@
 
 ## [UI] 截图预览
 
-> 高清匿名版截图正在准备中。先看核心能力一览（见上方功能矩阵 + 模型预设矩阵），桌面端下载安装后可直接体验全部界面。
+> 以下截图中的账号、Base URL 与本地路径已做匿名处理。
+
+| 一键配置与 Provider 管理 | 数据看板 |
+|--------------------------|----------|
+| <img src="assets/screenshot-quick-setup.png" alt="一键配置与 Provider 管理" width="100%" /> | <img src="assets/screenshot-dashboard.png" alt="数据看板" width="100%" /> |
+
+| 自动路由网关 | 配置编辑 |
+|--------------|----------|
+| <img src="assets/screenshot-router.png" alt="自动路由网关" width="100%" /> | <img src="assets/screenshot-config-editor.png" alt="配置编辑" width="100%" /> |
+
+| 工具安装与管理 | 内置终端 |
+|----------------|----------|
+| <img src="assets/screenshot-tools.png" alt="工具安装与管理" width="100%" /> | <img src="assets/screenshot-terminal.png" alt="内置终端" width="100%" /> |
 
 ## [Install] 安装
 
