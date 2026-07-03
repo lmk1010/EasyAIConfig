@@ -104,6 +104,11 @@ const state = {
   codexCmdPaletteOpen: false,
   // 列表行的 uptime 缓存：{ providerKey: { uptimePct, fetchedAt } }
   providerUptime: {},
+  // 列表行的远程余额缓存：{ "tool:providerKey": { result, error, fetchedAt } }
+  providerRemoteUsageByKey: {},
+  providerRemoteUsageLoadingByKey: {},
+  providerRemoteCredentialByKey: {},
+  providerBalanceBatchLoading: false,
   // 自动故障转移：当前 active provider 连续失败 N 次，按 priority 自动切下一档
   autoFailover: (() => {
     try {
@@ -132,13 +137,28 @@ const state = {
     history: null,             // { rows: [{ probedAt, success, latencyMs, error }] }
     selectedProbeKey: '',
     usageWindow: localStorage.getItem('easyaiconfig_pd_usage_window') || '30',
+    usageView: localStorage.getItem('easyaiconfig_pd_usage_view') || 'local',
     usageModel: 'all',
     usageMetrics: null,
     usageMetricsFetchedAt: 0,
+    remoteUsageResult: null,
+    remoteUsageFetchedAt: 0,
+    remoteUsageLoading: false,
+    remoteUsageError: '',
+    remoteCredential: null,
+    remoteCredentialLoading: false,
+    remoteCredentialSaving: false,
+    remoteCredentialTesting: false,
+    remoteCredentialError: '',
+    remoteCredentialDraftAuthMode: '',
+    remoteCredentialDraft: {},
     testResult: null,          // { ok, models, latencyMs, error }
     testRunning: false,
     evalResult: null,          // { summary, evidence, capabilities, error }
     evalRunning: false,
+    evalRunningProfile: '',
+    evalStartedAt: 0,
+    evalProgressEstimateMs: 0,
     evalExpanded: { channel: false, upstream: false },
     evalCasePage: 0,
     evalView: localStorage.getItem('easyaiconfig_pd_eval_view') || 'single',
@@ -151,6 +171,25 @@ const state = {
     evalBatchRunId: '',
     loading: false,
     error: '',
+  },
+  providerRouter: {
+    status: null,
+    loading: false,
+    error: '',
+    activeTool: 'codex',
+    activeTab: 'pool',
+    probeLoading: false,
+    primaryProviderKey: '',
+    primaryProviderKeysByTool: {},
+    selectedProviderKeys: [],
+    selectedProviderKeysByTool: {},
+    routeStrategyByTool: {},
+    providerWeightsByTool: {},
+    balanceGuardEnabled: true,
+    balanceMinPercent: 5,
+    balanceMinAmount: 0,
+    codexPreviousProviderKey: localStorage.getItem('easyaiconfig_provider_router_prev_codex_provider') || '',
+    wired: false,
   },
   // 默认只贴 `codex <flags>`；切到 OAuth profile 时自动打开"环境前缀"
   // 让命令带上 unset + CODEX_HOME（多账号/IP 残留 env 必须）
@@ -6394,6 +6433,7 @@ const PAGE_META = {
   console: { eyebrow: 'Console', title: '运行控制台', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的运行状态、异常检测与快速修复入口。' },
   terminal: { eyebrow: 'Terminal', title: '内置终端', subtitle: '一站启动 codex / claude code，多会话 tab、token 实时监控与命令面板。' },
   dashboard: { eyebrow: 'Dashboard', title: '数据看板', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的状态、用量与趋势。' },
+  providerRouter: { eyebrow: 'Router', title: '自动路由网关', subtitle: '启动本地 OpenAI-compatible 网关，按 provider 池做请求级路由。' },
   tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新、重装或卸载 AI 编程工具。' },
   tasks: { eyebrow: 'Tasks', title: '任务管理', subtitle: '查看当前进行中和历史安装任务。' },
   about: { eyebrow: 'About', title: '关于 EasyAIConfig', subtitle: '查看桌面版本、更新源与当前运行信息。' },
@@ -9073,6 +9113,63 @@ async function preLaunchIpFirewallCheck(toolLabel) {
   }
 }
 
+const OAUTH_IP_WARNING_LS = 'easyaiconfig_oauth_ip_warning_last_at';
+const OAUTH_IP_WARNING_INTERVAL_MS = 60 * 60 * 1000;
+
+function getOauthIpRiskMeta(network) {
+  if (!network || network.ok === false) return { risky: false, reason: '' };
+  const countryCode = String(network.countryCode || network.country || '').trim().toUpperCase();
+  const verdict = String(network.verdict || '').trim().toLowerCase();
+  if (countryCode && countryCode !== 'US') {
+    const label = countryCode === 'CN' ? '中国大陆出口 IP' : `${countryCode} 出口 IP`;
+    return { risky: true, reason: `${label}，不是美国线路` };
+  }
+  if (verdict && verdict !== 'ok') {
+    return { risky: true, reason: network.verdictCopy || `当前网络 verdict=${verdict}` };
+  }
+  return { risky: false, reason: '' };
+}
+
+async function confirmOauthIpRiskBeforeRequest(actionLabel = 'Codex OAuth 请求', options = {}) {
+  try {
+    const silent = Boolean(options?.silent);
+    if (!window.__consoleV3?.network) {
+      const res = await api('/api/network/status', { method: 'GET' });
+      window.__consoleV3 = window.__consoleV3 || {};
+      window.__consoleV3.network = res?.ok ? (res.data || null) : null;
+    }
+    const network = window.__consoleV3?.network;
+    const risk = getOauthIpRiskMeta(network);
+    if (!risk.risky) return true;
+
+    const lastAt = Number(localStorage.getItem(OAUTH_IP_WARNING_LS) || 0);
+    if (lastAt && Date.now() - lastAt < OAUTH_IP_WARNING_INTERVAL_MS) return true;
+    if (silent) return false;
+
+    const ip = network?.ip || '未知';
+    const country = network?.countryCode || network?.country || '未知';
+    const body = `
+      <div class="update-line">当前出口 IP：${escapeHtml(ip)} (${escapeHtml(country)})</div>
+      <div class="update-line">风险原因：${escapeHtml(risk.reason || '当前线路不适合直接访问官方 OAuth')}</div>
+      <div class="update-line">操作：${escapeHtml(actionLabel)}</div>
+      <div class="update-line">建议先切到稳定美国线路；继续不会绕过官方风控，只是按你的选择发起请求。</div>`;
+    const ok = await openUpdateDialog({
+      eyebrow: 'OAuth IP',
+      title: '出口 IP 风险确认',
+      body,
+      confirmText: '继续请求',
+      cancelText: '取消',
+      tone: 'warning',
+    });
+    if (ok) {
+      try { localStorage.setItem(OAUTH_IP_WARNING_LS, String(Date.now())); } catch {}
+    }
+    return Boolean(ok);
+  } catch (_) {
+    return true;
+  }
+}
+
 async function loadConsoleNetworkStatus({ force = false } = {}) {
   if (window.__consoleV3.networkLoading) return;
   window.__consoleV3.networkLoading = true;
@@ -10885,6 +10982,71 @@ async function api(url, options = {}) {
   }
 }
 
+function normalizeProviderRemoteUsageCacheEntry(entry = {}) {
+  const result = entry?.result && typeof entry.result === 'object' ? entry.result : null;
+  const error = entry?.error ? String(entry.error).slice(0, 500) : '';
+  const fetchedAt = Number(entry?.fetchedAt) || Date.now();
+  return { result, error, fetchedAt };
+}
+
+function providerRemoteUsageCacheParts(cacheKey = '', fallback = {}) {
+  const text = String(cacheKey || '').trim();
+  const sep = text.indexOf(':');
+  const tool = (sep >= 0 ? text.slice(0, sep) : fallback.tool || 'codex').trim().toLowerCase() || 'codex';
+  const providerKey = (fallback.providerKey || (sep >= 0 ? text.slice(sep + 1) : text)).trim();
+  return { tool, providerKey };
+}
+
+async function persistProviderRemoteUsageCacheRecord(cacheKey, normalized, options = {}) {
+  const { tool, providerKey } = providerRemoteUsageCacheParts(cacheKey, options);
+  if (!providerKey) return null;
+  return api('/api/provider/remote-usage/cache', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cacheKey,
+      tool,
+      providerKey,
+      result: normalized.result,
+      error: normalized.error,
+      fetchedAt: normalized.fetchedAt,
+    }),
+    timeoutMs: 12000,
+  }).catch(() => null);
+}
+
+function setProviderRemoteUsageCache(cacheKey, entry, options = {}) {
+  const key = String(cacheKey || '').trim();
+  if (!key) return null;
+  const normalized = normalizeProviderRemoteUsageCacheEntry(entry);
+  state.providerRemoteUsageByKey[key] = normalized;
+  if (options.persist !== false) {
+    void persistProviderRemoteUsageCacheRecord(key, normalized, options);
+  }
+  return normalized;
+}
+
+async function saveProviderRemoteUsageCache(cacheKey, entry, options = {}) {
+  const key = String(cacheKey || '').trim();
+  if (!key) return null;
+  const normalized = setProviderRemoteUsageCache(key, entry, { ...options, persist: false });
+  await persistProviderRemoteUsageCacheRecord(key, normalized, options);
+  return normalized;
+}
+
+async function loadProviderRemoteUsageCache() {
+  try {
+    const res = await api('/api/provider/remote-usage/cache?limit=120', { timeoutMs: 12000 });
+    if (!res?.ok || !res.data?.entries || typeof res.data.entries !== 'object') return;
+    for (const [key, entry] of Object.entries(res.data.entries)) {
+      if (!key) continue;
+      state.providerRemoteUsageByKey[key] = normalizeProviderRemoteUsageCacheEntry(entry);
+    }
+    try { window.renderConnectionHub?.(); } catch (_) {}
+    if (state.providerDetail?.open) renderProviderDetail({ force: true });
+  } catch (_) {}
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -12548,6 +12710,7 @@ const SECONDARY_META = {
   quick:          { sub: '选择要配置的工具，或为同一工具保存多份预设。' },
   console:        { sub: '集中监控各 CLI 工具的运行状态与异常检测结果。' },
   dashboard:      { sub: '查看各工具的模型用量、会话趋势与耗时分布。' },
+  providerRouter: { sub: '启动本地网关，选择主 provider 和 API Key 候选池。' },
   configEditor:   { sub: '搜索配置项，直接编辑底层配置文件。' },
   tools:          { sub: '安装、更新、重装或卸载已接入的 AI 编程工具。' },
   tasks:          { sub: '查看当前进行中和历史的安装/更新任务。' },
@@ -12650,6 +12813,11 @@ function setPage(page = 'quick') {
     } else if (isApiDashboard) {
       void refreshDashboardData({ silent: hasCachedMetrics, tool: dashboardTool });
     }
+  }
+  if (page === 'providerRouter') {
+    renderProviderRouterPage();
+    ensureProviderRouterEvents();
+    fetchProviderRouterStatus().catch(() => {});
   }
   if (page === 'configEditor') {
     applyConfigEditorSearch();
@@ -18429,7 +18597,7 @@ function describeHealthDot(provider) {
     const count = h.modelCount ? ` · ${h.modelCount} models` : '';
     return {
       tone: 'ok',
-      label: lat ? `已通 · ${lat}` : '已通',
+      label: '已通',
       tip: `连通正常${count}${lat ? ` · 延迟 ${lat}` : ''}${h.checkedAt ? `\n上次检测 ${new Date(h.checkedAt).toLocaleTimeString()}` : ''}`,
     };
   }
@@ -19621,6 +19789,7 @@ const PROVIDER_DETAIL_TABS = [
   { id: 'overview', label: '概览' },
   { id: 'models',   label: '模型支持' },
   { id: 'usage',    label: '用量' },
+  { id: 'panel',    label: '面板认证' },
   { id: 'test',     label: '测试' },
   { id: 'eval',     label: '验真' },
   { id: 'health',   label: '健康' },
@@ -19631,6 +19800,7 @@ const PROVIDER_DETAIL_EVAL_VIEWS = new Set(['single', 'history', 'batch']);
 const PROJECT_BINDINGS_CACHE_MS = 15000;
 let pdEventsContainer = null;
 let pdTabPointerCaptureBound = false;
+let pdEvalProgressTimer = null;
 
 function normalizeProviderDetailTab(tab) {
   const value = String(tab || '').trim();
@@ -19674,6 +19844,12 @@ function switchProviderDetailTab(tab) {
     pdLastRenderSig = '';
   }
   renderProviderDetail({ force: true });
+  if (nextTab === 'panel') {
+    const row = lookupProviderDetailRow();
+    if (row && isCodexProviderDetail(row) && row.mode === 'apikey') {
+      loadPdRemotePanelCredential(row).catch(() => {});
+    }
+  }
 }
 
 function getProviderDetailTabButtonAtPoint(clientX, clientY) {
@@ -19702,6 +19878,12 @@ function handleProviderDetailTabPointerCapture(e) {
 
 function handleProviderDetailChange(e) {
   const target = e.target;
+  if (target instanceof HTMLSelectElement && target.matches('[data-pd-remote-auth-mode]')) {
+    state.providerDetail.remoteCredentialDraftAuthMode = target.value || 'newapi_password';
+    updatePdRemoteCredentialDraftFromForm(target.closest('.pd-remote-credential') || document);
+    syncPdRemoteCredentialAuthFields(target.closest('.pd-remote-credential') || document);
+    return;
+  }
   if (!(target instanceof HTMLInputElement)) return;
   const batchToggle = target.closest('[data-pd-batch-toggle]');
   if (batchToggle) {
@@ -19734,6 +19916,20 @@ function handleProviderDetailClick(e) {
   if (tabBtn) {
     e.preventDefault();
     switchProviderDetailTab(tabBtn.dataset.pdTab);
+    return;
+  }
+  const usageViewBtn = target.closest('[data-pd-usage-view]');
+  if (usageViewBtn) {
+    e.preventDefault();
+    const nextView = normalizePdUsageView(usageViewBtn.getAttribute('data-pd-usage-view'));
+    state.providerDetail.usageView = nextView;
+    try { localStorage.setItem('easyaiconfig_pd_usage_view', nextView); } catch {}
+    pdLastRenderSig = '';
+    renderProviderDetail({ force: true });
+    if (nextView === 'remote') {
+      const row = lookupProviderDetailRow();
+      if (row) loadPdRemotePanelCredential(row).catch(() => {});
+    }
     return;
   }
   const probeBtn = target.closest('[data-pd-probe-index]');
@@ -19769,7 +19965,11 @@ function handleProviderDetailClick(e) {
   if (target.closest('[data-pd-edit]')) { actionPdEdit(); return; }
   if (target.closest('[data-pd-delete]')) { actionPdDelete(); return; }
   if (target.closest('[data-pd-test]')) { actionPdRunTest(); return; }
-  if (target.closest('[data-pd-run-eval]')) { actionPdRunEval(); return; }
+  const runEvalBtn = target.closest('[data-pd-run-eval]');
+  if (runEvalBtn) {
+    actionPdRunEval(runEvalBtn.getAttribute('data-pd-run-eval') || 'quick');
+    return;
+  }
   if (target.closest('[data-pd-export-eval]')) { actionPdExportEvalReport(); return; }
   const evalViewBtn = target.closest('[data-pd-eval-view]');
   if (evalViewBtn) {
@@ -19855,6 +20055,15 @@ function handleProviderDetailClick(e) {
   }
   if (target.closest('[data-pd-refresh-health]')) { actionPdRefreshHealth(); return; }
   if (target.closest('[data-pd-refresh-usage]')) { actionPdRefreshUsage(); return; }
+  if (target.closest('[data-pd-save-remote-credential]')) { actionPdSaveRemoteCredential(); return; }
+  if (target.closest('[data-pd-test-remote-credential]')) { actionPdTestRemoteCredential(); return; }
+  if (target.closest('[data-pd-delete-remote-credential]')) { actionPdDeleteRemoteCredential(); return; }
+  const openRemotePanelBtn = target.closest('[data-pd-open-remote-panel]');
+  if (openRemotePanelBtn) {
+    actionPdOpenRemotePanel(openRemotePanelBtn.getAttribute('data-pd-open-remote-panel') || 'root');
+    return;
+  }
+  if (target.closest('[data-pd-sync-remote-usage]')) { actionPdSyncRemoteUsage(); return; }
   if (target.closest('[data-pd-launch]')) { actionPdLaunch(); return; }
   if (target.closest('[data-pd-copy-cmd]')) { actionPdCopyLaunchCmd(); return; }
   // P0 #3：项目绑定 tab 的目录选择器
@@ -19932,12 +20141,20 @@ function handleProviderDetailClick(e) {
   }
 }
 
+function handleProviderDetailInput(e) {
+  const target = e.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  if (!target.matches('[data-pd-remote-base-url], [data-pd-remote-username], [data-pd-remote-email], [data-pd-remote-password], [data-pd-remote-user-id], [data-pd-remote-access-token]')) return;
+  updatePdRemoteCredentialDraftFromForm(target.closest('.pd-remote-credential') || document);
+}
+
 function ensureProviderDetailEvents() {
   const container = document.getElementById('chDetail');
   if (!container) return;
   if (container === pdEventsContainer) return;
   pdEventsContainer = container;
   // 项目绑定 tab 里 cwd 输入手动编辑后，把值同步到 launchCwdInput 并重查 binding
+  container.addEventListener('input', handleProviderDetailInput);
   container.addEventListener('change', handleProviderDetailChange);
   container.addEventListener('click', handleProviderDetailClick);
   if (!pdTabPointerCaptureBound) {
@@ -19985,6 +20202,7 @@ function getProviderDetailToolName(row = lookupProviderDetailRow()) {
 
 function openProviderDetail(key) {
   if (!key) return;
+  stopPdEvalProgressTicker();
   const s = (typeof window.__chHubState === 'function' ? window.__chHubState() : null) || state;
   state.providerDetail.providerKey = key;
   state.providerDetail.tool = s.activeTool || state.activeTool || 'codex';
@@ -19997,6 +20215,9 @@ function openProviderDetail(key) {
   state.providerDetail.testRunning = false;
   state.providerDetail.evalResult = null;
   state.providerDetail.evalRunning = false;
+  state.providerDetail.evalRunningProfile = '';
+  state.providerDetail.evalStartedAt = 0;
+  state.providerDetail.evalProgressEstimateMs = 0;
   state.providerDetail.evalExpanded = { channel: false, upstream: false };
   state.providerDetail.evalCasePage = 0;
   state.providerDetail.evalView = normalizeProviderDetailEvalView(localStorage.getItem('easyaiconfig_pd_eval_view') || state.providerDetail.evalView || 'single');
@@ -20011,9 +20232,21 @@ function openProviderDetail(key) {
   state.providerDetail.error = '';
   state.providerDetail.usageAutoRetried = false;
   state.providerDetail.usageRefreshing = false;
+  state.providerDetail.usageView = normalizePdUsageView(localStorage.getItem('easyaiconfig_pd_usage_view') || state.providerDetail.usageView || 'local');
   state.providerDetail.usageModel = 'all';
   state.providerDetail.usageMetrics = null;
   state.providerDetail.usageMetricsFetchedAt = 0;
+  state.providerDetail.remoteUsageResult = null;
+  state.providerDetail.remoteUsageFetchedAt = 0;
+  state.providerDetail.remoteUsageLoading = false;
+  state.providerDetail.remoteUsageError = '';
+  state.providerDetail.remoteCredential = null;
+  state.providerDetail.remoteCredentialLoading = false;
+  state.providerDetail.remoteCredentialSaving = false;
+  state.providerDetail.remoteCredentialTesting = false;
+  state.providerDetail.remoteCredentialError = '';
+  state.providerDetail.remoteCredentialDraftAuthMode = '';
+  state.providerDetail.remoteCredentialDraft = {};
   state.providerDetail.modelsLoading = false;
   const hub = document.getElementById('connectionHub');
   if (hub) hub.classList.add('ch-detail-on');
@@ -20028,6 +20261,15 @@ function openProviderDetail(key) {
   if (row) {
     state.providerDetail.evalHistory = readPdEvalHistory(row);
     seedPdEvalBatchSelection(row);
+    const remoteCacheKey = `${providerDetailTool(row)}:${row.key}`;
+    const cachedRemote = state.providerRemoteUsageByKey?.[remoteCacheKey];
+    if (cachedRemote?.result) {
+      state.providerDetail.remoteUsageResult = cachedRemote.result;
+      state.providerDetail.remoteUsageFetchedAt = cachedRemote.fetchedAt || Date.now();
+      state.providerDetail.remoteUsageError = '';
+    } else if (cachedRemote?.error) {
+      state.providerDetail.remoteUsageError = cachedRemote.error;
+    }
   }
   if (row && isCodexProviderDetail(row) && row.mode === 'apikey') {
     const expectedKey = row.key;
@@ -20043,6 +20285,9 @@ function openProviderDetail(key) {
     })();
     // 用量数据从 dashboard metrics 来，没就拉一次
     fetchDashboardMetricsForDetail().catch(() => {});
+    loadPdRemotePanelCredential(row).catch(() => {});
+  } else if (row && isCodexProviderDetail(row) && row.mode === 'oauth') {
+    fetchDashboardMetricsForDetail().catch(() => {});
   }
 }
 
@@ -20054,10 +20299,12 @@ async function fetchDashboardMetricsForDetail(force = false) {
   const fetchedAt = Number(state.providerDetail.usageMetricsFetchedAt || 0);
   const isStale = !fetchedAt || (Date.now() - fetchedAt > 60 * 1000);
   if (state.providerDetail?.usageMetrics && !force && !isStale) return;
+  const row = lookupProviderDetailRow();
+  const codexHome = row?.homePath || getDashboardCodexHome();
   const requestDays = getPdUsageRequestDays();
   const params = new URLSearchParams({
     days: String(requestDays),
-    codexHome: getDashboardCodexHome(),
+    codexHome,
   });
   if (force) params.set('force', '1');
   try {
@@ -20088,6 +20335,1812 @@ async function actionPdRefreshUsage() {
   if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
   state.providerDetail.usageRefreshing = false;
   renderProviderDetail();
+}
+
+function getRemotePanelRootFromBase(baseUrl = '') {
+  const raw = String(baseUrl || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    let path = url.pathname.replace(/\/+$/, '');
+    const lower = path.toLowerCase();
+    const suffixes = [
+      '/api/openai/v1',
+      '/api/openai-compatible/v1',
+      '/api/compatible-mode/v1',
+      '/compatible-mode/v1',
+      '/openai-compatible/v1',
+      '/openai/v1',
+      '/api/v1',
+      '/v1',
+    ];
+    const matchedSuffix = suffixes.find((suffix) => lower === suffix || lower.endsWith(suffix));
+    if (matchedSuffix) {
+      path = path.slice(0, path.length - matchedSuffix.length).replace(/\/+$/, '');
+    } else if (lower === '/api') {
+      path = '';
+    }
+    url.pathname = path || '/';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return raw.replace(/\/+$/, '').replace(/(?:\/(?:api\/)?v1|\/api)$/i, '');
+  }
+}
+
+function joinRemotePanelPath(root, path) {
+  const base = String(root || '').replace(/\/+$/, '');
+  const next = String(path || '').replace(/^\/+/, '');
+  return base && next ? `${base}/${next}` : base || next;
+}
+
+function getRemotePanelRechargePath(providerType = '') {
+  const type = String(providerType || '').trim().toLowerCase();
+  return type === 'sub2api' ? '/purchase' : '/console/topup';
+}
+
+function getPdRemoteCredentialQuery(row = lookupProviderDetailRow()) {
+  const params = new URLSearchParams({
+    providerKey: row?.key || '',
+    tool: providerDetailTool(row) || 'codex',
+  });
+  return params.toString();
+}
+
+function getPdRemoteCredentialDraft() {
+  if (!state.providerDetail.remoteCredentialDraft || typeof state.providerDetail.remoteCredentialDraft !== 'object') {
+    state.providerDetail.remoteCredentialDraft = {};
+  }
+  return state.providerDetail.remoteCredentialDraft;
+}
+
+function pdRemoteDraftHasOwn(draft, key) {
+  return Object.prototype.hasOwnProperty.call(draft || {}, key);
+}
+
+function updatePdRemoteCredentialDraftFromForm(root = document) {
+  const scope = root?.querySelector ? root : document;
+  const draft = getPdRemoteCredentialDraft();
+  const authModeEl = scope.querySelector('[data-pd-remote-auth-mode]');
+  if (authModeEl) {
+    draft.authMode = authModeEl.value || 'newapi_password';
+    state.providerDetail.remoteCredentialDraftAuthMode = draft.authMode;
+  }
+  const textFields = [
+    ['baseUrl', '[data-pd-remote-base-url]', true],
+    ['username', '[data-pd-remote-username]', true],
+    ['email', '[data-pd-remote-email]', true],
+    ['password', '[data-pd-remote-password]', false],
+    ['userId', '[data-pd-remote-user-id]', true],
+    ['accessToken', '[data-pd-remote-access-token]', true],
+  ];
+  for (const [key, selector, trim] of textFields) {
+    const input = scope.querySelector(selector);
+    if (!input) continue;
+    const value = String(input.value || '');
+    draft[key] = trim ? value.trim() : value;
+  }
+}
+
+async function loadPdRemotePanelCredential(row = lookupProviderDetailRow(), force = false) {
+  if (!row || !isCodexProviderDetail(row) || !row.key) return;
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
+  if (state.providerDetail.remoteCredentialLoading && !force) return;
+  state.providerDetail.remoteCredentialLoading = true;
+  state.providerDetail.remoteCredentialError = '';
+  renderProviderDetail({ force: true });
+  try {
+    const res = await api(`/api/provider/remote-usage/credential?${getPdRemoteCredentialQuery(row)}`, { timeoutMs: 12000 });
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    if (res?.ok) {
+      state.providerDetail.remoteCredential = res.data || { exists: false };
+      state.providerRemoteCredentialByKey[`${expectedTool}:${expectedKey}`] = state.providerDetail.remoteCredential;
+      const draft = getPdRemoteCredentialDraft();
+      if (!draft.authMode && !state.providerDetail.remoteCredentialDraftAuthMode) {
+        state.providerDetail.remoteCredentialDraftAuthMode = res.data?.authMode || '';
+      }
+      state.providerDetail.remoteCredentialError = '';
+    } else {
+      state.providerDetail.remoteCredentialError = res?.error || '远程面板认证读取失败';
+    }
+  } catch (err) {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.remoteCredentialError = err?.message || String(err);
+  } finally {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.remoteCredentialLoading = false;
+    renderProviderDetail({ force: true });
+  }
+}
+
+function readPdRemoteCredentialForm(row = lookupProviderDetailRow()) {
+  const credential = state.providerDetail.remoteCredential || {};
+  const scope = document.getElementById('chDetail') || document;
+  updatePdRemoteCredentialDraftFromForm(scope);
+  const draft = getPdRemoteCredentialDraft();
+  const authMode = scope.querySelector('[data-pd-remote-auth-mode]')?.value
+    || draft.authMode
+    || credential.authMode
+    || 'newapi_password';
+  const baseUrl = scope.querySelector('[data-pd-remote-base-url]')?.value?.trim()
+    || (pdRemoteDraftHasOwn(draft, 'baseUrl') ? draft.baseUrl : '')
+    || credential.baseUrl
+    || row?.baseUrl
+    || '';
+  const panelType = authMode.startsWith('sub2api') ? 'sub2api' : 'newapi';
+  const username = scope.querySelector('[data-pd-remote-username]')?.value?.trim()
+    || (pdRemoteDraftHasOwn(draft, 'username') ? draft.username : '')
+    || '';
+  const email = scope.querySelector('[data-pd-remote-email]')?.value?.trim()
+    || (pdRemoteDraftHasOwn(draft, 'email') ? draft.email : '')
+    || '';
+  const password = scope.querySelector('[data-pd-remote-password]')?.value
+    || (pdRemoteDraftHasOwn(draft, 'password') ? draft.password : '')
+    || '';
+  const userId = scope.querySelector('[data-pd-remote-user-id]')?.value?.trim()
+    || (pdRemoteDraftHasOwn(draft, 'userId') ? draft.userId : '')
+    || '';
+  const accessToken = scope.querySelector('[data-pd-remote-access-token]')?.value?.trim()
+    || (pdRemoteDraftHasOwn(draft, 'accessToken') ? draft.accessToken : '')
+    || '';
+  return {
+    scope: el('scopeSelect')?.value || 'global',
+    projectPath: el('projectPathInput')?.value?.trim() || '',
+    codexHome: (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '',
+    tool: providerDetailTool(row) || 'codex',
+    providerKey: row?.key || '',
+    baseUrl,
+    panelType,
+    authMode,
+    username: authMode === 'newapi_password' ? username : '',
+    email: authMode === 'sub2api_password' ? email : '',
+    password: authMode === 'newapi_password' || authMode === 'sub2api_password' ? password : '',
+    userId: authMode === 'newapi_access_token' ? userId : '',
+    accessToken: authMode === 'newapi_access_token' ? accessToken : '',
+  };
+}
+
+function validatePdRemoteCredentialPayload(payload) {
+  const credential = state.providerDetail.remoteCredential || {};
+  const mode = String(payload?.authMode || '').toLowerCase();
+  if (!String(payload?.baseUrl || '').trim()) return '面板地址不能为空';
+  if (mode === 'newapi_password') {
+    if (!String(payload?.username || '').trim()) return 'NewAPI 用户名不能为空';
+    if (!String(payload?.password || '') && !credential.hasPassword) return 'NewAPI 密码不能为空';
+  } else if (mode === 'newapi_access_token') {
+    if (!String(payload?.userId || '').trim()) return 'NewAPI User ID 不能为空';
+    if (!String(payload?.accessToken || '').trim() && !credential.hasAccessToken) return 'NewAPI Access Token 不能为空';
+  } else if (mode === 'sub2api_password') {
+    if (!String(payload?.email || '').trim()) return 'sub2api 邮箱不能为空';
+    if (!String(payload?.password || '') && !credential.hasPassword) return 'sub2api 密码不能为空';
+  } else {
+    return '不支持的远程面板认证方式';
+  }
+  return '';
+}
+
+async function actionPdSaveRemoteCredential({ silent = false, payload = null } = {}) {
+  const row = lookupProviderDetailRow();
+  if (!row || !isCodexProviderDetail(row)) return false;
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
+  const formPayload = payload || readPdRemoteCredentialForm(row);
+  const validationError = validatePdRemoteCredentialPayload(formPayload);
+  if (validationError) {
+    state.providerDetail.remoteCredentialError = validationError;
+    if (!silent) flash(validationError, 'error');
+    renderProviderDetail({ force: true });
+    return false;
+  }
+  state.providerDetail.remoteCredentialSaving = true;
+  state.providerDetail.remoteCredentialError = '';
+  renderProviderDetail({ force: true });
+  try {
+    const res = await api('/api/provider/remote-usage/credential', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(formPayload),
+      timeoutMs: 18000,
+    });
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return false;
+    if (res?.ok && res.data) {
+      state.providerDetail.remoteCredential = res.data;
+      state.providerRemoteCredentialByKey[`${expectedTool}:${expectedKey}`] = res.data;
+      state.providerDetail.remoteCredentialDraftAuthMode = res.data.authMode || '';
+      state.providerDetail.remoteCredentialDraft = {};
+      state.providerDetail.remoteCredentialError = '';
+      if (!silent) flash('远程面板认证已保存', 'success');
+      try { window.renderConnectionHub?.(); } catch (_) {}
+      return true;
+    }
+    state.providerDetail.remoteCredentialError = res?.error || '远程面板认证保存失败';
+    if (!silent) flash(state.providerDetail.remoteCredentialError, 'error');
+    return false;
+  } catch (err) {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return false;
+    state.providerDetail.remoteCredentialError = err?.message || String(err);
+    if (!silent) flash(state.providerDetail.remoteCredentialError, 'error');
+    return false;
+  } finally {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return false;
+    state.providerDetail.remoteCredentialSaving = false;
+    renderProviderDetail({ force: true });
+  }
+}
+
+async function actionPdDeleteRemoteCredential() {
+  const row = lookupProviderDetailRow();
+  if (!row || !isCodexProviderDetail(row)) return;
+  if (!window.confirm('删除当前 Provider 保存的远程面板认证？')) return;
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
+  state.providerDetail.remoteCredentialSaving = true;
+  state.providerDetail.remoteCredentialError = '';
+  renderProviderDetail({ force: true });
+  try {
+    const res = await api('/api/provider/remote-usage/credential', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        providerKey: row.key,
+        tool: providerDetailTool(row) || 'codex',
+      }),
+      timeoutMs: 12000,
+    });
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    if (res?.ok) {
+      state.providerDetail.remoteCredential = { exists: false, providerKey: row.key, tool: providerDetailTool(row) || 'codex' };
+      state.providerRemoteCredentialByKey[`${expectedTool}:${expectedKey}`] = state.providerDetail.remoteCredential;
+      state.providerDetail.remoteCredentialDraftAuthMode = 'newapi_password';
+      state.providerDetail.remoteCredentialDraft = {};
+      state.providerDetail.remoteUsageResult = null;
+      state.providerDetail.remoteUsageFetchedAt = 0;
+      flash('远程面板认证已删除', 'success');
+      try { window.renderConnectionHub?.(); } catch (_) {}
+    } else {
+      state.providerDetail.remoteCredentialError = res?.error || '远程面板认证删除失败';
+      flash(state.providerDetail.remoteCredentialError, 'error');
+    }
+  } finally {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.remoteCredentialSaving = false;
+    renderProviderDetail({ force: true });
+  }
+}
+
+async function actionPdTestRemoteCredential() {
+  const row = lookupProviderDetailRow();
+  if (!row || !isCodexProviderDetail(row)) return;
+  const payload = readPdRemoteCredentialForm(row);
+  state.providerDetail.remoteCredentialTesting = true;
+  renderProviderDetail({ force: true });
+  try {
+    const saved = await actionPdSaveRemoteCredential({ silent: true, payload });
+    if (saved) await actionPdSyncRemoteUsage();
+  } finally {
+    state.providerDetail.remoteCredentialTesting = false;
+    renderProviderDetail({ force: true });
+  }
+}
+
+function actionPdOpenRemotePanel(kind = 'root') {
+  const row = lookupProviderDetailRow();
+  const credential = state.providerDetail.remoteCredential || {};
+  const formBase = document.querySelector('[data-pd-remote-base-url]')?.value?.trim() || '';
+  const root = getRemotePanelRootFromBase(formBase || credential.panelUrl || credential.baseUrl || row?.baseUrl || '');
+  if (!root) {
+    flash('当前 Provider 没有可打开的面板地址', 'error');
+    return;
+  }
+  const url = kind === 'newapi-setting' ? joinRemotePanelPath(root, '/profile') : root;
+  void openExternalUrl(url);
+}
+
+async function actionPdSyncRemoteUsage() {
+  const row = lookupProviderDetailRow();
+  if (!row || !isCodexProviderDetail(row)) return;
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
+  const remoteCacheKey = `${expectedTool}:${row.key}`;
+  if (row.mode === 'oauth') {
+    if (!row.hasCredential) {
+      flash('当前 OAuth 账号未完成登录授权，无法查询官方额度', 'error');
+      return;
+    }
+    if (!(await confirmOauthIpRiskBeforeRequest('查询 Codex 官方额度'))) return;
+    state.providerDetail.usageView = 'remote';
+    state.providerDetail.remoteUsageLoading = true;
+    state.providerDetail.remoteUsageError = '';
+    state.providerRemoteUsageLoadingByKey[remoteCacheKey] = true;
+    renderProviderDetail({ force: true });
+    try { window.renderConnectionHub?.(); } catch (_) {}
+    try {
+      const codexHome = row.homePath || (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
+      const res = await api('/api/codex/oauth/usage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          codexHome,
+          profileId: row.profileId || '',
+          systemTimeoutMs: 1800,
+          fallbackTimeoutMs: 8000,
+        }),
+        timeoutMs: 15000,
+      });
+      if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+      if (res?.ok && res.data) {
+        state.providerDetail.remoteUsageResult = res.data;
+        state.providerDetail.remoteUsageFetchedAt = Date.now();
+        await saveProviderRemoteUsageCache(
+          remoteCacheKey,
+          { result: res.data, error: '', fetchedAt: state.providerDetail.remoteUsageFetchedAt },
+          { tool: expectedTool, providerKey: row.key },
+        );
+        const status = String(res.data.status || '');
+        if (status === 'ok') flash('Codex OAuth 官方额度已同步', 'success');
+        else if (status === 'blocked') flash('官方额度接口被 Cloudflare/bot 拦截，已标记不支持', 'warning');
+        else if (status === 'auth_error') flash('OAuth token 无权访问官方额度接口', 'warning');
+        else flash('官方额度接口暂不支持或没有返回稳定字段', 'info');
+      } else {
+        state.providerDetail.remoteUsageError = res?.error || '官方额度查询失败';
+        await saveProviderRemoteUsageCache(
+          remoteCacheKey,
+          { result: null, error: state.providerDetail.remoteUsageError, fetchedAt: Date.now() },
+          { tool: expectedTool, providerKey: row.key },
+        );
+        flash(state.providerDetail.remoteUsageError, 'error');
+      }
+    } catch (err) {
+      if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+      state.providerDetail.remoteUsageError = err?.message || String(err);
+      await saveProviderRemoteUsageCache(
+        remoteCacheKey,
+        { result: null, error: state.providerDetail.remoteUsageError, fetchedAt: Date.now() },
+        { tool: expectedTool, providerKey: row.key },
+      );
+      flash(state.providerDetail.remoteUsageError, 'error');
+    } finally {
+      const stillCurrent = isCurrentProviderDetail(expectedKey, expectedTool);
+      state.providerRemoteUsageLoadingByKey[remoteCacheKey] = false;
+      if (stillCurrent) {
+        state.providerDetail.remoteUsageLoading = false;
+        renderProviderDetail({ force: true });
+      }
+      try { window.renderConnectionHub?.(); } catch (_) {}
+    }
+    return;
+  }
+  const savedPanelCredential = state.providerRemoteCredentialByKey?.[remoteCacheKey] || state.providerDetail.remoteCredential || {};
+  if (!row.hasCredential && !savedPanelCredential.exists) {
+    flash('当前 Provider 没有可用 API Key 或面板认证，无法查询远程余额', 'error');
+    return;
+  }
+  state.providerDetail.usageView = 'remote';
+  state.providerDetail.remoteUsageLoading = true;
+  state.providerDetail.remoteUsageError = '';
+  renderProviderDetail({ force: true });
+  const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
+  try {
+    const res = await api('/api/provider/remote-usage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: el('scopeSelect')?.value || 'global',
+        projectPath: el('projectPathInput')?.value?.trim() || '',
+        codexHome,
+        tool: 'codex',
+        providerKey: row.key,
+        days: getPdUsageRequestDays(),
+        timeoutMs: 9000,
+      }),
+      timeoutMs: 26000,
+    });
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    if (res?.ok && res.data) {
+      state.providerDetail.remoteUsageResult = res.data;
+      state.providerDetail.remoteUsageFetchedAt = Date.now();
+      await saveProviderRemoteUsageCache(
+        remoteCacheKey,
+        { result: res.data, error: '', fetchedAt: state.providerDetail.remoteUsageFetchedAt },
+        { tool: expectedTool, providerKey: row.key },
+      );
+      const status = String(res.data.status || '');
+      if (status === 'ok') flash('远程中转统计已同步', 'success');
+      else if (status === 'blocked') flash('中转面板存在 Cloudflare/bot 拦截，已标记不支持', 'warning');
+      else if (status === 'auth_error') flash('远程用量接口无权限，已保留本地统计', 'warning');
+      else flash('该渠道暂不支持远程余额/用量查询', 'info');
+    } else {
+      state.providerDetail.remoteUsageError = res?.error || '远程用量查询失败';
+      await saveProviderRemoteUsageCache(
+        remoteCacheKey,
+        { result: null, error: state.providerDetail.remoteUsageError, fetchedAt: Date.now() },
+        { tool: expectedTool, providerKey: row.key },
+      );
+      flash(state.providerDetail.remoteUsageError, 'error');
+    }
+  } catch (err) {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.remoteUsageError = err?.message || String(err);
+    await saveProviderRemoteUsageCache(
+      remoteCacheKey,
+      { result: null, error: state.providerDetail.remoteUsageError, fetchedAt: Date.now() },
+      { tool: expectedTool, providerKey: row.key },
+    );
+    flash(state.providerDetail.remoteUsageError, 'error');
+  } finally {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.remoteUsageLoading = false;
+    renderProviderDetail({ force: true });
+  }
+}
+
+const PROVIDER_ROUTER_CLIENT_KEY = 'easyai-router';
+const PROVIDER_ROUTER_CLIENT_PROVIDER_KEY = 'easyai-router';
+const PROVIDER_ROUTER_NO_PROXY = '127.0.0.1,localhost,::1';
+const PROVIDER_ROUTER_STRATEGY_LS = 'easyaiconfig_provider_router_strategy_v1';
+const PROVIDER_ROUTER_WEIGHTS_LS = 'easyaiconfig_provider_router_weights_v1';
+const PROVIDER_ROUTER_BALANCE_GUARD_LS = 'easyaiconfig_provider_router_balance_guard_v1';
+const PROVIDER_ROUTER_STRATEGIES = [
+  { value: 'auto', label: '智能自动', hint: '余额保护 + 权重轮询' },
+  { value: 'weighted', label: '权重轮询', hint: '按每行权重分摊请求' },
+  { value: 'balance', label: '余额优先', hint: '优先走余额更充足的 Provider' },
+  { value: 'round_robin', label: '均衡轮询', hint: '所有 Provider 平均轮转' },
+  { value: 'priority', label: '主线优先', hint: '主 Provider 优先，失败再切换' },
+];
+
+function readProviderRouterJsonPref(key, fallback = {}) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writeProviderRouterJsonPref(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value || {})); } catch (_) {}
+}
+
+function readProviderRouterBalanceGuardPref() {
+  const fallback = {
+    enabled: state.providerRouter.balanceGuardEnabled !== false,
+    minPercent: Number(state.providerRouter.balanceMinPercent ?? 5),
+    minAmount: Number(state.providerRouter.balanceMinAmount ?? 0),
+  };
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PROVIDER_ROUTER_BALANCE_GUARD_LS) || '');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback;
+    return {
+      enabled: parsed.enabled !== false,
+      minPercent: Number.isFinite(Number(parsed.minPercent)) ? Number(parsed.minPercent) : fallback.minPercent,
+      minAmount: Number.isFinite(Number(parsed.minAmount)) ? Number(parsed.minAmount) : fallback.minAmount,
+    };
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writeProviderRouterBalanceGuardPref() {
+  try {
+    localStorage.setItem(PROVIDER_ROUTER_BALANCE_GUARD_LS, JSON.stringify({
+      enabled: state.providerRouter.balanceGuardEnabled !== false,
+      minPercent: Number(state.providerRouter.balanceMinPercent ?? 5),
+      minAmount: Number(state.providerRouter.balanceMinAmount ?? 0),
+    }));
+  } catch (_) {}
+}
+
+function normalizeProviderRouterTool(tool = '') {
+  const value = String(tool || '').trim().toLowerCase();
+  return value === 'claude' || value === 'claude-code' || value === 'claudecode' ? 'claudecode' : 'codex';
+}
+
+function providerRouterToolLabel(tool = '') {
+  return normalizeProviderRouterTool(tool) === 'claudecode' ? 'Claude Code' : 'Codex';
+}
+
+function providerRouterRouteKey(tool, key) {
+  return `${normalizeProviderRouterTool(tool)}:${String(key || '').trim()}`;
+}
+
+function isProviderRouterLoopbackEndpoint(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  if (
+    lower.startsWith('http://127.0.0.1:18791')
+    || lower.startsWith('http://localhost:18791')
+    || lower.startsWith('http://[::1]:18791')
+    || lower.startsWith('http://::1:18791')
+  ) {
+    return true;
+  }
+  try {
+    const parsed = new URL(raw.includes('://') ? raw : `http://${raw}`);
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+    return port === '18791' && (host === '127.0.0.1' || host === 'localhost' || host === '::1');
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackHttpEndpoint(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw.includes('://') ? raw : `http://${raw}`);
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return host === 'localhost' || host === '::1' || host === '127.0.0.1' || /^127\./.test(host);
+  } catch {
+    return false;
+  }
+}
+
+function isProviderRouterSelfRow(row, tool = getProviderRouterActiveTool()) {
+  if (!row) return false;
+  const key = String(row.key || '').trim().toLowerCase();
+  const routeKey = providerRouterRouteKey(tool, row.key).toLowerCase();
+  const name = String(row.name || '').trim().toLowerCase();
+  const baseUrl = String(row.baseUrl || row.ref?.baseUrl || '').trim();
+  return key === PROVIDER_ROUTER_CLIENT_PROVIDER_KEY
+    || routeKey === `codex:${PROVIDER_ROUTER_CLIENT_PROVIDER_KEY}`
+    || routeKey === `claudecode:${PROVIDER_ROUTER_CLIENT_PROVIDER_KEY}`
+    || name === 'easyaiconfig router'
+    || isProviderRouterLoopbackEndpoint(baseUrl);
+}
+
+function isCodexProviderRouterProvider(provider = null) {
+  const key = String(provider?.key || '').trim().toLowerCase();
+  const name = String(provider?.name || '').trim().toLowerCase();
+  const baseUrl = String(provider?.baseUrl || provider?.base_url || '').trim();
+  return key === PROVIDER_ROUTER_CLIENT_PROVIDER_KEY
+    || name === 'easyaiconfig router'
+    || isProviderRouterLoopbackEndpoint(baseUrl);
+}
+
+function getActiveCodexProviderForRouterCheck() {
+  const providers = Array.isArray(state.current?.providers) ? state.current.providers : [];
+  return state.current?.activeProvider || providers.find((item) => item.isActive) || null;
+}
+
+function rememberCodexProviderBeforeRouter() {
+  const active = getActiveCodexProviderForRouterCheck();
+  if (!active?.key || isCodexProviderRouterProvider(active)) return;
+  state.providerRouter.codexPreviousProviderKey = active.key;
+  localStorage.setItem('easyaiconfig_provider_router_prev_codex_provider', active.key);
+}
+
+function getRememberedCodexProviderBeforeRouter() {
+  const key = String(state.providerRouter.codexPreviousProviderKey || localStorage.getItem('easyaiconfig_provider_router_prev_codex_provider') || '').trim();
+  if (!key) return null;
+  const providers = Array.isArray(state.current?.providers) ? state.current.providers : [];
+  const provider = providers.find((item) => item.key === key) || null;
+  if (!provider || isCodexProviderRouterProvider(provider)) return null;
+  return provider;
+}
+
+async function restoreCodexProviderBeforeRouter() {
+  const provider = getRememberedCodexProviderBeforeRouter();
+  if (!provider?.key) {
+    return { ok: false, error: '没有找到可恢复的上一个 Codex Provider' };
+  }
+  const saved = await api('/api/config/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      scope: el('scopeSelect')?.value || 'global',
+      projectPath: el('projectPathInput')?.value?.trim() || '',
+      codexHome: el('codexHomeInput')?.value?.trim() || state.current?.codexHome || '',
+      providerKey: provider.key,
+      providerLabel: String(provider.name || provider.key || '').trim(),
+      envKey: String(provider.envKey || inferEnvKey(provider.key)).trim(),
+      baseUrl: normalizeBaseUrl(provider.baseUrl || ''),
+      apiKey: '',
+      model: el('modelSelect')?.value?.trim() || state.current?.summary?.model || '',
+      activate: true,
+    }),
+  });
+  if (!saved.ok) return saved;
+  await loadState({ preserveForm: true });
+  if (typeof populateConfigEditor === 'function') populateConfigEditor();
+  renderCurrentConfig();
+  return { ok: true, provider };
+}
+
+function getProviderRouterActiveTool() {
+  const tool = normalizeProviderRouterTool(state.providerRouter.activeTool || 'codex');
+  state.providerRouter.activeTool = tool;
+  return tool;
+}
+
+function getProviderRouterRows(tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  const hubRows = typeof window.__chBuildRows === 'function' ? window.__chBuildRows(normalizedTool) : [];
+  const fallbackRows = normalizedTool === 'codex' && Array.isArray(state.current?.providers)
+    ? state.current.providers.map((provider) => ({
+      key: provider.key || '',
+      name: provider.name || provider.key || '',
+      baseUrl: provider.baseUrl || '',
+      model: provider.model || state.current?.summary?.model || '',
+      mode: 'apikey',
+      kind: 'codex-apikey',
+      isActive: provider.key && provider.key === state.current?.activeProvider?.key,
+      hasCredential: Boolean(provider.hasApiKey || provider.hasCredential),
+      historyOnly: Boolean(provider.historyOnly),
+      health: provider.health || null,
+      tool: 'codex',
+      ref: provider,
+    }))
+    : [];
+  const rows = hubRows.length ? hubRows : fallbackRows;
+  const seen = new Set();
+  const candidates = [];
+  for (const row of rows) {
+    if (!row || row.mode !== 'apikey' || !row.hasCredential || !row.key || row.historyOnly) continue;
+    if (isProviderRouterSelfRow(row, normalizedTool)) continue;
+    const routeKey = providerRouterRouteKey(normalizedTool, row.key);
+    if (seen.has(routeKey)) continue;
+    seen.add(routeKey);
+    const ref = row.ref && typeof row.ref === 'object' ? row.ref : {};
+    const hasPlainClaudeSecret = normalizedTool !== 'claudecode'
+      || Boolean(String(ref.apiKey || '').trim() || String(ref.authToken || '').trim());
+    candidates.push({
+      ...row,
+      tool: normalizedTool,
+      routeKey,
+      canRoute: normalizedTool === 'codex' || hasPlainClaudeSecret,
+      apiKey: String(ref.apiKey || '').trim(),
+      authToken: String(ref.authToken || '').trim(),
+    });
+  }
+  candidates.sort((a, b) => {
+    if (a.canRoute !== b.canRoute) return a.canRoute ? -1 : 1;
+    if (a.isActive && !b.isActive) return -1;
+    if (!a.isActive && b.isActive) return 1;
+    return String(a.name || a.key).localeCompare(String(b.name || b.key), 'zh-Hans-CN');
+  });
+  return candidates;
+}
+
+function getProviderRouterSelectedKeySet(candidates = getProviderRouterRows(), tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  const validKeys = new Set(candidates.filter((item) => item.canRoute).map((item) => item.routeKey));
+  const byTool = state.providerRouter.selectedProviderKeysByTool || {};
+  const legacy = normalizedTool === 'codex' && Array.isArray(state.providerRouter.selectedProviderKeys)
+    ? state.providerRouter.selectedProviderKeys.map((key) => key.includes(':') ? key : providerRouterRouteKey('codex', key))
+    : [];
+  const savedRaw = Array.isArray(byTool[normalizedTool]) ? byTool[normalizedTool] : legacy;
+  const saved = savedRaw
+    .map((key) => String(key || '').trim())
+    .filter((key) => validKeys.has(key));
+  return new Set(saved.length ? saved : [...validKeys]);
+}
+
+function setProviderRouterSelectedKeys(keySet, candidates = getProviderRouterRows(), tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  const validKeys = new Set(candidates.filter((item) => item.canRoute).map((item) => item.routeKey));
+  if (!state.providerRouter.selectedProviderKeysByTool || typeof state.providerRouter.selectedProviderKeysByTool !== 'object') {
+    state.providerRouter.selectedProviderKeysByTool = {};
+  }
+  state.providerRouter.selectedProviderKeysByTool[normalizedTool] = [...keySet].filter((key) => validKeys.has(key));
+  if (normalizedTool === 'codex') {
+    state.providerRouter.selectedProviderKeys = state.providerRouter.selectedProviderKeysByTool[normalizedTool].map((key) => key.replace(/^codex:/, ''));
+  }
+  const selected = getProviderRouterSelectedKeySet(candidates, normalizedTool);
+  const primaryKey = getProviderRouterPrimaryKey(normalizedTool);
+  if (!selected.has(primaryKey)) {
+    const nextPrimary = candidates.find((item) => item.canRoute && selected.has(item.routeKey)) || candidates.find((item) => item.canRoute) || null;
+    setProviderRouterPrimaryKey(nextPrimary?.routeKey || '', normalizedTool);
+  }
+}
+
+function getProviderRouterPrimaryKey(tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  const byTool = state.providerRouter.primaryProviderKeysByTool || {};
+  const legacy = normalizedTool === 'codex' && state.providerRouter.primaryProviderKey
+    ? (String(state.providerRouter.primaryProviderKey).includes(':') ? state.providerRouter.primaryProviderKey : providerRouterRouteKey('codex', state.providerRouter.primaryProviderKey))
+    : '';
+  return String(byTool[normalizedTool] || legacy || '').trim();
+}
+
+function setProviderRouterPrimaryKey(routeKey, tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  if (!state.providerRouter.primaryProviderKeysByTool || typeof state.providerRouter.primaryProviderKeysByTool !== 'object') {
+    state.providerRouter.primaryProviderKeysByTool = {};
+  }
+  state.providerRouter.primaryProviderKeysByTool[normalizedTool] = String(routeKey || '').trim();
+  if (normalizedTool === 'codex') {
+    state.providerRouter.primaryProviderKey = String(routeKey || '').replace(/^codex:/, '');
+  }
+}
+
+function getProviderRouterPrimaryRow(candidates = getProviderRouterRows(), tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  const selected = getProviderRouterSelectedKeySet(candidates, normalizedTool);
+  const primaryKey = getProviderRouterPrimaryKey(normalizedTool);
+  const current = candidates.find((item) => item.routeKey === primaryKey && item.canRoute && selected.has(item.routeKey));
+  const active = candidates.find((item) => item.isActive && item.canRoute && selected.has(item.routeKey));
+  const first = candidates.find((item) => item.canRoute && selected.has(item.routeKey));
+  const primary = current || active || first || candidates.find((item) => item.canRoute) || null;
+  setProviderRouterPrimaryKey(primary?.routeKey || '', normalizedTool);
+  return primary;
+}
+
+function normalizeProviderRouterStrategy(value = '') {
+  const clean = String(value || '').trim().toLowerCase().replace(/-/g, '_');
+  return PROVIDER_ROUTER_STRATEGIES.some((item) => item.value === clean) ? clean : 'auto';
+}
+
+function getProviderRouterStrategy(tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  if (!state.providerRouter.routeStrategyByTool || typeof state.providerRouter.routeStrategyByTool !== 'object') {
+    state.providerRouter.routeStrategyByTool = {};
+  }
+  if (!state.providerRouter.routeStrategyByTool[normalizedTool]) {
+    const saved = readProviderRouterJsonPref(PROVIDER_ROUTER_STRATEGY_LS, {});
+    state.providerRouter.routeStrategyByTool = { ...saved, ...state.providerRouter.routeStrategyByTool };
+  }
+  const strategy = normalizeProviderRouterStrategy(state.providerRouter.routeStrategyByTool[normalizedTool] || 'auto');
+  state.providerRouter.routeStrategyByTool[normalizedTool] = strategy;
+  return strategy;
+}
+
+function setProviderRouterStrategy(strategy, tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  if (!state.providerRouter.routeStrategyByTool || typeof state.providerRouter.routeStrategyByTool !== 'object') {
+    state.providerRouter.routeStrategyByTool = {};
+  }
+  state.providerRouter.routeStrategyByTool[normalizedTool] = normalizeProviderRouterStrategy(strategy);
+  writeProviderRouterJsonPref(PROVIDER_ROUTER_STRATEGY_LS, state.providerRouter.routeStrategyByTool);
+}
+
+function getProviderRouterWeights(tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  if (!state.providerRouter.providerWeightsByTool || typeof state.providerRouter.providerWeightsByTool !== 'object') {
+    state.providerRouter.providerWeightsByTool = {};
+  }
+  if (!state.providerRouter.providerWeightsByTool[normalizedTool]) {
+    const saved = readProviderRouterJsonPref(PROVIDER_ROUTER_WEIGHTS_LS, {});
+    state.providerRouter.providerWeightsByTool = { ...saved, ...state.providerRouter.providerWeightsByTool };
+  }
+  if (!state.providerRouter.providerWeightsByTool[normalizedTool] || typeof state.providerRouter.providerWeightsByTool[normalizedTool] !== 'object') {
+    state.providerRouter.providerWeightsByTool[normalizedTool] = {};
+  }
+  return state.providerRouter.providerWeightsByTool[normalizedTool];
+}
+
+function normalizeProviderRouterWeight(value) {
+  const num = Math.round(Number(value));
+  if (!Number.isFinite(num)) return 1;
+  return Math.max(1, Math.min(100, num));
+}
+
+function getProviderRouterWeight(routeKey, tool = getProviderRouterActiveTool()) {
+  const weights = getProviderRouterWeights(tool);
+  return normalizeProviderRouterWeight(weights[String(routeKey || '').trim()] ?? 1);
+}
+
+function setProviderRouterWeight(routeKey, value, tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  const weights = getProviderRouterWeights(normalizedTool);
+  weights[String(routeKey || '').trim()] = normalizeProviderRouterWeight(value);
+  state.providerRouter.providerWeightsByTool[normalizedTool] = weights;
+  writeProviderRouterJsonPref(PROVIDER_ROUTER_WEIGHTS_LS, state.providerRouter.providerWeightsByTool);
+}
+
+function ensureProviderRouterBalanceGuardState() {
+  if (state.providerRouter.balanceGuardHydrated) return;
+  const pref = readProviderRouterBalanceGuardPref();
+  state.providerRouter.balanceGuardEnabled = pref.enabled !== false;
+  state.providerRouter.balanceMinPercent = Math.max(0, Math.min(100, Number(pref.minPercent) || 0));
+  state.providerRouter.balanceMinAmount = Math.max(0, Number(pref.minAmount) || 0);
+  state.providerRouter.balanceGuardHydrated = true;
+}
+
+function providerRouterFiniteNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function providerRouterRemoteCacheKey(row) {
+  return `${normalizeProviderRouterTool(row?.tool || 'codex')}:${String(row?.key || '').trim()}`;
+}
+
+function providerRouterPercentFromPair(remaining, total) {
+  const remainNum = providerRouterFiniteNumber(remaining);
+  const totalNum = providerRouterFiniteNumber(total);
+  if (remainNum == null || totalNum == null || totalNum <= 0) return null;
+  return (remainNum / totalNum) * 100;
+}
+
+function formatProviderRouterPercent(value) {
+  const num = providerRouterFiniteNumber(value);
+  if (num == null) return '--%';
+  const clamped = Math.max(0, Math.min(100, num));
+  return `${clamped % 1 === 0 ? clamped.toFixed(0) : clamped.toFixed(1)}%`;
+}
+
+function formatProviderRouterTokens(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num) || num <= 0) return '0';
+  if (typeof formatTokenCount === 'function') return formatTokenCount(num);
+  if (num >= 1000000) return `${(num / 1000000).toFixed(num >= 10000000 ? 1 : 2)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(num >= 10000 ? 1 : 2)}k`;
+  return String(Math.round(num));
+}
+
+function getProviderRouterLogUsageParts(item = {}) {
+  const input = Number(item.inputTokens || 0) || 0;
+  const cached = Number(item.cachedInputTokens || 0) || 0;
+  const output = Number(item.outputTokens || 0) || 0;
+  const total = Number(item.totalTokens || 0) || 0;
+  const parts = [];
+  if (input) parts.push(`in ${formatProviderRouterTokens(input)}`);
+  if (cached) parts.push(`cache ${formatProviderRouterTokens(cached)}`);
+  if (output) parts.push(`out ${formatProviderRouterTokens(output)}`);
+  if (!parts.length && total) parts.push(`tok ${formatProviderRouterTokens(total)}`);
+  return parts;
+}
+
+function formatProviderRouterTraffic(item = {}) {
+  const requestBytes = Number(item.requestBytes || 0) || 0;
+  const responseBytes = Number(item.responseBytes || 0) || 0;
+  if (!requestBytes && !responseBytes) return '';
+  return `${formatBytes(requestBytes)} -> ${formatBytes(responseBytes)}`;
+}
+
+function getProviderRouterBalanceMeta(row) {
+  const cacheKey = providerRouterRemoteCacheKey(row);
+  const cached = state.providerRemoteUsageByKey?.[cacheKey] || null;
+  const result = cached?.result && typeof cached.result === 'object' ? cached.result : null;
+  const fetchedAt = Number(cached?.fetchedAt || 0) || 0;
+  const status = String(result?.status || (cached?.error ? 'error' : '')).toLowerCase();
+  if (status === 'ok') {
+    const balance = result.balance || {};
+    const unit = balance.unit || balance.currency || 'raw';
+    const remaining = providerRouterFiniteNumber(balance.remaining);
+    const total = providerRouterFiniteNumber(balance.total);
+    const percent = providerRouterFiniteNumber(balance.percent ?? balance.remainingPercent) ?? providerRouterPercentFromPair(remaining, total);
+    if (remaining != null || percent != null) {
+      return {
+        known: true,
+        status: 'ok',
+        remaining,
+        total,
+        percent,
+        unit,
+        fetchedAt,
+        cls: percent != null && percent <= 5 ? 'is-low' : 'is-ok',
+        valueLabel: remaining == null
+          ? formatProviderRouterPercent(percent)
+          : percent == null
+            ? formatRemoteUsageNumber(remaining, unit)
+            : `${formatRemoteUsageNumber(remaining, unit)} · ${formatProviderRouterPercent(percent)}`,
+        title: result.message || '远程余额已同步，网关启动时会带入这份缓存。',
+      };
+    }
+    return {
+      known: true,
+      status: 'ok',
+      remaining: null,
+      total: null,
+      percent: null,
+      unit,
+      fetchedAt,
+      cls: 'is-ok',
+      valueLabel: '已同步',
+      title: result.message || '远程接口成功，但没有返回可量化余额。',
+    };
+  }
+  if (status === 'blocked') return { known: false, status, remaining: null, total: null, percent: null, unit: '', fetchedAt, cls: 'is-warn', valueLabel: '被拦截', title: result?.message || '该面板有 Cloudflare/bot 拦截，网关不会按 0 处理。' };
+  if (status === 'auth_error') return { known: false, status, remaining: null, total: null, percent: null, unit: '', fetchedAt, cls: 'is-warn', valueLabel: '无权限', title: result?.message || '远程用量接口没有权限，网关不会按 0 处理。' };
+  if (status === 'unsupported') return { known: false, status, remaining: null, total: null, percent: null, unit: '', fetchedAt, cls: 'is-muted', valueLabel: '不支持', title: result?.message || '该 Provider 暂无远程余额缓存。' };
+  return { known: false, status: status || 'unknown', remaining: null, total: null, percent: null, unit: '', fetchedAt, cls: 'is-muted', valueLabel: '未知', title: '没有远程余额缓存；网关会允许路由，不会把未知当成 0。' };
+}
+
+function getProviderRouterSelectedRows(candidates = getProviderRouterRows(), tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  const selected = getProviderRouterSelectedKeySet(candidates, normalizedTool);
+  return candidates.filter((item) => item.canRoute && selected.has(item.routeKey));
+}
+
+function getProviderRouterOrigin(status = state.providerRouter.status || {}) {
+  const explicit = String(status.originUrl || status.anthropicBaseUrl || '').trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+  const base = String(status.openaiBaseUrl || status.baseUrl || '').trim();
+  if (base) return base.replace(/\/v1\/?$/i, '').replace(/\/+$/, '');
+  const port = Number(status.port || 18791) || 18791;
+  return `http://127.0.0.1:${port}`;
+}
+
+function getProviderRouterEndpoint(tool = getProviderRouterActiveTool(), status = state.providerRouter.status || {}) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  const origin = getProviderRouterOrigin(status);
+  if (normalizedTool === 'claudecode') {
+    return String(status.anthropicBaseUrl || origin).replace(/\/+$/, '');
+  }
+  return String(status.openaiBaseUrl || status.baseUrl || `${origin}/v1`).replace(/\/+$/, '');
+}
+
+function getProviderRouterCopyText(kind = 'base') {
+  const activeTool = getProviderRouterActiveTool();
+  const codexBase = getProviderRouterEndpoint('codex');
+  const claudeBase = getProviderRouterEndpoint('claudecode');
+  const healthUrl = `${getProviderRouterOrigin()}/_easyai/health`;
+  if (kind === 'api-key') return PROVIDER_ROUTER_CLIENT_KEY;
+  if (kind === 'codex-env') {
+    return `export NO_PROXY="${PROVIDER_ROUTER_NO_PROXY}"\nexport no_proxy="${PROVIDER_ROUTER_NO_PROXY}"\nexport OPENAI_BASE_URL="${codexBase}"\nexport OPENAI_API_KEY="${PROVIDER_ROUTER_CLIENT_KEY}"`;
+  }
+  if (kind === 'codex-toml') {
+    return `model_provider = "${PROVIDER_ROUTER_CLIENT_PROVIDER_KEY}"\n\n[model_providers.${PROVIDER_ROUTER_CLIENT_PROVIDER_KEY}]\nname = "EasyAIConfig Router"\nbase_url = "${codexBase}"\nenv_key = "EASYAI_ROUTER_API_KEY"\nwire_api = "responses"\n\n# ~/.codex/.env\nEASYAI_ROUTER_API_KEY=${PROVIDER_ROUTER_CLIENT_KEY}\nNO_PROXY=${PROVIDER_ROUTER_NO_PROXY}\nno_proxy=${PROVIDER_ROUTER_NO_PROXY}`;
+  }
+  if (kind === 'claude-env') {
+    return `export NO_PROXY="${PROVIDER_ROUTER_NO_PROXY}"\nexport no_proxy="${PROVIDER_ROUTER_NO_PROXY}"\nexport ANTHROPIC_BASE_URL="${claudeBase}"\nexport ANTHROPIC_API_KEY="${PROVIDER_ROUTER_CLIENT_KEY}"`;
+  }
+  if (kind === 'claude-json') {
+    return JSON.stringify({
+      env: {
+        NO_PROXY: PROVIDER_ROUTER_NO_PROXY,
+        no_proxy: PROVIDER_ROUTER_NO_PROXY,
+        ANTHROPIC_BASE_URL: claudeBase,
+        ANTHROPIC_API_KEY: PROVIDER_ROUTER_CLIENT_KEY,
+      },
+      easyaiconfig: {
+        activeProvider: PROVIDER_ROUTER_CLIENT_PROVIDER_KEY,
+        providers: {
+          [PROVIDER_ROUTER_CLIENT_PROVIDER_KEY]: {
+            name: 'EasyAIConfig Router',
+            baseUrl: claudeBase,
+            apiKey: PROVIDER_ROUTER_CLIENT_KEY,
+          },
+        },
+      },
+    }, null, 2);
+  }
+  if (kind === 'router-logs') {
+    const status = state.providerRouter.status || {};
+    const stats = status.stats || {};
+    const logs = Array.isArray(stats.logs) ? stats.logs : [];
+    if (!logs.length) return 'EasyAIConfig Router: no logs';
+    return logs.map((item) => {
+      const at = item.at ? formatRelativeTime(item.at) : '-';
+      const provider = item.providerKey || '-';
+      const statusText = item.status == null ? 'ERR' : String(item.status);
+      const latency = item.latencyMs == null ? '-' : `${item.latencyMs}ms`;
+      const traffic = formatProviderRouterTraffic(item);
+      const usage = getProviderRouterLogUsageParts(item).join('/');
+      const retry = item.retry ? ' retry' : '';
+      const error = item.error ? ` ${item.error}` : '';
+      return `[${at}] ${item.method || '-'} ${item.target || '-'} provider=${provider} status=${statusText} latency=${latency}${traffic ? ` traffic=${traffic}` : ''}${usage ? ` tokens=${usage}` : ''}${retry}${error}`;
+    }).join('\n');
+  }
+  if (kind === 'curl-health') return `curl -fsS --max-time 5 ${healthUrl}`;
+  if (kind === 'codex-base') return codexBase;
+  if (kind === 'claude-base') return claudeBase;
+  return getProviderRouterEndpoint(activeTool);
+}
+
+async function fetchProviderRouterStatus(force = false) {
+  if (state.providerRouter.status && !force) {
+    renderProviderRouterPage();
+    return;
+  }
+  try {
+    const res = await api('/api/provider-router/status');
+    if (res?.ok) {
+      state.providerRouter.status = res.data || null;
+      state.providerRouter.error = '';
+    } else if (force) {
+      state.providerRouter.error = res?.error || '读取路由状态失败';
+    }
+  } catch (err) {
+    if (force) state.providerRouter.error = err?.message || String(err);
+  } finally {
+    renderProviderRouterPage();
+  }
+}
+
+function getProviderRouterProbeModel(tool = getProviderRouterActiveTool()) {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  if (normalizedTool === 'claudecode') {
+    return sanitizeClaudeModelValue(state.claudeCodeState?.model || state.claudeCodeState?.settings?.model || '') || 'claude-sonnet-4-20250514';
+  }
+  return el('modelSelect')?.value?.trim() || state.current?.summary?.model || 'gpt-5.5';
+}
+
+async function probeProviderRouterProxy(options = {}) {
+  const status = state.providerRouter.status || {};
+  if (!status.running || state.providerRouter.probeLoading) return status;
+  state.providerRouter.probeLoading = true;
+  if (!options.silent) state.providerRouter.error = '';
+  renderProviderRouterPage();
+  try {
+    const tool = normalizeProviderRouterTool(options.tool || status.tool || getProviderRouterActiveTool());
+    const res = await api('/api/provider-router/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool,
+        model: getProviderRouterProbeModel(tool),
+        timeoutMs: options.timeoutMs || 45000,
+      }),
+      timeoutMs: (options.timeoutMs || 45000) + 5000,
+    });
+    if (res?.ok && res.data) {
+      state.providerRouter.status = res.data;
+      const probe = res.data.probe || {};
+      if (!options.silent) {
+        if (res.data.proxyReady || probe.ok) flash('网关反代探测通过', 'success');
+        else flash(probe.error || '网关反代探测失败', 'warning');
+      }
+      return res.data;
+    }
+    const message = res?.error || '网关反代探测失败';
+    state.providerRouter.error = message;
+    if (!options.silent) flash(message, 'error');
+    return state.providerRouter.status || null;
+  } catch (err) {
+    const message = err?.message || String(err);
+    state.providerRouter.error = message;
+    if (!options.silent) flash(message, 'error');
+    return state.providerRouter.status || null;
+  } finally {
+    state.providerRouter.probeLoading = false;
+    renderProviderRouterPage();
+  }
+}
+
+async function actionProviderRouterStart() {
+  const tool = getProviderRouterActiveTool();
+  const candidates = getProviderRouterRows(tool);
+  const primary = getProviderRouterPrimaryRow(candidates, tool);
+  const selectedRows = getProviderRouterSelectedRows(candidates, tool);
+  if (!primary || !selectedRows.length) {
+    const message = tool === 'claudecode'
+      ? '没有可直接路由的 Claude Code API Key Provider；请在 Claude Provider 里保存明文 API Key 或 Auth Token'
+      : '没有可用于路由的 Codex API Key Provider';
+    flash(message, 'error');
+    return;
+  }
+  state.providerRouter.loading = true;
+  state.providerRouter.error = '';
+  renderProviderRouterPage();
+  const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
+  ensureProviderRouterBalanceGuardState();
+  const routeStrategy = getProviderRouterStrategy(tool);
+  try {
+    const res = await api('/api/provider-router/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: el('scopeSelect')?.value || 'global',
+        projectPath: el('projectPathInput')?.value?.trim() || '',
+        codexHome,
+        tool,
+        primaryProviderKey: primary.routeKey,
+        routeStrategy,
+        balanceGuardEnabled: state.providerRouter.balanceGuardEnabled !== false,
+        balanceMinPercent: Math.max(0, Math.min(100, Number(state.providerRouter.balanceMinPercent) || 0)),
+        balanceMinAmount: Math.max(0, Number(state.providerRouter.balanceMinAmount) || 0),
+        providerKeys: selectedRows.map((item) => item.key),
+        providerTargets: selectedRows.map((item) => {
+          const balance = getProviderRouterBalanceMeta(item);
+          return {
+            tool: item.tool,
+            providerKey: item.key,
+            routeKey: item.routeKey,
+            name: item.name || item.key,
+            baseUrl: item.baseUrl || '',
+            apiKey: item.tool === 'claudecode' ? (item.apiKey || '') : '',
+            authToken: item.tool === 'claudecode' ? (item.authToken || '') : '',
+            weight: getProviderRouterWeight(item.routeKey, tool),
+            balanceRemaining: balance.remaining,
+            balanceTotal: balance.total,
+            balancePercent: balance.percent,
+            balanceUnit: balance.unit || '',
+            balanceStatus: balance.status || 'unknown',
+            balanceFetchedAt: balance.fetchedAt || 0,
+          };
+        }),
+        port: 18791,
+        roundRobin: routeStrategy !== 'priority',
+        timeoutMs: 180000,
+      }),
+      timeoutMs: 20000,
+    });
+    if (res?.ok && res.data) {
+      state.providerRouter.status = res.data;
+      const label = providerRouterToolLabel(tool);
+      const noProxyHint = res.data.localRouterNoProxyAdded ? '；已写入 NO_PROXY，当前已打开的 Codex 进程需要重启后生效' : '';
+      flash(res.data.portFallback ? `${label} 网关已启动，默认端口被占用，已使用自动端口${noProxyHint}` : `${label} 本地网关已启动${noProxyHint}`, 'success');
+    } else {
+      state.providerRouter.error = res?.error || '启动本地路由失败';
+      flash(state.providerRouter.error, 'error');
+    }
+  } catch (err) {
+    state.providerRouter.error = err?.message || String(err);
+    flash(state.providerRouter.error, 'error');
+  } finally {
+    state.providerRouter.loading = false;
+    renderProviderRouterPage();
+  }
+}
+
+async function actionProviderRouterStop() {
+  let restoreCodexAfterStop = false;
+  const activeCodexProvider = getActiveCodexProviderForRouterCheck();
+  if (isCodexProviderRouterProvider(activeCodexProvider)) {
+    const previousProvider = getRememberedCodexProviderBeforeRouter();
+    if (previousProvider) {
+      restoreCodexAfterStop = await openUpdateDialog({
+        eyebrow: 'Router',
+        title: '停止网关前恢复 Codex Provider？',
+        body: `
+          <p>当前 Codex 仍指向本地网关。仅停止网关后，Codex 会继续请求本机端口并失败。</p>
+          <p>可以先恢复到上一个 Provider「${esc(previousProvider.name || previousProvider.key)}」，再停止网关。</p>
+        `,
+        confirmText: '恢复并停止',
+        cancelText: '仅停止',
+      });
+    } else {
+      const ok = await openUpdateDialog({
+        eyebrow: 'Router',
+        title: 'Codex 仍指向本地网关',
+        body: '<p>当前 Codex active provider 是本地网关。停止后如果不手动切换 Provider，Codex 请求会失败。</p>',
+        confirmText: '继续停止',
+        cancelText: '取消',
+      });
+      if (!ok) return;
+    }
+  }
+  state.providerRouter.loading = true;
+  state.providerRouter.error = '';
+  renderProviderRouterPage();
+  try {
+    if (restoreCodexAfterStop) {
+      const restored = await restoreCodexProviderBeforeRouter();
+      if (!restored.ok) {
+        flash(restored.error || '恢复 Codex Provider 失败，已取消停止网关', 'error');
+        return;
+      }
+    }
+    const res = await api('/api/provider-router/stop', { method: 'POST', timeoutMs: 10000 });
+    if (res?.ok) {
+      state.providerRouter.status = res.data || { running: false };
+      flash(restoreCodexAfterStop ? '已恢复 Codex Provider，并停止本地自动路由' : '本地自动路由已停止', 'success');
+    } else {
+      state.providerRouter.error = res?.error || '停止本地路由失败';
+      flash(state.providerRouter.error, 'error');
+    }
+  } catch (err) {
+    state.providerRouter.error = err?.message || String(err);
+    flash(state.providerRouter.error, 'error');
+  } finally {
+    state.providerRouter.loading = false;
+    renderProviderRouterPage();
+  }
+}
+
+async function actionProviderRouterCopy(kind = 'base') {
+  const text = getProviderRouterCopyText(kind);
+  if (!text) return;
+  const labels = {
+    base: '当前 Base URL',
+    'codex-base': 'Codex Base URL',
+    'claude-base': 'Claude Code Base URL',
+    'api-key': '客户端 API Key',
+    'codex-env': 'Codex 环境变量',
+    'codex-toml': 'Codex 配置片段',
+    'claude-env': 'Claude Code 环境变量',
+    'claude-json': 'Claude Code settings 片段',
+    'router-logs': '网关日志',
+    'curl-health': '健康检查命令',
+  };
+  try {
+    if (typeof copyText === 'function') await copyText(text);
+    else await navigator.clipboard.writeText(text);
+    flash(`已复制${labels[kind] || '配置'}`, 'success');
+  } catch {
+    flash(text, 'info');
+  }
+}
+
+async function actionProviderRouterApplyClient(tool) {
+  const targetTool = normalizeProviderRouterTool(tool || getProviderRouterActiveTool());
+  const endpoint = getProviderRouterEndpoint(targetTool);
+  state.providerRouter.loading = true;
+  state.providerRouter.error = '';
+  renderProviderRouterPage();
+  try {
+    if (targetTool === 'claudecode') {
+      const currentSettings = cloneJson(state.claudeCodeState?.settings || {});
+      const settings = ensurePlainObject(currentSettings, {});
+      settings.env = ensurePlainObject(settings.env, {});
+      settings.easyaiconfig = ensurePlainObject(settings.easyaiconfig, {});
+      settings.easyaiconfig.providers = ensurePlainObject(settings.easyaiconfig.providers, {});
+      const model = sanitizeClaudeModelValue(state.claudeCodeState?.model || el('modelSelect')?.value || settings.model || '') || '';
+      if (model) settings.model = model;
+      settings.env.NO_PROXY = PROVIDER_ROUTER_NO_PROXY;
+      settings.env.no_proxy = PROVIDER_ROUTER_NO_PROXY;
+      settings.env.ANTHROPIC_BASE_URL = endpoint;
+      settings.env.ANTHROPIC_API_KEY = PROVIDER_ROUTER_CLIENT_KEY;
+      delete settings.env.ANTHROPIC_AUTH_TOKEN;
+      settings.easyaiconfig.providers[PROVIDER_ROUTER_CLIENT_PROVIDER_KEY] = {
+        ...(settings.easyaiconfig.providers[PROVIDER_ROUTER_CLIENT_PROVIDER_KEY] || {}),
+        name: 'EasyAIConfig Router',
+        baseUrl: endpoint,
+        apiKey: PROVIDER_ROUTER_CLIENT_KEY,
+        authToken: '',
+        model,
+        updatedAt: new Date().toISOString(),
+      };
+      settings.easyaiconfig.activeProvider = PROVIDER_ROUTER_CLIENT_PROVIDER_KEY;
+      const saved = await saveClaudeCodeSettingsJson(settings);
+      if (!saved.ok) throw new Error(saved.error || 'Claude Code 网关配置写入失败');
+      await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+      if (typeof populateConfigEditor === 'function') populateConfigEditor();
+      flashClaudeCodeSavedNeedsRestart(saved);
+      return;
+    }
+
+    const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
+    const model = el('modelSelect')?.value?.trim() || state.current?.summary?.model || 'gpt-5.5';
+    rememberCodexProviderBeforeRouter();
+    const saved = await api('/api/config/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: el('scopeSelect')?.value || 'global',
+        projectPath: el('projectPathInput')?.value?.trim() || '',
+        codexHome,
+        providerKey: PROVIDER_ROUTER_CLIENT_PROVIDER_KEY,
+        providerLabel: 'EasyAIConfig Router',
+        baseUrl: endpoint,
+        apiKey: PROVIDER_ROUTER_CLIENT_KEY,
+        model,
+        activate: true,
+      }),
+    });
+    if (!saved.ok) throw new Error(saved.error || 'Codex 网关配置写入失败');
+    await loadState({ preserveForm: true });
+    if (typeof populateConfigEditor === 'function') populateConfigEditor();
+    flashCodexSavedNeedsRestart(saved, 'Codex 网关 Provider 已写入');
+  } catch (err) {
+    const message = err?.message || String(err);
+    state.providerRouter.error = message;
+    flash(message, 'error');
+  } finally {
+    state.providerRouter.loading = false;
+    renderProviderRouterPage();
+  }
+}
+
+function ensureProviderRouterEvents() {
+  if (state.providerRouter.wired) return;
+  state.providerRouter.wired = true;
+  document.addEventListener('click', (e) => {
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    const routerTab = target.closest('[data-provider-router-tab]');
+    if (routerTab) {
+      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'pool').trim();
+      state.providerRouter.activeTab = ['pool', 'clients', 'stats'].includes(tab) ? tab : 'pool';
+      renderProviderRouterPage();
+      return;
+    }
+    const toolBtn = target.closest('[data-provider-router-tool]');
+    if (toolBtn) {
+      state.providerRouter.activeTool = normalizeProviderRouterTool(toolBtn.getAttribute('data-provider-router-tool') || 'codex');
+      renderProviderRouterPage();
+      return;
+    }
+    const primaryBtn = target.closest('[data-provider-router-primary]');
+    if (primaryBtn) {
+      const routeKey = primaryBtn.getAttribute('data-provider-router-primary') || '';
+      const tool = getProviderRouterActiveTool();
+      const candidates = getProviderRouterRows(tool);
+      const selected = getProviderRouterSelectedKeySet(candidates, tool);
+      if (!selected.has(routeKey)) {
+        selected.add(routeKey);
+        setProviderRouterSelectedKeys(selected, candidates);
+      }
+      setProviderRouterPrimaryKey(routeKey, tool);
+      renderProviderRouterPage();
+      return;
+    }
+    if (target.closest('[data-provider-router-start]')) { actionProviderRouterStart(); return; }
+    if (target.closest('[data-provider-router-stop]')) { actionProviderRouterStop(); return; }
+    if (target.closest('[data-provider-router-refresh]')) { fetchProviderRouterStatus(true); return; }
+    if (target.closest('[data-provider-router-probe]')) { probeProviderRouterProxy(); return; }
+    const copyBtn = target.closest('[data-provider-router-copy]');
+    if (copyBtn) {
+      actionProviderRouterCopy(copyBtn.getAttribute('data-provider-router-copy') || 'base');
+      return;
+    }
+    const applyBtn = target.closest('[data-provider-router-apply]');
+    if (applyBtn) {
+      actionProviderRouterApplyClient(applyBtn.getAttribute('data-provider-router-apply') || getProviderRouterActiveTool());
+      return;
+    }
+  });
+  document.addEventListener('change', (e) => {
+    const target = e.target;
+    if (target instanceof HTMLSelectElement && target.matches('[data-provider-router-strategy]')) {
+      setProviderRouterStrategy(target.value, getProviderRouterActiveTool());
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-balance-guard]')) {
+      ensureProviderRouterBalanceGuardState();
+      state.providerRouter.balanceGuardEnabled = target.checked;
+      writeProviderRouterBalanceGuardPref();
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-balance-min-percent]')) {
+      ensureProviderRouterBalanceGuardState();
+      state.providerRouter.balanceMinPercent = Math.max(0, Math.min(100, Number(target.value) || 0));
+      writeProviderRouterBalanceGuardPref();
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-balance-min-amount]')) {
+      ensureProviderRouterBalanceGuardState();
+      state.providerRouter.balanceMinAmount = Math.max(0, Number(target.value) || 0);
+      writeProviderRouterBalanceGuardPref();
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-weight]')) {
+      setProviderRouterWeight(target.getAttribute('data-provider-router-weight') || '', target.value, getProviderRouterActiveTool());
+      renderProviderRouterPage();
+      return;
+    }
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.matches('[data-provider-router-toggle]')) return;
+    const routeKey = target.getAttribute('data-provider-router-toggle') || '';
+    const tool = getProviderRouterActiveTool();
+    const candidates = getProviderRouterRows(tool);
+    const selected = getProviderRouterSelectedKeySet(candidates, tool);
+    if (target.checked) selected.add(routeKey);
+    else selected.delete(routeKey);
+    if (!selected.size) {
+      target.checked = true;
+      selected.add(routeKey);
+      flash('路由池至少要保留一个 Provider', 'warning');
+    }
+    setProviderRouterSelectedKeys(selected, candidates, tool);
+    renderProviderRouterPage();
+  });
+  document.addEventListener('input', (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.matches('[data-provider-router-weight]')) {
+      setProviderRouterWeight(target.getAttribute('data-provider-router-weight') || '', target.value, getProviderRouterActiveTool());
+      return;
+    }
+    if (target.matches('[data-provider-router-balance-min-percent]')) {
+      ensureProviderRouterBalanceGuardState();
+      state.providerRouter.balanceMinPercent = Math.max(0, Math.min(100, Number(target.value) || 0));
+      writeProviderRouterBalanceGuardPref();
+      return;
+    }
+    if (target.matches('[data-provider-router-balance-min-amount]')) {
+      ensureProviderRouterBalanceGuardState();
+      state.providerRouter.balanceMinAmount = Math.max(0, Number(target.value) || 0);
+      writeProviderRouterBalanceGuardPref();
+    }
+  });
+}
+
+function renderProviderRouterPage() {
+  const container = document.getElementById('providerRouterPage');
+  if (!container) return;
+  const esc = escapeHtml;
+  const status = state.providerRouter.status || {};
+  const running = Boolean(status.running);
+  const loading = Boolean(state.providerRouter.loading);
+  const error = state.providerRouter.error || '';
+  const activeTool = getProviderRouterActiveTool();
+  ensureProviderRouterBalanceGuardState();
+  const activeRouteStrategy = getProviderRouterStrategy(activeTool);
+  const activeStrategyMeta = PROVIDER_ROUTER_STRATEGIES.find((item) => item.value === activeRouteStrategy) || PROVIDER_ROUTER_STRATEGIES[0];
+  const balanceGuardEnabled = state.providerRouter.balanceGuardEnabled !== false;
+  const balanceMinPercent = Math.max(0, Math.min(100, Number(state.providerRouter.balanceMinPercent) || 0));
+  const balanceMinAmount = Math.max(0, Number(state.providerRouter.balanceMinAmount) || 0);
+  const toolLabel = providerRouterToolLabel(activeTool);
+  const tools = ['codex', 'claudecode'];
+  const toolCounts = Object.fromEntries(tools.map((tool) => {
+    const rows = getProviderRouterRows(tool);
+    return [tool, { total: rows.length, routable: rows.filter((item) => item.canRoute).length }];
+  }));
+  const candidates = getProviderRouterRows(activeTool);
+  const primary = getProviderRouterPrimaryRow(candidates, activeTool);
+  const selected = getProviderRouterSelectedKeySet(candidates, activeTool);
+  const selectedRows = getProviderRouterSelectedRows(candidates, activeTool);
+  const activeKeys = Array.isArray(status.providerKeys) ? status.providerKeys : [];
+  const stats = status.stats || {};
+  const providerStats = Array.isArray(stats.providers) ? stats.providers : [];
+  const routerLogs = Array.isArray(stats.logs) ? stats.logs : [];
+  const startedAt = status.startedAt ? formatRelativeTime(status.startedAt) : '';
+  const activeStatusTool = normalizeProviderRouterTool(status.tool || activeTool);
+  const runningDifferentTool = running && activeStatusTool !== activeTool;
+  const codexBaseUrl = getProviderRouterEndpoint('codex', status);
+  const claudeBaseUrl = getProviderRouterEndpoint('claudecode', status);
+  const currentBaseUrl = getProviderRouterEndpoint(activeTool, status);
+  const originUrl = getProviderRouterOrigin(status);
+  const providerNames = new Map([
+    ...getProviderRouterRows('codex'),
+    ...getProviderRouterRows('claudecode'),
+  ].flatMap((item) => [[item.routeKey, item.name || item.key], [item.key, item.name || item.key]]));
+  const strategyOptions = PROVIDER_ROUTER_STRATEGIES.map((item) => (
+    `<option value="${esc(item.value)}" ${item.value === activeRouteStrategy ? 'selected' : ''}>${esc(item.label)}</option>`
+  )).join('');
+  const candidateList = candidates.map((item, index) => {
+    const isPrimary = item.routeKey === primary?.routeKey;
+    const isSelected = selected.has(item.routeKey);
+    const isActive = activeKeys.includes(item.routeKey);
+    const balance = getProviderRouterBalanceMeta(item);
+    const balancePct = providerRouterFiniteNumber(balance.percent);
+    const balanceStyle = balancePct == null ? '' : ` style="--pd-router-balance-fill:${Math.max(0, Math.min(100, balancePct)).toFixed(1)}%"`;
+    const weight = getProviderRouterWeight(item.routeKey, activeTool);
+    const health = item.health || {};
+    const healthText = health.loading ? '检测中' : health.ok ? '可用' : health.checked ? '失败' : '未检测';
+    const authText = item.tool === 'claudecode'
+      ? (item.authToken ? 'Auth Token' : item.apiKey ? 'API Key' : '仅掩码')
+      : 'API Key';
+    const routeHint = item.canRoute
+      ? `${authText} · ${healthText}${item.model ? ` · ${item.model}` : ''}`
+      : '只能显示，运行时环境变量是掩码，无法注入网关';
+    return `
+      <div class="pd-router-provider-row ${isPrimary ? 'is-primary' : ''} ${isActive ? 'is-active' : ''} ${!item.canRoute ? 'is-disabled' : ''}">
+        <label class="provider-router-pool-toggle" title="${item.canRoute ? '加入本地路由负载池' : '该 Provider 没有可读取的明文密钥'}">
+          <input type="checkbox" data-provider-router-toggle="${esc(item.routeKey)}" ${isSelected ? 'checked' : ''} ${!item.canRoute || loading ? 'disabled' : ''} />
+          <span aria-hidden="true"></span>
+        </label>
+        <div class="pd-router-provider-main">
+          <strong>${esc(item.name || item.key)}</strong>
+          <em>${esc(item.baseUrl || item.key)}</em>
+        </div>
+        <div class="pd-router-provider-meta">
+          <code>${esc(item.key)}</code>
+          <em>${isPrimary ? '主 Provider' : index === 0 ? '当前优先' : '候选'} · ${esc(routeHint)}</em>
+        </div>
+        <label class="pd-router-weight" title="权重越高，请求命中比例越高。">
+          <span>权重</span>
+          <input type="number" min="1" max="100" step="1" value="${esc(weight)}" data-provider-router-weight="${esc(item.routeKey)}" ${!item.canRoute || loading ? 'disabled' : ''} />
+        </label>
+        <span class="pd-router-balance ${balance.cls}" title="${esc(balance.title || '')}"${balanceStyle}>
+          <span aria-hidden="true"><i></i></span>
+          <strong>${esc(balance.valueLabel)}</strong>
+        </span>
+        <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-primary="${esc(item.routeKey)}" ${isPrimary || !item.canRoute || loading ? 'disabled' : ''}>${isPrimary ? '主' : '设主'}</button>
+      </div>`;
+  }).join('');
+  const toolTabs = tools.map((tool) => {
+    const count = toolCounts[tool] || { total: 0, routable: 0 };
+    return `
+      <button type="button" class="pd-router-tool-tab ${activeTool === tool ? 'is-active' : ''}" data-provider-router-tool="${tool}">
+        <span>${esc(providerRouterToolLabel(tool))}</span>
+        <em>${esc(String(count.routable))}/${esc(String(count.total))}</em>
+      </button>`;
+  }).join('');
+  const probe = status.probe || {};
+  const probeLoading = Boolean(state.providerRouter.probeLoading);
+  const proxyReady = running;
+  const upstreamReady = running && Boolean(status.proxyReady || probe.ok);
+  const probeFailed = running && !upstreamReady && Boolean(probe.error);
+  const probeChecked = Boolean(probe.checkedAt || probe.status || probe.error);
+  const routerStateText = probeLoading
+      ? '运行中 · 探测中'
+      : probeFailed
+        ? '运行中 · 反代异常'
+        : running
+          ? '运行中 · 反代中'
+          : '未启动';
+  const probeStateText = upstreamReady
+    ? '已通过'
+    : probeLoading
+      ? '探测中'
+      : probeFailed
+        ? '异常'
+        : running
+          ? (probeChecked ? '未通过' : '未探测')
+          : '未启动';
+  const probeDetail = upstreamReady
+    ? (probe.latencyMs ? `${probe.latencyMs}ms` : '最近探测通过')
+    : probeLoading
+      ? '正在请求本机网关'
+      : probeFailed
+        ? String(probe.error || '探测失败')
+        : running
+          ? '点击测试反代'
+          : '启动后自动探测';
+  const statusToolLabel = running ? providerRouterToolLabel(activeStatusTool) : toolLabel;
+  const statusScopeLabel = running ? `${statusToolLabel} 网关` : '本地网关';
+  const runningText = running
+    ? `${statusToolLabel} 网关 ${routerStateText}`
+    : '网关未启动';
+  const selectedSummary = `${selectedRows.length} / ${candidates.filter((item) => item.canRoute).length}`;
+  const statusNote = runningDifferentTool
+    ? `当前运行的是 ${providerRouterToolLabel(activeStatusTool)} 网关，切换到 ${toolLabel} 会自动重启监听。`
+    : (startedAt ? `启动于 ${startedAt}` : '启动后会监听 127.0.0.1 本地端口');
+  const startActionText = loading
+    ? '处理中'
+    : runningDifferentTool
+      ? '切换并重启网关'
+      : running
+        ? '重启网关'
+        : '启动网关';
+  const activeTab = ['pool', 'clients', 'stats'].includes(state.providerRouter.activeTab) ? state.providerRouter.activeTab : 'pool';
+  state.providerRouter.activeTab = activeTab;
+  const statsMaxRows = Number(stats.maxRows || 10000) || 10000;
+  const statsTrafficLabel = [
+    Number(stats.requestBytes || 0) ? `请求 ${formatBytes(stats.requestBytes)}` : '',
+    Number(stats.responseBytes || 0) ? `响应 ${formatBytes(stats.responseBytes)}` : '',
+  ].filter(Boolean).join(' / ') || '暂无流量';
+  const statsTokenLabel = [
+    Number(stats.inputTokens || 0) ? `输入 ${formatProviderRouterTokens(stats.inputTokens)}` : '',
+    Number(stats.cachedInputTokens || 0) ? `缓存 ${formatProviderRouterTokens(stats.cachedInputTokens)}` : '',
+    Number(stats.outputTokens || 0) ? `输出 ${formatProviderRouterTokens(stats.outputTokens)}` : '',
+  ].filter(Boolean).join(' / ') || '暂无 token';
+  const routerTabs = [
+    { key: 'pool', label: '负载池', meta: selectedSummary },
+    { key: 'clients', label: '客户端配置', meta: '复制 / 写入' },
+    { key: 'stats', label: '运行统计', meta: String(stats.requests || 0) },
+  ].map((tab) => `
+    <button type="button" class="pd-router-tab ${activeTab === tab.key ? 'is-active' : ''}" data-provider-router-tab="${esc(tab.key)}">
+      <span>${esc(tab.label)}</span>
+      <em>${esc(tab.meta)}</em>
+    </button>`).join('');
+  const poolPanel = `
+    <div class="pd-router-panel">
+      <div class="pd-router-pool-toolbar">
+        <div class="pd-router-tool-tabs">${toolTabs}</div>
+        <div class="pd-router-pool-summary">
+          <strong>${esc(toolLabel)}</strong>
+          <span>${esc(selectedSummary)} 个已加入负载池</span>
+          <em>OAuth 不进入路由池；Claude Code 只纳入能读取到明文 API Key / Auth Token 的 Provider。</em>
+        </div>
+      </div>
+      <div class="pd-router-strategy-bar">
+        <label class="pd-router-strategy-select">
+          <span>路由策略</span>
+          <div class="select-wrap"><select data-provider-router-strategy ${loading ? 'disabled' : ''}>${strategyOptions}</select></div>
+          <em>${esc(activeStrategyMeta.hint)}</em>
+        </label>
+        <div class="pd-router-switch-field">
+          <span>余额保护</span>
+          <label class="pd-router-switch ${balanceGuardEnabled ? 'is-on' : ''}">
+            <input type="checkbox" data-provider-router-balance-guard ${balanceGuardEnabled ? 'checked' : ''} ${loading ? 'disabled' : ''} />
+            <span aria-hidden="true"></span>
+            <strong>启用</strong>
+          </label>
+        </div>
+        <label class="pd-router-threshold">
+          <span>最低百分比</span>
+          <input type="number" min="0" max="100" step="1" value="${esc(balanceMinPercent)}" data-provider-router-balance-min-percent ${loading || !balanceGuardEnabled ? 'disabled' : ''} />
+        </label>
+        <label class="pd-router-threshold">
+          <span>最低余额</span>
+          <input type="number" min="0" step="0.01" value="${esc(balanceMinAmount)}" data-provider-router-balance-min-amount ${loading || !balanceGuardEnabled ? 'disabled' : ''} />
+        </label>
+        <div class="pd-router-strategy-note">余额来自已同步缓存；未知余额继续允许路由，明确低于阈值才跳过。</div>
+      </div>
+      ${candidates.length ? `
+        <div class="pd-router-provider-list">
+          <div class="pd-router-provider-head">
+            <span>启用</span>
+            <span>Provider</span>
+            <span>Key / 状态</span>
+            <span>权重</span>
+            <span>余额</span>
+            <span>主线</span>
+          </div>
+          ${candidateList}
+        </div>` : `<div class="pd-empty pd-empty-small">没有可用于路由的 ${esc(toolLabel)} API Key Provider。先在快速配置或连接详情里保存一个 Provider。</div>`}
+    </div>`;
+  const clientsPanel = `
+    <div class="pd-router-panel">
+      <div class="pd-router-client-table">
+        <div class="pd-router-client-row is-head">
+          <span>客户端</span>
+          <span>Base URL</span>
+          <span>API Key</span>
+          <span>操作</span>
+        </div>
+        <div class="pd-router-client-row">
+          <strong>Codex</strong>
+          <code>${esc(codexBaseUrl)}</code>
+          <code>${esc(PROVIDER_ROUTER_CLIENT_KEY)}</code>
+          <span class="pd-router-client-actions">
+            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="codex-env">复制 env</button>
+            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="codex-toml">复制片段</button>
+            <button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-provider-router-apply="codex" ${loading ? 'disabled' : ''}>一键配置</button>
+          </span>
+        </div>
+        <div class="pd-router-client-row">
+          <strong>Claude Code</strong>
+          <code>${esc(claudeBaseUrl)}</code>
+          <code>${esc(PROVIDER_ROUTER_CLIENT_KEY)}</code>
+          <span class="pd-router-client-actions">
+            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="claude-env">复制 env</button>
+            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="claude-json">复制 JSON</button>
+            <button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-provider-router-apply="claudecode" ${loading ? 'disabled' : ''}>一键配置</button>
+          </span>
+        </div>
+      </div>
+    </div>`;
+  const routerLogRows = routerLogs.map((item) => {
+    const statusText = item.status == null ? 'ERR' : String(item.status);
+    const tone = item.success ? 'is-ok' : item.retry ? 'is-warn' : 'is-bad';
+    const providerText = providerNames.get(item.providerKey) || item.providerKey || '-';
+    const latencyText = item.latencyMs == null ? '-' : `${item.latencyMs}ms`;
+    const trafficText = formatProviderRouterTraffic(item);
+    const usageText = getProviderRouterLogUsageParts(item).join(' / ');
+    const errorText = item.error ? String(item.error) : (item.retry ? '已尝试切换下一个 Provider' : '');
+    return `
+      <div class="pd-router-log-row ${tone}">
+        <span>${esc(item.at ? formatRelativeTime(item.at) : '-')}</span>
+        <code>${esc(item.method || '-')} ${esc(item.target || '-')}</code>
+        <strong>${esc(providerText)}</strong>
+        <em>${esc(statusText)} · ${esc(latencyText)}${trafficText ? ` · ${esc(trafficText)}` : ''}${usageText ? ` · ${esc(usageText)}` : ''}${item.retry ? ' · retry' : ''}${errorText ? ` · ${esc(errorText)}` : ''}</em>
+      </div>`;
+  }).join('');
+  const statsPanel = `
+    <div class="pd-router-panel">
+      <div class="pd-router-stat-summary">
+        <span><strong>${esc(String(stats.requests || 0))}</strong><em>累计请求</em></span>
+        <span><strong>${esc(statsTokenLabel)}</strong><em>输入 / 缓存 / 输出</em></span>
+        <span><strong>${esc(statsTrafficLabel)}</strong><em>请求 / 响应流量</em></span>
+        <span><strong>SQLite</strong><em>最多保留 ${esc(String(statsMaxRows))} 条</em></span>
+      </div>
+      ${providerStats.length ? `
+        <div class="pd-router-provider-stats">
+          <div class="pd-router-stat-head">
+            <span>Provider</span>
+            <span>状态</span>
+            <span>请求</span>
+            <span>Token / 流量</span>
+          </div>
+          ${providerStats.map((item) => {
+            const itemTraffic = formatProviderRouterTraffic(item);
+            const itemUsage = getProviderRouterLogUsageParts(item).join(' / ');
+            return `
+              <div class="pd-router-stat-row">
+                <span>${esc(providerNames.get(item.providerKey) || item.providerKey || '-')}</span>
+                <code>${esc(String(item.lastStatus || '-'))}</code>
+                <em>请求 ${esc(String(item.requests || 0))} · 成功 ${esc(String(item.successes || 0))} · 失败 ${esc(String(item.failures || 0))}${item.lastError ? ` · ${esc(item.lastError)}` : ''}</em>
+                <em>${esc(itemUsage || '暂无 token')}${itemTraffic ? ` · ${esc(itemTraffic)}` : ''}</em>
+              </div>`;
+          }).join('')}
+        </div>` : '<div class="pd-empty pd-empty-small">网关启动并收到请求后，这里会显示每个 Provider 的转发统计。</div>'}
+      <div class="pd-router-log-block">
+        <div class="pd-router-log-head">
+          <div>
+            <strong>最近请求日志</strong>
+            <span>${esc(String(routerLogs.length))} 条 · 只记录路径、Provider、状态、流量和 token 摘要</span>
+          </div>
+          <div>
+            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${loading ? 'disabled' : ''}>刷新</button>
+            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="router-logs" ${routerLogs.length ? '' : 'disabled'}>复制日志</button>
+          </div>
+        </div>
+        ${routerLogs.length ? `
+          <div class="pd-router-log-list">
+            <div class="pd-router-log-row is-head">
+              <span>时间</span>
+              <span>请求</span>
+              <span>Provider</span>
+              <span>结果</span>
+            </div>
+            ${routerLogRows}
+          </div>` : '<div class="pd-empty pd-empty-small">暂无网关日志。如果 Codex 仍报 502 但这里没有日志，说明请求没有进到本机网关，大概率是当前 Codex 进程没有继承 NO_PROXY，被系统代理截获了。</div>'}
+      </div>
+    </div>`;
+  const activePanel = activeTab === 'clients' ? clientsPanel : activeTab === 'stats' ? statsPanel : poolPanel;
+
+  container.innerHTML = `
+    <div class="pd-router provider-router-shell">
+      <header class="pd-router-page-head">
+        <div>
+          <div class="pd-router-page-title-row">
+            <span class="pd-router-page-tool">Router</span>
+            <em>·</em>
+            <span>自动路由网关</span>
+          </div>
+          <p>选择 Codex / Claude Code 的 Provider 池，启动后客户端只连接本机网关，由本机按负载池转发。</p>
+        </div>
+        <div class="pd-router-page-meta">
+          <span>${esc(statusScopeLabel)}</span>
+          <strong>${esc(routerStateText)}</strong>
+        </div>
+      </header>
+      ${error ? `<div class="pd-remote-alert is-bad">${esc(error)}</div>` : ''}
+      <section class="pd-router-gateway">
+        <div class="pd-router-gateway-top">
+          <div class="pd-router-gateway-title">
+            <div class="pd-router-kicker">GATEWAY</div>
+            <div class="pd-router-title">本地监听与路由</div>
+            <div class="pd-router-sub">${esc(statusNote)} 客户端只连本机地址，真实 Provider 密钥仍由本机后端读取。</div>
+          </div>
+          <div class="pd-router-state-pill ${running ? 'is-on' : 'is-off'} ${proxyReady ? 'is-proxying' : ''} ${(probeLoading || probeFailed) ? 'is-warning' : ''}">
+            <span></span>
+            <strong>${esc(runningText)}</strong>
+          </div>
+        </div>
+
+        <div class="pd-router-gateway-main">
+          <div class="pd-router-metrics">
+            <div>
+              <span>监听</span>
+              <strong>${esc(originUrl)}</strong>
+              <em>${status.portFallback ? '自动端口' : '默认 18791'}</em>
+            </div>
+            <div>
+              <span>反代</span>
+              <strong class="${proxyReady ? 'is-ok' : probeFailed ? 'is-bad' : probeLoading ? 'is-warning' : ''}">${esc(probeStateText)}</strong>
+              <em>${esc(probeDetail)}</em>
+            </div>
+            <div>
+              <span>Provider</span>
+              <strong>${esc(selectedSummary)}</strong>
+              <em>已选 / 可路由</em>
+            </div>
+            <div>
+              <span>请求</span>
+              <strong>${esc(String(stats.requests || 0))}</strong>
+              <em>成功 ${esc(String(stats.forwarded || 0))} / 失败 ${esc(String(stats.failed || 0))}</em>
+            </div>
+          </div>
+
+          <div class="pd-router-actions">
+            <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-provider-router-start ${loading || !selectedRows.length ? 'disabled' : ''}>${esc(startActionText)}</button>
+            <button type="button" class="pd-btn pd-btn-ghost" data-provider-router-stop ${(!running || loading) ? 'disabled' : ''}>停止</button>
+            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small ${probeLoading ? 'is-busy' : ''}" data-provider-router-probe ${(!running || loading || probeLoading) ? 'disabled' : ''}>${probeLoading ? '探测中' : '测试反代'}</button>
+            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${loading ? 'disabled' : ''}>刷新</button>
+          </div>
+        </div>
+
+        <div class="pd-router-endpoint-strip">
+          <button type="button" data-provider-router-copy="codex-base">
+            <div>
+              <span>Codex Base URL</span>
+              <code>${esc(codexBaseUrl)}</code>
+            </div>
+            <em>复制</em>
+          </button>
+          <button type="button" data-provider-router-copy="claude-base">
+            <div>
+              <span>Claude Code Base URL</span>
+              <code>${esc(claudeBaseUrl)}</code>
+            </div>
+            <em>复制</em>
+          </button>
+          <button type="button" data-provider-router-copy="api-key">
+            <div>
+              <span>客户端 API Key</span>
+              <code>${esc(PROVIDER_ROUTER_CLIENT_KEY)}</code>
+            </div>
+            <em>复制</em>
+          </button>
+        </div>
+      </section>
+
+      <section class="pd-router-tabs-shell">
+        <div class="pd-router-tabs">${routerTabs}</div>
+        ${activePanel}
+        <div class="pd-router-note">当前选中复制地址：<code>${esc(currentBaseUrl)}</code>。网关不伪装模型能力；要稳定自动路由，池子里的 Provider 最好支持同一模型名。</div>
+      </section>
+    </div>`;
+  if (window.initCustomSelect) {
+    container.querySelectorAll('.select-wrap > select').forEach((select) => window.initCustomSelect(select));
+  } else if (window.refreshCustomSelects) {
+    window.refreshCustomSelects();
+  }
 }
 
 function closeProviderDetail() {
@@ -20171,9 +22224,10 @@ function pdComputeRenderSig(row) {
     histLen,
     pd.selectedProbeKey || '',
     pd.usageWindow || '',
+    `uv:${normalizePdUsageView(pd.usageView || 'local')}`,
     pd.usageModel || '',
     pd.testRunning ? 'tr' : (pd.testResult?.ok ? 'tk' : pd.testResult?.error ? 'te' : 'tn'),
-    pd.evalRunning ? 'er' : (pd.evalResult?.summary ? `ek:${pd.evalResult.status || pd.evalResult.summary.status || ''}:${pd.evalResult.summary.totalScore}:${pd.evalResult.summary.riskLevel}` : pd.evalResult?.error ? 'ee' : 'en'),
+    pd.evalRunning ? `er:${pd.evalRunningProfile || 'quick'}:${pd.evalStartedAt ? Math.floor((Date.now() - pd.evalStartedAt) / 1000) : 0}` : (pd.evalResult?.summary ? `ek:${pd.evalResult.profile || pd.evalResult.summary.profile || 'quick'}:${pd.evalResult.status || pd.evalResult.summary.status || ''}:${pd.evalResult.summary.totalScore}:${pd.evalResult.summary.riskLevel}` : pd.evalResult?.error ? 'ee' : 'en'),
     pd.evalExpanded?.channel ? 'cx' : 'cc',
     pd.evalExpanded?.upstream ? 'ux' : 'uc',
     `cp:${pd.evalCasePage || 0}`,
@@ -20185,6 +22239,9 @@ function pdComputeRenderSig(row) {
     `ebp:${pd.evalBatchProgress?.completed ?? 0}/${pd.evalBatchProgress?.total ?? 0}:${pd.evalBatchProgress?.currentLabel || ''}`,
     `ebr:${batchResultsSig}`,
     pd.usageRefreshing ? 'ur' : 'us',
+    pd.remoteUsageLoading ? 'rul' : 'rui',
+    pd.remoteUsageError || '',
+    pd.remoteUsageResult ? `ru:${pd.remoteUsageResult.status || ''}:${pd.remoteUsageResult.providerType || ''}:${pd.remoteUsageFetchedAt || 0}` : 'run',
     pd.loading ? 'l' : '',
     dashboardCodexMetrics ? 'dm' : 'dn',
     pd.usageMetrics ? `pdm:${pd.usageMetrics._providerDetailDays || ''}:${pd.usageMetricsFetchedAt || 0}` : 'pdn',
@@ -20255,6 +22312,12 @@ function renderProviderDetail(options = {}) {
       ${tabHtml}
     </section>
   `;
+  if (window.initCustomSelect) {
+    container.querySelectorAll('.select-wrap > select').forEach(s => window.initCustomSelect(s));
+  }
+  if (tab === 'panel') {
+    syncPdRemoteCredentialAuthFields(container);
+  }
   // models tab 内的事件 (复选 / 搜索 / 保存 / 拉取)
   if (tab === 'models') {
     setTimeout(() => { try { bindPdModelsEvents(); } catch (_) {} }, 0);
@@ -20333,6 +22396,7 @@ function renderPdTab(tab, row) {
   if (tab === 'overview') return renderPdOverview(row);
   if (tab === 'models') return renderPdModels(row);
   if (tab === 'usage') return renderPdUsage(row);
+  if (tab === 'panel') return renderPdPanelAuth(row);
   if (tab === 'test') return renderPdTest(row);
   if (tab === 'eval') return renderPdEval(row);
   if (tab === 'health') return renderPdHealth(row);
@@ -21232,7 +23296,7 @@ function renderPdOverview(row) {
           <div class="pd-section-title">登录信息</div>
           <div class="pd-info-grid">
             ${row.email ? `<div class="pd-info-row"><span>账号</span><code>${esc(row.email)}</code></div>` : ''}
-            ${row.plan ? `<div class="pd-info-row"><span>计划</span><code>${esc(String(row.plan).toUpperCase())}</code></div>` : ''}
+            ${row.plan ? `<div class="pd-info-row"><span>计划</span><code class="pd-oauth-plan-code">${renderOauthPlanPill(row.plan)}</code></div>` : ''}
             ${row.homePath ? `<div class="pd-info-row"><span>CODEX_HOME</span><code>${esc(row.homePath)}</code></div>` : ''}
           </div>
         </div>`}
@@ -21289,6 +23353,12 @@ const PD_USAGE_WINDOWS = [
   { value: '90', label: '90 天', days: 90 },
   { value: 'all', label: '全部', days: 366 },
 ];
+const PD_USAGE_VIEWS = new Set(['local', 'remote']);
+
+function normalizePdUsageView(value) {
+  const raw = String(value || '').trim();
+  return PD_USAGE_VIEWS.has(raw) ? raw : 'local';
+}
 
 function normalizePdUsageWindow(value) {
   const raw = String(value || '').trim();
@@ -21302,6 +23372,605 @@ function getPdUsageWindow() {
 
 function getPdUsageRequestDays() {
   return Math.min(366, Math.max(1, getPdUsageWindow().days || 30));
+}
+
+function renderPdUsageSourceTabs(activeView = 'local', row = {}) {
+  const view = normalizePdUsageView(activeView);
+  const isOauth = row.mode === 'oauth';
+  return `
+    <div class="pd-usage-source-tabs">
+      <div class="pd-segmented" role="group" aria-label="用量来源">
+        <button type="button" class="pd-seg-btn ${view === 'local' ? 'is-active' : ''}" data-pd-usage-view="local">本地统计</button>
+        <button type="button" class="pd-seg-btn ${view === 'remote' ? 'is-active' : ''}" data-pd-usage-view="remote">${isOauth ? '官方用量' : '远程中转统计'}</button>
+      </div>
+      <span class="pd-usage-source-hint">${isOauth ? '官方额度只读查询，不暴露本地 OAuth token' : '远程统计只读查询中转面板，不混入本地 session 估算'}</span>
+    </div>`;
+}
+
+function getRemoteProviderTypeLabel(type = '') {
+  const value = String(type || '').toLowerCase();
+  if (value === 'newapi') return 'NewAPI';
+  if (value === 'sub2api') return 'sub2api';
+  if (value === 'openai-compatible-billing') return 'OpenAI-compatible billing';
+  if (value === 'cloudflare-protected') return 'Cloudflare 保护';
+  if (value === 'official-oauth' || value === 'codex-oauth') return 'Codex OAuth';
+  return '未识别';
+}
+
+function getRemoteUsageStatusMeta(status = '') {
+  const value = String(status || '').toLowerCase();
+  if (value === 'ok') return { label: '已同步', cls: 'is-ok' };
+  if (value === 'blocked') return { label: '被拦截', cls: 'is-warn' };
+  if (value === 'auth_error') return { label: '无权限', cls: 'is-warn' };
+  if (value === 'unsupported') return { label: '不支持', cls: 'is-muted' };
+  return { label: '未查询', cls: 'is-muted' };
+}
+
+function formatRemoteUsageNumber(value, unit = '') {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  const normalizedUnit = String(unit || '').trim().toUpperCase();
+  if (normalizedUnit === 'USD') return formatDashboardUsd(num, { min: num < 1 ? 4 : 2, max: 4 });
+  if (['CNY', 'RMB'].includes(normalizedUnit)) {
+    return `¥${num.toLocaleString('zh-CN', { minimumFractionDigits: num < 1 ? 4 : 2, maximumFractionDigits: 4 })}`;
+  }
+  if (Math.abs(num) >= 1000) return formatDashboardMetric(num);
+  return num.toLocaleString('en-US', { maximumFractionDigits: 6 });
+}
+
+function syncPdRemoteCredentialAuthFields(root = document) {
+  const scope = root?.querySelector ? root : document;
+  const authMode = String(scope.querySelector('[data-pd-remote-auth-mode]')?.value || 'newapi_password').toLowerCase();
+  scope.querySelectorAll('[data-pd-remote-auth-field]').forEach((field) => {
+    const modes = String(field.getAttribute('data-pd-remote-auth-field') || '')
+      .split(/\s+/)
+      .filter(Boolean);
+    field.hidden = modes.length > 0 && !modes.includes(authMode);
+  });
+  scope.querySelectorAll('[data-pd-open-remote-panel="newapi-setting"]').forEach((button) => {
+    button.hidden = authMode !== 'newapi_access_token';
+  });
+}
+
+function renderPdRemoteCredentialPanel(row) {
+  const esc = escapeHtml;
+  const credential = state.providerDetail.remoteCredential || {};
+  const draft = getPdRemoteCredentialDraft();
+  const draftValue = (key, fallback = '') => pdRemoteDraftHasOwn(draft, key) ? draft[key] : fallback;
+  const loading = Boolean(state.providerDetail.remoteCredentialLoading);
+  const saving = Boolean(state.providerDetail.remoteCredentialSaving);
+  const testing = Boolean(state.providerDetail.remoteCredentialTesting);
+  const busy = loading || saving || testing || Boolean(state.providerDetail.remoteUsageLoading);
+  const exists = Boolean(credential.exists);
+  const authMode = state.providerDetail.remoteCredentialDraftAuthMode || draftValue('authMode', credential.authMode || 'newapi_password');
+  const savedAt = credential.savedAt ? formatRelativeTime(credential.savedAt) : '';
+  const baseUrl = draftValue('baseUrl', credential.baseUrl || row.baseUrl || '');
+  const username = draftValue('username', credential.username || '');
+  const email = draftValue('email', credential.email || '');
+  const password = draftValue('password', '');
+  const userId = draftValue('userId', credential.userId || '');
+  const accessToken = draftValue('accessToken', '');
+  const statusText = loading
+    ? '读取中'
+    : exists
+      ? `已保存${savedAt ? ` · ${savedAt}` : ''}`
+      : '未保存';
+  const error = state.providerDetail.remoteCredentialError || '';
+  const modeLabel = authMode === 'newapi_access_token'
+    ? 'NewAPI UserID + AccessToken'
+    : authMode === 'sub2api_password'
+      ? 'sub2api 邮箱密码'
+      : 'NewAPI 用户名密码';
+  return `
+    <div class="pd-remote-credential">
+      <div class="pd-remote-credential-head">
+        <div>
+          <div class="pd-remote-credential-title">面板认证</div>
+          <div class="pd-remote-credential-sub">${esc(modeLabel)} · ${esc(statusText)}</div>
+        </div>
+        <div class="pd-remote-credential-actions">
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-open-remote-panel="root">打开面板</button>
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-open-remote-panel="newapi-setting" ${authMode === 'newapi_access_token' ? '' : 'hidden'}>NewAPI Token</button>
+        </div>
+      </div>
+      ${error ? `<div class="pd-remote-alert is-bad">${esc(error)}</div>` : ''}
+      <div class="pd-remote-form">
+        <label class="pd-remote-field">
+          <span>认证方式</span>
+          <div class="select-wrap pd-remote-auth-select-wrap">
+            <select data-pd-remote-auth-mode ${busy ? 'disabled' : ''}>
+              <option value="newapi_password" ${authMode === 'newapi_password' ? 'selected' : ''}>NewAPI 用户名密码</option>
+              <option value="newapi_access_token" ${authMode === 'newapi_access_token' ? 'selected' : ''}>NewAPI UserID + AccessToken</option>
+              <option value="sub2api_password" ${authMode === 'sub2api_password' ? 'selected' : ''}>sub2api 邮箱密码</option>
+            </select>
+          </div>
+        </label>
+        <label class="pd-remote-field pd-remote-field-wide">
+          <span>面板地址</span>
+          <input type="url" data-pd-remote-base-url value="${esc(baseUrl)}" placeholder="https://relay.example.com/v1" ${busy ? 'disabled' : ''} />
+        </label>
+        <label class="pd-remote-field" data-pd-remote-auth-field="newapi_password" ${authMode === 'newapi_password' ? '' : 'hidden'}>
+          <span>NewAPI 用户名</span>
+          <input type="text" data-pd-remote-username value="${esc(username)}" autocomplete="username" ${busy ? 'disabled' : ''} />
+        </label>
+        <label class="pd-remote-field" data-pd-remote-auth-field="sub2api_password" ${authMode === 'sub2api_password' ? '' : 'hidden'}>
+          <span>sub2api 邮箱</span>
+          <input type="email" data-pd-remote-email value="${esc(email)}" autocomplete="email" ${busy ? 'disabled' : ''} />
+        </label>
+        <label class="pd-remote-field" data-pd-remote-auth-field="newapi_password sub2api_password" ${authMode === 'newapi_access_token' ? 'hidden' : ''}>
+          <span>密码</span>
+          <input type="password" data-pd-remote-password value="${esc(password)}" placeholder="${exists && credential.hasPassword ? '留空保留已保存密码' : ''}" autocomplete="current-password" ${busy ? 'disabled' : ''} />
+        </label>
+        <label class="pd-remote-field" data-pd-remote-auth-field="newapi_access_token" ${authMode === 'newapi_access_token' ? '' : 'hidden'}>
+          <span>User ID</span>
+          <input type="text" data-pd-remote-user-id value="${esc(userId)}" inputmode="numeric" ${busy ? 'disabled' : ''} />
+        </label>
+        <label class="pd-remote-field pd-remote-field-wide" data-pd-remote-auth-field="newapi_access_token" ${authMode === 'newapi_access_token' ? '' : 'hidden'}>
+          <span>Access Token</span>
+          <input type="password" data-pd-remote-access-token value="${esc(accessToken)}" placeholder="${exists && credential.hasAccessToken ? '留空保留已保存 token' : ''}" autocomplete="off" ${busy ? 'disabled' : ''} />
+        </label>
+      </div>
+      <div class="pd-remote-credential-foot">
+        <span>${exists ? '保存后将优先用面板凭据查询，API Key 只做兜底。' : '保存后可自动同步中转面板余额和远程消耗。'}</span>
+        <div class="pd-remote-credential-actions">
+          ${exists ? `<button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-delete-remote-credential ${busy ? 'disabled' : ''}>删除</button>` : ''}
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-save-remote-credential ${busy ? 'disabled' : ''}>${saving ? '保存中…' : '保存'}</button>
+          <button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-test-remote-credential ${busy ? 'disabled' : ''}>${testing ? '测试中…' : '保存并测试'}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderPdPanelAuth(row) {
+  const esc = escapeHtml;
+  if (!isCodexProviderDetail(row)) {
+    return '<div class="pd-empty"><div class="pd-empty-title-line">当前工具暂不支持远程面板认证</div><p>面板认证当前只用于 Codex API Key 中转 Provider 的余额和远程消耗查询。</p></div>';
+  }
+  if (row.mode === 'oauth') {
+    return '<div class="pd-empty"><div class="pd-empty-title-line">OAuth 不需要面板认证</div><p>官方 OAuth 账号不保存中转面板账号密码，也不通过本地网关代理官方登录态。</p></div>';
+  }
+  if (row.historyOnly) {
+    return '<div class="pd-empty"><div class="pd-empty-title-line">本地草稿无法保存面板认证</div><p>先把这个 Provider 重新保存到 Codex 配置，再配置 NewAPI / sub2api 面板账号。</p></div>';
+  }
+  return `
+    <div class="pd-usage pd-panel-auth">
+      <div class="pd-remote-head">
+        <div>
+          <div class="pd-remote-kicker">REMOTE PANEL AUTH</div>
+          <div class="pd-remote-title">面板账号与 Token</div>
+          <div class="pd-remote-sub">${esc(row.baseUrl || '') || '用于自动识别 NewAPI / sub2api 面板并查询余额、远程消耗；遇到 Cloudflare/bot 拦截只标记不支持。'}</div>
+        </div>
+        <button type="button" class="pd-btn pd-btn-ghost" data-pd-open-remote-panel="root">打开面板</button>
+      </div>
+      ${renderPdRemoteCredentialPanel(row)}
+    </div>`;
+}
+
+function formatOauthQuotaPercent(value) {
+  if (value == null || value === '') return '—';
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  const clamped = Math.max(0, Math.min(100, num));
+  return `${clamped % 1 === 0 ? clamped.toFixed(0) : clamped.toFixed(1)}%`;
+}
+
+function formatOauthQuotaNumber(value) {
+  if (value == null || value === '') return '—';
+  const num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  if (Math.abs(num) >= 1000) return formatDashboardMetric(num);
+  return num.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+}
+
+function getOauthPlanMeta(plan = '') {
+  const raw = String(plan || '').trim();
+  const normalized = raw.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const compact = normalized.replace(/\s+/g, '');
+  if (!raw) return { key: '', label: '', multiplier: null };
+  if (compact.includes('pro20') || compact.includes('20x')) return { key: 'pro20x', label: 'Pro 20x', multiplier: 20 };
+  if (compact.includes('pro5') || compact.includes('5x')) return { key: 'pro5x', label: 'Pro 5x', multiplier: 5 };
+  if (compact === 'pro' || compact.includes('chatgptpro')) return { key: 'pro', label: 'Pro', multiplier: null };
+  if (compact.includes('plus')) return { key: 'plus', label: 'Plus', multiplier: 1 };
+  if (compact.includes('team')) return { key: 'team', label: 'Team', multiplier: null };
+  if (compact.includes('enterprise')) return { key: 'enterprise', label: 'Enterprise', multiplier: null };
+  if (compact.includes('free')) return { key: 'free', label: 'Free', multiplier: null };
+  if (compact.includes('max20')) return { key: 'max20x', label: 'Max 20x', multiplier: 20 };
+  if (compact.includes('max5')) return { key: 'max5x', label: 'Max 5x', multiplier: 5 };
+  if (compact.includes('max')) return { key: 'max', label: 'Max', multiplier: null };
+  return { key: compact || normalized || raw.toLowerCase(), label: raw.toUpperCase(), multiplier: null };
+}
+
+function renderOauthPlanPill(plan = '', extraClass = '') {
+  const meta = getOauthPlanMeta(plan);
+  if (!meta.label) return '';
+  return `<span class="ch-row-plan pd-oauth-plan ${escapeHtml(extraClass)}" data-plan="${escapeHtml(meta.key)}">${escapeHtml(meta.label)}</span>`;
+}
+
+function formatOauthAbsoluteTime(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatOauthFutureTime(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return raw;
+  const diff = ms - Date.now();
+  if (diff <= 0) return `已到期 · ${formatOauthAbsoluteTime(raw)}`;
+  const minutes = Math.round(diff / 60000);
+  const relative = minutes < 90
+    ? `${minutes} 分钟后`
+    : `${Math.round(minutes / 60)} 小时后`;
+  return `${relative} · ${formatOauthAbsoluteTime(raw)}`;
+}
+
+function formatOauthWindowDuration(seconds) {
+  const num = Number(seconds);
+  if (!Number.isFinite(num) || num <= 0) return '';
+  const hours = num / 3600;
+  if (Math.abs(hours - Math.round(hours)) < 0.05) return `${Math.round(hours)} 小时窗口`;
+  if (num >= 86400) return `${Math.round(num / 86400)} 天窗口`;
+  if (num >= 3600) return `${hours.toFixed(1)} 小时窗口`;
+  return `${Math.round(num / 60)} 分钟窗口`;
+}
+
+function formatOauthResetText(item = {}) {
+  const resetAt = String(item.resetAt || '').trim();
+  if (resetAt) {
+    const text = formatOauthFutureTime(resetAt);
+    return text ? `重置 ${text}` : `重置 ${resetAt}`;
+  }
+  const seconds = Number(item.resetInSeconds);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 90) return `约 ${minutes} 分钟后重置`;
+    return `约 ${Math.round(minutes / 60)} 小时后重置`;
+  }
+  return '未返回重置时间';
+}
+
+function formatOauthWindowSub(item = {}) {
+  const pieces = [];
+  const used = formatOauthQuotaPercent(item.usedPercent);
+  if (used !== '—') pieces.push(`已用 ${used}`);
+  const remain = formatOauthQuotaNumber(item.remaining);
+  const limit = formatOauthQuotaNumber(item.limit);
+  if (remain !== '—' || limit !== '—') pieces.push(`${remain} / ${limit}`);
+  const duration = formatOauthWindowDuration(item.limitWindowSeconds);
+  if (duration) pieces.push(duration);
+  pieces.push(formatOauthResetText(item));
+  return pieces.filter(Boolean).join(' · ');
+}
+
+function renderOauthQuotaMini(item, fallbackLabel) {
+  const esc = escapeHtml;
+  const data = item && typeof item === 'object' ? item : null;
+  const label = data?.label || fallbackLabel;
+  const pct = data ? formatOauthQuotaPercent(data.remainingPercent) : '—';
+  const sub = data ? formatOauthWindowSub(data) : '官方接口未返回该窗口';
+  return `
+    <div class="pd-stat-mini">
+      <div class="pd-stat-mini-label">${esc(label)}</div>
+      <div class="pd-stat-mini-value">${esc(pct)}</div>
+      <div class="pd-stat-mini-sub">${esc(sub)}</div>
+    </div>`;
+}
+
+function renderOauthMembershipMini(account = {}, row = {}) {
+  const esc = escapeHtml;
+  const membership = account.membership || {};
+  const plan = account.planType || account.plan || row.plan || '';
+  const planMeta = getOauthPlanMeta(plan);
+  const expires = formatOauthFutureTime(membership.expiresAt || membership.renewsAt || '');
+  const value = planMeta.label || '—';
+  const sub = membership.expiresAt
+    ? `到期 ${expires}`
+    : membership.renewsAt
+      ? `续费 ${expires}`
+      : '官方接口未返回会员到期';
+  return `
+    <div class="pd-stat-mini pd-oauth-membership-mini">
+      <div class="pd-stat-mini-label">会员</div>
+      <div class="pd-stat-mini-value pd-oauth-plan-value">${planMeta.label ? renderOauthPlanPill(plan) : '—'}</div>
+      <div class="pd-stat-mini-sub">${value === '—' ? '未识别会员计划' : esc(sub)}</div>
+    </div>`;
+}
+
+function formatOauthCapacityTokens(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return '—';
+  return `${(num / 1e6).toLocaleString('zh-CN', { maximumFractionDigits: 2, minimumFractionDigits: num < 10_000_000 ? 2 : 1 })}M`;
+}
+
+function getOauthWindowTimes(windowInfo = {}) {
+  const durationMs = Math.max(1, Number(windowInfo.limitWindowSeconds || 18000)) * 1000;
+  const resetMs = Date.parse(String(windowInfo.resetAt || ''));
+  const now = Date.now();
+  if (Number.isFinite(resetMs) && resetMs > now) {
+    return { startMs: resetMs - durationMs, endMs: Math.min(now, resetMs), durationMs };
+  }
+  return { startMs: now - durationMs, endMs: now, durationMs };
+}
+
+function computeOauthFiveHourEstimate(row = {}, result = {}) {
+  const summary = result?.summary || {};
+  const fiveHour = summary.fiveHour || {};
+  const usedPercent = Number(fiveHour.usedPercent ?? (100 - Number(fiveHour.remainingPercent)));
+  const remainingPercent = Number(fiveHour.remainingPercent);
+  if (!Number.isFinite(usedPercent) || usedPercent <= 0 || !Number.isFinite(remainingPercent)) return null;
+  const metrics = state.providerDetail?.usageMetrics || getDashboardMetricsForTool('codex');
+  const sessions = Array.isArray(metrics?.sessions) ? metrics.sessions : [];
+  if (!sessions.length) return null;
+  const { startMs, endMs, durationMs } = getOauthWindowTimes(fiveHour);
+  const windowSessions = sessions.filter((session) => {
+    const ms = getPdUsageSessionTime(session);
+    return ms && ms >= startMs && ms <= endMs;
+  });
+  if (!windowSessions.length) return null;
+  const totals = aggregatePdUsageTotals(windowSessions);
+  const localTokens = Number(totals.total || 0);
+  if (!Number.isFinite(localTokens) || localTokens <= 0) return null;
+  const modelAgg = aggregatePdUsageByModel(windowSessions);
+  const costSummary = summarizePdUsageModelCosts(modelAgg);
+  const usedRatio = usedPercent / 100;
+  const totalTokens = localTokens / usedRatio;
+  const remainingTokens = totalTokens * (remainingPercent / 100);
+  const localCost = Number(costSummary.totalCost || 0);
+  const totalCost = localCost > 0 ? localCost / usedRatio : null;
+  const remainingCost = totalCost != null ? totalCost * (remainingPercent / 100) : null;
+  const planMeta = getOauthPlanMeta(result?.account?.planType || result?.account?.plan || row.plan || '');
+  return {
+    events: windowSessions.length,
+    localTokens,
+    localCost,
+    totalTokens,
+    remainingTokens,
+    totalCost,
+    remainingCost,
+    usedPercent,
+    remainingPercent,
+    planMeta,
+    windowLabel: formatOauthWindowDuration(durationMs / 1000) || '5 小时窗口',
+  };
+}
+
+function renderOauthFiveHourEstimate(row = {}, result = {}) {
+  const estimate = computeOauthFiveHourEstimate(row, result);
+  const esc = escapeHtml;
+  if (!estimate) {
+    return `
+      <div class="pd-section">
+        <div class="pd-section-title">
+          <span>5 小时容量估算</span>
+          <span class="pd-section-meta">本地统计 + 官方 usedPercent</span>
+        </div>
+        <div class="pd-usage-note">本地 5 小时窗口没有可匹配会话，或官方 usedPercent 为 0，暂不硬算容量。</div>
+      </div>`;
+  }
+  const usd = (value) => value == null ? '—' : formatDashboardUsd(value, { min: value < 1 ? 3 : 2, max: 3 });
+  return `
+    <div class="pd-section">
+      <div class="pd-section-title">
+        <span>5 小时容量估算</span>
+        <span class="pd-section-meta">本地统计 + 官方 usedPercent · ${esc(estimate.windowLabel)}</span>
+      </div>
+      <div class="pd-oauth-estimate-grid">
+        <div><span>已消耗</span><strong>${esc(formatOauthCapacityTokens(estimate.localTokens))}</strong><em>${esc(usd(estimate.localCost))} · ${esc(String(estimate.events))} 次</em></div>
+        <div><span>估算总量</span><strong>${esc(formatOauthCapacityTokens(estimate.totalTokens))}</strong><em>${esc(usd(estimate.totalCost))}</em></div>
+        <div><span>估算剩余</span><strong>${esc(formatOauthCapacityTokens(estimate.remainingTokens))}</strong><em>${esc(usd(estimate.remainingCost))} · ${esc(formatOauthQuotaPercent(estimate.remainingPercent))}</em></div>
+        <div><span>会员倍率</span><strong>${estimate.planMeta.label ? renderOauthPlanPill(estimate.planMeta.label) : '—'}</strong><em>${estimate.planMeta.multiplier ? esc(`${estimate.planMeta.multiplier}x 标签`) : '按当前账号实测'}</em></div>
+      </div>
+      <div class="pd-usage-note">这是按本地 token/费用和官方 5 小时 usedPercent 反推的容量，用于判断账号档位和路由余量；不是官方直接返回的 token 上限。</div>
+    </div>`;
+}
+
+function renderPdOauthUsage(row, viewTabs) {
+  const esc = escapeHtml;
+  const loading = Boolean(state.providerDetail.remoteUsageLoading);
+  const result = state.providerDetail.remoteUsageResult;
+  const error = state.providerDetail.remoteUsageError || '';
+  const statusMeta = getRemoteUsageStatusMeta(result?.status);
+  const account = result?.account || {};
+  const summary = result?.summary || {};
+  const usage = result?.usage || {};
+  const windows = Array.isArray(result?.windows) ? result.windows : [];
+  const endpointRows = Array.isArray(result?.endpointsTried) ? result.endpointsTried.slice(0, 8) : [];
+  const fetchedAt = state.providerDetail.remoteUsageFetchedAt
+    ? formatRelativeTime(new Date(state.providerDetail.remoteUsageFetchedAt).toISOString())
+    : '';
+  const pct = summary.remainingPercent ?? result?.quota?.remainingPercent;
+  const plan = account.planType || account.plan || row.plan || '';
+  const planMeta = getOauthPlanMeta(plan);
+  const accountLine = [
+    account.email || row.email || '',
+    planMeta.label || plan || '',
+    account.accountId ? `account ${account.accountId}` : '',
+  ].filter(Boolean).join(' · ');
+  return `
+    <div class="pd-usage">
+      ${viewTabs}
+      <div class="pd-remote-head">
+        <div>
+          <div class="pd-remote-kicker">CODEX OAUTH ALLOWANCE</div>
+          <div class="pd-remote-title">官方额度与限制</div>
+          <div class="pd-remote-sub">${result ? esc(result.message || '官方额度接口已返回') : esc(accountLine || '读取本地 OAuth profile 后请求 Codex 官方额度接口。')}</div>
+        </div>
+        <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-pd-sync-remote-usage ${loading ? 'disabled' : ''}>${loading ? '查询中…' : '查询官方额度'}</button>
+      </div>
+      ${error ? `<div class="pd-remote-alert is-bad">${esc(error)}</div>` : ''}
+      ${result ? `
+        <div class="pd-stat-rail pd-remote-rail">
+          <div class="pd-stat-mini pd-stat-mini-hero">
+            <div class="pd-stat-mini-label">剩余额度</div>
+            <div class="pd-stat-mini-value pd-cost-hero">${esc(formatOauthQuotaPercent(pct))}</div>
+            <div class="pd-stat-mini-sub">${esc(fetchedAt ? `更新 ${fetchedAt}` : statusMeta.label)}</div>
+          </div>
+          ${renderOauthQuotaMini(summary.fiveHour, '5 小时')}
+          ${renderOauthQuotaMini(summary.weekly, '周限制')}
+          ${renderOauthMembershipMini(account, row)}
+        </div>
+        <div class="pd-remote-status ${statusMeta.cls}">
+          <strong>${esc(statusMeta.label)}</strong>
+          <span>${renderOauthPlanPill(plan)} ${esc(accountLine || result.baseUrl || 'Codex OAuth')}</span>
+        </div>
+        ${summary.review ? `
+          <div class="pd-section pd-oauth-review-section">
+            <div class="pd-section-title"><span>Review 限制</span><span class="pd-section-meta">官方返回</span></div>
+            <div class="pd-remote-endpoints">
+              <div class="pd-remote-endpoint is-ok">
+                <span>${esc(summary.review.label || 'Review')}</span>
+                <code>${esc(formatOauthQuotaPercent(summary.review.remainingPercent))}</code>
+                <em>${esc(formatOauthWindowSub(summary.review))}</em>
+              </div>
+            </div>
+          </div>` : ''}
+        ${renderOauthFiveHourEstimate(row, result)}
+        <div class="pd-section">
+          <div class="pd-section-title">
+            <span>官方窗口</span>
+            <span class="pd-section-meta">${esc(String(windows.length))} 条</span>
+          </div>
+          ${windows.length ? `
+            <div class="pd-remote-endpoints">
+              ${windows.slice(0, 10).map((item) => `
+                <div class="pd-remote-endpoint is-ok">
+                  <span>${esc(item.label || item.id || '-')}</span>
+                  <code>${esc(formatOauthQuotaPercent(item.remainingPercent))}</code>
+                  <em>${esc(formatOauthWindowSub(item))}</em>
+                </div>`).join('')}
+            </div>` : `
+            <div class="pd-empty pd-empty-small">
+              <div class="pd-empty-title-line">官方接口未返回稳定额度字段</div>
+              <p>接口请求成功，但当前版本没有识别到 5 小时、周限制或 review 字段。后端已保留脱敏结构用于后续适配。</p>
+            </div>`}
+        </div>
+        ${(usage.totalTokens != null || usage.requests != null) ? `
+          <div class="pd-section">
+            <div class="pd-section-title">官方用量</div>
+            <div class="pd-info-grid">
+              <div class="pd-info-row"><span>Total Tokens</span><code>${esc(formatOauthQuotaNumber(usage.totalTokens))}</code></div>
+              <div class="pd-info-row"><span>Input Tokens</span><code>${esc(formatOauthQuotaNumber(usage.inputTokens))}</code></div>
+              <div class="pd-info-row"><span>Output Tokens</span><code>${esc(formatOauthQuotaNumber(usage.outputTokens))}</code></div>
+              <div class="pd-info-row"><span>Requests</span><code>${esc(formatOauthQuotaNumber(usage.requests))}</code></div>
+            </div>
+          </div>` : ''}
+        ${endpointRows.length ? `
+          <div class="pd-section">
+            <div class="pd-section-title">
+              <span>接口尝试</span>
+              <span class="pd-section-meta">${esc(String(endpointRows.length))} 条</span>
+            </div>
+            <div class="pd-remote-endpoints">
+              ${endpointRows.map((item) => `
+                <div class="pd-remote-endpoint ${String(item.status || '') === 'ok' ? 'is-ok' : ''}">
+                  <span>${esc(item.label || item.endpoint || '-')}</span>
+                  <code>${esc(`${item.method || 'GET'} ${item.status || '-'}${item.statusCode ? ' ' + item.statusCode : ''}`)}</code>
+                  <em>${esc(item.message || '')}</em>
+                </div>`).join('')}
+            </div>
+          </div>` : ''}
+      ` : `
+        <div class="pd-empty pd-empty-small">
+          <div class="pd-empty-title-line">还没有官方额度数据</div>
+          <p>点击上方按钮后会读取当前 OAuth profile 的本地 token，由后端请求 Codex 官方额度接口；token 不会返回前端。</p>
+        </div>
+      `}
+    </div>`;
+}
+
+function renderPdRemoteUsage(row) {
+  const esc = escapeHtml;
+  const viewTabs = renderPdUsageSourceTabs('remote', row);
+  const isOauth = row.mode === 'oauth';
+  const loading = Boolean(state.providerDetail.remoteUsageLoading);
+  const result = state.providerDetail.remoteUsageResult;
+  const error = state.providerDetail.remoteUsageError || '';
+  if (isOauth) {
+    return renderPdOauthUsage(row, viewTabs);
+  }
+  const statusMeta = getRemoteUsageStatusMeta(result?.status);
+  const balance = result?.balance || {};
+  const usage = result?.usage || {};
+  const balanceUnit = balance.unit || balance.currency || 'raw';
+  const usageUnit = usage.unit || balanceUnit || 'raw';
+  const fetchedAt = state.providerDetail.remoteUsageFetchedAt
+    ? formatRelativeTime(new Date(state.providerDetail.remoteUsageFetchedAt).toISOString())
+    : '';
+  const endpointRows = Array.isArray(result?.endpointsTried) ? result.endpointsTried.slice(0, 8) : [];
+  return `
+    <div class="pd-usage">
+      ${viewTabs}
+      <div class="pd-remote-head">
+        <div>
+          <div class="pd-remote-kicker">REMOTE RELAY USAGE</div>
+          <div class="pd-remote-title">余额与远程消耗</div>
+          <div class="pd-remote-sub">${result ? esc(result.message || '远程统计已返回') : '支持 NewAPI、sub2api 线索和 OpenAI-compatible billing；Cloudflare 拦截时只提示不支持。'}</div>
+        </div>
+        <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-pd-sync-remote-usage ${loading ? 'disabled' : ''}>${loading ? '查询中…' : '查询余额/远程用量'}</button>
+      </div>
+      <div class="pd-remote-config-note">
+        <span>面板账号、密码、UserID / AccessToken 已移到「面板认证」标签。</span>
+        <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-pd-tab="panel">去配置</button>
+      </div>
+      ${error ? `<div class="pd-remote-alert is-bad">${esc(error)}</div>` : ''}
+      ${result ? `
+        <div class="pd-stat-rail pd-remote-rail">
+          <div class="pd-stat-mini pd-stat-mini-hero">
+            <div class="pd-stat-mini-label">余额 / 剩余额度</div>
+            <div class="pd-stat-mini-value pd-cost-hero">${esc(formatRemoteUsageNumber(balance.remaining, balanceUnit))}</div>
+            <div class="pd-stat-mini-sub">${esc(balance.remainingSource || balanceUnit || '原始单位')}</div>
+          </div>
+          <div class="pd-stat-mini">
+            <div class="pd-stat-mini-label">远程已用</div>
+            <div class="pd-stat-mini-value">${esc(formatRemoteUsageNumber(balance.used ?? usage.cost, usageUnit))}</div>
+            <div class="pd-stat-mini-sub">${esc(balance.usedSource || usage.costSource || '面板返回')}</div>
+          </div>
+          <div class="pd-stat-mini">
+            <div class="pd-stat-mini-label">远程 Token / 请求</div>
+            <div class="pd-stat-mini-value">${esc(formatRemoteUsageNumber(usage.totalTokens, 'tokens'))}</div>
+            <div class="pd-stat-mini-sub">${usage.requests != null ? `${esc(formatRemoteUsageNumber(usage.requests, 'requests'))} requests` : esc(usage.tokensSource || '无 token 字段')}</div>
+          </div>
+          <div class="pd-stat-mini">
+            <div class="pd-stat-mini-label">面板类型</div>
+            <div class="pd-stat-mini-value pd-stat-mini-value-soft">${esc(getRemoteProviderTypeLabel(result.providerType))}</div>
+            <div class="pd-stat-mini-sub">${fetchedAt ? `更新 ${esc(fetchedAt)}` : esc(statusMeta.label)}</div>
+          </div>
+        </div>
+        <div class="pd-remote-status ${statusMeta.cls}">
+          <strong>${esc(statusMeta.label)}</strong>
+          <span>${esc(result.baseUrl || row.baseUrl || '')}</span>
+        </div>
+        ${endpointRows.length ? `
+          <div class="pd-section">
+            <div class="pd-section-title">
+              <span>接口尝试</span>
+              <span class="pd-section-meta">${esc(String(endpointRows.length))} 条</span>
+            </div>
+            <div class="pd-remote-endpoints">
+              ${endpointRows.map((item) => `
+                <div class="pd-remote-endpoint ${String(item.status || '') === 'ok' ? 'is-ok' : ''}">
+                  <span>${esc(item.label || item.endpoint || '-')}</span>
+                  <code>${esc(item.status || '-')} ${item.statusCode ? esc(String(item.statusCode)) : ''}</code>
+                  <em>${esc(item.message || '')}</em>
+                </div>`).join('')}
+            </div>
+          </div>` : ''}
+      ` : `
+        <div class="pd-empty pd-empty-small">
+          <div class="pd-empty-title-line">还没有远程统计</div>
+          <p>点击上方按钮后才会向当前 provider 的中转面板发起只读查询。若面板没有公开接口或被 Cloudflare challenge 拦截，会显示“不支持”。</p>
+        </div>
+      `}
+    </div>`;
 }
 
 function getPdUsageSessionTime(session) {
@@ -21463,16 +24132,22 @@ function renderPdUsageModelCostTable(models = [], totalTokens = 0) {
 function renderPdUsage(row) {
   const esc = escapeHtml;
   if (isClaudeProviderDetail(row)) return renderClaudeProviderDetailUsage(row);
+  const usageView = normalizePdUsageView(state.providerDetail?.usageView || 'local');
+  if (usageView === 'remote') return renderPdRemoteUsage(row);
+  const sourceTabs = renderPdUsageSourceTabs('local', row);
   const codexMetrics = state.providerDetail?.usageMetrics || getDashboardMetricsForTool('codex');
   const usageRefreshing = state.providerDetail.usageRefreshing;
   const usageWindow = getPdUsageWindow();
   if (!codexMetrics) {
     return `
-      <div class="pd-empty">
-        <div class="pd-empty-title-line">用量数据加载中…</div>
-        <p>正在从本地 sessions 聚合 token / 费用 / 模型分布。</p>
-        <div class="pd-empty-actions">
-          <button type="button" class="pd-btn pd-btn-primary pd-btn-small ${usageRefreshing ? 'is-busy' : ''}" data-pd-refresh-usage ${usageRefreshing ? 'disabled' : ''}>${usageRefreshing ? '刷新中…' : '强制刷新'}</button>
+      <div class="pd-usage">
+        ${sourceTabs}
+        <div class="pd-empty">
+          <div class="pd-empty-title-line">用量数据加载中…</div>
+          <p>正在从本地 sessions 聚合 token / 费用 / 模型分布。</p>
+          <div class="pd-empty-actions">
+            <button type="button" class="pd-btn pd-btn-primary pd-btn-small ${usageRefreshing ? 'is-busy' : ''}" data-pd-refresh-usage ${usageRefreshing ? 'disabled' : ''}>${usageRefreshing ? '刷新中…' : '强制刷新'}</button>
+          </div>
         </div>
       </div>`;
   }
@@ -21523,14 +24198,17 @@ function renderPdUsage(row) {
         </div>`
       : '';
     return `
-      <div class="pd-empty">
-        <div class="pd-empty-title-line">没匹配到 ${esc(row.name || row.key)} 的会话</div>
-        <p>当前 row.key = <code class="pd-empty-code">${esc(row.key || '')}</code>，但本地 codex sessions 的 provider 字段写的是另一个名字。可能是 OAuth profile 隔离了 CODEX_HOME，也可能是历史会话用了不同的 model_provider key。</p>
-        ${renderPdUsageWindowControls(usageWindow, usageRefreshing)}
-        ${knownChips}
-        <div class="pd-empty-actions">
-          ${row.isActive ? '' : '<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-switch>切换为当前</button>'}
-          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small ${usageRefreshing ? 'is-busy' : ''}" data-pd-refresh-usage ${usageRefreshing ? 'disabled' : ''}>${usageRefreshing ? '刷新中…' : '强制刷新用量'}</button>
+      <div class="pd-usage">
+        ${sourceTabs}
+        <div class="pd-empty">
+          <div class="pd-empty-title-line">没匹配到 ${esc(row.name || row.key)} 的会话</div>
+          <p>当前 row.key = <code class="pd-empty-code">${esc(row.key || '')}</code>，但本地 codex sessions 的 provider 字段写的是另一个名字。可能是 OAuth profile 隔离了 CODEX_HOME，也可能是历史会话用了不同的 model_provider key。</p>
+          ${renderPdUsageWindowControls(usageWindow, usageRefreshing)}
+          ${knownChips}
+          <div class="pd-empty-actions">
+            ${row.isActive ? '' : '<button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-pd-switch>切换为当前</button>'}
+            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small ${usageRefreshing ? 'is-busy' : ''}" data-pd-refresh-usage ${usageRefreshing ? 'disabled' : ''}>${usageRefreshing ? '刷新中…' : '强制刷新用量'}</button>
+          </div>
         </div>
       </div>`;
   }
@@ -21575,6 +24253,7 @@ function renderPdUsage(row) {
 
   return `
     <div class="pd-usage">
+      ${sourceTabs}
       ${renderPdUsageWindowControls(usageWindow, usageRefreshing)}
       <div class="pd-stat-rail">
         <div class="pd-stat-mini pd-stat-mini-hero">
@@ -21988,6 +24667,9 @@ function rememberPdEvalHistory(row, result) {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     savedAt: new Date().toISOString(),
     summary: {
+      profile: snapshot.profile || result.profile || result.summary?.profile || 'quick',
+      profileLabel: result.summary?.profileLabel || result.profileLabel || getPdEvalProfileLabel(snapshot.profile || result.profile || result.summary?.profile),
+      reportTitle: getPdEvalReportTitle(result),
       riskLabel: snapshot.riskLabel || '',
       riskLevel: snapshot.riskLevel || '',
       totalScore: snapshot.totalScore,
@@ -22061,6 +24743,7 @@ function renderPdEvalHistoryPage(row) {
           <thead>
             <tr>
               <th>时间</th>
+              <th>报告</th>
               <th>结论</th>
               <th>接入渠道</th>
               <th>疑似上游</th>
@@ -22084,9 +24767,12 @@ function renderPdEvalHistoryPage(row) {
               const passed = summary.passed ?? snapshot.passed;
               const total = summary.total ?? snapshot.total;
               const risk = summary.riskLabel || snapshot.riskLabel || '检测结果';
+              const reportTitle = summary.reportTitle || getPdEvalReportTitle(item.result || {});
+              const profileLabel = summary.profileLabel || getPdEvalProfileLabel(summary.profile || item.result?.profile || item.result?.summary?.profile);
               return `
                 <tr>
                   <td><span>${esc(item.savedAt ? formatRelativeTime(item.savedAt) : '未知')}</span></td>
+                  <td><strong>${esc(reportTitle)}</strong><em>${esc(profileLabel)}</em></td>
                   <td><strong>${esc(risk)}</strong><em>总分 ${esc(formatPdEvalScore(summary.totalScore ?? snapshot.totalScore))}</em></td>
                   <td><strong>${esc(formatPdEvalProbability(channelProbability))}</strong><em title="${esc(channelLabel)}">${esc(channelLabel)}</em></td>
                   <td><strong>${esc(formatPdEvalProbability(upstreamProbability))}</strong><em title="${esc(upstreamLabel)}">${esc(upstreamLabel)}</em></td>
@@ -22168,6 +24854,55 @@ function getSelectedPdEvalBatchCandidates(row = lookupProviderDetailRow()) {
   return candidates.filter((item) => selection[item.id]);
 }
 
+function getPdEvalProfileLabel(profile = '') {
+  const value = String(profile || '').toLowerCase();
+  if (value === 'professional') return '专业测试';
+  if (value === 'batch') return '批量快测';
+  return '快速测试';
+}
+
+function getPdEvalProfile(result = {}) {
+  const summary = result?.summary || {};
+  return String(result?.profile || summary.profile || 'quick').toLowerCase();
+}
+
+function isPdProfessionalEval(result = {}) {
+  return getPdEvalProfile(result) === 'professional';
+}
+
+function getPdEvalReportTitle(result = {}) {
+  if (isPdProfessionalEval(result)) return '专业评测报告';
+  if (getPdEvalProfile(result) === 'batch') return '批量快测报告';
+  return '快速验真报告';
+}
+
+function getPdEvalReportScope(result = {}) {
+  if (isPdProfessionalEval(result)) {
+    return '面向高阶模型能力验真，重点看 SWE 补丁推理、仓库诊断、上下文抗干扰、状态机、SQL 边界、指令完整性和复杂工具调用。';
+  }
+  return '面向日常接入验真，重点看渠道、疑似上游、模型回显、token 线索、基础推理、结构化输出和工具调用。';
+}
+
+function renderPdEvalReportTypePanel(result = {}) {
+  const esc = escapeHtml;
+  const professional = isPdProfessionalEval(result);
+  const summary = result?.summary || {};
+  const capabilities = Array.isArray(result?.capabilities) ? result.capabilities : [];
+  const hardCount = capabilities.filter((item) => /^prof_/.test(String(item?.id || ''))).length;
+  return `
+    <div class="pd-eval-report-type ${professional ? 'is-professional' : 'is-quick'}">
+      <div>
+        <span>${professional ? 'PROFESSIONAL EVAL' : 'QUICK AUTHENTICITY'}</span>
+        <strong>${esc(getPdEvalReportTitle(result))}</strong>
+        <p>${esc(getPdEvalReportScope(result))}</p>
+      </div>
+      <div class="pd-eval-report-type-meta">
+        <em>${professional ? `${esc(String(hardCount || capabilities.length))} 个专业探针` : `${esc(String(summary.total ?? capabilities.length))} 个快测探针`}</em>
+        <em>${professional ? '独立专业报告' : '低 token 快速报告'}</em>
+      </div>
+    </div>`;
+}
+
 function renderPdEvalSingleView(row) {
   const esc = escapeHtml;
   const running = state.providerDetail.evalRunning;
@@ -22181,7 +24916,7 @@ function renderPdEvalSingleView(row) {
         <div class="pd-info-row"><span>协议</span><code>${esc(providerEvalProtocolLabel(row))}</code></div>
       </div>
       ${running ? renderPdEvalRunning() : ''}
-      ${result ? renderPdEvalResult(result) : (!running ? '<div class="pd-empty pd-empty-small">点“开始快测”运行低 token 探针。</div>' : '')}
+      ${result ? renderPdEvalResult(result) : (!running ? '<div class="pd-empty pd-empty-small">点“开始快测”运行低 token 探针；点“专业测试”运行更难的 SWE、长上下文、SQL 和工具调用 eval。</div>' : '')}
     </div>`;
 }
 
@@ -22507,6 +25242,7 @@ function renderPdEval(row) {
 
   const evalView = normalizeProviderDetailEvalView(state.providerDetail.evalView);
   state.providerDetail.evalView = evalView;
+  const runningProfile = state.providerDetail.evalRunningProfile || 'quick';
   const batchCandidates = getPdEvalBatchCandidates(row);
   const batchSelection = getPdEvalBatchSelection(batchCandidates);
   const selectedCount = batchCandidates.filter((item) => batchSelection[item.id]).length;
@@ -22522,12 +25258,15 @@ function renderPdEval(row) {
       <div class="pd-eval-hero">
         <div>
           <div class="pd-eval-kicker">MODEL AUTHENTICITY</div>
-          <div class="pd-eval-title">接入渠道 + 疑似上游 + 能力快测</div>
+          <div class="pd-eval-title">接入渠道 + 疑似上游 + 能力测试</div>
           <div class="pd-eval-sub">检测渠道、上游线索、token 消耗和多维能力。</div>
         </div>
         <div class="pd-eval-actions">
-          <button type="button" class="pd-btn pd-btn-primary ${running ? 'is-busy' : ''}" data-pd-run-eval ${running ? 'disabled' : ''}>
-            ${running ? '快测中…' : '开始快测'}
+          <button type="button" class="pd-btn pd-btn-primary ${running && runningProfile === 'quick' ? 'is-busy' : ''}" data-pd-run-eval="quick" ${running ? 'disabled' : ''}>
+            ${running && runningProfile === 'quick' ? '快测中…' : '开始快测'}
+          </button>
+          <button type="button" class="pd-btn pd-btn-ghost ${running && runningProfile === 'professional' ? 'is-busy' : ''}" data-pd-run-eval="professional" ${running ? 'disabled' : ''}>
+            ${running && runningProfile === 'professional' ? '专业测试中…' : '专业测试'}
           </button>
         </div>
       </div>
@@ -22537,12 +25276,26 @@ function renderPdEval(row) {
 }
 
 function renderPdEvalRunning() {
+  const esc = escapeHtml;
+  const profile = state.providerDetail.evalRunningProfile || 'quick';
+  const label = getPdEvalProfileLabel(profile);
+  const progress = getPdEvalProgressInfo(profile);
   return `
     <div class="pd-eval-running">
       <div class="pd-eval-spinner"></div>
-      <div>
-        <strong>正在运行快测</strong>
-        <span>检测渠道、上游、token 和能力探针。</span>
+      <div class="pd-eval-running-body">
+        <div class="pd-eval-running-head">
+          <strong>正在运行${esc(label)}</strong>
+          <em>${esc(String(progress.percent))}%</em>
+        </div>
+        <span>${profile === 'professional' ? '执行 SWE、上下文抗干扰、状态机、SQL 和复杂工具调用探针。' : '检测渠道、上游、token 和能力探针。'}</span>
+        <div class="pd-eval-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(String(progress.percent))}">
+          <div style="width:${esc(String(progress.percent))}%"></div>
+        </div>
+        <div class="pd-eval-progress-meta">
+          <span>${esc(progress.stage)}</span>
+          <span>已用 ${esc(progress.elapsedText)} · ${esc(progress.remainingText)}</span>
+        </div>
       </div>
     </div>`;
 }
@@ -22572,12 +25325,15 @@ function renderPdEvalResult(result) {
   const statusMeta = getPdEvalStatusMeta(result);
   const completed = summary.completedAt ? formatRelativeTime(summary.completedAt) : '';
   const duration = summary.durationMs != null ? fmtLatency(summary.durationMs) : '—';
+  const profileLabel = summary.profileLabel || result.profileLabel || getPdEvalProfileLabel(result.profile || summary.profile);
+  const reportTitle = getPdEvalReportTitle(result);
+  const capabilityTitle = isPdProfessionalEval(result) ? '专业 Eval 明细' : profileLabel;
 
   return `
     <div class="pd-eval-result is-${esc(risk)} is-${esc(statusMeta.status)}">
       <div class="pd-eval-result-head">
         <div>
-          <strong>检测结果</strong>
+          <strong>${esc(reportTitle)}</strong>
           <span>${esc(provider.name || provider.key || '')}${completed ? ` · ${esc(completed)}` : ''}</span>
         </div>
         <div class="pd-eval-result-actions">
@@ -22585,6 +25341,7 @@ function renderPdEvalResult(result) {
           <button type="button" class="pd-btn pd-btn-small" data-pd-export-eval>导出报告</button>
         </div>
       </div>
+      ${renderPdEvalReportTypePanel(result)}
       <div class="pd-eval-score-grid">
         <div class="pd-eval-score-main">
           <div class="pd-eval-score-label">风险结论</div>
@@ -22612,7 +25369,7 @@ function renderPdEvalResult(result) {
           <small>请求 ${esc(String(tokenUsage.requests || '—'))} 次</small>
         </div>
         <div class="pd-eval-score">
-          <span>能力快测</span>
+          <span>${esc(profileLabel)}</span>
           <strong>${esc(String(summary.capabilityScore ?? '—'))}</strong>
           <small>${esc(String(summary.passed ?? 0))}/${esc(String(summary.total ?? capabilities.length))} 题通过</small>
         </div>
@@ -22647,7 +25404,7 @@ function renderPdEvalResult(result) {
       </div>
 
       <div class="pd-section">
-        ${renderPdEvalCapabilityPager(capabilities)}
+        ${renderPdEvalCapabilityPager(capabilities, capabilityTitle)}
       </div>
     </div>`;
 }
@@ -22742,7 +25499,7 @@ function renderPdEvalCase(item) {
     </div>`;
 }
 
-function renderPdEvalCapabilityPager(capabilities = []) {
+function renderPdEvalCapabilityPager(capabilities = [], label = '能力快测') {
   const esc = escapeHtml;
   const items = Array.isArray(capabilities) ? capabilities : [];
   const passed = items.filter((item) => item.passed).length;
@@ -22752,7 +25509,7 @@ function renderPdEvalCapabilityPager(capabilities = []) {
   const slice = items.slice(page * pageSize, page * pageSize + pageSize);
   return `
     <div class="pd-section-title">
-      <span>能力快测</span>
+      <span>${esc(label || '能力快测')}</span>
       <span class="pd-section-meta">${esc(String(passed))} / ${esc(String(items.length))}</span>
     </div>
     <div class="pd-eval-cases">
@@ -22946,8 +25703,132 @@ async function actionPdRunTest() {
 
 const PD_EVAL_SINGLE_PROVIDER_TIMEOUT_MS = 30000;
 const PD_EVAL_SINGLE_FRONTEND_TIMEOUT_MS = 210000;
+const PD_EVAL_PRO_PROVIDER_TIMEOUT_MS = 60000;
+const PD_EVAL_PRO_FRONTEND_TIMEOUT_MS = 420000;
 const PD_EVAL_BATCH_PROVIDER_TIMEOUT_MS = 12000;
 const PD_EVAL_BATCH_FRONTEND_TIMEOUT_MS = 45000;
+const PD_EVAL_PROGRESS_TICK_MS = 1000;
+const PD_EVAL_QUICK_PROGRESS_ESTIMATE_MS = 90000;
+const PD_EVAL_PRO_PROGRESS_ESTIMATE_MS = 240000;
+
+function getPdEvalProgressEstimateMs(profile = 'quick') {
+  return profile === 'professional' ? PD_EVAL_PRO_PROGRESS_ESTIMATE_MS : PD_EVAL_QUICK_PROGRESS_ESTIMATE_MS;
+}
+
+function getPdEvalRunEstimate(profile = 'quick') {
+  if (profile === 'professional') {
+    return {
+      label: '专业测试',
+      timeText: '约 3-7 分钟',
+      maxWaitText: '最长等待 7 分钟',
+      tokenText: '约 8k-20k token',
+      requestText: '约 9 次请求',
+      scopeText: 'SWE 补丁、仓库诊断、上下文抗干扰、状态机、SQL 边界、指令完整性和复杂工具调用',
+    };
+  }
+  return {
+    label: '快速测试',
+    timeText: '约 1-3 分钟',
+    maxWaitText: '最长等待 3 分 30 秒',
+    tokenText: '约 3k-8k token',
+    requestText: '约 12 次请求',
+    scopeText: '渠道、疑似上游、token 回显、基础推理、代码跟踪、结构化输出和工具调用',
+  };
+}
+
+function renderPdEvalConfirmBody(profile = 'quick', row = {}) {
+  const esc = escapeHtml;
+  const estimate = getPdEvalRunEstimate(profile);
+  const model = getProviderDetailModel(row) || '自动选择';
+  return `
+    <div class="pd-eval-confirm">
+      <div class="pd-eval-confirm-target">
+        <span>Provider</span>
+        <strong>${esc(row?.name || row?.key || 'Provider')}</strong>
+        <em>${esc(model)}</em>
+      </div>
+      <div class="pd-eval-confirm-grid">
+        <div><span>预计耗时</span><strong>${esc(estimate.timeText)}</strong><em>${esc(estimate.maxWaitText)}</em></div>
+        <div><span>预计消耗</span><strong>${esc(estimate.tokenText)}</strong><em>输入 + 输出估算</em></div>
+        <div><span>请求数量</span><strong>${esc(estimate.requestText)}</strong><em>含元数据和能力探针</em></div>
+      </div>
+      <div class="pd-eval-confirm-scope">
+        <span>测试内容</span>
+        <p>${esc(estimate.scopeText)}</p>
+      </div>
+      <div class="pd-eval-confirm-note">token 和耗时会随模型输出长度、中转实现、reasoning token、网络延迟变化；取消不会发起请求。</div>
+    </div>`;
+}
+
+async function confirmPdEvalRun(profile = 'quick', row = {}) {
+  const estimate = getPdEvalRunEstimate(profile);
+  return openUpdateDialog({
+    eyebrow: 'MODEL EVAL',
+    title: `确认运行${estimate.label}`,
+    body: renderPdEvalConfirmBody(profile, row),
+    meta: '点击确认后才会开始请求模型并产生 token 消耗。',
+    confirmText: `确认开始${estimate.label}`,
+    cancelText: '取消',
+  });
+}
+
+function fmtPdEvalProgressDuration(ms) {
+  const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
+
+function getPdEvalProgressInfo(profile = 'quick') {
+  const startedAt = Number(state.providerDetail.evalStartedAt || 0);
+  const estimateMs = Number(state.providerDetail.evalProgressEstimateMs || getPdEvalProgressEstimateMs(profile));
+  const elapsedMs = startedAt ? Math.max(0, Date.now() - startedAt) : 0;
+  const rawPercent = estimateMs > 0 ? Math.round((elapsedMs / estimateMs) * 100) : 0;
+  const percent = Math.max(4, Math.min(96, rawPercent));
+  const remainingMs = percent >= 96 ? null : Math.max(0, estimateMs - elapsedMs);
+  const professional = profile === 'professional';
+  const stages = professional
+    ? [
+      [10, '准备专业测试'],
+      [24, '模型列表与元数据'],
+      [48, 'SWE 与仓库诊断'],
+      [68, '上下文、状态机和 SQL'],
+      [84, '复杂工具调用'],
+      [96, '真实性评分与报告'],
+    ]
+    : [
+      [12, '准备快测'],
+      [28, '/models 与协议探测'],
+      [55, '模型回显和 token 线索'],
+      [84, '能力快测题执行'],
+      [96, '汇总评分'],
+    ];
+  const stage = stages.find(([limit]) => percent < limit)?.[1] || '等待结果返回';
+  return {
+    percent,
+    stage,
+    elapsedText: fmtPdEvalProgressDuration(elapsedMs),
+    remainingText: remainingMs == null ? '等待服务端返回' : `估算剩余 ${fmtPdEvalProgressDuration(remainingMs)}`,
+  };
+}
+
+function stopPdEvalProgressTicker() {
+  if (!pdEvalProgressTimer) return;
+  clearInterval(pdEvalProgressTimer);
+  pdEvalProgressTimer = null;
+}
+
+function startPdEvalProgressTicker(expectedKey, expectedTool) {
+  stopPdEvalProgressTicker();
+  pdEvalProgressTimer = setInterval(() => {
+    if (!state.providerDetail.evalRunning || !isCurrentProviderDetail(expectedKey, expectedTool)) {
+      stopPdEvalProgressTicker();
+      return;
+    }
+    renderProviderDetail({ force: true });
+  }, PD_EVAL_PROGRESS_TICK_MS);
+}
 
 async function requestPdModelEvalForRow(row, options = {}) {
   if (!row || row.mode !== 'apikey') return { ok: false, error: '缺少 API Key Provider' };
@@ -22956,6 +25837,13 @@ async function requestPdModelEvalForRow(row, options = {}) {
   if (!isCodex && !isClaude) return { ok: false, error: '当前快测支持 Codex / Claude Code API Provider' };
   const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
   const isBatch = options.mode === 'batch';
+  const profile = isBatch ? 'batch' : (options.profile === 'professional' ? 'professional' : 'quick');
+  const providerTimeoutMs = profile === 'professional'
+    ? PD_EVAL_PRO_PROVIDER_TIMEOUT_MS
+    : (isBatch ? PD_EVAL_BATCH_PROVIDER_TIMEOUT_MS : PD_EVAL_SINGLE_PROVIDER_TIMEOUT_MS);
+  const frontendTimeoutMs = profile === 'professional'
+    ? PD_EVAL_PRO_FRONTEND_TIMEOUT_MS
+    : (isBatch ? PD_EVAL_BATCH_FRONTEND_TIMEOUT_MS : PD_EVAL_SINGLE_FRONTEND_TIMEOUT_MS);
   return api('/api/provider/model-eval', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -22966,14 +25854,14 @@ async function requestPdModelEvalForRow(row, options = {}) {
       tool: isClaude ? 'claudecode' : 'codex',
       providerKey: row.key,
       model: getProviderDetailModel(row),
-      profile: isBatch ? 'batch' : 'quick',
-      timeoutMs: isBatch ? PD_EVAL_BATCH_PROVIDER_TIMEOUT_MS : PD_EVAL_SINGLE_PROVIDER_TIMEOUT_MS,
+      profile,
+      timeoutMs: providerTimeoutMs,
     }),
-    timeoutMs: isBatch ? PD_EVAL_BATCH_FRONTEND_TIMEOUT_MS : PD_EVAL_SINGLE_FRONTEND_TIMEOUT_MS,
+    timeoutMs: frontendTimeoutMs,
   });
 }
 
-async function actionPdRunEval() {
+async function actionPdRunEval(profile = 'quick') {
   const row = lookupProviderDetailRow();
   if (!row || row.mode !== 'apikey') return;
   const isCodex = isCodexProviderDetail(row);
@@ -22984,30 +25872,42 @@ async function actionPdRunEval() {
   }
   const expectedKey = row.key;
   const expectedTool = providerDetailTool(row);
+  const evalProfile = profile === 'professional' ? 'professional' : 'quick';
+  const confirmed = await confirmPdEvalRun(evalProfile, row);
+  if (!confirmed) {
+    flash('已取消模型测试', 'info');
+    return;
+  }
+  if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+  stopPdEvalProgressTicker();
   state.providerDetail.evalRunning = true;
+  state.providerDetail.evalRunningProfile = evalProfile;
+  state.providerDetail.evalStartedAt = Date.now();
+  state.providerDetail.evalProgressEstimateMs = getPdEvalProgressEstimateMs(evalProfile);
   state.providerDetail.evalResult = null;
   state.providerDetail.evalView = 'single';
   try { localStorage.setItem('easyaiconfig_pd_eval_view', 'single'); } catch {}
   state.providerDetail.evalExpanded = { channel: false, upstream: false };
   state.providerDetail.evalCasePage = 0;
   renderProviderDetail({ force: true });
+  startPdEvalProgressTicker(expectedKey, expectedTool);
 
   try {
-    const res = await requestPdModelEvalForRow(row);
+    const res = await requestPdModelEvalForRow(row, { profile: evalProfile });
     if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
     if (res?.ok && res.data?.summary) {
       state.providerDetail.evalResult = res.data;
       state.providerDetail.evalHistory = rememberPdEvalHistory(row, res.data);
       const status = normalizePdEvalRunStatus(res.data);
       if (status === 'ok') {
-        flash('模型验真完成：请求完整', 'success');
+        flash(evalProfile === 'professional' ? '专业测试完成：请求完整' : '模型验真完成：请求完整', 'success');
       } else if (status === 'degraded') {
-        flash('模型验真完成，但存在请求或线索异常', 'warning');
+        flash(evalProfile === 'professional' ? '专业测试完成，但存在请求或线索异常' : '模型验真完成，但存在请求或线索异常', 'warning');
       } else {
-        flash('模型验真失败：关键探测未完成', 'error');
+        flash(evalProfile === 'professional' ? '专业测试失败：关键探测未完成' : '模型验真失败：关键探测未完成', 'error');
       }
     } else {
-      state.providerDetail.evalResult = { error: res?.error || res?.data?.error || '模型快测失败' };
+      state.providerDetail.evalResult = { error: res?.error || res?.data?.error || (evalProfile === 'professional' ? '专业测试失败' : '模型快测失败') };
       flash(state.providerDetail.evalResult.error, 'error');
     }
   } catch (err) {
@@ -23016,7 +25916,11 @@ async function actionPdRunEval() {
     flash(state.providerDetail.evalResult.error, 'error');
   } finally {
     if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    stopPdEvalProgressTicker();
     state.providerDetail.evalRunning = false;
+    state.providerDetail.evalRunningProfile = '';
+    state.providerDetail.evalStartedAt = 0;
+    state.providerDetail.evalProgressEstimateMs = 0;
     renderProviderDetail({ force: true });
   }
 }
@@ -23238,12 +26142,16 @@ function buildPdEvalReportHtml(result = {}, row = {}) {
   const capabilities = Array.isArray(result.capabilities) ? result.capabilities : [];
   const completedAt = summary.completedAt || new Date().toISOString();
   const riskText = summary.riskLabel || summary.riskLevel || '未定';
+  const profileLabel = summary.profileLabel || result.profileLabel || getPdEvalProfileLabel(result.profile || summary.profile);
+  const reportTitle = getPdEvalReportTitle(result);
+  const reportScope = getPdEvalReportScope(result);
+  const capabilityTitle = isPdProfessionalEval(result) ? '专业 Eval 明细' : `${profileLabel}明细`;
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${esc(row.name || provider.name || provider.key || 'Provider')} 模型验真报告</title>
+  <title>${esc(row.name || provider.name || provider.key || 'Provider')} ${esc(reportTitle)}</title>
   <style>
     :root { color-scheme: light; --text:#111827; --muted:#6b7280; --line:#e5e7eb; --soft:#f8fafc; --blue:#2563eb; }
     body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:#f4f6fb; }
@@ -23259,6 +26167,7 @@ function buildPdEvalReportHtml(result = {}, row = {}) {
     .card small { display:block; margin-top:6px; color:var(--muted); line-height:1.35; }
     section { margin-top:16px; padding:18px; border:1px solid var(--line); border-radius:12px; background:white; }
     h2 { margin:0 0 12px; font-size:17px; }
+    section p { margin:0; color:var(--muted); font-size:13px; line-height:1.6; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
     th,td { padding:9px 8px; border-top:1px solid var(--line); text-align:left; vertical-align:top; }
     th { color:var(--muted); font-size:12px; }
@@ -23275,17 +26184,23 @@ function buildPdEvalReportHtml(result = {}, row = {}) {
   <main>
     <header>
       <div class="kicker">MODEL AUTHENTICITY REPORT</div>
-      <h1>${esc(row.name || provider.name || provider.key || 'Provider')} 模型验真报告</h1>
+      <h1>${esc(row.name || provider.name || provider.key || 'Provider')} ${esc(reportTitle)}</h1>
       <div class="sub">${esc(pdEvalReportDate(completedAt))} · ${esc(provider.protocolLabel || result.rawMeta?.protocolLabel || provider.protocol || '-')}</div>
       <div class="grid">
+        <div class="card"><span>报告类型</span><strong>${esc(profileLabel)}</strong><small>${esc(isPdProfessionalEval(result) ? '独立专业评测' : '低 token 快速验真')}</small></div>
         <div class="card"><span>风险结论</span><strong>${esc(riskText)}</strong><small>总分 ${esc(String(summary.totalScore ?? '-'))}</small></div>
         <div class="card"><span>接入渠道</span><strong>${esc(channelTop.probability != null ? `${channelTop.probability}%` : '-')}</strong><small>${esc(channelTop.label || '-')}</small></div>
         <div class="card"><span>疑似上游</span><strong>${esc(upstreamTop.probability != null ? `${upstreamTop.probability}%` : '-')}</strong><small>${esc(upstreamTop.label || summary.upstreamLabel || '-')}</small></div>
         <div class="card"><span>智商分</span><strong>${esc(String(summary.iqScore ?? result.iq?.score ?? '-'))}</strong><small>${esc(summary.iqLabel || result.iq?.label || 'IQ-like')}</small></div>
         <div class="card"><span>Token</span><strong>${esc(formatTokenCount(tokenUsage.totalTokens))}</strong><small>请求 ${esc(String(tokenUsage.requests || '-'))} 次</small></div>
-        <div class="card"><span>能力快测</span><strong>${esc(String(summary.capabilityScore ?? '-'))}</strong><small>${esc(String(summary.passed ?? 0))}/${esc(String(summary.total ?? capabilities.length))} 题通过</small></div>
+        <div class="card"><span>${esc(isPdProfessionalEval(result) ? '专业能力' : profileLabel)}</span><strong>${esc(String(summary.capabilityScore ?? '-'))}</strong><small>${esc(String(summary.passed ?? 0))}/${esc(String(summary.total ?? capabilities.length))} 题通过</small></div>
       </div>
     </header>
+
+    <section>
+      <h2>报告范围</h2>
+      <p>${esc(reportScope)}</p>
+    </section>
 
     <section>
       <h2>模型与 token</h2>
@@ -23314,7 +26229,7 @@ function buildPdEvalReportHtml(result = {}, row = {}) {
     </section>
 
     <section>
-      <h2>能力快测明细</h2>
+      <h2>${esc(capabilityTitle)}</h2>
       <table>
         <thead><tr><th>题目</th><th>维度</th><th>结果</th><th>耗时</th><th>Token</th><th>期望 / 观察</th></tr></thead>
         <tbody>
@@ -23913,6 +26828,10 @@ async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已�
     if (!installed) return false;
   }
 
+  const currentLogin = state.current?.login || {};
+  const activeProvider = state.current?.activeProvider || null;
+  const usingOauth = Boolean(currentLogin.loggedIn) && (!activeProvider || !activeProvider.hasApiKey);
+  if (usingOauth && !(await confirmOauthIpRiskBeforeRequest('Codex OAuth 模型请求'))) return false;
   if (!(await preLaunchIpFirewallCheck('Codex'))) return false;
 
   const credentialWarning = getCodexLaunchCredentialWarning();
@@ -23947,6 +26866,7 @@ async function launchCodexLogin(buttonId = '', terminalProfile = '', codexHome =
     if (!installed) return false;
   }
 
+  if (!(await confirmOauthIpRiskBeforeRequest('Codex 官方登录'))) return false;
   if (!(await preLaunchIpFirewallCheck('Codex 官方登录'))) return false;
   if (buttonId) setBusy(buttonId, true, '启动中...');
   const launched = await api('/api/codex/login', {
@@ -27347,6 +30267,10 @@ loadTools();
 
     function renderOptions() {
       const opts = Array.from(selectEl.options);
+      const disabled = Boolean(selectEl.disabled);
+      container.classList.toggle('disabled', disabled);
+      trigger.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+      if (disabled) container.classList.remove('open');
       dropdown.innerHTML = opts.map((opt, i) => {
         const sel = selectEl.selectedIndex === i ? ' selected' : '';
         return `<div class="custom-select-option${sel}" data-value="${opt.value}" data-index="${i}">${opt.textContent}</div>`;
@@ -27366,6 +30290,7 @@ loadTools();
     // Toggle open
     trigger.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (selectEl.disabled) return;
       const wasOpen = container.classList.contains('open');
       closeAllCustomSelects();
       if (!wasOpen) {
@@ -27376,6 +30301,7 @@ loadTools();
 
     // Option click
     dropdown.addEventListener('click', (e) => {
+      if (selectEl.disabled) return;
       const opt = e.target.closest('.custom-select-option');
       if (!opt) return;
       selectEl.value = opt.dataset.value;
@@ -27457,6 +30383,13 @@ loadTools();
     if (typeof state.chSearch !== 'string') state.chSearch = '';
     if (typeof state.chFilter !== 'string') state.chFilter = 'all';
     return state;
+  }
+
+  function isConnectionHubLocalRouterRow(row) {
+    if (!row || row.tool !== 'codex') return false;
+    if (String(row.key || '').trim().toLowerCase() === PROVIDER_ROUTER_CLIENT_PROVIDER_KEY) return true;
+    if (typeof isLoopbackHttpEndpoint === 'function' && isLoopbackHttpEndpoint(row.baseUrl || '')) return true;
+    return false;
   }
 
   // ── Provider row model (tool-agnostic) ──────────────────────────────
@@ -27892,10 +30825,10 @@ loadTools();
   //   - OAuth profile：unset OPENAI_API_KEY OPENAI_BASE_URL + 内联 CODEX_HOME
   //   - API key：仅当 codexHome 不是默认 `~/.codex` 时内联 CODEX_HOME
   // 永远不带 `cd '...'`，用户自己在终端里管理工作目录。
-  function buildCodexLaunchCommand({ codexHome, isOauth, flags = [], isWindows = false, withPrefix = false }) {
+  function buildCodexLaunchCommand({ codexHome, isOauth, flags = [], isWindows = false, withPrefix = false, usesLocalRouter = false }) {
     const trimmedHome = String(codexHome || '').trim();
     const codexCmd = ['codex', ...flags].join(' ');
-    if (!withPrefix) {
+    if (!withPrefix && !usesLocalRouter) {
       return codexCmd;
     }
     if (isWindows) {
@@ -27904,6 +30837,10 @@ loadTools();
         parts.push('set "OPENAI_API_KEY="');
         parts.push('set "OPENAI_BASE_URL="');
       }
+      if (usesLocalRouter) {
+        parts.push(`set "NO_PROXY=${PROVIDER_ROUTER_NO_PROXY}"`);
+        parts.push(`set "no_proxy=${PROVIDER_ROUTER_NO_PROXY}"`);
+      }
       if (trimmedHome) parts.push(`set "CODEX_HOME=${trimmedHome}"`);
       parts.push(codexCmd);
       return parts.join(' && ');
@@ -27911,9 +30848,13 @@ loadTools();
     // POSIX
     const parts = [];
     if (isOauth) parts.push('unset OPENAI_API_KEY OPENAI_BASE_URL');
-    const cmdWithEnv = trimmedHome
-      ? `CODEX_HOME=${posixQuote(trimmedHome)} ${codexCmd}`
-      : codexCmd;
+    const envPrefix = [];
+    if (usesLocalRouter) {
+      envPrefix.push(`NO_PROXY=${posixQuote(PROVIDER_ROUTER_NO_PROXY)}`);
+      envPrefix.push(`no_proxy=${posixQuote(PROVIDER_ROUTER_NO_PROXY)}`);
+    }
+    if (trimmedHome) envPrefix.push(`CODEX_HOME=${posixQuote(trimmedHome)}`);
+    const cmdWithEnv = envPrefix.length ? `${envPrefix.join(' ')} ${codexCmd}` : codexCmd;
     parts.push(cmdWithEnv);
     return parts.join(' && ');
   }
@@ -27924,8 +30865,9 @@ loadTools();
     const codexHome = active.homePath || state.current?.codexHome || '';
     const isWindows = String(state.current?.launch?.platform || '').toLowerCase() === 'win32';
     const withPrefix = Boolean(state.codexCmdShowPrefix);
+    const usesLocalRouter = isConnectionHubLocalRouterRow(active);
     const items = CODEX_LAUNCH_PRESETS.map((preset, idx) => {
-      const cmd = buildCodexLaunchCommand({ codexHome, isOauth, flags: preset.flags, isWindows, withPrefix });
+      const cmd = buildCodexLaunchCommand({ codexHome, isOauth, flags: preset.flags, isWindows, withPrefix, usesLocalRouter });
       const danger = preset.danger ? ' is-danger' : '';
       return `
         <div class="ch-cmd-row${danger}">
@@ -27995,7 +30937,6 @@ loadTools();
           ${active.model ? `<span class="ch-hero-model">${safeEscape(active.model)}</span>` : ''}
         </div>
         ${active.baseUrl ? `<div class="ch-hero-url">${safeEscape(active.baseUrl)}</div>` : ''}
-        ${active.homePath ? `<div class="ch-hero-url mono">${safeEscape(`${active.homeLabel || 'HOME'}: ${active.homePath}`)}</div>` : ''}
       </div>
       <div class="ch-hero-actions">
         ${isOauth ? '' : `<button type="button" class="ch-hero-ghost" data-ch-detect title="重新检测连接">
@@ -28018,6 +30959,492 @@ loadTools();
       ${renderCodexCmdPalette(active, tool)}`;
   }
 
+  // ── List row balance / allowance display ──────────────────────────
+  const CH_BALANCE_VISIBILITY_LS = 'easyaiconfig_provider_balance_visibility_v2';
+
+  function chRowCacheKey(row) {
+    return `${row?.tool || 'codex'}:${row?.key || ''}`;
+  }
+
+  function chRowHasRemotePanelCredential(row) {
+    const cached = state.providerRemoteCredentialByKey?.[chRowCacheKey(row)];
+    return Boolean(cached?.exists);
+  }
+
+  function inferChRowRemotePanelType(row) {
+    const key = chRowCacheKey(row);
+    const cachedResult = state.providerRemoteUsageByKey?.[key]?.result || {};
+    const credential = state.providerRemoteCredentialByKey?.[key] || {};
+    const candidates = [
+      cachedResult.providerType,
+      cachedResult.auth?.panelType,
+      credential.panelType,
+    ].map((item) => String(item || '').trim().toLowerCase());
+    if (candidates.includes('sub2api')) return 'sub2api';
+    if (candidates.includes('newapi')) return 'newapi';
+    const authMode = String(credential.authMode || '').toLowerCase();
+    if (authMode.startsWith('sub2api')) return 'sub2api';
+    if (authMode.startsWith('newapi')) return 'newapi';
+    const text = [row?.name, row?.key, row?.baseUrl, credential.baseUrl, credential.panelUrl, cachedResult.baseUrl, cachedResult.panelUrl]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    if (text.includes('sub2api') || text.includes('aisubapi') || text.includes('ohlaoo.com')) return 'sub2api';
+    return 'newapi';
+  }
+
+  function getChRowPanelRoot(row) {
+    const key = chRowCacheKey(row);
+    const cachedResult = state.providerRemoteUsageByKey?.[key]?.result || {};
+    const credential = state.providerRemoteCredentialByKey?.[key] || {};
+    return getRemotePanelRootFromBase(
+      credential.panelUrl
+        || credential.baseUrl
+        || cachedResult.panelUrl
+        || cachedResult.baseUrl
+        || row?.baseUrl
+        || '',
+    );
+  }
+
+  function buildChRowRechargeUrl(row) {
+    const root = getChRowPanelRoot(row);
+    if (!root) return '';
+    return joinRemotePanelPath(root, getRemotePanelRechargePath(inferChRowRemotePanelType(row)));
+  }
+
+  function canOpenChRowRecharge(row) {
+    if (!row || row.mode !== 'apikey') return false;
+    const root = getChRowPanelRoot(row);
+    if (!root) return false;
+    return !/(^|\/\/)(api\.)?(openai|anthropic)\.com\b/i.test(root);
+  }
+
+  async function openChRowRecharge(row) {
+    const url = buildChRowRechargeUrl(row);
+    if (!url) {
+      if (typeof flash === 'function') flash('当前 Provider 没有可打开的充值页地址', 'error');
+      return;
+    }
+    await openExternalUrl(url);
+  }
+
+  function readChBalanceVisibility() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CH_BALANCE_VISIBILITY_LS) || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function writeChBalanceVisibility(next) {
+    try { localStorage.setItem(CH_BALANCE_VISIBILITY_LS, JSON.stringify(next || {})); } catch (_) {}
+  }
+
+  function isChRowBalanceVisible(row) {
+    const prefs = readChBalanceVisibility();
+    const value = prefs[chRowCacheKey(row)];
+    return value !== false;
+  }
+
+  function setChRowBalanceVisible(row, visible) {
+    const key = chRowCacheKey(row);
+    if (!key.endsWith(':')) {
+      const prefs = readChBalanceVisibility();
+      if (visible) prefs[key] = true;
+      else prefs[key] = false;
+      writeChBalanceVisibility(prefs);
+    }
+  }
+
+  function chFiniteNumber(value) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function formatChRowPercent(value) {
+    const num = chFiniteNumber(value);
+    if (num == null) return '--%';
+    const clamped = Math.max(0, Math.min(100, num));
+    return `${clamped % 1 === 0 ? clamped.toFixed(0) : clamped.toFixed(1)}%`;
+  }
+
+  function getChPercentFromPair(remaining, total) {
+    const remainNum = chFiniteNumber(remaining);
+    const totalNum = chFiniteNumber(total);
+    if (remainNum == null || totalNum == null || totalNum <= 0) return null;
+    return (remainNum / totalNum) * 100;
+  }
+
+  function getChOauthAllowancePercent(row) {
+    const ref = row?.ref || {};
+    const quota = ref.quota || ref.allowance || ref.usage || {};
+    const direct = [
+      row.allowancePercent,
+      row.quotaPercent,
+      row.quotaRemainingPercent,
+      ref.allowancePercent,
+      ref.quotaPercent,
+      ref.quotaRemainingPercent,
+      ref.remainingPercent,
+      ref.availablePercent,
+      quota.remainingPercent,
+      quota.availablePercent,
+      quota.percent,
+    ];
+    for (const value of direct) {
+      let num = chFiniteNumber(value);
+      if (num == null) continue;
+      if (num > 0 && num <= 1) num *= 100;
+      return num;
+    }
+    return getChPercentFromPair(quota.remaining ?? quota.available, quota.total ?? quota.limit);
+  }
+
+  function formatChRemoteNumber(value, unit) {
+    const num = chFiniteNumber(value);
+    if (num == null) return '—';
+    const cleanUnit = String(unit || '').trim().toLowerCase();
+    const money = Math.abs(num).toLocaleString('zh-CN', {
+      minimumFractionDigits: Math.abs(num) >= 100 ? 0 : 2,
+      maximumFractionDigits: 2,
+    });
+    if (cleanUnit === 'rmb' || cleanUnit === 'cny' || cleanUnit === 'yuan' || cleanUnit === '¥' || cleanUnit === '￥') {
+      return `¥${money}`;
+    }
+    if (cleanUnit === 'usd' || cleanUnit === '$') {
+      return `$${money}`;
+    }
+    if (Math.abs(num) >= 1000) return num.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+    if (Math.abs(num) >= 1) return num.toLocaleString('zh-CN', { maximumFractionDigits: 3 });
+    return num.toLocaleString('zh-CN', { maximumFractionDigits: 6 });
+  }
+
+  function chBalancePercentStyle(percent) {
+    const num = chFiniteNumber(percent);
+    if (num == null) return '';
+    const clamped = Math.max(0, Math.min(100, num));
+    return ` style="--ch-balance-fill:${clamped.toFixed(1)}%"`;
+  }
+
+  function renderChBalanceDisplay(row, meta, { button = true } = {}) {
+    const pct = chFiniteNumber(meta?.percent);
+    const title = safeEscape(meta?.title || '');
+    const cls = `${meta?.cls || 'is-muted'} ${pct == null ? 'is-empty' : 'has-percent'}`;
+    const content = `
+      <span class="ch-balance-meter" aria-hidden="true"><span></span></span>
+      <span class="ch-balance-copy">
+        <span>${safeEscape(meta?.labelKind || '余额')}</span>
+        <strong>${safeEscape(meta?.valueLabel || '--')}</strong>
+      </span>`;
+    if (!button) {
+      return `<span class="ch-row-balance ${cls}" title="${title}"${chBalancePercentStyle(pct)}>${content}</span>`;
+    }
+    return `<button type="button" class="ch-row-balance ${cls}" data-ch-row-balance-query="${safeEscape(row.key)}" title="${title}"${chBalancePercentStyle(pct)}>${content}</button>`;
+  }
+
+  function getChRemoteBalanceMeta(result) {
+    if (!result) {
+      return { labelKind: '余额', valueLabel: '--', percent: null, cls: 'is-muted', title: '点击查询当前 Provider 的远程余额。' };
+    }
+    const status = String(result.status || '').toLowerCase();
+    if (status === 'ok') {
+      const balance = result.balance || {};
+      const unit = balance.unit || balance.currency || 'raw';
+      const remaining = chFiniteNumber(balance.remaining);
+      const total = chFiniteNumber(balance.total);
+      const pct = getChPercentFromPair(remaining, total);
+      if (remaining != null) {
+        return {
+          labelKind: '余额',
+          valueLabel: pct == null ? formatChRemoteNumber(remaining, unit) : `${formatChRemoteNumber(remaining, unit)} · ${formatChRowPercent(pct)}`,
+          percent: pct,
+          cls: 'is-ok',
+          title: result.message || '远程余额已同步。',
+        };
+      }
+      return {
+        labelKind: '余额',
+        valueLabel: '已同步',
+        percent: null,
+        cls: 'is-ok',
+        title: result.message || '远程接口返回成功，但没有可展示的余额字段。',
+      };
+    }
+    if (status === 'blocked') return { labelKind: '余额', valueLabel: '不支持', percent: null, cls: 'is-warn', title: result.message || '该面板存在 Cloudflare/bot 拦截。' };
+    if (status === 'auth_error') return { labelKind: '余额', valueLabel: '无权限', percent: null, cls: 'is-warn', title: result.message || '远程用量接口没有权限。' };
+    if (status === 'unsupported') return { labelKind: '余额', valueLabel: '不支持', percent: null, cls: 'is-muted', title: result.message || '该渠道暂不支持远程余额查询。' };
+    return { labelKind: '余额', valueLabel: '--', percent: null, cls: 'is-muted', title: result.message || '尚未查询远程余额。' };
+  }
+
+  function getChOauthAllowanceMeta(row, cached) {
+    if (cached?.error) {
+      return { labelKind: '额度', valueLabel: '失败', percent: null, cls: 'is-warn', title: cached.error };
+    }
+    const result = cached?.result || null;
+    if (!row?.hasCredential) {
+      return { labelKind: '额度', valueLabel: '--%', percent: null, cls: 'is-muted', title: '当前 OAuth 账号未完成登录授权。' };
+    }
+    if (!result) {
+      const pct = getChOauthAllowancePercent(row);
+      return {
+        labelKind: '额度',
+        valueLabel: pct == null ? '--%' : formatChRowPercent(pct),
+        percent: pct,
+        cls: pct == null ? 'is-oauth' : 'is-ok',
+        title: pct == null ? '点击刷新 Codex 官方 OAuth 额度。' : 'OAuth profile 自带的额度百分比。',
+      };
+    }
+    const status = String(result.status || '').toLowerCase();
+    if (status === 'ok') {
+      const pct = chFiniteNumber(result.summary?.remainingPercent ?? result.quota?.remainingPercent);
+      return {
+        labelKind: '额度',
+        valueLabel: pct == null ? '已同步' : formatChRowPercent(pct),
+        percent: pct,
+        cls: 'is-oauth',
+        title: result.message || 'Codex OAuth 官方额度已同步。',
+      };
+    }
+    if (status === 'blocked') return { labelKind: '额度', valueLabel: '不支持', percent: null, cls: 'is-warn', title: result.message || '官方接口被 Cloudflare/bot challenge 拦截。' };
+    if (status === 'auth_error') return { labelKind: '额度', valueLabel: '无权限', percent: null, cls: 'is-warn', title: result.message || 'OAuth token 无权访问官方额度接口。' };
+    if (status === 'network_error') return { labelKind: '额度', valueLabel: '失败', percent: null, cls: 'is-warn', title: result.message || '官方额度接口网络请求失败。' };
+    if (status === 'unsupported') return { labelKind: '额度', valueLabel: '不支持', percent: null, cls: 'is-muted', title: result.message || '官方接口没有返回可用额度数据。' };
+    return { labelKind: '额度', valueLabel: '--%', percent: null, cls: 'is-muted', title: result.message || '尚未查询官方额度。' };
+  }
+
+  function getChBalanceRefreshRows(tool = hubState()?.activeTool || 'codex') {
+    if (tool !== 'codex') return [];
+    return buildProviderRows('codex').filter((row) => {
+      if (!row || row.historyOnly) return false;
+      if (row.mode === 'oauth') return row.tool === 'codex' && row.hasCredential;
+      return row.tool === 'codex' && row.mode === 'apikey' && (row.hasCredential || chRowHasRemotePanelCredential(row));
+    });
+  }
+
+  function applyChBalanceRefreshUi(rows = null) {
+    const button = document.getElementById('chBalanceRefreshBtn');
+    const label = document.getElementById('chBalanceRefreshLabel');
+    if (!button) return;
+    const tool = hubState()?.activeTool || 'codex';
+    const eligible = rows ? rows.filter((row) => getChBalanceRefreshRows(tool).some((item) => item.key === row.key)) : getChBalanceRefreshRows(tool);
+    const loading = Boolean(state.providerBalanceBatchLoading);
+    button.disabled = loading || eligible.length === 0;
+    button.classList.toggle('is-loading', loading);
+    button.title = eligible.length
+      ? `批量刷新 ${eligible.length} 个 Codex OAuth 额度 / API Key 中转余额`
+      : '当前没有可刷新额度或余额的 Codex Provider';
+    if (label) label.textContent = loading ? '刷新中' : '刷新额度/余额';
+  }
+
+  function renderChRowBalance(row) {
+    if (!isChRowBalanceVisible(row)) return '';
+    const key = chRowCacheKey(row);
+    const loading = Boolean(state.providerRemoteUsageLoadingByKey?.[key]);
+    if (row.mode === 'oauth') {
+      if (loading) return renderChBalanceDisplay(row, { labelKind: '额度', valueLabel: '查询中', percent: null, cls: 'is-loading', title: '正在查询官方额度。' }, { button: false });
+      if (row.tool !== 'codex') {
+        return renderChBalanceDisplay(row, { labelKind: '额度', valueLabel: '--%', percent: null, cls: 'is-muted', title: '官方额度查询当前只支持 Codex OAuth。' }, { button: false });
+      }
+      const cached = state.providerRemoteUsageByKey?.[key] || null;
+      const meta = getChOauthAllowanceMeta(row, cached);
+      return renderChBalanceDisplay(row, meta);
+    }
+    if (loading) {
+      return renderChBalanceDisplay(row, { labelKind: '余额', valueLabel: '查询中', percent: null, cls: 'is-loading', title: '正在查询远程余额。' }, { button: false });
+    }
+    if (row.tool !== 'codex') {
+      return renderChBalanceDisplay(row, { labelKind: '余额', valueLabel: '--', percent: null, cls: 'is-muted', title: '远程余额暂只支持 Codex API Key Provider。' }, { button: false });
+    }
+    if ((!row.hasCredential && !chRowHasRemotePanelCredential(row)) || row.historyOnly) {
+      return renderChBalanceDisplay(row, { labelKind: '余额', valueLabel: '--', percent: null, cls: 'is-muted', title: '当前 Provider 没有可用 API Key 或面板认证。' }, { button: false });
+    }
+    const cached = state.providerRemoteUsageByKey?.[key] || null;
+    if (cached?.error) {
+      return renderChBalanceDisplay(row, { labelKind: '余额', valueLabel: '失败', percent: null, cls: 'is-warn', title: cached.error });
+    }
+    const meta = getChRemoteBalanceMeta(cached?.result || null);
+    return renderChBalanceDisplay(row, meta);
+  }
+
+  function getChRowBalanceToggleLabel(row) {
+    const visible = isChRowBalanceVisible(row);
+    const isOauth = row.mode === 'oauth';
+    return visible
+      ? (isOauth ? '隐藏额度百分比' : '隐藏余额')
+      : (isOauth ? '显示额度百分比' : '显示余额');
+  }
+
+  function chRowMenuIcon(kind) {
+    const icons = {
+      more: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>',
+      edit: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>',
+      refresh: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>',
+      delete: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
+      eye: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-8 10-8 10 8 10 8-3.5 8-10 8-10-8-10-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+      eyeOff: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 10.6A2 2 0 0 0 13.4 13.4"/><path d="M9.9 4.2A9.8 9.8 0 0 1 12 4c6.5 0 10 8 10 8a18.4 18.4 0 0 1-2.3 3.5"/><path d="M6.6 6.6C3.5 8.5 2 12 2 12s3.5 8 10 8a10 10 0 0 0 4.5-1"/></svg>',
+      save: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>',
+      copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+      login: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/></svg>',
+      recharge: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg>',
+    };
+    return icons[kind] || icons.more;
+  }
+
+	  function renderChRowActionMenu(row, items) {
+	    if (!items.length) return '';
+	    return `
+	        <span class="ch-row-menu">
+	          <button type="button" class="ch-row-menu-trigger" data-ch-row-menu-trigger="${safeEscape(row.key)}" title="更多操作" aria-label="更多操作 ${safeEscape(row.name)}" aria-expanded="false">
+	            ${chRowMenuIcon('more')}
+	          </button>
+	          <span class="ch-row-menu-panel" role="menu">
+	            ${items.map((item) => `
+	              <button type="button" class="ch-row-menu-item ${item.danger ? 'is-danger' : ''} ${item.primary ? 'is-primary' : ''}" role="menuitem" ${item.attrs}>
+                ${chRowMenuIcon(item.icon)}
+                <span>${safeEscape(item.label)}</span>
+              </button>`).join('')}
+          </span>
+        </span>`;
+  }
+
+  async function queryChRowRemoteUsage(row, options = {}) {
+    const { silent = false, render = true } = options || {};
+    if (!row) return;
+    if (row.mode === 'oauth') {
+      if (row.tool !== 'codex') {
+        setProviderRemoteUsageCache(chRowCacheKey(row), {
+          result: { status: 'unsupported', supported: false, providerType: 'unsupported-oauth', message: '官方额度查询当前只支持 Codex OAuth。' },
+          error: '',
+          fetchedAt: Date.now(),
+        }, { tool: row.tool || 'codex', providerKey: row.key || '' });
+        if (render) renderConnectionHub();
+        return;
+      }
+      if (!row.hasCredential) {
+        if (!silent && typeof flash === 'function') flash('当前 OAuth 账号未完成登录授权，无法查询官方额度', 'error');
+        if (render) renderConnectionHub();
+        return;
+      }
+      if (!(await confirmOauthIpRiskBeforeRequest('查询 Codex 官方额度', { silent }))) {
+        if (!silent && typeof flash === 'function') flash('已取消官方额度查询', 'info');
+        if (render) renderConnectionHub();
+        return;
+      }
+      const key = chRowCacheKey(row);
+      if (state.providerRemoteUsageLoadingByKey?.[key]) return;
+      state.providerRemoteUsageLoadingByKey[key] = true;
+      if (render) renderConnectionHub();
+      try {
+        const codexHome = row.homePath || (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
+        const res = await api('/api/codex/oauth/usage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            codexHome,
+            profileId: row.profileId || '',
+            systemTimeoutMs: 1800,
+            fallbackTimeoutMs: 8000,
+          }),
+          timeoutMs: 15000,
+        });
+        if (res?.ok && res.data) {
+          setProviderRemoteUsageCache(key, { result: res.data, error: '', fetchedAt: Date.now() }, { tool: row.tool || 'codex', providerKey: row.key || '' });
+        } else {
+          setProviderRemoteUsageCache(key, { result: null, error: res?.error || '官方额度查询失败', fetchedAt: Date.now() }, { tool: row.tool || 'codex', providerKey: row.key || '' });
+        }
+      } catch (err) {
+        setProviderRemoteUsageCache(key, { result: null, error: err?.message || String(err), fetchedAt: Date.now() }, { tool: row.tool || 'codex', providerKey: row.key || '' });
+      } finally {
+        state.providerRemoteUsageLoadingByKey[key] = false;
+        if (render) renderConnectionHub();
+      }
+      return;
+    }
+    if (row.tool !== 'codex') {
+      setProviderRemoteUsageCache(chRowCacheKey(row), {
+        result: { status: 'unsupported', supported: false, providerType: 'unsupported-tool', message: '远程余额暂只支持 Codex API Key Provider。' },
+        error: '',
+        fetchedAt: Date.now(),
+      }, { tool: row.tool || 'codex', providerKey: row.key || '' });
+      if (render) renderConnectionHub();
+      return;
+    }
+    if ((!row.hasCredential && !chRowHasRemotePanelCredential(row)) || row.historyOnly) {
+      if (!silent && typeof flash === 'function') flash('当前 Provider 没有可用 API Key 或面板认证，无法查询远程余额', 'error');
+      if (render) renderConnectionHub();
+      return;
+    }
+    const key = chRowCacheKey(row);
+    if (state.providerRemoteUsageLoadingByKey?.[key]) return;
+    state.providerRemoteUsageLoadingByKey[key] = true;
+    if (render) renderConnectionHub();
+    const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
+    try {
+      const res = await api('/api/provider/remote-usage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: el('scopeSelect')?.value || 'global',
+          projectPath: el('projectPathInput')?.value?.trim() || '',
+          codexHome,
+          tool: 'codex',
+          mode: 'apikey',
+          providerKey: row.key,
+          days: 30,
+          timeoutMs: 9000,
+        }),
+        timeoutMs: 26000,
+      });
+      if (res?.ok && res.data) {
+        setProviderRemoteUsageCache(key, { result: res.data, error: '', fetchedAt: Date.now() }, { tool: row.tool || 'codex', providerKey: row.key || '' });
+      } else {
+        setProviderRemoteUsageCache(key, { result: null, error: res?.error || '远程余额查询失败', fetchedAt: Date.now() }, { tool: row.tool || 'codex', providerKey: row.key || '' });
+      }
+    } catch (err) {
+      setProviderRemoteUsageCache(key, { result: null, error: err?.message || String(err), fetchedAt: Date.now() }, { tool: row.tool || 'codex', providerKey: row.key || '' });
+    } finally {
+      state.providerRemoteUsageLoadingByKey[key] = false;
+      if (render) renderConnectionHub();
+    }
+  }
+
+  async function refreshChAllBalances(options = {}) {
+    const { silent = false } = options || {};
+    if (state.providerBalanceBatchLoading) return;
+    const rows = getChBalanceRefreshRows(hubState()?.activeTool || 'codex');
+    if (!rows.length) {
+      if (!silent && typeof flash === 'function') flash('当前没有可刷新额度或余额的 Codex Provider', 'info');
+      applyChBalanceRefreshUi();
+      return;
+    }
+    state.providerBalanceBatchLoading = true;
+    renderConnectionHub();
+    let okCount = 0;
+    let failCount = 0;
+    let cursor = 0;
+    const workerCount = Math.min(3, rows.length);
+    const worker = async () => {
+      while (cursor < rows.length) {
+        const row = rows[cursor++];
+        await queryChRowRemoteUsage(row, { silent: true, render: true });
+        const cached = state.providerRemoteUsageByKey?.[chRowCacheKey(row)];
+        if (cached?.result && !cached?.error) okCount += 1;
+        else failCount += 1;
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: workerCount }, worker));
+      if (!silent && typeof flash === 'function') {
+        flash(failCount ? `已刷新 ${okCount} 个，失败 ${failCount} 个` : `已刷新 ${okCount} 个额度/余额`, failCount ? 'warning' : 'success');
+      }
+    } finally {
+      state.providerBalanceBatchLoading = false;
+      renderConnectionHub();
+    }
+  }
+
   // ── List HTML ─────────────────────────────────────────────────────
   function rowHTML(r) {
     const h = r.health || {};
@@ -28038,7 +31465,7 @@ loadTools();
       dotCls = 'warn'; statusCls = 'warn loading'; statusTxt = '检测中';
     } else if (h.ok) {
       dotCls = 'ok'; statusCls = 'ok';
-      statusTxt = h.latencyMs ? `已通 · ${h.latencyMs}ms` : '已通';
+      statusTxt = '已通';
     } else if (h.checked) {
       dotCls = 'bad'; statusCls = 'bad';
       // 把诊断 stage 映射成短中文标签放进状态文字（详细 hint 走 title tooltip）
@@ -28091,59 +31518,48 @@ loadTools();
       ? `<span class="ch-row-bound-pin" title="该 Provider 已绑定到当前项目 ${safeEscape(state.projectBinding?.cwd || '')}，启动 Codex 时自动用它">本项目</span>`
       : '';
 
-    let actions = '';
+    const actionItems = [{
+      label: getChRowBalanceToggleLabel(r),
+      icon: isChRowBalanceVisible(r) ? 'eyeOff' : 'eye',
+      attrs: `data-ch-row-balance-toggle="${safeEscape(r.key)}"`,
+    }];
     if (r.kind === 'codex-oauth-profile') {
-      actions = `
-          <button type="button" class="ch-row-icon-btn" data-ch-oauth-rename="${safeEscape(r.profileId || '')}" title="重命名" aria-label="重命名 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
-          </button>
-          <button type="button" class="ch-row-icon-btn" data-ch-oauth-delete="${safeEscape(r.profileId || '')}" title="删除" aria-label="删除 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
-          </button>`;
+      actionItems.push(
+        { label: '重命名', icon: 'edit', attrs: `data-ch-oauth-rename="${safeEscape(r.profileId || '')}"` },
+        { label: '删除账号', icon: 'delete', danger: true, attrs: `data-ch-oauth-delete="${safeEscape(r.profileId || '')}"` },
+      );
     } else if (r.kind === 'codex-oauth-unsaved') {
-      actions = `
-          <button type="button" class="ch-row-icon-btn primary" data-ch-oauth-save-current="1" title="保存为 OAuth profile" aria-label="保存为 OAuth profile">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          </button>`;
+      actionItems.push({ label: '保存为 OAuth Profile', icon: 'save', primary: true, attrs: 'data-ch-oauth-save-current="1"' });
     } else if (r.kind === 'claudecode-oauth-profile') {
-      actions = `
-          <button type="button" class="ch-row-icon-btn" data-ch-cc-oauth-copy-export="${safeEscape(r.profileId || '')}" title="复制 export 命令（粘贴到任意终端即可让该会话使用该账号）" aria-label="复制 export 命令">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-          </button>
-          <button type="button" class="ch-row-icon-btn" data-ch-cc-oauth-rename="${safeEscape(r.profileId || '')}" title="重命名" aria-label="重命名 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
-          </button>
-          <button type="button" class="ch-row-icon-btn" data-ch-cc-oauth-relogin="${safeEscape(r.profileId || '')}" title="重新登录 (替换 token)" aria-label="重新登录">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
-          </button>
-          <button type="button" class="ch-row-icon-btn" data-ch-cc-oauth-delete="${safeEscape(r.profileId || '')}" title="删除" aria-label="删除 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
-          </button>`;
+      actionItems.push(
+        { label: '复制 export 命令', icon: 'copy', attrs: `data-ch-cc-oauth-copy-export="${safeEscape(r.profileId || '')}"` },
+        { label: '重命名', icon: 'edit', attrs: `data-ch-cc-oauth-rename="${safeEscape(r.profileId || '')}"` },
+        { label: '重新登录', icon: 'login', attrs: `data-ch-cc-oauth-relogin="${safeEscape(r.profileId || '')}"` },
+        { label: '删除账号', icon: 'delete', danger: true, attrs: `data-ch-cc-oauth-delete="${safeEscape(r.profileId || '')}"` },
+      );
     } else if (r.kind === 'claudecode-oauth-default') {
       // 默认行的 "copy export" 实际上是 unset —— 贴到终端后那个会话会回到
       // 读取 ~/.claude/ 的默认路径。profileId 传空字符串作为标记。
-      actions = `
-          <button type="button" class="ch-row-icon-btn" data-ch-cc-oauth-copy-export="" title="复制 unset 命令（粘贴到终端可切回默认 ~/.claude/）" aria-label="复制 unset 命令">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-          </button>`;
+      actionItems.push({ label: '复制 unset 命令', icon: 'copy', attrs: 'data-ch-cc-oauth-copy-export=""' });
     } else {
       // API-key provider rows — edit / detect / delete. Bind 操作 moved to
       // 详情 drawer 的「📌 项目绑定」tab — 行内图标按钮太隐晦，需要场景解释。
       const canDelete = r.kind === 'codex-apikey' || r.kind === 'claudecode-apikey';
-      actions = `
-          <button type="button" class="ch-row-icon-btn" data-ch-row-edit="${safeEscape(r.key)}" title="编辑" aria-label="编辑 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
-          </button>
-          <button type="button" class="ch-row-icon-btn" data-ch-row-detect="${safeEscape(r.key)}" title="重检" aria-label="重检 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
-          </button>
-          ${canDelete ? `<button type="button" class="ch-row-icon-btn danger" data-ch-row-delete="${safeEscape(r.key)}" data-ch-row-delete-kind="${safeEscape(r.kind)}" title="删除" aria-label="删除 ${safeEscape(r.name)}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
-          </button>` : ''}`;
+      if (canOpenChRowRecharge(r)) {
+        actionItems.push({ label: '充值', icon: 'recharge', attrs: `data-ch-row-recharge="${safeEscape(r.key)}"` });
+      }
+      actionItems.push(
+        { label: '编辑', icon: 'edit', attrs: `data-ch-row-edit="${safeEscape(r.key)}"` },
+        { label: '重检', icon: 'refresh', attrs: `data-ch-row-detect="${safeEscape(r.key)}"` },
+      );
+      if (canDelete) {
+        actionItems.push({ label: '删除 Provider', icon: 'delete', danger: true, attrs: `data-ch-row-delete="${safeEscape(r.key)}" data-ch-row-delete-kind="${safeEscape(r.kind)}"` });
+      }
     }
 
-    const planPill = r.plan ? `<span class="ch-row-plan" data-plan="${safeEscape(String(r.plan).toLowerCase())}">${safeEscape(String(r.plan).toUpperCase())}</span>` : '';
-    const homeMeta = r.homePath ? `<span class="ch-row-url mono">${safeEscape(`${r.homeLabel || 'HOME'}: ${r.homePath}`)}</span>` : '';
+    const actions = renderChRowActionMenu(r, actionItems);
+    const planPill = r.plan ? renderOauthPlanPill(r.plan) : '';
+    const balanceChip = renderChRowBalance(r);
 
     return `
       <div class="ch-row ${r.isActive ? 'current' : ''} ${isBound ? 'is-project-bound' : ''}" role="listitem" data-ch-key="${safeEscape(r.key)}" tabindex="0">
@@ -28152,22 +31568,14 @@ loadTools();
           <span class="ch-row-title">
             <span class="ch-row-name">${safeEscape(r.name)}</span>
             ${planPill}
-            ${r.isActive ? '<span class="ch-row-current-tag">当前</span>' : ''}
             ${boundPin}
           </span>
           <span class="ch-row-meta">
             ${r.model ? `<span class="ch-row-model">${safeEscape(r.model)}</span>` : ''}
             ${r.baseUrl ? `<span class="ch-row-url">${safeEscape(r.baseUrl)}</span>` : ''}
-            ${homeMeta}
           </span>
         </span>
-        <span class="ch-row-status">${statusTxt ? `<span class="ch-status ${statusCls}" title="${safeEscape(dotTip)}">${safeEscape(statusTxt)}</span>` : ''}${(() => {
-          const up = state.providerUptime?.[r.key];
-          if (r.tool !== 'codex' || r.mode !== 'apikey' || up == null || up.uptimePct == null) return '';
-          const v = Number(up.uptimePct);
-          const tier = v >= 99 ? 'is-good' : v >= 90 ? 'is-warn' : 'is-bad';
-          return `<span class="ch-row-uptime ${tier}" title="近 24h 可用率 (${up.total || 0} 次探测)"><span class="ch-row-uptime-bar" style="--up:${v}%"></span>${v}%</span>`;
-        })()}</span>
+        <span class="ch-row-status" title="${safeEscape(dotTip)}">${balanceChip}</span>
         <span class="ch-row-actions">${actions}
         </span>
       </div>`;
@@ -28267,6 +31675,7 @@ loadTools();
     const allRows = buildProviderRows(tool);
     updateRibbonCounts(allRows);
     applyAutodetectUi(readAutodetectInterval());
+    applyChBalanceRefreshUi(allRows);
 
     // Apply search + filter
     const search = (s.chSearch || '').trim().toLowerCase();
@@ -28586,6 +31995,7 @@ loadTools();
 
 
   async function activateCurrentCodexOauth(codexHome = '') {
+    if (!(await confirmOauthIpRiskBeforeRequest('切换到当前 Codex OAuth'))) return false;
     const targetHome = codexHome || getDashboardCodexHome();
     if (targetHome && el('codexHomeInput')) {
       el('codexHomeInput').value = targetHome;
@@ -28619,6 +32029,7 @@ loadTools();
   }
 
   async function saveCurrentOauthAsProfile() {
+    if (!(await confirmOauthIpRiskBeforeRequest('保存 Codex OAuth profile'))) return;
     const defaultName = (() => {
       const d = window.__chOauthProfiles?.data;
       const live = d?.live || {};
@@ -28647,6 +32058,7 @@ loadTools();
 
   async function switchOauthProfile(id) {
     if (!id) return;
+    if (!(await confirmOauthIpRiskBeforeRequest('切换 Codex OAuth 账号'))) return;
     const res = await api('/api/codex/oauth/profiles/switch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -28729,7 +32141,19 @@ loadTools();
   }
 
   async function addNewOauthAccount() {
-    const go = window.confirm('接下来会：\n1) 创建一个独立的 Codex profile 目录（独立 CODEX_HOME）\n2) 在终端里用该目录执行 codex login\n3) 浏览器授权完成后，这里会自动显示并切到新账号\n\n整个过程不会覆盖你当前账号的 auth/history/sessions。继续？');
+    if (!(await confirmOauthIpRiskBeforeRequest('新增 Codex OAuth 账号'))) return;
+    const go = await openUpdateDialog({
+      eyebrow: 'Codex OAuth',
+      title: '新增官方 OAuth 账号',
+      body: updateLines([
+        '将创建一个独立的 Codex profile 目录（独立 CODEX_HOME）。',
+        '随后会在终端里用该目录执行 codex login。',
+        '浏览器授权完成后，这里会自动显示并切到新账号。',
+        '整个过程不会覆盖你当前账号的 auth、history 或 sessions。',
+      ]),
+      confirmText: '继续登录',
+      cancelText: '取消',
+    });
     if (!go) return;
 
     const createRes = await api('/api/codex/oauth/profiles/create', {
@@ -29300,10 +32724,13 @@ loadTools();
 
   // ── Auto-detect frequency ────────────────────────────────────────
   // Persist user's preferred cadence in localStorage. When > 0, schedules a
-  // refreshProviderHealth(true) tick for eligible Codex API Key providers only.
+  // connectivity tick for eligible Codex API Key providers. Quota/balance
+  // refreshes are folded into the same scheduler, but capped to 5 minutes.
   const AUTODETECT_LS_KEY = 'easyaiconfig_ch_autodetect_interval_sec';
   const AUTODETECT_MIN_SEC = 30; // guard against <30s cadence (server-side pressure)
+  const AUTODETECT_BALANCE_MIN_MS = 5 * 60 * 1000;
   let autodetectTimerId = 0;
+  let autodetectLastBalanceRefreshAt = 0;
 
   function clearAutodetectTimer() {
     if (autodetectTimerId) {
@@ -29316,10 +32743,7 @@ loadTools();
     clearAutodetectTimer();
     if (!sec || sec < AUTODETECT_MIN_SEC) return;
     autodetectTimerId = setInterval(() => {
-      if (document.hidden) return; // skip when window backgrounded
-      if (canRunAutodetect()) {
-        try { refreshProviderHealth(true); } catch (_) {}
-      }
+      runAutodetectTick({ silentBalance: true });
     }, sec * 1000);
   }
 
@@ -29358,7 +32782,27 @@ loadTools();
   }
 
   function canRunAutodetect(tool = hubState()?.activeTool || 'codex') {
-    return typeof refreshProviderHealth === 'function' && autodetectEligibleRows(tool).length > 0;
+    const canCheckHealth = typeof refreshProviderHealth === 'function' && autodetectEligibleRows(tool).length > 0;
+    const canRefreshBalance = typeof refreshChAllBalances === 'function' && getChBalanceRefreshRows(tool).length > 0;
+    return canCheckHealth || canRefreshBalance;
+  }
+
+  function runAutodetectTick(options = {}) {
+    const { forceBalance = false, silentBalance = true } = options || {};
+    if (document.hidden) return;
+    const tool = hubState()?.activeTool || 'codex';
+    if (tool !== 'codex') return;
+    if (typeof refreshProviderHealth === 'function' && autodetectEligibleRows(tool).length > 0) {
+      try { refreshProviderHealth(true); } catch (_) {}
+    }
+    if (typeof refreshChAllBalances !== 'function' || getChBalanceRefreshRows(tool).length === 0) return;
+    const now = Date.now();
+    if (!forceBalance && autodetectLastBalanceRefreshAt && now - autodetectLastBalanceRefreshAt < AUTODETECT_BALANCE_MIN_MS) return;
+    autodetectLastBalanceRefreshAt = now;
+    refreshChAllBalances({ silent: silentBalance }).catch((err) => {
+      console.warn('[ch] auto balance refresh failed', err);
+      autodetectLastBalanceRefreshAt = 0;
+    });
   }
 
   function autodetectAvailability() {
@@ -29366,12 +32810,16 @@ loadTools();
     const tool = s?.activeTool || 'codex';
     const rows = buildProviderRows(tool);
     const apiKeyRows = rows.filter((row) => row.mode === 'apikey' && !row.historyOnly);
+    const healthRows = autodetectEligibleRows(tool);
+    const balanceRows = getChBalanceRefreshRows(tool);
     const canRun = canRunAutodetect(tool);
     if (canRun) {
       return {
         canRun: true,
         valueLabel: null,
-        title: '仅探测 Codex API Key Provider；官方 OAuth 不参与连通性探测。',
+        title: healthRows.length
+          ? '按所选频率检测 Codex API Key 连通性；额度/余额最多每 5 分钟刷新一次。'
+          : `当前没有可连通性探测的 API Key；将按 5 分钟节流刷新 ${balanceRows.length} 个额度/余额。`,
       };
     }
     if (tool !== 'codex') {
@@ -29384,7 +32832,7 @@ loadTools();
     return {
       canRun: false,
       valueLabel: apiKeyRows.length ? '缺 Key' : '无 API Key',
-      title: '自动检测只用于已保存 Key 的 Codex API Key Provider；官方 OAuth 不参与连通性探测。',
+      title: '自动检测需要已保存 Key 的 Codex API Key Provider，或可查询额度/余额的 Codex Provider。',
     };
   }
 
@@ -29434,7 +32882,7 @@ loadTools();
     if (container) container.dataset.open = 'true';
   }
 
-  function initAutodetect() {
+	  function initAutodetect() {
     const trigger = document.getElementById('chAutodetectTrigger');
     const menu = document.getElementById('chAutodetectMenu');
     if (!trigger || !menu) return;
@@ -29476,9 +32924,7 @@ loadTools();
       applyAutodetectUi(sec);
       scheduleAutodetect(sec);
       closeAutodetectMenu();
-      if (sec > 0 && canRunAutodetect()) {
-        try { refreshProviderHealth(true); } catch (_) {}
-      }
+      if (sec > 0 && canRunAutodetect()) runAutodetectTick({ silentBalance: true });
     });
 
     // Dismiss on outside click / Escape
@@ -29491,8 +32937,54 @@ loadTools();
       if (e.key === 'Escape' && !menu.classList.contains('hide')) closeAutodetectMenu();
     });
 
-    window.addEventListener('beforeunload', clearAutodetectTimer);
-  }
+	    window.addEventListener('beforeunload', clearAutodetectTimer);
+	  }
+
+	  function closeChRowActionMenu() {
+	    document.querySelectorAll('.ch-row-menu.is-open').forEach((menu) => {
+	      menu.classList.remove('is-open');
+	      const panel = menu.querySelector('.ch-row-menu-panel');
+	      if (panel instanceof HTMLElement) {
+	        panel.style.left = '';
+	        panel.style.top = '';
+	        panel.style.minWidth = '';
+	      }
+	      const trigger = menu.querySelector('[data-ch-row-menu-trigger]');
+	      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+	    });
+	  }
+
+	  function openChRowActionMenu(trigger) {
+	    if (!(trigger instanceof HTMLElement)) return;
+	    const menu = trigger.closest('.ch-row-menu');
+	    const panel = menu?.querySelector('.ch-row-menu-panel');
+	    if (!(menu instanceof HTMLElement) || !(panel instanceof HTMLElement)) return;
+
+	    const wasOpen = menu.classList.contains('is-open');
+	    closeChRowActionMenu();
+	    if (wasOpen) return;
+
+	    menu.classList.add('is-open');
+	    trigger.setAttribute('aria-expanded', 'true');
+	    panel.style.left = '0px';
+	    panel.style.top = '0px';
+	    panel.style.minWidth = '';
+
+	    const margin = 8;
+	    const triggerRect = trigger.getBoundingClientRect();
+	    const panelRect = panel.getBoundingClientRect();
+	    const panelWidth = Math.max(panelRect.width || 176, 176);
+	    const panelHeight = Math.max(panelRect.height || 0, 1);
+	    const maxLeft = Math.max(margin, window.innerWidth - panelWidth - margin);
+	    let left = Math.min(Math.max(margin, triggerRect.right - panelWidth), maxLeft);
+	    let top = triggerRect.bottom + margin;
+	    if (top + panelHeight > window.innerHeight - margin) {
+	      top = Math.max(margin, triggerRect.top - panelHeight - margin);
+	    }
+	    panel.style.left = `${Math.round(left)}px`;
+	    panel.style.top = `${Math.round(top)}px`;
+	    panel.style.minWidth = `${Math.round(panelWidth)}px`;
+	  }
 
   // ── Delegated event wiring (runs once on DOMContentLoaded) ─────
   function wire() {
@@ -29503,6 +32995,9 @@ loadTools();
     // Add button
     document.getElementById('chAddBtn')?.addEventListener('click', () => {
       handlePrimaryAdd().catch((err) => console.warn('[ch] primary add failed', err));
+    });
+    document.getElementById('chBalanceRefreshBtn')?.addEventListener('click', () => {
+      refreshChAllBalances().catch((err) => console.warn('[ch] balance refresh failed', err));
     });
 
     // Hero actions
@@ -29586,6 +33081,7 @@ loadTools();
           flags: preset.flags,
           isWindows: String(state.current?.launch?.platform || '').toLowerCase() === 'win32',
           withPrefix: Boolean(state.codexCmdShowPrefix),
+          usesLocalRouter: isConnectionHubLocalRouterRow(active),
         });
         navigator.clipboard?.writeText(cmd)
           .then(() => {
@@ -29601,55 +33097,101 @@ loadTools();
 
     // Row clicks
     const list = document.getElementById('chList');
-    list?.addEventListener('click', (e) => {
-      const target = e.target instanceof Element ? e.target : null;
-      if (!target) return;
-      // OAuth profile actions (rename / delete / save-current / add-new)
-      const addOauth = target.closest('[data-ch-oauth-add]');
-      if (addOauth) { e.stopPropagation(); addNewOauthAccount(); return; }
-      const saveOauth = target.closest('[data-ch-oauth-save-current]');
-      if (saveOauth) { e.stopPropagation(); saveCurrentOauthAsProfile(); return; }
-      const renameOauth = target.closest('[data-ch-oauth-rename]');
-      if (renameOauth) { e.stopPropagation(); renameOauthProfile(renameOauth.getAttribute('data-ch-oauth-rename')); return; }
-      const deleteOauth = target.closest('[data-ch-oauth-delete]');
-      if (deleteOauth) { e.stopPropagation(); deleteOauthProfile(deleteOauth.getAttribute('data-ch-oauth-delete')); return; }
+	    list?.addEventListener('click', (e) => {
+	      const target = e.target instanceof Element ? e.target : null;
+	      if (!target) return;
+		      const menuTrigger = target.closest('[data-ch-row-menu-trigger]');
+		      if (menuTrigger) {
+		        e.preventDefault();
+		        e.stopPropagation();
+		        openChRowActionMenu(menuTrigger);
+		        return;
+		      }
+		      const balanceToggle = target.closest('[data-ch-row-balance-toggle]');
+		      if (balanceToggle) {
+		        e.preventDefault();
+		        e.stopPropagation();
+		        closeChRowActionMenu();
+		        const key = balanceToggle.getAttribute('data-ch-row-balance-toggle') || '';
+		        const row = buildProviderRows(hubState()?.activeTool || 'codex').find((item) => item.key === key);
+		        if (!row) return;
+	        const nextVisible = !isChRowBalanceVisible(row);
+	        setChRowBalanceVisible(row, nextVisible);
+	        renderConnectionHub();
+	        if (nextVisible && row.tool === 'codex' && (row.hasCredential || chRowHasRemotePanelCredential(row)) && !row.historyOnly && !state.providerRemoteUsageByKey?.[chRowCacheKey(row)]) {
+	          queryChRowRemoteUsage(row).catch((err) => console.warn('[ch] row balance query failed', err));
+	        }
+	        return;
+	      }
+	      const balanceQuery = target.closest('[data-ch-row-balance-query]');
+		      if (balanceQuery) {
+		        e.preventDefault();
+		        e.stopPropagation();
+		        closeChRowActionMenu();
+		        const key = balanceQuery.getAttribute('data-ch-row-balance-query') || '';
+		        const row = buildProviderRows(hubState()?.activeTool || 'codex').find((item) => item.key === key);
+		        if (row) queryChRowRemoteUsage(row).catch((err) => console.warn('[ch] row balance query failed', err));
+	        return;
+	      }
+	      const rechargeBtn = target.closest('[data-ch-row-recharge]');
+		      if (rechargeBtn) {
+		        e.preventDefault();
+		        e.stopPropagation();
+		        closeChRowActionMenu();
+		        const key = rechargeBtn.getAttribute('data-ch-row-recharge') || '';
+		        const row = buildProviderRows(hubState()?.activeTool || 'codex').find((item) => item.key === key);
+		        if (row) openChRowRecharge(row).catch((err) => console.warn('[ch] open recharge failed', err));
+		        return;
+		      }
+	      // OAuth profile actions (rename / delete / save-current / add-new)
+	      const addOauth = target.closest('[data-ch-oauth-add]');
+	      if (addOauth) { e.stopPropagation(); closeChRowActionMenu(); addNewOauthAccount(); return; }
+	      const saveOauth = target.closest('[data-ch-oauth-save-current]');
+	      if (saveOauth) { e.stopPropagation(); closeChRowActionMenu(); saveCurrentOauthAsProfile(); return; }
+	      const renameOauth = target.closest('[data-ch-oauth-rename]');
+	      if (renameOauth) { e.stopPropagation(); closeChRowActionMenu(); renameOauthProfile(renameOauth.getAttribute('data-ch-oauth-rename')); return; }
+	      const deleteOauth = target.closest('[data-ch-oauth-delete]');
+	      if (deleteOauth) { e.stopPropagation(); closeChRowActionMenu(); deleteOauthProfile(deleteOauth.getAttribute('data-ch-oauth-delete')); return; }
 
       // Claude Code OAuth profile actions
-      const ccAddOauth = target.closest('[data-ch-cc-oauth-add]');
-      if (ccAddOauth) { e.stopPropagation(); addNewClaudeCodeOauthProfile(); return; }
-      const ccCopyExport = target.closest('[data-ch-cc-oauth-copy-export]');
-      if (ccCopyExport) {
-        e.stopPropagation();
-        copyClaudeExportCommand(ccCopyExport.getAttribute('data-ch-cc-oauth-copy-export') || '');
-        return;
-      }
-      const ccRename = target.closest('[data-ch-cc-oauth-rename]');
-      if (ccRename) { e.stopPropagation(); renameClaudeCodeOauthProfile(ccRename.getAttribute('data-ch-cc-oauth-rename')); return; }
-      const ccRelogin = target.closest('[data-ch-cc-oauth-relogin]');
-      if (ccRelogin) { e.stopPropagation(); reloginClaudeCodeOauthProfile(ccRelogin.getAttribute('data-ch-cc-oauth-relogin')); return; }
-      const ccDelete = target.closest('[data-ch-cc-oauth-delete]');
-      if (ccDelete) { e.stopPropagation(); deleteClaudeCodeOauthProfile(ccDelete.getAttribute('data-ch-cc-oauth-delete')); return; }
+	      const ccAddOauth = target.closest('[data-ch-cc-oauth-add]');
+	      if (ccAddOauth) { e.stopPropagation(); closeChRowActionMenu(); addNewClaudeCodeOauthProfile(); return; }
+	      const ccCopyExport = target.closest('[data-ch-cc-oauth-copy-export]');
+	      if (ccCopyExport) {
+	        e.stopPropagation();
+	        closeChRowActionMenu();
+	        copyClaudeExportCommand(ccCopyExport.getAttribute('data-ch-cc-oauth-copy-export') || '');
+	        return;
+	      }
+	      const ccRename = target.closest('[data-ch-cc-oauth-rename]');
+	      if (ccRename) { e.stopPropagation(); closeChRowActionMenu(); renameClaudeCodeOauthProfile(ccRename.getAttribute('data-ch-cc-oauth-rename')); return; }
+	      const ccRelogin = target.closest('[data-ch-cc-oauth-relogin]');
+	      if (ccRelogin) { e.stopPropagation(); closeChRowActionMenu(); reloginClaudeCodeOauthProfile(ccRelogin.getAttribute('data-ch-cc-oauth-relogin')); return; }
+	      const ccDelete = target.closest('[data-ch-cc-oauth-delete]');
+	      if (ccDelete) { e.stopPropagation(); closeChRowActionMenu(); deleteClaudeCodeOauthProfile(ccDelete.getAttribute('data-ch-cc-oauth-delete')); return; }
 
-      const editBtn = target.closest('[data-ch-row-edit]');
-      if (editBtn) { e.stopPropagation(); openSlideover('edit', editBtn.getAttribute('data-ch-row-edit')); return; }
-      const detectBtn = target.closest('[data-ch-row-detect]');
-      if (detectBtn) { e.stopPropagation(); detectRow(detectBtn.getAttribute('data-ch-row-detect')); return; }
-      const delBtn = target.closest('[data-ch-row-delete]');
-      if (delBtn) {
-        e.stopPropagation();
-        const key = delBtn.getAttribute('data-ch-row-delete');
-        const kind = delBtn.getAttribute('data-ch-row-delete-kind') || '';
-        deleteApiKeyProvider(key, kind);
+	      const editBtn = target.closest('[data-ch-row-edit]');
+	      if (editBtn) { e.stopPropagation(); closeChRowActionMenu(); openSlideover('edit', editBtn.getAttribute('data-ch-row-edit')); return; }
+	      const detectBtn = target.closest('[data-ch-row-detect]');
+	      if (detectBtn) { e.stopPropagation(); closeChRowActionMenu(); detectRow(detectBtn.getAttribute('data-ch-row-detect')); return; }
+	      const delBtn = target.closest('[data-ch-row-delete]');
+	      if (delBtn) {
+	        e.stopPropagation();
+	        closeChRowActionMenu();
+	        const key = delBtn.getAttribute('data-ch-row-delete');
+	        const kind = delBtn.getAttribute('data-ch-row-delete-kind') || '';
+	        deleteApiKeyProvider(key, kind);
         return;
       }
       const row = target.closest('[data-ch-key]');
       if (row) {
-        const key = row.getAttribute('data-ch-key');
-        // 点行 = 打开详情 drawer（不再直接切换）。
-        // 切换 / 编辑 / 测试 / 删除 都是 drawer 内或行内显式按钮。
-        openProviderDetail(key);
-      }
-    });
+	        const key = row.getAttribute('data-ch-key');
+	        // 点行 = 打开详情 drawer（不再直接切换）。
+	        // 切换 / 编辑 / 测试 / 删除 都是 drawer 内或行内显式按钮。
+	        closeChRowActionMenu();
+	        openProviderDetail(key);
+	      }
+	    });
     list?.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       const target = e.target instanceof Element ? e.target : null;
@@ -29698,12 +33240,20 @@ loadTools();
 
     // Close slide-over (scrim, X button, Escape)
     document.querySelectorAll('[data-ch-close]').forEach((el) => el.addEventListener('click', closeSlideover));
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        const so = document.getElementById('chSlideover');
-        if (so && so.classList.contains('open')) closeSlideover();
-      }
-    });
+	    document.addEventListener('keydown', (e) => {
+	      if (e.key === 'Escape') {
+	        closeChRowActionMenu();
+	        const so = document.getElementById('chSlideover');
+	        if (so && so.classList.contains('open')) closeSlideover();
+	      }
+	    });
+	    document.addEventListener('click', (e) => {
+	      const target = e.target instanceof Element ? e.target : null;
+	      if (target?.closest('.ch-row-menu')) return;
+	      closeChRowActionMenu();
+	    });
+	    document.addEventListener('scroll', closeChRowActionMenu, true);
+	    window.addEventListener('resize', closeChRowActionMenu);
 
     // Save button: when the drawer is open we want edit-in-place semantics —
     // the save should update this provider's URL / Key / model, but NOT change
@@ -29761,6 +33311,7 @@ loadTools();
     // meantime, the hub falls back to an explicit "加载中..." state for the
     // still-loading tool (handled in renderConnectionHub itself).
     await Promise.all([
+      loadProviderRemoteUsageCache(),
       loadCodexOauthProfiles(),
       loadClaudeCodeOauthProfiles(),
     ]);

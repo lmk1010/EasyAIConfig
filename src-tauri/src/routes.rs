@@ -44,6 +44,17 @@ use crate::network::{
 };
 use crate::processes::{kill_process, list_processes};
 use crate::provider::detect_provider;
+use crate::provider_router::{
+  probe_provider_router, query_provider_router_status, start_provider_router, stop_provider_router,
+};
+use crate::provider_remote_usage::{
+  delete_provider_remote_usage_credential, get_provider_remote_usage_credential,
+  query_saved_provider_remote_usage, save_provider_remote_usage_credential,
+};
+use crate::provider_remote_usage_cache::{
+  list_provider_remote_usage_cache, save_provider_remote_usage_cache,
+};
+use crate::codex_oauth_usage::query_codex_oauth_usage;
 use crate::usage_stats::{claudecode_local_usage, codex_session_stats};
 use crate::updater::{get_app_update_info, get_app_update_progress, install_app_update};
 use crate::terminal::{terminal_close, terminal_create, terminal_list, terminal_read, terminal_resize, terminal_write};
@@ -57,6 +68,16 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/provider/test", "POST") => detect_provider(body).await,
     ("/api/provider/secret", "POST") => get_provider_secret(body),
     ("/api/provider/test-saved", "POST") => test_saved_provider(body).await,
+    ("/api/provider/remote-usage", "POST") => query_saved_provider_remote_usage(body).await,
+    ("/api/provider/remote-usage/cache", "GET") => list_provider_remote_usage_cache(query),
+    ("/api/provider/remote-usage/cache", "POST") => save_provider_remote_usage_cache(body),
+    ("/api/provider/remote-usage/credential", "GET") => get_provider_remote_usage_credential(query),
+    ("/api/provider/remote-usage/credential", "POST") => save_provider_remote_usage_credential(body),
+    ("/api/provider/remote-usage/credential", "DELETE") => delete_provider_remote_usage_credential(body),
+    ("/api/provider-router/status", "GET") => query_provider_router_status(query),
+    ("/api/provider-router/start", "POST") => start_provider_router(body),
+    ("/api/provider-router/probe", "POST") => probe_provider_router(body),
+    ("/api/provider-router/stop", "POST") => stop_provider_router(body),
     ("/api/provider/model-eval", "POST") => {
       let tool = body.get("tool").and_then(Value::as_str).unwrap_or("codex").trim().to_lowercase();
       if tool == "claudecode" {
@@ -88,6 +109,7 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/codex/oauth/profiles/switch", "POST") => switch_oauth_profile(body),
     ("/api/codex/oauth/profiles/rename", "POST") => rename_oauth_profile(body),
     ("/api/codex/oauth/profiles/delete", "POST") => delete_oauth_profile(body),
+    ("/api/codex/oauth/usage", "POST") => query_codex_oauth_usage(body).await,
     ("/api/provider/probe-history", "GET") => crate::provider_health::get_probe_history(query),
     ("/api/provider/probe-summary", "GET") => crate::provider_health::get_probe_summary(query),
     ("/api/tray/refresh", "POST") => crate::tray::refresh_menu(&app, body),

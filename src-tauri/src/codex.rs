@@ -29,6 +29,8 @@ const CODEX_APP_MAC_DOWNLOAD_URL: &str = "https://persistent.oaistatic.com/codex
 const CODEX_APP_WIN_STORE_URL: &str = "https://apps.microsoft.com/detail/9plm9xgg6vks";
 const CODEX_APP_WIN_STORE_URI: &str = "ms-windows-store://pdp/?ProductId=9PLM9XGG6VKS";
 const CODEX_APP_DOCS_URL: &str = "https://developers.openai.com/codex/app";
+const ROUTER_CLIENT_PROVIDER_KEY: &str = "easyai-router";
+const LOCAL_ROUTER_NO_PROXY_VALUE: &str = "127.0.0.1,localhost,::1";
 
 static OPENCODE_INSTALL_TASK_SEQ: AtomicU64 = AtomicU64::new(1);
 static OPENCODE_INSTALL_TASKS: OnceLock<Mutex<BTreeMap<String, OpenCodeInstallTask>>> = OnceLock::new();
@@ -2616,6 +2618,67 @@ fn clear_codex_oauth_active_provider(codex_home: &Path, cwd: Option<&Path>) -> R
   Ok(changed)
 }
 
+fn is_local_router_base_url(value: &str) -> bool {
+  let text = value.trim().to_ascii_lowercase();
+  text.starts_with("http://127.")
+    || text.starts_with("http://localhost")
+    || text.starts_with("http://[::1]")
+    || text.starts_with("https://127.")
+    || text.starts_with("https://localhost")
+    || text.starts_with("https://[::1]")
+}
+
+fn codex_config_uses_local_router(config_path: &Path) -> bool {
+  let raw = read_text(config_path).unwrap_or_default();
+  let Ok(config) = parse_toml_config(&raw) else {
+    return false;
+  };
+  let active_provider = config
+    .get("model_provider")
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .trim();
+  if active_provider.eq_ignore_ascii_case(ROUTER_CLIENT_PROVIDER_KEY) {
+    return true;
+  }
+  if let Some(base_url) = config
+    .get("model_providers")
+    .and_then(Value::as_object)
+    .and_then(|providers| providers.get(active_provider))
+    .and_then(|provider| provider.get("base_url"))
+    .and_then(Value::as_str)
+  {
+    if is_local_router_base_url(base_url) {
+      return true;
+    }
+  }
+  for key in ["openai_base_url", "chatgpt_base_url"] {
+    if config.get(key).and_then(Value::as_str).map(is_local_router_base_url).unwrap_or(false) {
+      return true;
+    }
+  }
+  false
+}
+
+fn codex_launch_uses_local_router(codex_home: &Path, cwd: Option<&Path>) -> bool {
+  if codex_config_uses_local_router(&codex_home.join("config.toml")) {
+    return true;
+  }
+  if let Some(project_dir) = cwd {
+    return codex_config_uses_local_router(&project_dir.join(".codex").join("config.toml"));
+  }
+  false
+}
+
+fn codex_launch_extra_env(codex_home: &Path, cwd: Option<&Path>) -> Vec<(String, String)> {
+  let mut env = vec![("CODEX_HOME".to_string(), codex_home.to_string_lossy().to_string())];
+  if codex_launch_uses_local_router(codex_home, cwd) {
+    env.push(("NO_PROXY".to_string(), LOCAL_ROUTER_NO_PROXY_VALUE.to_string()));
+    env.push(("no_proxy".to_string(), LOCAL_ROUTER_NO_PROXY_VALUE.to_string()));
+  }
+  env
+}
+
 fn requested_codex_home_from_object(object: &Map<String, Value>) -> Result<PathBuf, String> {
   let input = get_string(object, "codexHome");
   if input.is_empty() {
@@ -2630,6 +2693,7 @@ fn with_codex_home_command(command: &str, codex_home: &Path, cwd: Option<&Path>)
   // env 全部清掉再启动 codex。不能只清 OPENAI_*，因为用户 provider 可能是
   // CHARITYDOING_API_KEY / OPENROUTER_API_KEY 等自定义 env_key。
   let is_oauth = crate::oauth_profiles::is_oauth_profile_home(codex_home);
+  let uses_local_router = codex_launch_uses_local_router(codex_home, cwd);
   if cfg!(target_os = "windows") {
     let cleanup = if is_oauth {
       collect_codex_provider_env_keys(codex_home, cwd)
@@ -2639,9 +2703,15 @@ fn with_codex_home_command(command: &str, codex_home: &Path, cwd: Option<&Path>)
     } else {
       String::new()
     };
+    let router_env = if uses_local_router {
+      format!("set \"NO_PROXY={LOCAL_ROUTER_NO_PROXY_VALUE}\" && set \"no_proxy={LOCAL_ROUTER_NO_PROXY_VALUE}\" && ")
+    } else {
+      String::new()
+    };
     return format!(
-      "{}set \"CODEX_HOME={}\" && {}",
+      "{}{}set \"CODEX_HOME={}\" && {}",
       cleanup,
+      router_env,
       normalize_windows_cmd_path(&codex_home.to_string_lossy()),
       command
     );
@@ -2655,9 +2725,19 @@ fn with_codex_home_command(command: &str, codex_home: &Path, cwd: Option<&Path>)
   } else {
     String::new()
   };
+  let router_env = if uses_local_router {
+    format!(
+      "NO_PROXY={} no_proxy={} ",
+      quote_posix_shell_arg(LOCAL_ROUTER_NO_PROXY_VALUE),
+      quote_posix_shell_arg(LOCAL_ROUTER_NO_PROXY_VALUE)
+    )
+  } else {
+    String::new()
+  };
   format!(
-    "{}CODEX_HOME={} {}",
+    "{}{}CODEX_HOME={} {}",
     cleanup,
+    router_env,
     quote_posix_shell_arg(&codex_home.to_string_lossy()),
     command
   )
@@ -2964,7 +3044,7 @@ pub(crate) fn launch_codex(body: &Value) -> Result<Value, String> {
     .filter(|text| !text.trim().is_empty())
     .unwrap_or("codex");
   if cfg!(target_os = "windows") {
-    let extra_env = vec![("CODEX_HOME".to_string(), codex_home.to_string_lossy().to_string())];
+    let extra_env = codex_launch_extra_env(&codex_home, Some(&cwd));
     let terminal_session = spawn_windows_embedded_session(
       &cwd,
       "Codex",
@@ -3018,7 +3098,7 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
     .unwrap_or("codex");
   if cfg!(target_os = "windows") {
     let args = vec!["login".to_string()];
-    let extra_env = vec![("CODEX_HOME".to_string(), codex_home.to_string_lossy().to_string())];
+    let extra_env = codex_launch_extra_env(&codex_home, Some(&cwd));
     let terminal_session = spawn_windows_embedded_session(
       &cwd,
       "Codex 登录",
@@ -3465,7 +3545,7 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
     .unwrap_or("codex");
   let tool_label = if action == "fork" { "Codex 分叉恢复" } else { "Codex 会话恢复" };
   if cfg!(target_os = "windows") {
-    let extra_env = vec![("CODEX_HOME".to_string(), codex_home.to_string_lossy().to_string())];
+    let extra_env = codex_launch_extra_env(&codex_home, Some(&cwd));
     let terminal_session = spawn_windows_embedded_session(
       &cwd,
       tool_label,

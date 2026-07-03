@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,6 +38,44 @@ const PROJECT_IGNORED_CODEX_CONFIG_KEYS: &[&str] = &[
   "experimental_realtime_ws_base_url",
   "otel",
 ];
+
+const LOCAL_ROUTER_NO_PROXY_ITEMS: &[&str] = &["127.0.0.1", "localhost", "::1"];
+
+fn is_loopback_base_url(base_url: &str) -> bool {
+  let value = base_url.trim().to_ascii_lowercase();
+  value.starts_with("http://127.")
+    || value.starts_with("http://localhost")
+    || value.starts_with("http://[::1]")
+    || value.starts_with("https://127.")
+    || value.starts_with("https://localhost")
+    || value.starts_with("https://[::1]")
+}
+
+fn append_no_proxy_items(current: &str) -> String {
+  let mut items = current
+    .split(',')
+    .map(|item| item.trim().to_string())
+    .filter(|item| !item.is_empty())
+    .collect::<Vec<_>>();
+  for item in LOCAL_ROUTER_NO_PROXY_ITEMS {
+    if !items.iter().any(|existing| existing.eq_ignore_ascii_case(item)) {
+      items.push((*item).to_string());
+    }
+  }
+  items.join(",")
+}
+
+fn ensure_local_router_no_proxy(env: &mut BTreeMap<String, String>) -> bool {
+  let mut changed = false;
+  for key in ["NO_PROXY", "no_proxy"] {
+    let next = append_no_proxy_items(env.get(key).map(String::as_str).unwrap_or_default());
+    if env.get(key).map(String::as_str) != Some(next.as_str()) {
+      env.insert(key.to_string(), next);
+      changed = true;
+    }
+  }
+  changed
+}
 
 fn normalize_settings_patch_for_scope(patch: &Value, scope: &str) -> Value {
   let mut normalized = normalize_settings_patch(patch);
@@ -889,6 +928,13 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
 
   if !api_key.trim().is_empty() && !env_key.trim().is_empty() {
     env.insert(env_key.clone(), api_key.trim().to_string());
+  }
+  if is_loopback_base_url(&base_url) && ensure_local_router_no_proxy(&mut env) {
+    hints.push(json!({
+      "code": "local_router_no_proxy_added",
+      "message": "已为本地网关写入 NO_PROXY/no_proxy，避免 Codex 请求被系统代理截走",
+      "detail": { "items": LOCAL_ROUTER_NO_PROXY_ITEMS },
+    }));
   }
 
   let mut removed_env_keys: Vec<String> = Vec::new();

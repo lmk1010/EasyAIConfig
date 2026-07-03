@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "EasyAIConfig",
-  "version": "1.0.56",
+  "version": "1.0.57",
   "identifier": "com.easyai.config",
   "build": {
     "frontendDist": "../public"
@@ -24,8 +24,8 @@
         "backgroundColor": "#090c12",
         "theme": "Dark",
         "trafficLightPosition": {
-          "x": 18,
-          "y": 18
+          "x": 6,
+          "y": 14
         }
       }
     ],
