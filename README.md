@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本 Windows 暂不支持，整体更适合 macOS 用户使用。</strong>
+  <strong>Windows 处于实验性支持；推荐优先使用桌面安装包，Web/CLI 模式在 Windows 会保留控制台窗口。</strong>
 </p>
 
 <p align="center">
@@ -17,6 +17,36 @@
   <a href="https://github.com/lmk1010/EasyAIConfig/blob/main/LICENSE"><img src="https://img.shields.io/github/license/lmk1010/EasyAIConfig?style=flat-square&color=3b82f6" alt="License" /></a>
   <a href="https://github.com/lmk1010/EasyAIConfig/actions"><img src="https://img.shields.io/github/actions/workflow/status/lmk1010/EasyAIConfig/release.yml?style=flat-square&label=build" alt="Build" /></a>
 </p>
+
+---
+
+## [UI] 截图预览
+
+> 以下截图中的账号、Base URL 与本地路径已做匿名处理。
+
+### 一键配置与 Provider 管理
+
+<img src="assets/screenshot-quick-setup.png" alt="一键配置与 Provider 管理" width="100%" />
+
+### 数据看板
+
+<img src="assets/screenshot-dashboard.png" alt="数据看板" width="100%" />
+
+### 自动路由网关
+
+<img src="assets/screenshot-router.png" alt="自动路由网关" width="100%" />
+
+### 配置编辑
+
+<img src="assets/screenshot-config-editor.png" alt="配置编辑" width="100%" />
+
+### 工具安装与管理
+
+<img src="assets/screenshot-tools.png" alt="工具安装与管理" width="100%" />
+
+### 内置终端
+
+<img src="assets/screenshot-terminal.png" alt="内置终端" width="100%" />
 
 ---
 
@@ -58,7 +88,7 @@
 | 已支持 | **内置终端** | Codex / Claude / OpenCode 会话浏览 + 实时输出 + 多会话切换 |
 | 已支持 | **会话恢复** | Codex 最近会话浏览 / 一键 resume / 复制命令 / 导出 |
 | 已支持 | **工具安装管理** | Codex CLI / Claude Code / OpenCode / OpenClaw / Codex App / VS Code & Cursor 扩展 一键安装 / 更新 / 卸载 |
-| 已支持 | **桌面客户端** | Tauri 桌面端（macOS aarch64 / x64，Linux .deb / .AppImage） |
+| 已支持 | **桌面客户端** | Tauri 桌面端（macOS aarch64 / x64，Windows .msi / .exe，Linux .deb / .AppImage） |
 | 已支持 | **自动更新（桌面版）** | Tauri 桌面端支持 GitHub Releases 自动检查与安装更新 |
 
 ### 工具支持矩阵
@@ -100,22 +130,6 @@
 | P2 | 多语言界面（中文 / English） | 规划中 |
 | P3 | 配方（Recipes）模板扩展与社区分享 | 规划中 |
 
-## [UI] 截图预览
-
-> 以下截图中的账号、Base URL 与本地路径已做匿名处理。
-
-| 一键配置与 Provider 管理 | 数据看板 |
-|--------------------------|----------|
-| <img src="assets/screenshot-quick-setup.png" alt="一键配置与 Provider 管理" width="100%" /> | <img src="assets/screenshot-dashboard.png" alt="数据看板" width="100%" /> |
-
-| 自动路由网关 | 配置编辑 |
-|--------------|----------|
-| <img src="assets/screenshot-router.png" alt="自动路由网关" width="100%" /> | <img src="assets/screenshot-config-editor.png" alt="配置编辑" width="100%" /> |
-
-| 工具安装与管理 | 内置终端 |
-|----------------|----------|
-| <img src="assets/screenshot-tools.png" alt="工具安装与管理" width="100%" /> | <img src="assets/screenshot-terminal.png" alt="内置终端" width="100%" /> |
-
 ## [Install] 安装
 
 ### [Desktop] 桌面版（推荐）
@@ -123,12 +137,13 @@
 最新版本下载统一在 Releases：
 [https://github.com/lmk1010/EasyAIConfig/releases/latest](https://github.com/lmk1010/EasyAIConfig/releases/latest)
 
-> 当前版本 Windows 暂不支持，推荐 macOS 用户优先使用桌面版。
+> Windows 桌面版处于实验性支持。若不想看到 `cmd` 黑窗口，请使用桌面安装包；`npm start` / `easyaiconfig` Web 模式在 Windows 属于控制台程序，会保留终端窗口。
 
 | 平台 | 推荐安装包 | 下载链接 |
 |------|------------|----------|
 | macOS (Apple Silicon) | `.dmg`（`aarch64`） | [下载 macOS 版本](https://github.com/lmk1010/EasyAIConfig/releases/latest) |
 | macOS (Intel) | `.dmg`（`x64`） | [下载 macOS 版本](https://github.com/lmk1010/EasyAIConfig/releases/latest) |
+| Windows | `.msi` / `.exe` | [下载 Windows 版本](https://github.com/lmk1010/EasyAIConfig/releases/latest) |
 | Linux | `.AppImage` / `.deb` | [下载 Linux 版本](https://github.com/lmk1010/EasyAIConfig/releases/latest) |
 
 下载后请按文件名中的架构选择：
@@ -241,7 +256,7 @@ git push origin v1.0.55
 - 新模型 slug 入库（在 `public/app.js` 的 `CODEX_MODEL_PRESETS` 里加）
 - 新工具集成（Codex / Claude / OpenCode / OpenClaw 之外的）
 - 国际化（English UI）
-- Windows 适配
+- Windows 兼容性验收与签名
 
 ## License
 
