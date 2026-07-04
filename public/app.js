@@ -3607,7 +3607,6 @@ function setActiveTool(toolId) {
   const detectField = detectBtn?.closest('.field');
   const protocolField = el('openClawProtocolField');
   const modelField = modelSelect?.closest('.field');
-  const modelSupportedField = el('modelSupportedMulti')?.closest('.field');
   const baseUrlLabel = baseUrlField?.querySelector('span');
   const apiKeyLabel = apiKeyInput?.closest('.field')?.querySelector('span');
   const detectLabel = detectField?.querySelector('span');
@@ -3623,7 +3622,6 @@ function setActiveTool(toolId) {
   if (modelLabel) modelLabel.textContent = '可用模型';
   if (protocolField) protocolField.classList.add('hide');
   if (claudeProviderKeyField) claudeProviderKeyField.classList.add('hide');
-  if (modelSupportedField) modelSupportedField.style.display = 'none';
   if (modelChips) modelChips.classList.add('hide');
   if (codexAuthBlock) codexAuthBlock.style.display = 'none';
   if (modelRefreshBtn) modelRefreshBtn.classList.remove('visible');
@@ -3688,7 +3686,6 @@ function setActiveTool(toolId) {
     if (baseUrlField) baseUrlField.style.display = '';
     if (detectField) detectField.style.display = '';
     if (modelField) modelField.style.display = '';
-    if (modelSupportedField) modelSupportedField.style.display = '';
     if (sectionTitle) sectionTitle.textContent = '连接配置';
     if (detectionMeta) detectionMeta.textContent = '只需要 URL 和 API Key；缺少 http/https 会自动补全。';
     if (baseUrlInput) baseUrlInput.placeholder = 'https://your-provider.com/v1';
@@ -19037,154 +19034,6 @@ function currentPayload() {
   return payload;
 }
 
-function cleanImportedScalar(value = '') {
-  return String(value || '')
-    .trim()
-    .replace(/^[\s"'`=:{\[]+/, '')
-    .replace(/[\s"'`,;}\]]+$/, '')
-    .trim();
-}
-
-function normalizeImportedBaseUrl(value = '') {
-  let url = cleanImportedScalar(value);
-  if (!url) return '';
-  url = url.replace(/\\\//g, '/');
-  url = url.replace(/\/(chat\/completions|responses|models)(?:[?#].*)?$/i, '');
-  url = url.replace(/\/v1\/(chat\/completions|responses|models)(?:[?#].*)?$/i, '/v1');
-  return normalizeBaseUrl(url);
-}
-
-function collectProviderImportFromJson(value, result = {}, path = []) {
-  if (value == null) return result;
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => collectProviderImportFromJson(item, result, path.concat(String(index))));
-    return result;
-  }
-  if (typeof value === 'object') {
-    Object.entries(value).forEach(([key, child]) => collectProviderImportFromJson(child, result, path.concat(key)));
-    return result;
-  }
-  const raw = cleanImportedScalar(value);
-  if (!raw) return result;
-  const key = String(path[path.length - 1] || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (!result.baseUrl && /(baseurl|apibase|apiurl|endpoint)$/.test(key)) result.baseUrl = normalizeImportedBaseUrl(raw);
-  if (!result.apiKey && /(apikey|authkey|token|bearertoken|secretkey)$/.test(key)) result.apiKey = raw;
-  if (!result.model && /(^model$|modelid|defaultmodel|openaimodel)/.test(key)) result.model = raw;
-  return result;
-}
-
-function parseProviderImportText(text = '') {
-  const source = String(text || '').trim();
-  const result = { baseUrl: '', apiKey: '', model: '' };
-  if (!source) return result;
-
-  try {
-    const parsed = JSON.parse(source);
-    collectProviderImportFromJson(parsed, result);
-  } catch (_) {}
-
-  const readFirst = (patterns) => {
-    for (const pattern of patterns) {
-      const match = source.match(pattern);
-      if (match?.[1]) return cleanImportedScalar(match[1]);
-    }
-    return '';
-  };
-
-  if (!result.baseUrl) {
-    result.baseUrl = normalizeImportedBaseUrl(readFirst([
-      /(?:OPENAI_|ANTHROPIC_|CODEX_)?(?:BASE_?URL|API_?BASE|API_?URL|ENDPOINT)\s*[:=]\s*["'`]?([^\s"'`,;]+)/i,
-      /(?:baseURL|base_url|baseUrl|apiBase|api_base|endpoint)\s*["']?\s*[:=]\s*["'`]?([^"'`,;\s]+)/i,
-      /--url\s+["'`]?([^"'`\s]+)/i,
-    ]));
-  }
-  if (!result.baseUrl) {
-    const urls = [...source.matchAll(/https?:\/\/[^\s"'`,;)]+/gi)].map((m) => normalizeImportedBaseUrl(m[0])).filter(Boolean);
-    result.baseUrl = urls.find((url) => /\/v\d+$/i.test(url)) || urls[0] || '';
-  }
-
-  if (!result.apiKey) {
-    result.apiKey = readFirst([
-      /(?:OPENAI_|ANTHROPIC_|CODEX_)?(?:API_?KEY|AUTH_?TOKEN|TOKEN|SECRET_?KEY)\s*[:=]\s*["'`]?([^\s"'`,;]+)/i,
-      /(?:apiKey|api_key|authToken|auth_token|bearerToken|bearer_token)\s*["']?\s*[:=]\s*["'`]?([^"'`,;\s]+)/i,
-      /Authorization\s*:\s*Bearer\s+([^"'`,;\s]+)/i,
-      /Bearer\s+([^"'`,;\s]+)/i,
-    ]);
-  }
-  if (!result.apiKey) {
-    result.apiKey = readFirst([/(sk-[A-Za-z0-9._-]{8,})/i]);
-  }
-
-  if (!result.model) {
-    result.model = readFirst([
-      /(?:OPENAI_)?MODEL\s*[:=]\s*["'`]?([^\s"'`,;]+)/i,
-      /(?:model|model_id|default_model|defaultModel)\s*["']?\s*[:=]\s*["'`]?([^"'`,;\s]+)/i,
-    ]);
-  }
-
-  return {
-    baseUrl: result.baseUrl || '',
-    apiKey: result.apiKey || '',
-    model: result.model || '',
-  };
-}
-
-function setImportedModelValue(model = '') {
-  const value = cleanImportedScalar(model);
-  const select = el('modelSelect');
-  if (!value || !select) return false;
-  if (state.activeTool === 'codex') {
-    renderModelOptions(state.detected?.models || [], value);
-  } else if (!Array.from(select.options || []).some((option) => option.value === value)) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = value;
-    select.prepend(option);
-  }
-  select.value = value;
-  select.dispatchEvent(new Event('change', { bubbles: true }));
-  return true;
-}
-
-async function applyProviderImportText(text = '') {
-  const parsed = parseProviderImportText(text);
-  const changed = [];
-  const baseUrl = parsed.baseUrl;
-  const apiKey = cleanImportedScalar(parsed.apiKey);
-  const model = cleanImportedScalar(parsed.model);
-
-  if (baseUrl && el('baseUrlInput')) {
-    el('baseUrlInput').value = baseUrl;
-    _markCurrentToolFieldDirty('baseUrl', baseUrl);
-    changed.push('Base URL');
-  }
-  if (apiKey && el('apiKeyInput')) {
-    const input = el('apiKeyInput');
-    input.type = 'password';
-    input.value = apiKey;
-    _markCurrentToolFieldDirty('apiKey', apiKey);
-    if (state.apiKeyField) {
-      state.apiKeyField.dirty = true;
-      state.apiKeyField.actualValue = apiKey;
-    }
-    syncApiKeyToggle();
-    changed.push('API Key');
-  }
-  if (model && setImportedModelValue(model)) changed.push('模型');
-
-  if (!changed.length) {
-    flash('没有识别到 URL、Key 或模型，请检查粘贴内容', 'warning');
-    el('providerImportText')?.focus();
-    return false;
-  }
-  renderQuickSummary();
-  flash(`已导入：${changed.join('、')}`, 'success');
-  if (baseUrl && apiKey && (state.activeTool === 'codex' || state.activeTool === 'opencode' || state.activeTool === 'openclaw')) {
-    void tryAutoFetchModels({ manual: true });
-  }
-  return true;
-}
-
 function applyDerivedMeta(force = false) {
   // No-op: auto-inference fields removed from UI
 }
@@ -19686,183 +19535,6 @@ const CODEX_DEFAULT_MODELS = [
   { value: 'o4-mini', label: 'o4-mini' },
   { value: 'o3', label: 'o3' },
 ];
-
-/** Render default GPT model options into a <select> when no detection has been run. */
-// ─── Slideover 内嵌"支持的模型"多选框组件 ─────────────
-// 点击 trigger 弹一个 popover, 列出全部 catalog 分组 + 复选 + 搜索
-function initModelSupportedMulti(providerKey = '', options = {}) {
-  const wrap = el('modelSupportedMulti');
-  if (!wrap) return;
-  const isDraft = Boolean(options.draft || !providerKey);
-  state.modelSupported = state.modelSupported || {};
-  state.modelSupported.providerKey = providerKey || '';
-  state.modelSupported.draft = isDraft;
-  state.modelSupported.dirty = false;
-  wrap.classList.toggle('is-draft', isDraft);
-  wrap.dataset.mode = isDraft ? 'draft' : 'saved';
-  const advanced = el('modelAdvancedDetails');
-  if (advanced && isDraft) advanced.open = false;
-
-  if (isDraft) {
-    state.modelSupported.checked = new Set(normalizeProviderModelList(options.models || []));
-    const search = el('modelSupportedSearch');
-    if (search) search.value = '';
-  } else {
-    // 拉已保存列表
-    const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
-    api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`)
-      .then((res) => {
-        const list = normalizeProviderModelList((res?.ok && Array.isArray(res.data?.models)) ? res.data.models : []);
-        state.providerSavedModels = state.providerSavedModels || {};
-        state.providerSavedModels[providerKey] = list;
-        state.modelSupported.checked = new Set(list);
-        state.modelSupported.dirty = false;
-        renderModelSupportedSummary();
-        renderModelSupportedPopBody();
-      }).catch(() => {});
-    // 初始 placeholder
-    state.modelSupported.checked = new Set(normalizeProviderModelList(state.providerSavedModels?.[providerKey] || []));
-  }
-  renderModelSupportedSummary();
-  renderModelSupportedPopBody();
-
-  // 绑定一次性事件
-  if (!wrap._msInit) {
-    wrap._msInit = true;
-    const trigger = el('modelSupportedTrigger');
-    trigger?.addEventListener('click', (e) => {
-      e.preventDefault();
-      const isOpen = wrap.classList.toggle('is-open');
-      trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-      if (isOpen) {
-        renderModelSupportedPopBody();
-        setTimeout(() => el('modelSupportedSearch')?.focus(), 60);
-      }
-    });
-    el('modelSupportedSearch')?.addEventListener('input', () => renderModelSupportedPopBody());
-    // 点外面关闭
-    document.addEventListener('click', (e) => {
-      if (!wrap.classList.contains('is-open')) return;
-      if (!wrap.contains(e.target)) {
-        wrap.classList.remove('is-open');
-        trigger?.setAttribute('aria-expanded', 'false');
-      }
-    });
-  }
-}
-
-function renderModelSupportedSummary() {
-  const summary = el('modelSupportedSummary');
-  const popCount = el('modelSupportedPopCount');
-  const advancedMeta = el('modelSupportedAdvancedMeta');
-  if (!summary) return;
-  const checked = state.modelSupported?.checked || new Set();
-  const n = checked.size;
-  if (popCount) popCount.textContent = String(n);
-  if (advancedMeta) {
-    advancedMeta.textContent = n ? `已选 ${n}` : '可选';
-    advancedMeta.classList.toggle('is-active', n > 0);
-  }
-  if (n === 0) {
-    summary.textContent = state.modelSupported?.draft ? '可选：点击选择模型范围' : '点击选择模型范围';
-    summary.classList.add('is-empty');
-    return;
-  }
-  summary.classList.remove('is-empty');
-  // 极简：纯文字摘要，无 pill
-  const arr = Array.from(checked);
-  const preview = arr.slice(0, 2).map((m) => escapeHtml(m)).join('、');
-  const tail = arr.length > 2 ? ` 等 ${n} 项` : '';
-  summary.textContent = '';
-  summary.textContent = preview + tail;
-}
-
-function renderModelSupportedPopBody() {
-  const body = el('modelSupportedPopBody');
-  const searchInput = el('modelSupportedSearch');
-  if (!body) return;
-  const filter = (searchInput?.value || '').trim().toLowerCase();
-  const checked = state.modelSupported?.checked || new Set();
-  let html = '';
-  let hasMatches = false;
-  if (state.modelSupported?.draft) {
-    html += '<div class="model-multi-pop-note">新增时先暂存；保存 Provider 后写入模型范围。默认模型在上方选择。</div>';
-  }
-  for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
-    const matched = group.options.filter((o) =>
-      !filter || o.value.toLowerCase().includes(filter) || String(o.label || '').toLowerCase().includes(filter)
-    );
-    if (!matched.length) continue;
-    hasMatches = true;
-    html += `<div class="model-multi-grp"><div class="model-multi-grp-label">${escapeHtml(group.label)} <em>${matched.length}</em></div>`;
-    for (const o of matched) {
-      const isOn = checked.has(o.value);
-      html += `<label class="model-multi-opt ${isOn ? 'is-on' : ''}">
-        <input type="checkbox" data-ms-model="${escapeHtml(o.value)}" ${isOn ? 'checked' : ''} />
-        <span class="model-multi-opt-id">${escapeHtml(o.value)}</span>
-        <span class="model-multi-opt-label">${escapeHtml(o.label)}</span>
-      </label>`;
-    }
-    html += `</div>`;
-  }
-  if (!hasMatches) html += '<div class="model-multi-empty">没有匹配模型</div>';
-  body.innerHTML = html;
-  body.querySelectorAll('input[data-ms-model]').forEach((cb) => {
-    cb.addEventListener('change', async (e) => {
-      const v = e.target.dataset.msModel;
-      if (e.target.checked) checked.add(v); else checked.delete(v);
-      e.target.closest('.model-multi-opt')?.classList.toggle('is-on', e.target.checked);
-      renderModelSupportedSummary();
-      state.modelSupported.dirty = true;
-      if (state.modelSupported?.draft) return;
-      // 节流写库 (200ms 内的连续 toggle 合并)
-      clearTimeout(state.modelSupported._saveTimer);
-      state.modelSupported._saveTimer = setTimeout(() => persistModelSupported(), 200);
-    });
-  });
-}
-
-async function persistModelSupported(providerKeyOverride = '', options = {}) {
-  const providerKey = String(providerKeyOverride || state.modelSupported?.providerKey || '').trim();
-  if (!providerKey) return false;
-  const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
-  const models = normalizeProviderModelList(Array.from(state.modelSupported?.checked || []));
-  try {
-    const res = await api('/api/provider/saved-models', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ providerKey, codexHome, models }),
-    });
-    if (res?.ok) {
-      state.providerSavedModels = state.providerSavedModels || {};
-      state.providerSavedModels[providerKey] = models;
-      state.modelSupported.providerKey = providerKey;
-      state.modelSupported.draft = false;
-      state.modelSupported.dirty = false;
-      const wrap = el('modelSupportedMulti');
-      if (wrap) {
-        wrap.classList.remove('is-draft');
-        wrap.dataset.mode = 'saved';
-      }
-      renderModelSupportedSummary();
-      return true;
-    }
-    if (!options.silent) flash(`保存支持模型失败: ${res?.error || '未知'}`, 'warning');
-  } catch (err) {
-    if (!options.silent) flash(`保存支持模型异常: ${err.message || err}`, 'warning');
-  }
-  return false;
-}
-
-async function persistModelSupportedAfterProviderSave(savedProviderKey = '') {
-  const providerKey = String(savedProviderKey || '').trim();
-  const ms = state.modelSupported || null;
-  if (!providerKey || !ms) return false;
-  const models = normalizeProviderModelList(Array.from(ms.checked || []));
-  const shouldPersist = Boolean(ms.draft || ms.dirty || (ms.providerKey && ms.providerKey !== providerKey && models.length));
-  if (!shouldPersist) return false;
-  if (!models.length && !ms.dirty) return false;
-  return persistModelSupported(providerKey, { silent: true });
-}
 
 // ─── Model browse modal: 多选浏览全部 catalog 模型 ─────────────
 // state.modelBrowse = { open, search, checked: Set, savedSet: Set }
@@ -28459,9 +28131,6 @@ async function saveConfigOnly() {
   } else {
     flashCodexSavedNeedsRestart(saved);
   }
-  if (savedKey) {
-    await persistModelSupportedAfterProviderSave(savedKey);
-  }
   const savedBaseUrl = String(saved.data?.baseUrl || '').trim();
   if (savedBaseUrl) {
     const baseUrlInput = el('baseUrlInput');
@@ -30190,37 +29859,6 @@ function bindEvents() {
   // ── Sync from environment buttons ──
   el('syncFromCodexBtn')?.addEventListener('click', syncFromCodexEnv);
   el('syncFromClaudeBtn')?.addEventListener('click', syncFromClaudeCodeEnv);
-  el('providerImportPasteBtn')?.addEventListener('click', async () => {
-    const input = el('providerImportText');
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text.trim()) {
-        flash('剪贴板为空，请先复制配置文本', 'warning');
-        input?.focus();
-        return;
-      }
-      if (input) input.value = text;
-      await applyProviderImportText(text);
-    } catch (_) {
-      flash('无法读取剪贴板，请粘贴到输入框后解析', 'warning');
-      input?.focus();
-    }
-  });
-  el('providerImportApplyBtn')?.addEventListener('click', () => {
-    void applyProviderImportText(el('providerImportText')?.value || '');
-  });
-  el('providerImportClearBtn')?.addEventListener('click', () => {
-    const input = el('providerImportText');
-    if (input) {
-      input.value = '';
-      input.focus();
-    }
-  });
-  el('providerImportText')?.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)) return;
-    event.preventDefault();
-    void applyProviderImportText(event.currentTarget.value || '');
-  });
   // Task filter buttons
   el('taskFilters')?.addEventListener('click', (e) => {
     const btn = e.target.closest('.task-filter');
@@ -33581,8 +33219,6 @@ startToolUpdatesTimer();
       if (key === '__codex_official_oauth__') return null;
       if (key === '__codex_oauth_unsaved__' || key.startsWith('__codex_oauth_profile:')) return null;
       const p = (s.current?.providers || []).find((x) => x.key === key);
-      // 异步初始化 / 刷新支持的模型多选框
-      try { initModelSupportedMulti(key); } catch (_) {}
       if (p && typeof fillFromProvider === 'function') {
         try { fillFromProvider(p); } catch (err) { console.warn('[ch] fillFromProvider failed', err); }
       }
@@ -33677,8 +33313,6 @@ startToolUpdatesTimer();
     });
 
     if (mode === 'edit' && effectiveProviderKey) {
-      const importEl = document.getElementById('providerImportText');
-      if (importEl) importEl.value = '';
       const provider = loadProviderIntoForm(effectiveProviderKey);
       if (title) title.textContent = provider ? `编辑 · ${provider.name || provider.key}` : '编辑 Provider';
     } else if (mode === 'add') {
@@ -33686,11 +33320,8 @@ startToolUpdatesTimer();
       if (s) s.editingKey = '';
       const urlEl = document.getElementById('baseUrlInput');
       const keyEl = document.getElementById('apiKeyInput');
-      const importEl = document.getElementById('providerImportText');
       if (urlEl) urlEl.value = '';
       if (keyEl) keyEl.value = '';
-      if (importEl) importEl.value = '';
-      if (activeTool === 'codex') initModelSupportedMulti('', { draft: true });
       setTimeout(() => urlEl && urlEl.focus(), 260);
     } else if (title) {
       title.textContent = '编辑 Provider';
@@ -35090,6 +34721,21 @@ startToolUpdatesTimer();
         const saved = await saveConfigOnly();
         if (saved) closeSlideover();
       }, true);
+    }
+
+    const drawerSaveBtn = document.getElementById('providerDrawerSaveBtn');
+    if (drawerSaveBtn) {
+      drawerSaveBtn.addEventListener('click', async (event) => {
+        event.preventDefault();
+        setBusy('providerDrawerSaveBtn', true, '保存中...');
+        let saved = false;
+        try {
+          saved = await saveConfigOnly();
+        } finally {
+          setBusy('providerDrawerSaveBtn', false);
+        }
+        if (saved) closeSlideover();
+      });
     }
 
     // Launch button: close drawer after launch (same as before, no save-restore needed)

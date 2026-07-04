@@ -23385,107 +23385,6 @@ button.ch-row-balance {
   margin-bottom: 8px !important;
 }
 
-.shell-v2 .ch-so-body .provider-import-field {
-  margin-bottom: 2px;
-}
-
-.shell-v2 .ch-so-body .provider-import-card {
-  display: grid;
-  gap: 9px;
-  padding: 11px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 10px;
-  background: rgba(148, 163, 184, 0.055);
-}
-
-[data-theme="light"] .shell-v2 .ch-so-body .provider-import-card {
-  border-color: rgba(15, 23, 42, 0.10);
-  background: rgba(241, 245, 249, 0.78);
-}
-
-.shell-v2 .ch-so-body .provider-import-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.shell-v2 .ch-so-body .provider-import-head > div {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.shell-v2 .ch-so-body .provider-import-head span {
-  font-size: 12.5px;
-  font-weight: 680;
-  color: var(--s2-text);
-}
-
-.shell-v2 .ch-so-body .provider-import-head small {
-  font-size: 11.5px;
-  line-height: 1.35;
-  color: var(--s2-muted);
-}
-
-.shell-v2 .ch-so-body .provider-import-paste {
-  flex: 0 0 auto;
-  height: 32px !important;
-  min-height: 32px !important;
-  padding: 0 10px !important;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border-radius: 8px !important;
-  font-size: 12px !important;
-  line-height: 1 !important;
-  white-space: nowrap;
-}
-
-.shell-v2 .ch-so-body #providerImportText {
-  width: 100%;
-  min-height: 54px !important;
-  max-height: 90px !important;
-  height: 54px !important;
-  resize: vertical;
-  box-sizing: border-box;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--s2-text);
-  font: inherit;
-  font-size: 12.5px;
-  line-height: 1.45 !important;
-  padding: 8px 10px !important;
-  outline: none;
-}
-
-[data-theme="light"] .shell-v2 .ch-so-body #providerImportText {
-  background: rgba(255, 255, 255, 0.82);
-}
-
-.shell-v2 .ch-so-body #providerImportText:focus {
-  border-color: rgba(91,140,255,0.55);
-  box-shadow: 0 0 0 3px rgba(91,140,255,0.10);
-}
-
-.shell-v2 .ch-so-body .provider-import-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.shell-v2 .ch-so-body .provider-import-actions button {
-  height: 30px !important;
-  min-height: 30px !important;
-  padding: 0 11px !important;
-  border-radius: 8px !important;
-  font-size: 12px !important;
-  line-height: 1 !important;
-}
-
 /* Model row: force the refresh icon button visible (it auto-hides by default
    if no models detected — but inside the drawer we always want it reachable
    so the user can re-pull the model list). */
@@ -23548,6 +23447,48 @@ button.ch-row-balance {
 
 [data-theme="light"] .shell-v2 .ch-so-body .primary-actions {
   background: linear-gradient(180deg, rgba(247, 250, 254, 0) 0%, rgba(247, 250, 254, 0.92) 30%) !important;
+}
+
+.shell-v2 .ch-so-body .primary-actions {
+  display: none !important;
+}
+
+.shell-v2 .ch-so-footer {
+  flex-shrink: 0;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--s2-line-soft);
+  background: rgba(14, 20, 36, 0.94);
+  box-shadow: 0 -18px 34px -28px rgba(0, 0, 0, 0.62);
+}
+
+[data-theme="light"] .shell-v2 .ch-so-footer {
+  background: rgba(247, 250, 254, 0.98);
+  box-shadow: 0 -18px 34px -28px rgba(15, 23, 42, 0.28);
+}
+
+.shell-v2 .ch-so-save-btn {
+  width: 100%;
+  height: 46px;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 0.92rem;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+  color: #0b1420;
+  background: linear-gradient(135deg, #a0c8ff, #6b9eff);
+  box-shadow:
+    0 10px 24px -14px rgba(107, 158, 255, 0.7),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+[data-theme="light"] .shell-v2 .ch-so-save-btn {
+  color: #fff;
+  background: linear-gradient(135deg, #60a5fa, #2563eb);
+}
+
+.shell-v2 .ch-so-save-btn:hover {
+  transform: translateY(-1px);
 }
 
 /* Scrollbars in slide-over */

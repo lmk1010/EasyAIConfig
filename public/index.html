@@ -694,31 +694,6 @@
                       <div class="codex-auth-panel" id="codexOfficialAuthPanel"></div>
                     </div>
 
-                    <div class="field field-wide provider-import-field" id="providerImportField">
-                      <div class="provider-import-card">
-                        <div class="provider-import-head">
-                          <div>
-                            <span>快速导入</span>
-                            <small>粘贴 env / JSON / curl / URL + Key，自动填入。</small>
-                          </div>
-                          <button id="providerImportPasteBtn" type="button" class="secondary provider-import-paste" title="从剪贴板读取并解析">
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                              <rect x="8" y="2" width="8" height="4" rx="1" />
-                            </svg>
-                            <span>从剪贴板</span>
-                          </button>
-                        </div>
-                        <textarea id="providerImportText" rows="2" spellcheck="false"
-                          placeholder="也可以粘贴：OPENAI_BASE_URL=...  OPENAI_API_KEY=...  MODEL=..."></textarea>
-                        <div class="provider-import-actions">
-                          <button id="providerImportApplyBtn" type="button" class="secondary">解析填入</button>
-                          <button id="providerImportClearBtn" type="button" class="secondary">清空</button>
-                        </div>
-                      </div>
-                    </div>
-
                     <label class="field field-wide">
                       <span>Base URL</span>
                       <input id="baseUrlInput" placeholder="https://your-provider.com/v1" />
@@ -784,34 +759,6 @@
                       <small class="field-hint model-fetch-hint">刷新会测试 URL / Key，并把可用模型放进下拉框。</small>
                     </label>
 
-                    <div class="field field-wide model-supported-field">
-                      <details class="model-advanced" id="modelAdvancedDetails">
-                        <summary class="model-advanced-summary">
-                          <span class="model-advanced-title">高级：模型范围</span>
-                          <span class="model-advanced-meta" id="modelSupportedAdvancedMeta">可选</span>
-                          <svg class="model-advanced-caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4l3 3 3-3"/></svg>
-                        </summary>
-                        <div class="model-advanced-body">
-                          <div class="model-advanced-copy">
-                            <span>可选模型</span>
-                            <small>不填也能保存；只在需要收窄默认模型下拉列表时选择。</small>
-                          </div>
-                          <div class="model-multi" id="modelSupportedMulti">
-                            <button type="button" class="model-multi-trigger" id="modelSupportedTrigger" aria-haspopup="listbox" aria-expanded="false">
-                              <span class="model-multi-summary" id="modelSupportedSummary">点击选择…</span>
-                              <svg class="model-multi-caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4l3 3 3-3"/></svg>
-                            </button>
-                            <div class="model-multi-pop" id="modelSupportedPop" role="listbox" aria-multiselectable="true">
-                              <div class="model-multi-pop-search">
-                                <input type="text" id="modelSupportedSearch" placeholder="搜索 model id / 标签…" />
-                                <span class="model-multi-pop-count"><strong id="modelSupportedPopCount">0</strong> 已选</span>
-                              </div>
-                              <div class="model-multi-pop-body" id="modelSupportedPopBody"></div>
-                            </div>
-                          </div>
-                        </div>
-                      </details>
-                    </div>
                   </div>
 
                   <div id="modelChips" class="chips hide"></div>
@@ -831,6 +778,9 @@
                   <div id="codexTerminalMenu" class="provider-dropdown hide"></div>
                 </section>
                     </div><!-- /.ch-so-body -->
+                    <footer class="ch-so-footer">
+                      <button id="providerDrawerSaveBtn" type="button" class="ch-so-save-btn">保存 Provider</button>
+                    </footer>
                   </aside>
                 </div><!-- /.ch-slideover -->
               </section>
