@@ -22,7 +22,7 @@ export const OPENCLAW_PROVIDER_RECIPES = [
     apply: (v) => ({ models: { mode: 'merge', providers: { google: { baseUrl: 'https://generativelanguage.googleapis.com', api: 'google-gemini', apiKey: '$GOOGLE_API_KEY' } } }, env: { GOOGLE_API_KEY: v.key } })
   },
   {
-    id: 'deepseek-direct', name: 'DeepSeek 直连', cat: 'Provider', desc: '使用 DeepSeek API（V3/R1）', kw: 'deepseek 深度求索 模型 provider v3 r1 coder chat',
+    id: 'deepseek-direct', name: 'DeepSeek 直连', cat: 'Provider', desc: '使用 DeepSeek API（V4 Flash / Pro）', kw: 'deepseek 深度求索 模型 provider v4 flash pro chat reasoner',
     fields: [{ key: 'key', label: 'DeepSeek API Key', placeholder: 'sk-...', type: 'password' }],
     apply: (v) => ({ models: { mode: 'merge', providers: { deepseek: { baseUrl: 'https://api.deepseek.com', api: 'openai-completions', apiKey: '$DEEPSEEK_API_KEY' } } }, env: { DEEPSEEK_API_KEY: v.key } })
   },

@@ -21,10 +21,10 @@ const ADAPTERS = [
     name: 'DeepSeek',
     hostPatterns: [/(?:^|\.)deepseek\.com$/i, /(?:^|\.)deepseek\.ai$/i],
     wireApi: 'chat',
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-v4-flash',
     envKey: 'DEEPSEEK_API_KEY',
-    hint: 'DeepSeek 官方直连，使用 OpenAI Chat Completions 协议。',
-    knownModels: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-coder'],
+    hint: 'DeepSeek 官方直连，使用 OpenAI Chat Completions 协议。当前官方模型为 deepseek-v4-flash / deepseek-v4-pro，deepseek-chat / deepseek-reasoner 仅为兼容别名。',
+    knownModels: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'],
   },
   {
     slug: 'siliconflow',

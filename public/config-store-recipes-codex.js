@@ -18,7 +18,7 @@ export const CODEX_CONFIG_RECIPES = [
   },
   {
     id: 'cx-model-custom', name: '自定义模型', cat: '模型', desc: '设置自定义模型名称', kw: 'model 模型 自定义 custom', tool: 'codex',
-    fields: [{ key: 'model', label: '模型名称', placeholder: '如: gpt-5.5, deepseek-r3' }],
+    fields: [{ key: 'model', label: '模型名称', placeholder: '如: gpt-5.5, deepseek-v4-flash' }],
     apply: (v) => ({ model: v.model })
   },
   // ── Reasoning ──

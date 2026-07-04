@@ -3607,6 +3607,7 @@ function setActiveTool(toolId) {
   const detectField = detectBtn?.closest('.field');
   const protocolField = el('openClawProtocolField');
   const modelField = modelSelect?.closest('.field');
+  const modelSupportedField = el('modelSupportedMulti')?.closest('.field');
   const baseUrlLabel = baseUrlField?.querySelector('span');
   const apiKeyLabel = apiKeyInput?.closest('.field')?.querySelector('span');
   const detectLabel = detectField?.querySelector('span');
@@ -3622,6 +3623,7 @@ function setActiveTool(toolId) {
   if (modelLabel) modelLabel.textContent = '可用模型';
   if (protocolField) protocolField.classList.add('hide');
   if (claudeProviderKeyField) claudeProviderKeyField.classList.add('hide');
+  if (modelSupportedField) modelSupportedField.style.display = 'none';
   if (modelChips) modelChips.classList.add('hide');
   if (codexAuthBlock) codexAuthBlock.style.display = 'none';
   if (modelRefreshBtn) modelRefreshBtn.classList.remove('visible');
@@ -3686,6 +3688,7 @@ function setActiveTool(toolId) {
     if (baseUrlField) baseUrlField.style.display = '';
     if (detectField) detectField.style.display = '';
     if (modelField) modelField.style.display = '';
+    if (modelSupportedField) modelSupportedField.style.display = '';
     if (sectionTitle) sectionTitle.textContent = '连接配置';
     if (detectionMeta) detectionMeta.textContent = '只需要 URL 和 API Key；缺少 http/https 会自动补全。';
     if (baseUrlInput) baseUrlInput.placeholder = 'https://your-provider.com/v1';
@@ -5405,7 +5408,8 @@ async function saveOpenCodeConfigOnly() {
   try {
     config = buildOpenCodeConfigFromFields();
   } catch (error) {
-    return flash(error instanceof Error ? error.message : String(error), 'error');
+    flash(error instanceof Error ? error.message : String(error), 'error');
+    return false;
   }
   setBusy('saveBtn', true, '保存中...');
   const json = await api('/api/opencode/config-save', {
@@ -5418,10 +5422,14 @@ async function saveOpenCodeConfigOnly() {
     }),
   });
   setBusy('saveBtn', false);
-  if (!json.ok) return flash(json.error || '保存失败', 'error');
+  if (!json.ok) {
+    flash(json.error || '保存失败', 'error');
+    return false;
+  }
   await loadOpenCodeQuickState();
   renderCurrentConfig();
   flashToolSavedNeedsRestart('OpenCode');
+  return true;
 }
 
 async function launchOpenCodeOnly() {
@@ -12704,7 +12712,7 @@ const OPENCLAW_PROTOCOL_META = {
 };
 
 const OPENCLAW_CN_PROVIDER_PRESETS = [
-  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek/deepseek-chat', providerKind: 'openai', envKey: 'DEEPSEEK_API_KEY', tip: '官方直连，适合 DeepSeek Chat / Reasoner' },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek/deepseek-v4-flash', providerKind: 'openai', envKey: 'DEEPSEEK_API_KEY', tip: '官方直连，当前推荐 V4 Flash / Pro；Chat / Reasoner 仅为兼容别名' },
   { id: 'siliconflow', label: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'siliconflow/deepseek-ai/DeepSeek-V3', providerKind: 'openai', envKey: 'SILICONFLOW_API_KEY', tip: '国内常用聚合线路，模型选择多' },
   { id: 'bailian', label: '阿里百炼', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'bailian/qwen-plus', providerKind: 'openai', envKey: 'DASHSCOPE_API_KEY', tip: 'Qwen 生态，国内访问稳定' },
   { id: 'volcengine', label: '火山方舟', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'volcengine/doubao-seed-1-6-thinking-250715', providerKind: 'openai', envKey: 'ARK_API_KEY', tip: '豆包 / 多模型接入，适合国内网络' },
@@ -12715,8 +12723,8 @@ const OPENCLAW_MODEL_PRESETS = [
   {
     label: '国内推荐',
     options: [
-      { value: 'deepseek/deepseek-chat', label: 'DeepSeek · DeepSeek Chat', apis: ['openai-completions'] },
-      { value: 'deepseek/deepseek-reasoner', label: 'DeepSeek · DeepSeek Reasoner', apis: ['openai-completions'] },
+      { value: 'deepseek/deepseek-v4-flash', label: 'DeepSeek · V4 Flash', apis: ['openai-completions'] },
+      { value: 'deepseek/deepseek-v4-pro', label: 'DeepSeek · V4 Pro', apis: ['openai-completions'] },
       { value: 'siliconflow/deepseek-ai/DeepSeek-V3', label: '硅基流动 · DeepSeek V3', apis: ['openai-completions'] },
       { value: 'bailian/qwen-plus', label: '阿里百炼 · Qwen Plus', apis: ['openai-completions'] },
       { value: 'volcengine/doubao-seed-1-6-thinking-250715', label: '火山方舟 · 豆包 Thinking', apis: ['openai-completions'] },
@@ -12761,7 +12769,8 @@ const OPENCLAW_MODEL_PRESETS = [
     options: [
       { value: 'openrouter/anthropic/claude-sonnet-4-5', label: 'OpenRouter · Claude Sonnet 4.5', apis: ['openai-completions', 'openai-responses'] },
       { value: 'moonshot/kimi-k2.5', label: 'Moonshot · Kimi K2.5', apis: ['openai-completions'] },
-      { value: 'deepseek/deepseek-r1', label: 'DeepSeek R1', apis: ['openai-completions'] },
+      { value: 'deepseek/deepseek-chat', label: 'DeepSeek Chat (V4 Flash 兼容别名)', apis: ['openai-completions'] },
+      { value: 'deepseek/deepseek-reasoner', label: 'DeepSeek Reasoner (V4 Flash 兼容别名)', apis: ['openai-completions'] },
     ],
   },
 ];
@@ -12843,18 +12852,10 @@ const CODEX_MODEL_PRESETS = [
   {
     label: 'DeepSeek',
     options: [
-      { value: 'deepseek-v4', label: 'DeepSeek V4 (最新旗舰)' },
-      { value: 'deepseek-v4-coder', label: 'DeepSeek V4 Coder' },
-      { value: 'deepseek-v4-thinking', label: 'DeepSeek V4 Thinking (推理)' },
-      { value: 'deepseek-v3.3', label: 'DeepSeek V3.3' },
-      { value: 'deepseek-v3.2', label: 'DeepSeek V3.2' },
-      { value: 'deepseek-v3.1', label: 'DeepSeek V3.1' },
-      { value: 'deepseek-r2', label: 'DeepSeek R2 (推理)' },
-      { value: 'deepseek-r1', label: 'DeepSeek R1' },
-      { value: 'deepseek-r1-lite', label: 'DeepSeek R1 Lite' },
-      { value: 'deepseek-coder-v3', label: 'DeepSeek Coder V3' },
-      { value: 'deepseek-chat', label: 'DeepSeek Chat (通用别名)' },
-      { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner (推理别名)' },
+      { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+      { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+      { value: 'deepseek-chat', label: 'DeepSeek Chat (V4 Flash 兼容别名，2026-07-24 退役)' },
+      { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner (V4 Flash 兼容别名，2026-07-24 退役)' },
     ],
   },
   {
@@ -13030,7 +13031,8 @@ const OPENCLAW_MODEL_NAME_PRESETS = [
   {
     label: '其他',
     options: [
-      { value: 'DeepSeek R1', label: 'DeepSeek R1' },
+      { value: 'DeepSeek V4 Flash', label: 'DeepSeek V4 Flash' },
+      { value: 'DeepSeek V4 Pro', label: 'DeepSeek V4 Pro' },
     ],
   },
 ];
@@ -19035,6 +19037,154 @@ function currentPayload() {
   return payload;
 }
 
+function cleanImportedScalar(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/^[\s"'`=:{\[]+/, '')
+    .replace(/[\s"'`,;}\]]+$/, '')
+    .trim();
+}
+
+function normalizeImportedBaseUrl(value = '') {
+  let url = cleanImportedScalar(value);
+  if (!url) return '';
+  url = url.replace(/\\\//g, '/');
+  url = url.replace(/\/(chat\/completions|responses|models)(?:[?#].*)?$/i, '');
+  url = url.replace(/\/v1\/(chat\/completions|responses|models)(?:[?#].*)?$/i, '/v1');
+  return normalizeBaseUrl(url);
+}
+
+function collectProviderImportFromJson(value, result = {}, path = []) {
+  if (value == null) return result;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectProviderImportFromJson(item, result, path.concat(String(index))));
+    return result;
+  }
+  if (typeof value === 'object') {
+    Object.entries(value).forEach(([key, child]) => collectProviderImportFromJson(child, result, path.concat(key)));
+    return result;
+  }
+  const raw = cleanImportedScalar(value);
+  if (!raw) return result;
+  const key = String(path[path.length - 1] || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!result.baseUrl && /(baseurl|apibase|apiurl|endpoint)$/.test(key)) result.baseUrl = normalizeImportedBaseUrl(raw);
+  if (!result.apiKey && /(apikey|authkey|token|bearertoken|secretkey)$/.test(key)) result.apiKey = raw;
+  if (!result.model && /(^model$|modelid|defaultmodel|openaimodel)/.test(key)) result.model = raw;
+  return result;
+}
+
+function parseProviderImportText(text = '') {
+  const source = String(text || '').trim();
+  const result = { baseUrl: '', apiKey: '', model: '' };
+  if (!source) return result;
+
+  try {
+    const parsed = JSON.parse(source);
+    collectProviderImportFromJson(parsed, result);
+  } catch (_) {}
+
+  const readFirst = (patterns) => {
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      if (match?.[1]) return cleanImportedScalar(match[1]);
+    }
+    return '';
+  };
+
+  if (!result.baseUrl) {
+    result.baseUrl = normalizeImportedBaseUrl(readFirst([
+      /(?:OPENAI_|ANTHROPIC_|CODEX_)?(?:BASE_?URL|API_?BASE|API_?URL|ENDPOINT)\s*[:=]\s*["'`]?([^\s"'`,;]+)/i,
+      /(?:baseURL|base_url|baseUrl|apiBase|api_base|endpoint)\s*["']?\s*[:=]\s*["'`]?([^"'`,;\s]+)/i,
+      /--url\s+["'`]?([^"'`\s]+)/i,
+    ]));
+  }
+  if (!result.baseUrl) {
+    const urls = [...source.matchAll(/https?:\/\/[^\s"'`,;)]+/gi)].map((m) => normalizeImportedBaseUrl(m[0])).filter(Boolean);
+    result.baseUrl = urls.find((url) => /\/v\d+$/i.test(url)) || urls[0] || '';
+  }
+
+  if (!result.apiKey) {
+    result.apiKey = readFirst([
+      /(?:OPENAI_|ANTHROPIC_|CODEX_)?(?:API_?KEY|AUTH_?TOKEN|TOKEN|SECRET_?KEY)\s*[:=]\s*["'`]?([^\s"'`,;]+)/i,
+      /(?:apiKey|api_key|authToken|auth_token|bearerToken|bearer_token)\s*["']?\s*[:=]\s*["'`]?([^"'`,;\s]+)/i,
+      /Authorization\s*:\s*Bearer\s+([^"'`,;\s]+)/i,
+      /Bearer\s+([^"'`,;\s]+)/i,
+    ]);
+  }
+  if (!result.apiKey) {
+    result.apiKey = readFirst([/(sk-[A-Za-z0-9._-]{8,})/i]);
+  }
+
+  if (!result.model) {
+    result.model = readFirst([
+      /(?:OPENAI_)?MODEL\s*[:=]\s*["'`]?([^\s"'`,;]+)/i,
+      /(?:model|model_id|default_model|defaultModel)\s*["']?\s*[:=]\s*["'`]?([^"'`,;\s]+)/i,
+    ]);
+  }
+
+  return {
+    baseUrl: result.baseUrl || '',
+    apiKey: result.apiKey || '',
+    model: result.model || '',
+  };
+}
+
+function setImportedModelValue(model = '') {
+  const value = cleanImportedScalar(model);
+  const select = el('modelSelect');
+  if (!value || !select) return false;
+  if (state.activeTool === 'codex') {
+    renderModelOptions(state.detected?.models || [], value);
+  } else if (!Array.from(select.options || []).some((option) => option.value === value)) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    select.prepend(option);
+  }
+  select.value = value;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+async function applyProviderImportText(text = '') {
+  const parsed = parseProviderImportText(text);
+  const changed = [];
+  const baseUrl = parsed.baseUrl;
+  const apiKey = cleanImportedScalar(parsed.apiKey);
+  const model = cleanImportedScalar(parsed.model);
+
+  if (baseUrl && el('baseUrlInput')) {
+    el('baseUrlInput').value = baseUrl;
+    _markCurrentToolFieldDirty('baseUrl', baseUrl);
+    changed.push('Base URL');
+  }
+  if (apiKey && el('apiKeyInput')) {
+    const input = el('apiKeyInput');
+    input.type = 'password';
+    input.value = apiKey;
+    _markCurrentToolFieldDirty('apiKey', apiKey);
+    if (state.apiKeyField) {
+      state.apiKeyField.dirty = true;
+      state.apiKeyField.actualValue = apiKey;
+    }
+    syncApiKeyToggle();
+    changed.push('API Key');
+  }
+  if (model && setImportedModelValue(model)) changed.push('模型');
+
+  if (!changed.length) {
+    flash('没有识别到 URL、Key 或模型，请检查粘贴内容', 'warning');
+    el('providerImportText')?.focus();
+    return false;
+  }
+  renderQuickSummary();
+  flash(`已导入：${changed.join('、')}`, 'success');
+  if (baseUrl && apiKey && (state.activeTool === 'codex' || state.activeTool === 'opencode' || state.activeTool === 'openclaw')) {
+    void tryAutoFetchModels({ manual: true });
+  }
+  return true;
+}
+
 function applyDerivedMeta(force = false) {
   // No-op: auto-inference fields removed from UI
 }
@@ -19540,79 +19690,46 @@ const CODEX_DEFAULT_MODELS = [
 /** Render default GPT model options into a <select> when no detection has been run. */
 // ─── Slideover 内嵌"支持的模型"多选框组件 ─────────────
 // 点击 trigger 弹一个 popover, 列出全部 catalog 分组 + 复选 + 搜索
-function initModelSupportedMulti(providerKey) {
+function initModelSupportedMulti(providerKey = '', options = {}) {
   const wrap = el('modelSupportedMulti');
-  if (!wrap || !providerKey) return;
+  if (!wrap) return;
+  const isDraft = Boolean(options.draft || !providerKey);
   state.modelSupported = state.modelSupported || {};
-  state.modelSupported.providerKey = providerKey;
-  // 拉已保存列表
-  const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
-  api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`)
-    .then((res) => {
-      const list = normalizeProviderModelList((res?.ok && Array.isArray(res.data?.models)) ? res.data.models : []);
-      state.providerSavedModels = state.providerSavedModels || {};
-      state.providerSavedModels[providerKey] = list;
-      state.modelSupported.checked = new Set(list);
-      renderModelSupportedSummary();
-      renderModelSupportedPopBody();
-    }).catch(() => {});
-  // 初始 placeholder
-  state.modelSupported.checked = new Set(normalizeProviderModelList(state.providerSavedModels?.[providerKey] || []));
+  state.modelSupported.providerKey = providerKey || '';
+  state.modelSupported.draft = isDraft;
+  state.modelSupported.dirty = false;
+  wrap.classList.toggle('is-draft', isDraft);
+  wrap.dataset.mode = isDraft ? 'draft' : 'saved';
+  const advanced = el('modelAdvancedDetails');
+  if (advanced && isDraft) advanced.open = false;
+
+  if (isDraft) {
+    state.modelSupported.checked = new Set(normalizeProviderModelList(options.models || []));
+    const search = el('modelSupportedSearch');
+    if (search) search.value = '';
+  } else {
+    // 拉已保存列表
+    const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
+    api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`)
+      .then((res) => {
+        const list = normalizeProviderModelList((res?.ok && Array.isArray(res.data?.models)) ? res.data.models : []);
+        state.providerSavedModels = state.providerSavedModels || {};
+        state.providerSavedModels[providerKey] = list;
+        state.modelSupported.checked = new Set(list);
+        state.modelSupported.dirty = false;
+        renderModelSupportedSummary();
+        renderModelSupportedPopBody();
+      }).catch(() => {});
+    // 初始 placeholder
+    state.modelSupported.checked = new Set(normalizeProviderModelList(state.providerSavedModels?.[providerKey] || []));
+  }
   renderModelSupportedSummary();
+  renderModelSupportedPopBody();
 
   // 绑定一次性事件
   if (!wrap._msInit) {
     wrap._msInit = true;
     const trigger = el('modelSupportedTrigger');
-    // 用 setProperty(important) — 内联 !important 是 CSS 优先级最高的，
-    // 任何外部 !important 规则都无法覆盖
-    const setImp = (el, kvs) => {
-      if (!el) return;
-      for (const [k, v] of Object.entries(kvs)) el.style.setProperty(k, v, 'important');
-    };
-    if (trigger) {
-      setImp(trigger, {
-        position: 'relative',
-        height: '32px',
-        'min-height': '32px',
-        'max-height': '32px',
-        'box-sizing': 'border-box',
-        display: 'block',
-        padding: '0',
-        margin: '0',
-        'text-align': 'left',
-      });
-      const summary = trigger.querySelector('.model-multi-summary');
-      setImp(summary, {
-        position: 'absolute',
-        top: '50%',
-        left: '12px',
-        right: '32px',
-        transform: 'translateY(-50%)',
-        overflow: 'hidden',
-        'text-overflow': 'ellipsis',
-        'white-space': 'nowrap',
-        // line-height 1.5 给 g / p / y descender 充足空间
-        'line-height': '1.5',
-        'font-size': '12.5px',
-        color: 'var(--text)',
-        'font-family': 'var(--font-mono)',
-        display: 'block',
-        // 重置 .model-multi-summary 的 flex / gap / align-items
-        'flex-wrap': 'unset',
-        gap: '0',
-        'align-items': 'unset',
-      });
-      const caret = trigger.querySelector('.model-multi-caret');
-      setImp(caret, {
-        position: 'absolute',
-        top: '50%',
-        right: '10px',
-        transform: 'translateY(-50%)',
-        width: '10px',
-        height: '10px',
-      });
-    }
     trigger?.addEventListener('click', (e) => {
       e.preventDefault();
       const isOpen = wrap.classList.toggle('is-open');
@@ -19637,12 +19754,17 @@ function initModelSupportedMulti(providerKey) {
 function renderModelSupportedSummary() {
   const summary = el('modelSupportedSummary');
   const popCount = el('modelSupportedPopCount');
+  const advancedMeta = el('modelSupportedAdvancedMeta');
   if (!summary) return;
   const checked = state.modelSupported?.checked || new Set();
   const n = checked.size;
   if (popCount) popCount.textContent = String(n);
+  if (advancedMeta) {
+    advancedMeta.textContent = n ? `已选 ${n}` : '可选';
+    advancedMeta.classList.toggle('is-active', n > 0);
+  }
   if (n === 0) {
-    summary.textContent = '点击选择…';
+    summary.textContent = state.modelSupported?.draft ? '可选：点击选择模型范围' : '点击选择模型范围';
     summary.classList.add('is-empty');
     return;
   }
@@ -19662,11 +19784,16 @@ function renderModelSupportedPopBody() {
   const filter = (searchInput?.value || '').trim().toLowerCase();
   const checked = state.modelSupported?.checked || new Set();
   let html = '';
+  let hasMatches = false;
+  if (state.modelSupported?.draft) {
+    html += '<div class="model-multi-pop-note">新增时先暂存；保存 Provider 后写入模型范围。默认模型在上方选择。</div>';
+  }
   for (const group of (typeof CODEX_MODEL_PRESETS !== 'undefined' ? CODEX_MODEL_PRESETS : [])) {
     const matched = group.options.filter((o) =>
       !filter || o.value.toLowerCase().includes(filter) || String(o.label || '').toLowerCase().includes(filter)
     );
     if (!matched.length) continue;
+    hasMatches = true;
     html += `<div class="model-multi-grp"><div class="model-multi-grp-label">${escapeHtml(group.label)} <em>${matched.length}</em></div>`;
     for (const o of matched) {
       const isOn = checked.has(o.value);
@@ -19678,7 +19805,7 @@ function renderModelSupportedPopBody() {
     }
     html += `</div>`;
   }
-  if (!html) html = '<div class="model-multi-empty">没有匹配模型</div>';
+  if (!hasMatches) html += '<div class="model-multi-empty">没有匹配模型</div>';
   body.innerHTML = html;
   body.querySelectorAll('input[data-ms-model]').forEach((cb) => {
     cb.addEventListener('change', async (e) => {
@@ -19686,6 +19813,8 @@ function renderModelSupportedPopBody() {
       if (e.target.checked) checked.add(v); else checked.delete(v);
       e.target.closest('.model-multi-opt')?.classList.toggle('is-on', e.target.checked);
       renderModelSupportedSummary();
+      state.modelSupported.dirty = true;
+      if (state.modelSupported?.draft) return;
       // 节流写库 (200ms 内的连续 toggle 合并)
       clearTimeout(state.modelSupported._saveTimer);
       state.modelSupported._saveTimer = setTimeout(() => persistModelSupported(), 200);
@@ -19693,9 +19822,9 @@ function renderModelSupportedPopBody() {
   });
 }
 
-async function persistModelSupported() {
-  const providerKey = state.modelSupported?.providerKey;
-  if (!providerKey) return;
+async function persistModelSupported(providerKeyOverride = '', options = {}) {
+  const providerKey = String(providerKeyOverride || state.modelSupported?.providerKey || '').trim();
+  if (!providerKey) return false;
   const codexHome = (typeof getDashboardCodexHome === 'function') ? getDashboardCodexHome() : '';
   const models = normalizeProviderModelList(Array.from(state.modelSupported?.checked || []));
   try {
@@ -19706,8 +19835,33 @@ async function persistModelSupported() {
     if (res?.ok) {
       state.providerSavedModels = state.providerSavedModels || {};
       state.providerSavedModels[providerKey] = models;
+      state.modelSupported.providerKey = providerKey;
+      state.modelSupported.draft = false;
+      state.modelSupported.dirty = false;
+      const wrap = el('modelSupportedMulti');
+      if (wrap) {
+        wrap.classList.remove('is-draft');
+        wrap.dataset.mode = 'saved';
+      }
+      renderModelSupportedSummary();
+      return true;
     }
-  } catch (_) {}
+    if (!options.silent) flash(`保存支持模型失败: ${res?.error || '未知'}`, 'warning');
+  } catch (err) {
+    if (!options.silent) flash(`保存支持模型异常: ${err.message || err}`, 'warning');
+  }
+  return false;
+}
+
+async function persistModelSupportedAfterProviderSave(savedProviderKey = '') {
+  const providerKey = String(savedProviderKey || '').trim();
+  const ms = state.modelSupported || null;
+  if (!providerKey || !ms) return false;
+  const models = normalizeProviderModelList(Array.from(ms.checked || []));
+  const shouldPersist = Boolean(ms.draft || ms.dirty || (ms.providerKey && ms.providerKey !== providerKey && models.length));
+  if (!shouldPersist) return false;
+  if (!models.length && !ms.dirty) return false;
+  return persistModelSupported(providerKey, { silent: true });
 }
 
 // ─── Model browse modal: 多选浏览全部 catalog 模型 ─────────────
@@ -20987,10 +21141,11 @@ async function detectModels() {
  * Works for both Codex and OpenClaw. Does not show error flashes on failure.
  */
 let _autoFetchAbort = null;
-async function tryAutoFetchModels() {
-  if (state.activeTool !== 'codex' && state.activeTool !== 'opencode' && state.activeTool !== 'openclaw') return;
+async function tryAutoFetchModels(options = {}) {
+  const manual = Boolean(options.manual);
+  if (state.activeTool !== 'codex' && state.activeTool !== 'opencode' && state.activeTool !== 'openclaw') return false;
   const params = _getDetectParams();
-  if (!params.baseUrl || (!params.apiKey && !params.useStored)) return;
+  if (!params.baseUrl || (!params.apiKey && !params.useStored)) return false;
 
   // Cancel previous auto-fetch if still in progress
   if (_autoFetchAbort) _autoFetchAbort.abort();
@@ -21016,8 +21171,9 @@ async function tryAutoFetchModels() {
       signal: _autoFetchAbort.signal,
     });
     if (!json.ok) {
-      if (meta) meta.textContent = '自动获取模型失败，可手动选择或点击"检测模型"';
-      return;
+      if (meta) meta.textContent = json.error || '获取模型失败，可手动选择默认模型';
+      if (manual) flash(json.error || '获取模型失败', 'error');
+      return false;
     }
     state.detected = json.data;
     const models = json.data.models || [];
@@ -21029,9 +21185,14 @@ async function tryAutoFetchModels() {
     }
     renderQuickSummary();
     if (meta) meta.textContent = `已获取 ${models.length} 个模型`;
-  } catch {
+    if (manual) flash(`连接正常，已获取 ${models.length} 个模型`, 'success');
+    return true;
+  } catch (error) {
     // Silent failure — keep default/preset model list
-    if (meta) meta.textContent = '可手动选择默认模型或点击"检测模型"';
+    const message = error instanceof Error ? error.message : String(error || '获取模型失败');
+    if (meta) meta.textContent = '可手动选择默认模型或重新刷新';
+    if (manual) flash(message || '获取模型失败', 'error');
+    return false;
   }
 }
 
@@ -28283,7 +28444,10 @@ async function saveConfigOnly() {
     body: JSON.stringify({ ...payload, activate: false }),
   });
   setBusy('saveBtn', false);
-  if (!saved.ok) return flash(saved.error || '保存失败', 'error');
+  if (!saved.ok) {
+    flash(saved.error || '保存失败', 'error');
+    return false;
+  }
   const savedKey = String(saved.data?.savedProviderKey || '').trim();
   const isStillNotActive = Boolean(saved.data?.needsActivation);
   const configPath = saved.data?.paths?.configPath || state.current?.configPath || '';
@@ -28295,6 +28459,9 @@ async function saveConfigOnly() {
   } else {
     flashCodexSavedNeedsRestart(saved);
   }
+  if (savedKey) {
+    await persistModelSupportedAfterProviderSave(savedKey);
+  }
   const savedBaseUrl = String(saved.data?.baseUrl || '').trim();
   if (savedBaseUrl) {
     const baseUrlInput = el('baseUrlInput');
@@ -28305,6 +28472,7 @@ async function saveConfigOnly() {
   await loadState({ preserveForm: true });
   await loadBackups();
   loadAppUpdateState();
+  return true;
 }
 
 async function saveOpenClawConfigOnly() {
@@ -28316,12 +28484,16 @@ async function saveOpenClawConfigOnly() {
   const normalizedBaseUrl = normalizeOpenClawBaseUrl(rawBaseUrl || getOpenClawDefaultBaseUrl(apiMode), selectedModel, apiMode);
   const apiKey = el('apiKeyInput')?.value?.trim() || '';
 
-  if (!selectedModel) return flash('先选一个默认模型', 'error');
+  if (!selectedModel) {
+    flash('先选一个默认模型', 'error');
+    return false;
+  }
 
   const envKey = currentQuick.envKey || inferOpenClawBuiltInEnvKey(selectedModel, apiMode) || getOpenClawDefaultEnvKey(apiMode);
   const canReuseStoredKey = currentQuick.hasApiKey && currentQuick.envKey === envKey;
   if (!apiKey && !canReuseStoredKey) {
-    return flash('请填写和当前协议匹配的 API Key', 'error');
+    flash('请填写和当前协议匹配的 API Key', 'error');
+    return false;
   }
 
   const config = cloneJson(state.openclawState?.config || {});
@@ -28372,10 +28544,14 @@ async function saveOpenClawConfigOnly() {
     body: JSON.stringify({ configJson: JSON.stringify(config, null, 2) }),
   });
   setBusy('saveBtn', false);
-  if (!saved.ok) return flash(saved.error || '保存失败', 'error');
+  if (!saved.ok) {
+    flash(saved.error || '保存失败', 'error');
+    return false;
+  }
 
   flashToolSavedNeedsRestart('OpenClaw', 'OpenClaw 配置已保存：协议、URL、模型、Token 都已自动适配');
   await loadOpenClawQuickState();
+  return true;
 }
 
 async function saveClaudeCodeConfigOnly() {
@@ -28395,13 +28571,20 @@ async function saveClaudeCodeConfigOnly() {
       preferOauthForOfficial: true,
     });
     const saved = await saveClaudeCodeSettingsJson(nextSettings);
-    if (!saved.ok) return flash(saved.error || '保存失败', 'error');
+    if (!saved.ok) {
+      flash(saved.error || '保存失败', 'error');
+      return false;
+    }
     await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
     renderCurrentConfig();
     const activeProvider = getClaudeProviderByKey(state.claudeSelectedProviderKey);
     const providerLabel = activeProvider?.name || state.claudeSelectedProviderKey || '当前';
     flashClaudeCodeSavedNeedsRestart(saved);
     flash(`当前 Provider：${providerLabel}`, 'info');
+    return true;
+  } catch (error) {
+    flash(error instanceof Error ? error.message : String(error), 'error');
+    return false;
   } finally {
     setBusy('saveBtn', false);
   }
@@ -29968,7 +30151,7 @@ function bindEvents() {
   el('modelBrowseSaveBtn')?.addEventListener('click', () => saveModelBrowseSelection());
 
   // Model refresh button (inline, next to model select)
-  el('modelRefreshBtn')?.addEventListener('click', () => {
+  el('modelRefreshBtn')?.addEventListener('click', async () => {
     const params = _getDetectParams();
     if (!params.baseUrl) {
       flash('请先填写 Base URL', 'error');
@@ -29980,7 +30163,7 @@ function bindEvents() {
     }
     const btn = el('modelRefreshBtn');
     btn?.classList.add('spinning');
-    tryAutoFetchModels().finally(() => {
+    tryAutoFetchModels({ manual: true }).finally(() => {
       btn?.classList.remove('spinning');
     });
   });
@@ -30007,6 +30190,37 @@ function bindEvents() {
   // ── Sync from environment buttons ──
   el('syncFromCodexBtn')?.addEventListener('click', syncFromCodexEnv);
   el('syncFromClaudeBtn')?.addEventListener('click', syncFromClaudeCodeEnv);
+  el('providerImportPasteBtn')?.addEventListener('click', async () => {
+    const input = el('providerImportText');
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        flash('剪贴板为空，请先复制配置文本', 'warning');
+        input?.focus();
+        return;
+      }
+      if (input) input.value = text;
+      await applyProviderImportText(text);
+    } catch (_) {
+      flash('无法读取剪贴板，请粘贴到输入框后解析', 'warning');
+      input?.focus();
+    }
+  });
+  el('providerImportApplyBtn')?.addEventListener('click', () => {
+    void applyProviderImportText(el('providerImportText')?.value || '');
+  });
+  el('providerImportClearBtn')?.addEventListener('click', () => {
+    const input = el('providerImportText');
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+  });
+  el('providerImportText')?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)) return;
+    event.preventDefault();
+    void applyProviderImportText(event.currentTarget.value || '');
+  });
   // Task filter buttons
   el('taskFilters')?.addEventListener('click', (e) => {
     const btn = e.target.closest('.task-filter');
@@ -33397,7 +33611,16 @@ startToolUpdatesTimer();
     // ever show the API-Key form. Pin the state + rerun the form visibility
     // sync (hides the now-invisible auth block but unhides URL / Key fields).
     const s = hubState();
-    if (s && (s.activeTool || 'codex') === 'codex') {
+    const activeTool = s?.activeTool || 'codex';
+    let effectiveProviderKey = String(providerKey || '').trim();
+    if (mode === 'edit' && !effectiveProviderKey) {
+      const rows = buildProviderRows(activeTool);
+      const activeApiKey = rows.find((row) => row.isActive && row.mode === 'apikey');
+      effectiveProviderKey = activeApiKey?.key || '';
+    }
+    if (s) s.editingKey = mode === 'edit' ? effectiveProviderKey : '';
+
+    if (s && activeTool === 'codex') {
       s.codexAuthView = 'api_key';
       if (typeof syncCodexAuthView === 'function') {
         try { syncCodexAuthView(); } catch (_) {}
@@ -33420,15 +33643,15 @@ startToolUpdatesTimer();
       const e = document.getElementById(id);
       if (!e) return;
       setImp2(e, {
-        height: '32px',
-        'min-height': '32px',
-        'max-height': '32px',
+        height: '40px',
+        'min-height': '40px',
+        'max-height': '40px',
         'box-sizing': 'border-box',
         'padding-top': '0',
         'padding-bottom': '0',
         margin: '0',
         'vertical-align': 'middle',
-        'line-height': 'normal',
+        'line-height': '38px',
         ...extra,
       });
     };
@@ -33436,10 +33659,11 @@ startToolUpdatesTimer();
     lockBox('apiKeyInput', { 'padding-left': '12px', 'padding-right': '36px' });
     lockBox('modelSelect', { 'padding-left': '12px', 'padding-right': '28px' });
     lockBox('modelRefreshBtn', {
-      width: '32px', padding: '0',
+      width: '40px', padding: '0',
       display: 'inline-flex',
       'align-items': 'center',
       'justify-content': 'center',
+      'line-height': '1',
     });
 
     // password 眼睛按钮也居中
@@ -33452,15 +33676,21 @@ startToolUpdatesTimer();
       height: '24px',
     });
 
-    if (mode === 'edit' && providerKey) {
-      const provider = loadProviderIntoForm(providerKey);
+    if (mode === 'edit' && effectiveProviderKey) {
+      const importEl = document.getElementById('providerImportText');
+      if (importEl) importEl.value = '';
+      const provider = loadProviderIntoForm(effectiveProviderKey);
       if (title) title.textContent = provider ? `编辑 · ${provider.name || provider.key}` : '编辑 Provider';
     } else if (mode === 'add') {
       if (title) title.textContent = '新增 Provider';
+      if (s) s.editingKey = '';
       const urlEl = document.getElementById('baseUrlInput');
       const keyEl = document.getElementById('apiKeyInput');
+      const importEl = document.getElementById('providerImportText');
       if (urlEl) urlEl.value = '';
       if (keyEl) keyEl.value = '';
+      if (importEl) importEl.value = '';
+      if (activeTool === 'codex') initModelSupportedMulti('', { draft: true });
       setTimeout(() => urlEl && urlEl.focus(), 260);
     } else if (title) {
       title.textContent = '编辑 Provider';
@@ -34847,21 +35077,19 @@ startToolUpdatesTimer();
 	    document.addEventListener('scroll', closeChRowActionMenu, true);
 	    window.addEventListener('resize', closeChRowActionMenu);
 
-    // Save button: when the drawer is open we want edit-in-place semantics —
-    // the save should update this provider's URL / Key / model, but NOT change
-    // Codex's active pointer (switching is a separate, outer action). The
-    // saveConfigOnly 现在已经默认 activate:false，不再动 model_provider，
-    // 所以之前那套"先 save 再 quickSwitch 回原 active"的拦截器没必要了 ——
-    // 让默认 bubble-phase 的 saveBtn 监听器直接处理。drawer 在保存后关掉就好。
+    // Save button in the drawer: wait for the actual save result. If the
+    // backend rejects URL / Key / model, keep the drawer open so the user can
+    // fix the field that failed.
     const saveBtn = document.getElementById('saveBtn');
     if (saveBtn) {
-      saveBtn.addEventListener('click', () => {
-        // 用 setTimeout 让 saveConfigOnly 先跑完一帧，再关 drawer
-        setTimeout(() => {
-          const so = document.getElementById('chSlideover');
-          if (so && so.classList.contains('open')) closeSlideover();
-        }, 120);
-      });
+      saveBtn.addEventListener('click', async (event) => {
+        const so = document.getElementById('chSlideover');
+        if (!so || !so.classList.contains('open')) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const saved = await saveConfigOnly();
+        if (saved) closeSlideover();
+      }, true);
     }
 
     // Launch button: close drawer after launch (same as before, no save-restore needed)

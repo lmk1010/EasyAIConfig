@@ -13,7 +13,7 @@
 //     "version": 1,
 //     "bindings": {
 //       "/Users/me/work/clientA": {
-//         "codex": { "providerKey": "deepseek-v4", "savedAt": 1750000000 },
+//         "codex": { "providerKey": "deepseek", "savedAt": 1750000000 },
 //         "claudecode": { "providerKey": "official", "savedAt": 1750000000 }
 //       },
 //       "/Users/me/personal": {
