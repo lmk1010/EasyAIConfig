@@ -44,7 +44,7 @@ function run(command, commandArgs, options = {}) {
     cwd: repoRoot,
     env: options.env,
     stdio: 'inherit',
-    windowsHide: false,
+    windowsHide: true,
   });
   const cleanup = () => {
     if (options.cleanup) {

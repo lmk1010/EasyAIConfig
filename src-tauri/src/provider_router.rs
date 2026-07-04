@@ -26,7 +26,7 @@ const LOCAL_ROUTER_NO_PROXY_ITEMS: &[&str] = &["127.0.0.1", "localhost", "::1"];
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ROUTER_LOG_ROWS: i64 = 10_000;
-const ROUTER_STATUS_LOG_LIMIT: i64 = 120;
+const ROUTER_STATUS_LOG_LIMIT: i64 = 500;
 
 #[derive(Clone)]
 struct RouterProviderConfig {
@@ -692,11 +692,11 @@ fn provider_targets_from_body(object: &Map<String, Value>) -> Vec<RouterProvider
   dedupe_provider_targets(targets, primary)
 }
 
-fn runtime_status_json(runtime: &RouterRuntime) -> Value {
+fn runtime_status_json(runtime: &RouterRuntime, log_limit: i64) -> Value {
   let stats = runtime.stats.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   let proxy_ready = stats.proxy_ready || stats.forwarded > 0;
   let memory_stats = memory_router_stats_json(&stats);
-  let persisted_stats = load_persisted_router_stats(ROUTER_STATUS_LOG_LIMIT);
+  let persisted_stats = load_persisted_router_stats(log_limit);
   let stats_json = if persisted_stats.get("logs").and_then(Value::as_array).map_or(false, |items| !items.is_empty())
     || persisted_stats.get("requests").and_then(Value::as_i64).unwrap_or(0) > 0
   {
@@ -736,8 +736,8 @@ fn runtime_status_json(runtime: &RouterRuntime) -> Value {
   })
 }
 
-fn stopped_status_json() -> Value {
-  let stats = load_persisted_router_stats(ROUTER_STATUS_LOG_LIMIT);
+fn stopped_status_json(log_limit: i64) -> Value {
+  let stats = load_persisted_router_stats(log_limit);
   json!({
     "running": false,
     "baseUrl": Value::Null,
@@ -764,6 +764,19 @@ fn stopped_status_json() -> Value {
   })
 }
 
+fn router_status_log_limit(query: &Value) -> i64 {
+  let object = parse_json_object(query);
+  object
+    .get("limit")
+    .and_then(|value| {
+      value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|raw| raw.trim().parse::<i64>().ok()))
+    })
+    .unwrap_or(ROUTER_STATUS_LOG_LIMIT)
+    .clamp(1, MAX_ROUTER_LOG_ROWS)
+}
+
 fn stop_router_runtime() -> Value {
   let runtime = {
     let mut guard = router_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -776,7 +789,7 @@ fn stop_router_runtime() -> Value {
       let _ = handle.join();
     }
   }
-  stopped_status_json()
+  stopped_status_json(ROUTER_STATUS_LOG_LIMIT)
 }
 
 fn reason_phrase(status_code: u16) -> &'static str {
@@ -1748,12 +1761,13 @@ fn run_router(
   }
 }
 
-pub(crate) fn query_provider_router_status(_query: &Value) -> Result<Value, String> {
+pub(crate) fn query_provider_router_status(query: &Value) -> Result<Value, String> {
+  let log_limit = router_status_log_limit(query);
   let guard = router_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   if let Some(runtime) = guard.as_ref() {
-    Ok(runtime_status_json(runtime))
+    Ok(runtime_status_json(runtime, log_limit))
   } else {
-    Ok(stopped_status_json())
+    Ok(stopped_status_json(log_limit))
   }
 }
 
@@ -1786,9 +1800,9 @@ pub(crate) fn probe_provider_router(body: &Value) -> Result<Value, String> {
 
   let guard = router_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
   if let Some(runtime) = guard.as_ref() {
-    Ok(runtime_status_json(runtime))
+    Ok(runtime_status_json(runtime, ROUTER_STATUS_LOG_LIMIT))
   } else {
-    Ok(stopped_status_json())
+    Ok(stopped_status_json(ROUTER_STATUS_LOG_LIMIT))
   }
 }
 
@@ -1861,7 +1875,7 @@ pub(crate) fn start_provider_router(body: &Value) -> Result<Value, String> {
     base_url: format!("http://127.0.0.1:{port}/v1"),
     handle: Some(handle),
   };
-  let mut status = runtime_status_json(&runtime);
+  let mut status = runtime_status_json(&runtime, ROUTER_STATUS_LOG_LIMIT);
   if let Some(object) = status.as_object_mut() {
     object.insert("localRouterNoProxyAdded".to_string(), json!(local_router_no_proxy_added));
   }

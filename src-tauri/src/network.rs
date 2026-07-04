@@ -17,6 +17,9 @@
 
 use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::{json, Value};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -25,6 +28,20 @@ use crate::provider::get_string;
 
 const IP_HISTORY_FILE: &str = "ip-history.jsonl";
 const CACHE_TTL: Duration = Duration::from_secs(300); // 5 min
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn process_command(program: &str) -> Command {
+  let mut command = Command::new(program);
+  command.creation_flags(CREATE_NO_WINDOW);
+  command
+}
+
+#[cfg(not(target_os = "windows"))]
+fn process_command(program: &str) -> Command {
+  Command::new(program)
+}
 
 // Ordered list of geo-IP providers to try. The first one that returns a
 // well-formed response wins. We prefer HTTPS so captive portals / firewalls
@@ -86,7 +103,7 @@ fn probe_proxy() -> Value {
   #[cfg(target_os = "macos")]
   {
     // `scutil --proxy` prints system-level proxy configuration. Best effort.
-    if let Ok(out) = std::process::Command::new("scutil").arg("--proxy").output() {
+    if let Ok(out) = process_command("scutil").arg("--proxy").output() {
       if out.status.success() {
         let text = String::from_utf8_lossy(&out.stdout);
         if text.contains("HTTPEnable : 1") || text.contains("HTTPSEnable : 1") || text.contains("SOCKSEnable : 1") {
@@ -131,7 +148,7 @@ fn detect_system_proxy_url() -> Option<String> {
   }
   #[cfg(target_os = "macos")]
   {
-    if let Ok(out) = std::process::Command::new("scutil").arg("--proxy").output() {
+    if let Ok(out) = process_command("scutil").arg("--proxy").output() {
       if out.status.success() {
         let text = String::from_utf8_lossy(&out.stdout);
         // Prefer SOCKS (works for both HTTP/HTTPS), then HTTPS, then HTTP.
@@ -184,7 +201,7 @@ fn build_probe_client() -> Result<reqwest::blocking::Client, String> {
 // Returns parsed JSON on success; err string on failure.
 fn curl_fetch_json(url: &str) -> Result<Value, String> {
   let proxy_arg = detect_system_proxy_url();
-  let mut cmd = std::process::Command::new("curl");
+  let mut cmd = process_command("curl");
   cmd.args([
     "-sS",                  // silent, but show errors
     "--max-time", "8",

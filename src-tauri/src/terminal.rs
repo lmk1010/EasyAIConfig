@@ -5,6 +5,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -21,6 +23,20 @@ pub(crate) fn install(handle: &AppHandle) {
 
 const DEFAULT_COLS: u16 = 120;
 const DEFAULT_ROWS: u16 = 32;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+fn process_command(program: &str) -> Command {
+  let mut command = Command::new(program);
+  command.creation_flags(CREATE_NO_WINDOW);
+  command
+}
+
+#[cfg(not(target_os = "windows"))]
+fn process_command(program: &str) -> Command {
+  Command::new(program)
+}
 
 struct TerminalSession {
   id: String,
@@ -160,7 +176,7 @@ fn windows_where(command: &str) -> Option<String> {
   if trimmed.is_empty() {
     return None;
   }
-  let output = Command::new("where.exe").arg(trimmed).output().ok()?;
+  let output = process_command("where.exe").arg(trimmed).output().ok()?;
   if !output.status.success() {
     return None;
   }

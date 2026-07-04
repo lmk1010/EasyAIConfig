@@ -49,10 +49,15 @@ import {
   getOpenCodeUsageMetrics,
   listCodexSessions,
   getSystemStorageState,
+  getToolUpdatesInfo,
   installClaudeCode,
+  installClaudeCodeVersion,
   installOpenCode,
+  installOpenCodeVersion,
   installCodex,
+  installCodexVersion,
   installOpenClaw,
+  installOpenClawVersion,
   installOpenClawRemote,
   killOpenClawPortOccupants,
   cancelOpenClawInstallTask,
@@ -104,9 +109,12 @@ import {
   uninstallCodex,
   uninstallOpenClaw,
   updateClaudeCode,
+  updateClaudeCodeDomestic,
   updateOpenCode,
   updateCodex,
+  updateCodexDomestic,
   updateOpenClaw,
+  updateOpenClawDomestic,
 } from './lib/config-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -159,6 +167,9 @@ function validatePathOrThrow(userPath, paramName = 'path') {
 const OPENCODE_DESKTOP_TASKS = new Map();
 const OPENCODE_DESKTOP_TASK_TTL_MS = 30 * 60 * 1000;
 let opencodeDesktopTaskSeq = 0;
+const CODEX_APP_TASKS = new Map();
+const CODEX_APP_TASK_TTL_MS = 30 * 60 * 1000;
+let codexAppTaskSeq = 0;
 const CODEX_APP_MAC_DOWNLOAD_URL = 'https://persistent.oaistatic.com/codex-app-prod/Codex.dmg';
 const CODEX_APP_WIN_STORE_URL = 'https://apps.microsoft.com/detail/9plm9xgg6vks';
 const CODEX_APP_WIN_STORE_URI = 'ms-windows-store://pdp/?ProductId=9PLM9XGG6VKS';
@@ -249,9 +260,54 @@ function getCodexAppInstallationCandidates() {
   return candidates;
 }
 
+function readMacAppBundleVersion(appPath) {
+  const infoPath = path.join(appPath || '', 'Contents', 'Info.plist');
+  if (!existsSync(infoPath)) return '';
+  for (const key of ['CFBundleShortVersionString', 'CFBundleVersion']) {
+    const result = spawnSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', infoPath], {
+      encoding: 'utf8',
+      timeout: 1000,
+      windowsHide: true,
+    });
+    const value = String(result.stdout || '').trim();
+    if (result.status === 0 && value) return value;
+  }
+  try {
+    const text = readFileSync(infoPath, 'utf8');
+    const match = text.match(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/)
+      || text.match(/<key>CFBundleVersion<\/key>\s*<string>([^<]+)<\/string>/);
+    return match ? match[1].trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function readWindowsFileVersion(filePath) {
+  if (!filePath) return '';
+  const escaped = quotePowerShellText(filePath);
+  const result = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-Command',
+    `(Get-Item -LiteralPath '${escaped}').VersionInfo.ProductVersion`,
+  ], {
+    encoding: 'utf8',
+    timeout: 1500,
+    windowsHide: true,
+  });
+  return result.status === 0 ? String(result.stdout || '').trim() : '';
+}
+
+function getCodexAppVersion(installPath) {
+  if (!installPath) return '';
+  if (process.platform === 'darwin') return readMacAppBundleVersion(installPath);
+  if (process.platform === 'win32') return readWindowsFileVersion(installPath);
+  return '';
+}
+
 function getCodexAppState() {
   const supported = process.platform === 'darwin' || process.platform === 'win32';
   const installPath = getCodexAppInstallationCandidates().find((item) => existsSync(item)) || '';
+  const version = getCodexAppVersion(installPath);
   const platform = process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : process.platform;
   const downloadUrl = process.platform === 'darwin'
     ? CODEX_APP_MAC_DOWNLOAD_URL
@@ -264,6 +320,8 @@ function getCodexAppState() {
     supported,
     installed: Boolean(installPath),
     installPath,
+    version,
+    currentVersion: version,
     downloadUrl,
     docsUrl: CODEX_APP_DOCS_URL,
     storeUrl: CODEX_APP_WIN_STORE_URL,
@@ -294,6 +352,326 @@ async function openCodexAppDesktop() {
     return { ok: true, opened: true, path: state.installPath };
   }
   return installCodexAppDesktop();
+}
+
+function cleanupCodexAppTasks() {
+  const now = Date.now();
+  for (const [taskId, task] of CODEX_APP_TASKS.entries()) {
+    if (task.status !== 'running' && task.status !== 'cancelling' && (now - task.updatedAtTs) > CODEX_APP_TASK_TTL_MS) {
+      CODEX_APP_TASKS.delete(taskId);
+    }
+  }
+}
+
+function createCodexAppTask({ reinstall = false } = {}) {
+  cleanupCodexAppTasks();
+  const isWin = process.platform === 'win32';
+  const steps = isWin
+    ? [
+      { key: 'inspect', title: '检查系统环境', description: '确认 Windows 商店安装入口', status: 'running', progress: 12 },
+      { key: 'store', title: '打开 Microsoft Store', description: '交给系统商店安装或更新 Codex App', status: 'pending', progress: 72 },
+      { key: 'verify', title: '等待商店确认', description: '商店确认后系统会继续安装或更新', status: 'pending', progress: 96 },
+    ]
+    : [
+      { key: 'inspect', title: '检查系统环境', description: '识别 macOS 安装位置与权限', status: 'running', progress: 8 },
+      { key: 'download', title: '下载安装包', description: '下载 Codex App 官方 DMG', status: 'pending', progress: 46 },
+      { key: 'install', title: '安装并打开', description: '挂载 DMG 并复制到 Applications', status: 'pending', progress: 86 },
+      { key: 'verify', title: '验证安装结果', description: '确认 Codex App 已可打开', status: 'pending', progress: 96 },
+    ];
+  const startedAt = nowIso();
+  const task = {
+    id: `codex-app-${Date.now()}-${codexAppTaskSeq += 1}`,
+    toolId: 'codex-app',
+    action: reinstall ? 'reinstall' : 'install',
+    reinstall,
+    status: 'running',
+    progress: steps[0]?.progress || 8,
+    stepIndex: 0,
+    summary: reinstall ? '正在更新 Codex App…' : '正在安装 Codex App…',
+    hint: isWin ? '会打开 Microsoft Store，请在商店里确认安装或更新。' : '会自动下载、挂载并复制到 Applications。',
+    detail: '正在检查当前系统环境…',
+    steps,
+    logs: [],
+    startedAt,
+    updatedAt: startedAt,
+    updatedAtTs: Date.now(),
+    completedAt: null,
+    error: null,
+    _abortController: null,
+    _downloadPath: '',
+    _cancelRequested: false,
+  };
+  CODEX_APP_TASKS.set(task.id, task);
+  return task;
+}
+
+function touchCodexAppTask(task) {
+  task.updatedAt = nowIso();
+  task.updatedAtTs = Date.now();
+}
+
+function setCodexAppStep(task, stepIndex, overrides = {}) {
+  const safeStepIndex = Math.max(0, Math.min(stepIndex, task.steps.length - 1));
+  task.stepIndex = safeStepIndex;
+  task.progress = Math.max(task.progress, overrides.progress || task.steps[safeStepIndex]?.progress || task.progress);
+  if (overrides.summary) task.summary = overrides.summary;
+  if (overrides.hint) task.hint = overrides.hint;
+  if (overrides.detail) task.detail = overrides.detail;
+  task.steps = task.steps.map((step, index) => ({
+    ...step,
+    status: index < safeStepIndex ? 'done' : index === safeStepIndex ? (overrides.status || 'running') : 'pending',
+  }));
+  touchCodexAppTask(task);
+}
+
+function pushCodexAppTaskLog(task, source, text) {
+  const cleaned = String(text || '').replace(/\u001b\[[0-9;]*m/g, '').trim();
+  if (!cleaned) return;
+  task.logs.push({ source, text: cleaned, at: nowIso() });
+  if (task.logs.length > 160) task.logs.shift();
+  task.detail = cleaned;
+  touchCodexAppTask(task);
+}
+
+function serializeCodexAppTask(task) {
+  return {
+    taskId: task.id,
+    toolId: task.toolId,
+    action: task.action,
+    status: task.status,
+    progress: task.progress,
+    stepIndex: task.stepIndex,
+    summary: task.summary,
+    hint: task.hint,
+    detail: task.detail,
+    steps: task.steps,
+    logs: task.logs.slice(-24),
+    startedAt: task.startedAt,
+    updatedAt: task.updatedAt,
+    completedAt: task.completedAt,
+    error: task.error,
+  };
+}
+
+function finalizeCodexAppCancelled(task, reason = '') {
+  task.status = 'cancelled';
+  task.progress = 100;
+  task.completedAt = nowIso();
+  task.error = null;
+  task.summary = 'Codex App 安装已中断';
+  task.hint = '重新点击安装即可继续。';
+  task.detail = reason || '已按你的要求中断当前安装任务。';
+  task.steps = task.steps.map((step, index) => ({
+    ...step,
+    status: index < task.stepIndex ? 'done' : index === task.stepIndex ? 'cancelled' : 'pending',
+  }));
+  touchCodexAppTask(task);
+}
+
+async function cancelCodexAppInstallTask({ taskId } = {}) {
+  cleanupCodexAppTasks();
+  const task = CODEX_APP_TASKS.get(String(taskId || '').trim());
+  if (!task) throw new Error('Codex App 任务不存在，可能已过期');
+  if (task.status === 'success' || task.status === 'error' || task.status === 'cancelled') {
+    return serializeCodexAppTask(task);
+  }
+  if (task.stepIndex >= 2 && !task._abortController) {
+    throw new Error('安装阶段已经开始，当前阶段无法立即中断');
+  }
+  task._cancelRequested = true;
+  task.status = 'cancelling';
+  task.summary = '正在中断 Codex App 安装…';
+  task.hint = '正在停止下载并清理临时状态。';
+  task.detail = '已收到中断请求，正在处理…';
+  pushCodexAppTaskLog(task, 'stderr', '已收到中断请求。');
+  if (task._abortController) task._abortController.abort();
+  touchCodexAppTask(task);
+  return serializeCodexAppTask(task);
+}
+
+async function downloadCodexAppInstaller(task, destinationPath) {
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  const controller = new AbortController();
+  task._abortController = controller;
+  const response = await fetch(CODEX_APP_MAC_DOWNLOAD_URL, { redirect: 'follow', signal: controller.signal });
+  if (!response.ok || !response.body) {
+    throw new Error(`下载安装包失败：HTTP ${response.status}`);
+  }
+  const totalBytes = Number(response.headers.get('content-length') || 0);
+  const writer = createWriteStream(destinationPath);
+  const stream = Readable.fromWeb(response.body);
+  let downloadedBytes = 0;
+  let nextLogBytes = totalBytes ? Math.max(1, Math.floor(totalBytes / 10)) : 5 * 1024 * 1024;
+  await new Promise((resolve, reject) => {
+    stream.on('data', (chunk) => {
+      downloadedBytes += chunk.length;
+      if (downloadedBytes >= nextLogBytes) {
+        const downloadedMb = (downloadedBytes / 1024 / 1024).toFixed(1);
+        const totalMb = totalBytes ? (totalBytes / 1024 / 1024).toFixed(1) : '?';
+        pushCodexAppTaskLog(task, 'stdout', `已下载 ${downloadedMb} MB / ${totalMb} MB`);
+        task.progress = Math.max(task.progress, Math.min(80, 46 + Math.floor((downloadedBytes / Math.max(totalBytes || downloadedBytes, 1)) * 32)));
+        touchCodexAppTask(task);
+        nextLogBytes += totalBytes ? Math.max(1, Math.floor(totalBytes / 10)) : 5 * 1024 * 1024;
+      }
+    });
+    stream.on('error', reject);
+    writer.on('error', reject);
+    writer.on('finish', resolve);
+    stream.pipe(writer);
+  });
+  task._abortController = null;
+  task._downloadPath = destinationPath;
+  pushCodexAppTaskLog(task, 'stdout', '安装包下载完成');
+  return destinationPath;
+}
+
+async function installCodexAppOnMac(task, installerPath) {
+  pushCodexAppTaskLog(task, 'stdout', '正在挂载 DMG 镜像…');
+  const attach = runCommandLocal('hdiutil', ['attach', '-nobrowse', installerPath]);
+  if (!attach.ok) throw new Error((attach.stderr || attach.stdout || '挂载 DMG 失败').trim());
+  const mountPoint = parseMountedVolume(`${attach.stdout}\n${attach.stderr}`);
+  if (!mountPoint) throw new Error('无法识别 DMG 挂载路径');
+  pushCodexAppTaskLog(task, 'stdout', 'DMG 已挂载');
+  try {
+    const entries = await fs.readdir(mountPoint, { withFileTypes: true });
+    const appEntry = entries.find((entry) => entry.isDirectory() && entry.name.endsWith('.app'));
+    if (!appEntry) throw new Error('DMG 中未找到 Codex.app');
+    const sourceAppPath = path.join(mountPoint, appEntry.name);
+    const appTargets = ['/Applications', path.join(os.homedir(), 'Applications')];
+    let installedPath = '';
+    for (const appDir of appTargets) {
+      await fs.mkdir(appDir, { recursive: true }).catch(() => {});
+      const targetAppPath = path.join(appDir, appEntry.name);
+      const script = `rm -rf ${quotePosixArg(targetAppPath)} && cp -R ${quotePosixArg(sourceAppPath)} ${quotePosixArg(appDir)}`;
+      const copy = runCommandLocal('sh', ['-lc', script]);
+      pushCodexAppTaskLog(task, copy.ok ? 'stdout' : 'stderr', copy.ok ? `已安装到 ${targetAppPath}` : (copy.stderr || copy.stdout || `复制到 ${targetAppPath} 失败`));
+      if (copy.ok) {
+        installedPath = targetAppPath;
+        runCommandLocal('xattr', ['-dr', 'com.apple.quarantine', targetAppPath]);
+        break;
+      }
+    }
+    if (!installedPath) throw new Error('无法把 Codex.app 安装到 Applications');
+    pushCodexAppTaskLog(task, 'stdout', '正在打开 Codex App…');
+    await open(installedPath);
+    return { installedPath, opened: true };
+  } finally {
+    runCommandLocal('hdiutil', ['detach', mountPoint]);
+  }
+}
+
+async function runCodexAppInstallTask(task) {
+  try {
+    const appState = getCodexAppState();
+    if (!appState.supported) throw new Error('当前系统暂不支持 Codex App 自动安装');
+    pushCodexAppTaskLog(task, 'stdout', `当前系统：${appState.platform}`);
+
+    if (process.platform === 'win32') {
+      setCodexAppStep(task, 1, {
+        summary: '正在打开 Microsoft Store…',
+        hint: '请在商店里确认安装或更新。',
+        detail: '正在交给系统商店处理…',
+        progress: 72,
+      });
+      try {
+        await open(CODEX_APP_WIN_STORE_URI);
+        pushCodexAppTaskLog(task, 'stdout', '已打开 Microsoft Store');
+      } catch {
+        await open(CODEX_APP_WIN_STORE_URL);
+        pushCodexAppTaskLog(task, 'stdout', '已打开 Microsoft Store 网页');
+      }
+      setCodexAppStep(task, 2, {
+        summary: '已打开商店，请确认安装或更新',
+        hint: 'Windows 商店安装由系统接管，确认后会自动继续。',
+        detail: '等待商店确认…',
+        progress: 96,
+      });
+      task.status = 'success';
+      task.progress = 100;
+      task.completedAt = nowIso();
+      task.summary = 'Codex App 商店入口已打开';
+      task.hint = '在 Microsoft Store 里确认即可完成安装或更新。';
+      task.steps = task.steps.map((step) => ({ ...step, status: 'done' }));
+      touchCodexAppTask(task);
+      return;
+    }
+
+    if (process.platform !== 'darwin') throw new Error('当前系统暂不支持 Codex App 自动安装');
+
+    if (task._cancelRequested) {
+      finalizeCodexAppCancelled(task);
+      return;
+    }
+
+    setCodexAppStep(task, 1, {
+      summary: '正在下载 Codex App 安装包…',
+      hint: '下载完成后会自动安装。',
+      detail: '正在连接官方安装源…',
+      progress: 46,
+    });
+    const downloadsDir = path.join(os.homedir(), 'Downloads', 'EasyAIConfig');
+    const installerPath = await downloadCodexAppInstaller(task, path.join(downloadsDir, 'Codex.dmg'));
+
+    if (task._cancelRequested) {
+      finalizeCodexAppCancelled(task);
+      return;
+    }
+
+    setCodexAppStep(task, 2, {
+      summary: '正在安装 Codex App…',
+      hint: '会自动挂载 DMG 并复制到 Applications。',
+      detail: '正在准备安装…',
+      progress: 86,
+    });
+    await installCodexAppOnMac(task, installerPath);
+
+    setCodexAppStep(task, 3, {
+      summary: '正在验证 Codex App…',
+      hint: '马上完成。',
+      detail: '正在确认安装结果…',
+      progress: 96,
+    });
+    const nextState = getCodexAppState();
+    if (!nextState.installed) throw new Error('安装命令完成，但还未检测到 Codex App');
+    task.status = 'success';
+    task.progress = 100;
+    task.completedAt = nowIso();
+    task.summary = task.reinstall ? 'Codex App 更新完成' : 'Codex App 安装完成';
+    task.hint = nextState.version ? `当前版本 ${nextState.version}` : 'Codex App 已准备好。';
+    task.steps = task.steps.map((step) => ({ ...step, status: 'done' }));
+    touchCodexAppTask(task);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const aborted = task._cancelRequested || (error instanceof Error && error.name === 'AbortError');
+    if (aborted) {
+      pushCodexAppTaskLog(task, 'stderr', '安装任务已中断');
+      finalizeCodexAppCancelled(task, '已停止当前下载安装任务。');
+      if (task._downloadPath) await fs.rm(task._downloadPath, { force: true }).catch(() => {});
+    } else {
+      task.status = 'error';
+      task.error = message;
+      task.completedAt = nowIso();
+      task.summary = 'Codex App 安装失败';
+      task.hint = '请查看最后一条日志确认是网络、权限还是系统商店问题。';
+      pushCodexAppTaskLog(task, 'stderr', message);
+      touchCodexAppTask(task);
+    }
+  } finally {
+    task._abortController = null;
+  }
+}
+
+async function startCodexAppInstallTask({ reinstall = false } = {}) {
+  const task = createCodexAppTask({ reinstall: Boolean(reinstall) });
+  void runCodexAppInstallTask(task);
+  return serializeCodexAppTask(task);
+}
+
+async function getCodexAppInstallTask({ taskId } = {}) {
+  cleanupCodexAppTasks();
+  const task = CODEX_APP_TASKS.get(String(taskId || '').trim());
+  if (!task) throw new Error('Codex App 任务不存在，可能已过期');
+  return serializeCodexAppTask(task);
 }
 
 function nowIso() {
@@ -411,7 +789,7 @@ function createOpenCodeDesktopTask({ reinstall = false } = {}) {
     status: 'running',
     progress: 10,
     stepIndex: 0,
-    summary: reinstall ? '正在重装 OpenCode Desktop…' : '正在安装 OpenCode Desktop…',
+    summary: reinstall ? '正在更新 OpenCode Desktop…' : '正在安装 OpenCode Desktop…',
     hint: '会自动下载并拉起安装器，你不需要手动找安装包。',
     detail: '正在检查当前系统环境…',
     steps,
@@ -631,7 +1009,7 @@ async function runOpenCodeDesktopInstallTask(task) {
     setOpenCodeDesktopStep(task, 1, {
       summary: '正在下载 OpenCode Desktop 安装器…',
       hint: '下载完成后会自动继续安装。',
-      detail: `下载地址：${state.downloadUrl}`,
+      detail: '正在连接官方下载源',
       progress: 46,
     });
     const downloadsDir = path.join(os.homedir(), 'Downloads', 'EasyAIConfig');
@@ -643,8 +1021,10 @@ async function runOpenCodeDesktopInstallTask(task) {
     }
 
     setOpenCodeDesktopStep(task, 2, {
-      summary: '正在自动安装 OpenCode Desktop…',
-      hint: process.platform === 'darwin' ? '会自动安装到 Applications 并尝试打开。' : '会自动拉起安装器并尽量直接完成安装。',
+      summary: task.reinstall ? '正在更新 OpenCode Desktop…' : '正在自动安装 OpenCode Desktop…',
+      hint: task.reinstall
+        ? (process.platform === 'darwin' ? '会覆盖到 Applications 并尝试打开。' : '会拉起安装器并尽量直接完成更新。')
+        : (process.platform === 'darwin' ? '会自动安装到 Applications 并尝试打开。' : '会自动拉起安装器并尽量直接完成安装。'),
       detail: installerPath,
       progress: 88,
     });
@@ -660,8 +1040,8 @@ async function runOpenCodeDesktopInstallTask(task) {
     task.status = 'success';
     task.progress = 100;
     task.completedAt = nowIso();
-    task.summary = 'OpenCode Desktop 安装完成';
-    task.hint = '桌面版已经为你准备好。';
+    task.summary = task.reinstall ? 'OpenCode Desktop 更新完成' : 'OpenCode Desktop 安装完成';
+    task.hint = task.reinstall ? '桌面版已更新，可以直接打开。' : '桌面版已经为你准备好。';
     task.steps = task.steps.map((step) => ({ ...step, status: 'done' }));
     touchOpenCodeDesktopTask(task);
   } catch (error) {
@@ -1093,6 +1473,14 @@ export async function startServer() {
     }
   });
 
+  app.get('/api/tools/updates', async (_req, res) => {
+    try {
+      ok(res, { data: await getToolUpdatesInfo() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
   app.get('/api/setup/check', async (req, res) => {
     try {
       const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
@@ -1321,6 +1709,30 @@ export async function startServer() {
     }
   });
 
+  app.post('/api/codex/update-domestic', async (_req, res) => {
+    try {
+      ok(res, { data: await updateCodexDomestic() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codex/install-version', async (req, res) => {
+    try {
+      ok(res, { data: await installCodexVersion(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codex/install-version-domestic', async (req, res) => {
+    try {
+      ok(res, { data: await installCodexVersion({ ...(req.body || {}), domestic: true }) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
   app.post('/api/codex/uninstall', async (_req, res) => {
     try {
       ok(res, { data: await uninstallCodex() });
@@ -1440,6 +1852,30 @@ app.get('/api/dashboard/opencode-usage', async (req, res) => {
     }
   });
 
+  app.post('/api/codex-app/install/start', async (req, res) => {
+    try {
+      ok(res, { data: await startCodexAppInstallTask(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/codex-app/install/status', async (req, res) => {
+    try {
+      ok(res, { data: await getCodexAppInstallTask({ taskId: req.query.taskId || '' }) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codex-app/install/cancel', async (req, res) => {
+    try {
+      ok(res, { data: await cancelCodexAppInstallTask(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
   app.post('/api/codex-app/install', async (_req, res) => {
     try {
       ok(res, { data: await installCodexAppDesktop() });
@@ -1500,6 +1936,30 @@ app.get('/api/dashboard/opencode-usage', async (req, res) => {
   app.post('/api/claudecode/update', async (_req, res) => {
     try {
       ok(res, { data: await updateClaudeCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/update-domestic', async (_req, res) => {
+    try {
+      ok(res, { data: await updateClaudeCodeDomestic() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/install-version', async (req, res) => {
+    try {
+      ok(res, { data: await installClaudeCodeVersion(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/claudecode/install-version-domestic', async (req, res) => {
+    try {
+      ok(res, { data: await installClaudeCodeVersion({ ...(req.body || {}), domestic: true }) });
     } catch (error) {
       fail(res, error);
     }
@@ -1619,6 +2079,22 @@ app.get('/api/dashboard/opencode-usage', async (req, res) => {
   app.post('/api/opencode/update', async (req, res) => {
     try {
       ok(res, { data: await updateOpenCode(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/opencode/install-version', async (req, res) => {
+    try {
+      ok(res, { data: await installOpenCodeVersion(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/opencode/install-version-domestic', async (req, res) => {
+    try {
+      ok(res, { data: await installOpenCodeVersion({ ...(req.body || {}), domestic: true }) });
     } catch (error) {
       fail(res, error);
     }
@@ -1774,6 +2250,30 @@ app.get('/api/opencode/ecosystem/state', async (req, res) => {
   app.post('/api/openclaw/update', async (_req, res) => {
     try {
       ok(res, { data: await updateOpenClaw() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/openclaw/update-domestic', async (_req, res) => {
+    try {
+      ok(res, { data: await updateOpenClawDomestic() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/openclaw/install-version', async (req, res) => {
+    try {
+      ok(res, { data: await installOpenClawVersion(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/openclaw/install-version-domestic', async (req, res) => {
+    try {
+      ok(res, { data: await installOpenClawVersion({ ...(req.body || {}), domestic: true }) });
     } catch (error) {
       fail(res, error);
     }

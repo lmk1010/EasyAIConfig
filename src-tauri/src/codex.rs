@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::io::Write;
 use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
@@ -13,15 +13,18 @@ use std::process::{Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const OPENCODE_INSTALL_TASK_KEEP: usize = 12;
+const CODEX_APP_INSTALL_TASK_KEEP: usize = 8;
 const OPENCLAW_INSTALL_TASK_KEEP: usize = 12;
 const OPENCODE_INSTALL_SCRIPT_UNIX: &str = "curl -fsSL https://opencode.ai/install | bash";
 const OPENCODE_NPM_REGISTRY_CN: &str = "https://registry.npmmirror.com";
+const NPM_REGISTRY_GLOBAL: &str = "https://registry.npmjs.org";
+const NPM_REGISTRY_CN: &str = "https://registry.npmmirror.com";
 const OPENCLAW_INSTALL_SCRIPT_UNIX: &str = "curl -fsSL https://openclaw.ai/install.sh | OPENCLAW_NO_ONBOARD=1 bash -s -- --no-onboard --install-method npm";
 const OPENCLAW_INSTALL_SCRIPT_WIN: &str = "$env:OPENCLAW_NO_ONBOARD='1'; iwr -useb https://openclaw.ai/install.ps1 | iex";
 const OPENCLAW_NPM_REGISTRY_CN: &str = "https://registry.npmmirror.com";
@@ -31,9 +34,12 @@ const CODEX_APP_WIN_STORE_URI: &str = "ms-windows-store://pdp/?ProductId=9PLM9XG
 const CODEX_APP_DOCS_URL: &str = "https://developers.openai.com/codex/app";
 const ROUTER_CLIENT_PROVIDER_KEY: &str = "easyai-router";
 const LOCAL_ROUTER_NO_PROXY_VALUE: &str = "127.0.0.1,localhost,::1";
+const TOOL_VERSION_TIMEOUT_MS: u64 = 2500;
 
 static OPENCODE_INSTALL_TASK_SEQ: AtomicU64 = AtomicU64::new(1);
 static OPENCODE_INSTALL_TASKS: OnceLock<Mutex<BTreeMap<String, OpenCodeInstallTask>>> = OnceLock::new();
+static CODEX_APP_INSTALL_TASK_SEQ: AtomicU64 = AtomicU64::new(1);
+static CODEX_APP_INSTALL_TASKS: OnceLock<Mutex<BTreeMap<String, CodexAppInstallTask>>> = OnceLock::new();
 static OPENCLAW_INSTALL_TASK_SEQ: AtomicU64 = AtomicU64::new(1);
 static OPENCLAW_INSTALL_TASKS: OnceLock<Mutex<BTreeMap<String, OpenClawInstallTask>>> = OnceLock::new();
 
@@ -84,6 +90,30 @@ struct OpenCodeInstallTask {
   cancel_requested: bool,
   #[serde(skip_serializing)]
   child_pid: Option<u32>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexAppInstallTask {
+  task_id: String,
+  tool_id: String,
+  action: String,
+  status: String,
+  progress: u64,
+  step_index: usize,
+  summary: String,
+  hint: String,
+  detail: String,
+  steps: Vec<OpenCodeInstallStep>,
+  logs: Vec<OpenCodeInstallLog>,
+  started_at: String,
+  updated_at: String,
+  completed_at: Option<String>,
+  error: Option<String>,
+  #[serde(skip_serializing)]
+  cancel_requested: bool,
+  #[serde(skip_serializing)]
+  download_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Serialize)]
@@ -319,6 +349,22 @@ fn windows_binary_candidate_rank(path: &str) -> u8 {
   3
 }
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn raw_command(program: &str) -> Command {
+  #[cfg(target_os = "windows")]
+  {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+  }
+  #[cfg(not(target_os = "windows"))]
+  {
+    Command::new(program)
+  }
+}
+
 fn read_binary_version_output(candidate_path: &Path) -> Option<String> {
   if !candidate_path.exists() {
     return None;
@@ -326,16 +372,38 @@ fn read_binary_version_output(candidate_path: &Path) -> Option<String> {
 
   let path_text = candidate_path.to_string_lossy().to_string();
   let lower = path_text.to_ascii_lowercase();
-  let output = if cfg!(target_os = "windows") && lower.ends_with(".ps1") {
-    create_command("powershell.exe")
-      .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
-      .arg(&path_text)
-      .arg("--version")
-      .output()
-      .ok()?
+  let mut command = if cfg!(target_os = "windows") && lower.ends_with(".ps1") {
+    let mut command = create_command("powershell.exe");
+    command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]);
+    command.arg(&path_text).arg("--version");
+    command
+  } else if cfg!(target_os = "windows") && (lower.ends_with(".cmd") || lower.ends_with(".bat")) {
+    let mut command = create_command("cmd.exe");
+    command.args(["/d", "/s", "/c", &format!("\"{}\" --version", path_text)]);
+    command
   } else {
-    create_command(&path_text).arg("--version").output().ok()?
+    let mut command = create_command(&path_text);
+    command.arg("--version");
+    command
   };
+  command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+  let mut child = command.spawn().ok()?;
+  let deadline = Instant::now() + Duration::from_millis(TOOL_VERSION_TIMEOUT_MS);
+  loop {
+    match child.try_wait() {
+      Ok(Some(_)) => break,
+      Ok(None) if Instant::now() >= deadline => {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+      }
+      Ok(None) => thread::sleep(Duration::from_millis(25)),
+      Err(_) => return None,
+    }
+  }
+
+  let output = child.wait_with_output().ok()?;
 
   if !output.status.success() {
     return None;
@@ -352,12 +420,9 @@ fn read_binary_version_output(candidate_path: &Path) -> Option<String> {
   )
 }
 
-fn read_binary_version_output_with_options(candidate_path: &Path, passive: bool) -> Option<Option<String>> {
+fn read_binary_version_output_with_options(candidate_path: &Path, _passive: bool) -> Option<Option<String>> {
   if !candidate_path.exists() {
     return None;
-  }
-  if passive {
-    return Some(None);
   }
   read_binary_version_output(candidate_path).map(Some)
 }
@@ -420,9 +485,8 @@ fn windows_registry_path_entries() -> Vec<String> {
   CACHED
     .get_or_init(|| {
       let script = "$user=[Environment]::GetEnvironmentVariable('Path','User');$machine=[Environment]::GetEnvironmentVariable('Path','Machine');Write-Output $user;Write-Output $machine";
-      let mut command = Command::new("powershell.exe");
+      let mut command = raw_command("powershell.exe");
       command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]);
-      command.creation_flags(CREATE_NO_WINDOW);
       let output = command.output().ok();
       let mut parts = Vec::new();
       if let Some(out) = output.filter(|out| out.status.success()) {
@@ -499,7 +563,7 @@ fn full_path_env() -> String {
       let current = std::env::var("PATH").unwrap_or_default();
 
       let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-      let shell_path = Command::new(&shell)
+      let shell_path = raw_command(&shell)
         .args(["-lc", "echo $PATH"])
         .output()
         .ok()
@@ -578,15 +642,10 @@ fn full_path_env() -> String {
 
 /// Create a Command with the full PATH environment set
 fn create_command(program: &str) -> Command {
-  let mut cmd = Command::new(program);
+  let mut cmd = raw_command(program);
   cmd.env("PATH", full_path_env());
-  #[cfg(target_os = "windows")]
-  cmd.creation_flags(CREATE_NO_WINDOW);
   cmd
 }
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg(target_os = "windows")]
 fn launch_windows_background_command(cwd: &Path, command_text: &str, tool_label: &str) -> Result<String, String> {
@@ -1408,20 +1467,20 @@ fn terminate_openclaw_install_process(pid: u32) {
     return;
   }
 
-  let _ = Command::new("pkill")
+  let _ = raw_command("pkill")
     .args(["-TERM", "-P", &pid.to_string()])
     .stdin(Stdio::null())
     .output();
-  let _ = Command::new("kill")
+  let _ = raw_command("kill")
     .args(["-TERM", &pid.to_string()])
     .stdin(Stdio::null())
     .output();
   thread::sleep(Duration::from_millis(900));
-  let _ = Command::new("pkill")
+  let _ = raw_command("pkill")
     .args(["-KILL", "-P", &pid.to_string()])
     .stdin(Stdio::null())
     .output();
-  let _ = Command::new("kill")
+  let _ = raw_command("kill")
     .args(["-KILL", &pid.to_string()])
     .stdin(Stdio::null())
     .output();
@@ -4619,7 +4678,7 @@ fn find_tool_binary_with_options(binary_name: &str, passive: bool) -> Value {
 }
 
 pub(crate) fn list_tools() -> Result<Value, String> {
-  let passive = true; // Never spawn binaries just to list tools — avoids macOS Gatekeeper popups for unsigned CLIs
+  let passive = true;
   let codex_binary = find_codex_binary_with_options(passive);
   let claude_binary = find_tool_binary_with_options("claude", passive);
   let opencode_binary = find_tool_binary_with_options("opencode", passive);
@@ -4680,6 +4739,670 @@ pub(crate) fn list_tools() -> Result<Value, String> {
   ]))
 }
 
+fn encode_npm_package_name(package_name: &str) -> String {
+  package_name.replace('@', "%40").replace('/', "%2F")
+}
+
+fn npm_package_metadata_url(registry: &str, package_name: &str) -> String {
+  format!("{}/{}", registry.trim_end_matches('/'), encode_npm_package_name(package_name))
+}
+
+fn npm_package_latest_url(registry: &str, package_name: &str) -> String {
+  format!("{}/latest", npm_package_metadata_url(registry, package_name))
+}
+
+fn npm_package_web_url(package_name: &str) -> String {
+  format!("https://www.npmjs.com/package/{}", package_name)
+}
+
+fn npm_package_version_web_url(package_name: &str, version: &str) -> String {
+  format!("{}/v/{}", npm_package_web_url(package_name), version)
+}
+
+fn normalize_repository_url(value: Option<&Value>) -> String {
+  let raw = match value {
+    Some(Value::String(text)) => text.as_str(),
+    Some(Value::Object(map)) => map.get("url").and_then(Value::as_str).unwrap_or(""),
+    _ => "",
+  };
+  let mut url = raw.trim().to_string();
+  if url.is_empty() {
+    return String::new();
+  }
+  if let Some(stripped) = url.strip_prefix("git+") {
+    url = stripped.to_string();
+  }
+  if let Some(stripped) = url.strip_prefix("git://") {
+    url = format!("https://{}", stripped);
+  }
+  if let Some(stripped) = url.strip_prefix("ssh://git@github.com/") {
+    url = format!("https://github.com/{}", stripped);
+  }
+  if let Some(stripped) = url.strip_prefix("git@github.com:") {
+    url = format!("https://github.com/{}", stripped);
+  }
+  if let Some(stripped) = url.strip_suffix(".git") {
+    url = stripped.to_string();
+  }
+  if let Some((before, _)) = url.split_once(".git#") {
+    url = before.to_string();
+  }
+  url
+}
+
+fn fetch_npm_json(client: &reqwest::blocking::Client, url: &str, accept: &str) -> Result<Value, String> {
+  let response = client
+    .get(url)
+    .header("Accept", accept)
+    .send()
+    .map_err(|error| error.to_string())?;
+  let status = response.status();
+  if !status.is_success() {
+    return Err(format!("HTTP {}", status.as_u16()));
+  }
+  response.json::<Value>().map_err(|error| error.to_string())
+}
+
+fn compact_version_text(raw: &str, max_len: usize) -> String {
+  let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+  let mut lines = Vec::new();
+  let mut previous_blank = false;
+  for line in normalized.lines() {
+    let trimmed = line.trim();
+    let blank = trimmed.is_empty();
+    if blank && previous_blank {
+      continue;
+    }
+    lines.push(trimmed.to_string());
+    previous_blank = blank;
+  }
+  let text = lines.join("\n").trim().to_string();
+  if text.is_empty() {
+    return String::new();
+  }
+  if text.chars().count() <= max_len {
+    return text;
+  }
+  let mut clipped = text.chars().take(max_len.saturating_sub(1)).collect::<String>();
+  clipped = clipped.trim().to_string();
+  clipped.push('…');
+  clipped
+}
+
+fn normalize_npm_version_note(value: Option<&Value>, depth: usize) -> String {
+  if depth > 2 {
+    return String::new();
+  }
+  match value {
+    Some(Value::String(text)) => compact_version_text(text, 1000),
+    Some(Value::Array(items)) => {
+      let text = items
+        .iter()
+        .map(|item| normalize_npm_version_note(Some(item), depth + 1))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+      compact_version_text(&text, 1000)
+    }
+    Some(Value::Object(map)) => {
+      for field in ["releaseNotes", "release_notes", "changelog", "changeLog", "changes", "notes", "body", "markdown", "text", "summary"] {
+        let note = normalize_npm_version_note(map.get(field), depth + 1);
+        if !note.is_empty() {
+          return note;
+        }
+      }
+      String::new()
+    }
+    _ => String::new(),
+  }
+}
+
+fn pick_npm_version_release_notes(version_meta: Option<&Value>) -> String {
+  let map = match version_meta.and_then(Value::as_object) {
+    Some(map) => map,
+    None => return String::new(),
+  };
+  for field in ["releaseNotes", "release_notes", "changelog", "changeLog", "changes", "notes"] {
+    let note = normalize_npm_version_note(map.get(field), 0);
+    if !note.is_empty() {
+      return note;
+    }
+  }
+  String::new()
+}
+
+fn normalize_release_version_key(value: &str) -> String {
+  let mut text = value.trim().to_ascii_lowercase();
+  if let Some(stripped) = text.strip_prefix("refs/tags/") {
+    text = stripped.to_string();
+  }
+  for prefix in ["rust-v", "rust-", "rust/", "release-v", "release-", "release/", "codex-v", "codex-", "codex/", "cli-v", "cli-", "cli/"] {
+    if let Some(stripped) = text.strip_prefix(prefix) {
+      text = stripped.to_string();
+      break;
+    }
+  }
+  if text.starts_with('v') && text.chars().nth(1).map(|ch| ch.is_ascii_digit()).unwrap_or(false) {
+    text = text.chars().skip(1).collect();
+  }
+  text
+}
+
+fn add_release_candidate(candidates: &mut Vec<String>, value: &str) {
+  let key = normalize_release_version_key(value);
+  if !key.is_empty() && !candidates.contains(&key) {
+    candidates.push(key);
+  }
+}
+
+fn add_versionish_release_candidates(candidates: &mut Vec<String>, value: &str) {
+  let mut token = String::new();
+  let flush = |token: &mut String, candidates: &mut Vec<String>| {
+    if token.matches('.').count() >= 2 && token.chars().any(|ch| ch.is_ascii_digit()) {
+      add_release_candidate(candidates, token);
+    }
+    token.clear();
+  };
+  for ch in value.chars() {
+    if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' || ch == '/' {
+      token.push(ch);
+    } else {
+      flush(&mut token, candidates);
+    }
+  }
+  flush(&mut token, candidates);
+}
+
+fn release_version_candidates(release: &Value) -> Vec<String> {
+  let mut candidates = Vec::new();
+  for field in ["tag_name", "name"] {
+    if let Some(value) = release.get(field).and_then(Value::as_str) {
+      add_release_candidate(&mut candidates, value);
+      add_versionish_release_candidates(&mut candidates, value);
+    }
+  }
+  candidates
+}
+
+fn github_releases_api_url(repository_url: &str) -> String {
+  let mut url = repository_url.trim().trim_end_matches('/').to_string();
+  if let Some((before, _)) = url.split_once('#') {
+    url = before.to_string();
+  }
+  if let Some((before, _)) = url.split_once('?') {
+    url = before.to_string();
+  }
+  let path = match url.strip_prefix("https://github.com/").or_else(|| url.strip_prefix("http://github.com/")) {
+    Some(path) => path,
+    None => return String::new(),
+  };
+  let mut parts = path.split('/').filter(|part| !part.is_empty());
+  let owner = match parts.next() {
+    Some(owner) => owner,
+    None => return String::new(),
+  };
+  let repo = match parts.next() {
+    Some(repo) => repo.trim_end_matches(".git"),
+    None => return String::new(),
+  };
+  if owner.is_empty() || repo.is_empty() {
+    return String::new();
+  }
+  format!("https://api.github.com/repos/{}/{}/releases?per_page=100", owner, repo)
+}
+
+fn fetch_github_release_notes(repository_url: &str) -> BTreeMap<String, Value> {
+  let url = github_releases_api_url(repository_url);
+  if url.is_empty() {
+    return BTreeMap::new();
+  }
+  let client = match reqwest::blocking::Client::builder()
+    .timeout(Duration::from_millis(15000))
+    .user_agent("EasyAIConfig update checker")
+    .build() {
+      Ok(client) => client,
+      Err(_) => return BTreeMap::new(),
+    };
+  let releases = match fetch_npm_json(&client, &url, "application/vnd.github+json") {
+    Ok(Value::Array(items)) => items,
+    _ => return BTreeMap::new(),
+  };
+  let mut by_version = BTreeMap::new();
+  for release in releases {
+    let body = compact_version_text(release.get("body").and_then(Value::as_str).unwrap_or(""), 1200);
+    if body.is_empty() {
+      continue;
+    }
+    let release_info = json!({
+      "releaseNotes": body,
+      "releaseUrl": release.get("html_url").and_then(Value::as_str).unwrap_or("").trim(),
+      "releaseName": release.get("name").and_then(Value::as_str).or_else(|| release.get("tag_name").and_then(Value::as_str)).unwrap_or("").trim(),
+      "releaseTag": release.get("tag_name").and_then(Value::as_str).unwrap_or("").trim(),
+    });
+    for key in release_version_candidates(&release) {
+      by_version.entry(key).or_insert_with(|| release_info.clone());
+    }
+  }
+  by_version
+}
+
+fn latest_npm_metadata_fallback(package_name: &str, latest: Value) -> Value {
+  let version = latest
+    .get("version")
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_string();
+  let mut versions = Map::new();
+  if !version.is_empty() {
+    versions.insert(version.clone(), latest.clone());
+  }
+  json!({
+    "name": latest.get("name").cloned().unwrap_or_else(|| json!(package_name)),
+    "description": latest.get("description").cloned().unwrap_or_else(|| json!("")),
+    "dist-tags": { "latest": version },
+    "versions": Value::Object(versions),
+    "time": {},
+    "repository": latest.get("repository").cloned().unwrap_or(Value::Null),
+    "homepage": latest.get("homepage").cloned().unwrap_or_else(|| json!("")),
+    "bugs": latest.get("bugs").cloned().unwrap_or(Value::Null),
+  })
+}
+
+fn merge_latest_npm_metadata(package_name: &str, latest: &Value, metadata: Value) -> Value {
+  let latest_version = latest
+    .get("version")
+    .and_then(Value::as_str)
+    .or_else(|| metadata.get("dist-tags").and_then(Value::as_object).and_then(|tags| tags.get("latest")).and_then(Value::as_str))
+    .or_else(|| metadata.get("version").and_then(Value::as_str))
+    .unwrap_or("")
+    .trim()
+    .to_string();
+
+  let mut map = metadata.as_object().cloned().unwrap_or_default();
+  let dist_tags_value = map.entry("dist-tags".to_string()).or_insert_with(|| json!({}));
+  if let Some(dist_tags) = dist_tags_value.as_object_mut() {
+    dist_tags.insert("latest".to_string(), json!(latest_version.clone()));
+  } else {
+    map.insert("dist-tags".to_string(), json!({ "latest": latest_version.clone() }));
+  }
+
+  let versions_value = map.entry("versions".to_string()).or_insert_with(|| json!({}));
+  if let Some(versions) = versions_value.as_object_mut() {
+    if !latest_version.is_empty() {
+      if let Some(existing) = versions.get_mut(&latest_version) {
+        if existing.get("description").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+          if let Some(description) = latest.get("description").and_then(Value::as_str) {
+            if let Some(existing_map) = existing.as_object_mut() {
+              existing_map.insert("description".to_string(), json!(description));
+            }
+          }
+        }
+      } else {
+        versions.insert(latest_version.clone(), latest.clone());
+      }
+    }
+  } else if !latest_version.is_empty() {
+    let mut versions = Map::new();
+    versions.insert(latest_version.clone(), latest.clone());
+    map.insert("versions".to_string(), Value::Object(versions));
+  }
+
+  if map.get("name").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+    map.insert("name".to_string(), latest.get("name").cloned().unwrap_or_else(|| json!(package_name)));
+  }
+  if map.get("description").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+    map.insert("description".to_string(), latest.get("description").cloned().unwrap_or_else(|| json!("")));
+  }
+  if !map.contains_key("repository") || map.get("repository").map(Value::is_null).unwrap_or(true) {
+    map.insert("repository".to_string(), latest.get("repository").cloned().unwrap_or(Value::Null));
+  }
+  if map.get("homepage").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+    map.insert("homepage".to_string(), latest.get("homepage").cloned().unwrap_or_else(|| json!("")));
+  }
+  if !map.contains_key("bugs") || map.get("bugs").map(Value::is_null).unwrap_or(true) {
+    map.insert("bugs".to_string(), latest.get("bugs").cloned().unwrap_or(Value::Null));
+  }
+
+  Value::Object(map)
+}
+
+fn fetch_npm_metadata(registry: &str, package_name: &str) -> Result<Value, String> {
+  let latest_client = reqwest::blocking::Client::builder()
+    .timeout(Duration::from_millis(2500))
+    .user_agent("EasyAIConfig update checker")
+    .build()
+    .map_err(|error| error.to_string())?;
+
+  let latest_url = npm_package_latest_url(registry, package_name);
+  let latest = match fetch_npm_json(&latest_client, &latest_url, "application/json") {
+    Ok(value) => value,
+    Err(latest_error) => {
+      let metadata_url = npm_package_metadata_url(registry, package_name);
+      return fetch_npm_json(&latest_client, &metadata_url, "application/vnd.npm.install-v1+json")
+        .map_err(|metadata_error| format!("{}; metadata {}", latest_error, metadata_error));
+    }
+  };
+
+  let fallback = latest_npm_metadata_fallback(package_name, latest.clone());
+  let metadata_client = reqwest::blocking::Client::builder()
+    .timeout(Duration::from_millis(1200))
+    .user_agent("EasyAIConfig update checker")
+    .build()
+    .map_err(|error| error.to_string())?;
+  let metadata_url = npm_package_metadata_url(registry, package_name);
+  match fetch_npm_json(&metadata_client, &metadata_url, "application/vnd.npm.install-v1+json") {
+    Ok(metadata) => Ok(merge_latest_npm_metadata(package_name, &latest, metadata)),
+    Err(_) => Ok(fallback),
+  }
+}
+
+fn recent_npm_versions(metadata: &Value, package_name: &str, release_notes_by_version: &BTreeMap<String, Value>, limit: usize) -> Value {
+  let versions = metadata.get("versions").and_then(Value::as_object);
+  let time = metadata.get("time").and_then(Value::as_object);
+  let mut names: Vec<String> = versions
+    .map(|map| map.keys().cloned().collect())
+    .unwrap_or_default();
+  names.sort_by(|left, right| {
+    let left_time = time.and_then(|map| map.get(left)).and_then(Value::as_str).unwrap_or("");
+    let right_time = time.and_then(|map| map.get(right)).and_then(Value::as_str).unwrap_or("");
+    if !left_time.is_empty() && !right_time.is_empty() && left_time != right_time {
+      return right_time.cmp(left_time);
+    }
+    compare_versions(right, left)
+  });
+  Value::Array(names.into_iter().take(limit).map(|version| {
+    let published_at = time
+      .and_then(|map| map.get(&version))
+      .and_then(Value::as_str)
+      .unwrap_or("")
+      .to_string();
+    let version_meta = versions.and_then(|map| map.get(&version));
+    let release_info = release_notes_by_version.get(&normalize_release_version_key(&version));
+    let npm_release_notes = pick_npm_version_release_notes(version_meta);
+    let release_notes = release_info
+      .and_then(|item| item.get("releaseNotes"))
+      .and_then(Value::as_str)
+      .filter(|text| !text.trim().is_empty())
+      .map(str::to_string)
+      .unwrap_or(npm_release_notes);
+    let description = version_meta
+      .and_then(|item| item.get("description"))
+      .and_then(Value::as_str)
+      .or_else(|| metadata.get("description").and_then(Value::as_str))
+      .map(|text| compact_version_text(text, 360))
+      .unwrap_or_default();
+    let has_release_notes = !release_notes.is_empty();
+    let npm_url = npm_package_version_web_url(package_name, &version);
+    json!({
+      "version": version,
+      "publishedAt": published_at,
+      "description": description,
+      "releaseNotes": release_notes,
+      "hasReleaseNotes": has_release_notes,
+      "releaseUrl": release_info.and_then(|item| item.get("releaseUrl")).and_then(Value::as_str).unwrap_or(""),
+      "releaseName": release_info.and_then(|item| item.get("releaseName")).and_then(Value::as_str).unwrap_or(""),
+      "npmUrl": npm_url,
+    })
+  }).collect())
+}
+
+fn normalize_npm_package_info(
+  tool_id: &str,
+  name: &str,
+  package_name: &str,
+  metadata: &Value,
+  source_id: &str,
+  source_label: &str,
+  registry: &str,
+  repository_url_hint: &str,
+  release_notes_by_version: &BTreeMap<String, Value>,
+) -> Value {
+  let dist_tags = metadata.get("dist-tags").cloned().unwrap_or_else(|| json!({}));
+  let latest_version = dist_tags
+    .get("latest")
+    .and_then(Value::as_str)
+    .or_else(|| metadata.get("version").and_then(Value::as_str))
+    .unwrap_or("")
+    .trim()
+    .to_string();
+  let latest_meta = metadata
+    .get("versions")
+    .and_then(Value::as_object)
+    .and_then(|versions| versions.get(&latest_version));
+  let repository_url = {
+    let from_metadata = normalize_repository_url(
+      latest_meta
+        .and_then(|item| item.get("repository"))
+        .or_else(|| metadata.get("repository")),
+    );
+    if from_metadata.is_empty() {
+      repository_url_hint.to_string()
+    } else {
+      from_metadata
+    }
+  };
+  let homepage = latest_meta
+    .and_then(|item| item.get("homepage"))
+    .and_then(Value::as_str)
+    .or_else(|| metadata.get("homepage").and_then(Value::as_str))
+    .unwrap_or(&repository_url)
+    .trim()
+    .to_string();
+  let bugs_url = metadata
+    .get("bugs")
+    .and_then(Value::as_object)
+    .and_then(|bugs| bugs.get("url"))
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_string();
+  let latest_dist = latest_meta.and_then(|item| item.get("dist"));
+  json!({
+    "toolId": tool_id,
+    "name": name,
+    "packageName": package_name,
+    "latestVersion": latest_version,
+    "distTags": dist_tags,
+    "description": latest_meta
+      .and_then(|item| item.get("description"))
+      .and_then(Value::as_str)
+      .or_else(|| metadata.get("description").and_then(Value::as_str))
+      .unwrap_or("")
+      .trim(),
+    "license": latest_meta
+      .and_then(|item| item.get("license"))
+      .and_then(Value::as_str)
+      .or_else(|| metadata.get("license").and_then(Value::as_str))
+      .unwrap_or("")
+      .trim(),
+    "publishedAt": metadata
+      .get("time")
+      .and_then(Value::as_object)
+      .and_then(|time| time.get(&latest_version).or_else(|| time.get("modified")))
+      .and_then(Value::as_str)
+      .unwrap_or(""),
+    "recentVersions": recent_npm_versions(metadata, package_name, release_notes_by_version, 8),
+    "source": { "id": source_id, "label": source_label, "registry": registry },
+    "packageUrl": npm_package_web_url(package_name),
+    "registryUrl": npm_package_metadata_url(registry, package_name),
+    "repositoryUrl": repository_url,
+    "homepage": homepage,
+    "bugsUrl": bugs_url,
+    "tarballUrl": latest_dist
+      .and_then(|dist| dist.get("tarball"))
+      .and_then(Value::as_str)
+      .unwrap_or("")
+      .trim(),
+    "install": {
+      "global": format!("{} install -g {}@latest", npm_command(), package_name),
+      "domestic": format!("{} install -g {}@latest --registry={}", npm_command(), package_name, NPM_REGISTRY_CN),
+    },
+    "regions": ["global", "domestic"],
+  })
+}
+
+fn npm_metadata_latest_version(metadata: &Value) -> String {
+  metadata
+    .get("dist-tags")
+    .and_then(Value::as_object)
+    .and_then(|tags| tags.get("latest"))
+    .and_then(Value::as_str)
+    .or_else(|| metadata.get("version").and_then(Value::as_str))
+    .unwrap_or("")
+    .trim()
+    .to_string()
+}
+
+fn npm_source_rank(source_id: &str) -> usize {
+  match source_id {
+    "global" => 0,
+    "domestic" => 1,
+    _ => 99,
+  }
+}
+
+fn fetch_tool_update_info(tool_id: &str, name: &str, package_name: &str, repository_url_hint: &str) -> Value {
+  let sources = [
+    ("global", "海外", NPM_REGISTRY_GLOBAL),
+    ("domestic", "国内", NPM_REGISTRY_CN),
+  ];
+  let source_count = sources.len();
+  let mut attempts = Vec::new();
+  let mut successes = Vec::new();
+  let (tx, rx) = mpsc::channel();
+  for (source_id, source_label, registry) in sources {
+    let tx = tx.clone();
+    let package_name = package_name.to_string();
+    thread::spawn(move || {
+      let _ = tx.send((source_id, source_label, registry, fetch_npm_metadata(registry, &package_name)));
+    });
+  }
+  drop(tx);
+
+  while attempts.len() < source_count {
+    match rx.recv_timeout(Duration::from_millis(5500)) {
+      Ok((source_id, source_label, registry, Ok(metadata))) => {
+        attempts.push(json!({ "id": source_id, "label": source_label, "ok": true, "version": npm_metadata_latest_version(&metadata) }));
+        successes.push((source_id, source_label, registry, metadata));
+      }
+      Ok((source_id, source_label, _, Err(error))) => {
+        attempts.push(json!({ "id": source_id, "label": source_label, "ok": false, "error": error }));
+      }
+      Err(_) => {
+        attempts.push(json!({ "id": "unknown", "label": "版本源", "ok": false, "error": "任务超时" }));
+        break;
+      }
+    }
+  }
+
+  if !successes.is_empty() {
+    successes.sort_by(|left, right| {
+      let version_order = compare_versions(
+        &npm_metadata_latest_version(&right.3),
+        &npm_metadata_latest_version(&left.3),
+      );
+      if version_order != Ordering::Equal {
+        return version_order;
+      }
+      npm_source_rank(left.0).cmp(&npm_source_rank(right.0))
+    });
+    let (source_id, source_label, registry, metadata) = successes.remove(0);
+    let latest_version = npm_metadata_latest_version(&metadata);
+    let release_repository_url = {
+      let from_metadata = normalize_repository_url(
+        metadata
+          .get("versions")
+          .and_then(Value::as_object)
+          .and_then(|versions| versions.get(&latest_version))
+          .and_then(|item| item.get("repository"))
+          .or_else(|| metadata.get("repository")),
+      );
+      if from_metadata.is_empty() {
+        repository_url_hint.to_string()
+      } else {
+        from_metadata
+      }
+    };
+    let release_notes_by_version = fetch_github_release_notes(&release_repository_url);
+    let mut item = normalize_npm_package_info(
+      tool_id,
+      name,
+      package_name,
+      &metadata,
+      source_id,
+      source_label,
+      registry,
+      repository_url_hint,
+      &release_notes_by_version,
+    );
+    if let Some(map) = item.as_object_mut() {
+      map.insert("attempts".to_string(), Value::Array(attempts));
+    }
+    return item;
+  }
+
+  let message = attempts
+    .iter()
+    .filter_map(|item| {
+      let label = item.get("label").and_then(Value::as_str).unwrap_or("");
+      let error = item.get("error").and_then(Value::as_str).unwrap_or("");
+      if label.is_empty() && error.is_empty() { None } else { Some(format!("{}: {}", label, error)) }
+    })
+    .collect::<Vec<_>>()
+    .join("; ");
+  json!({
+    "toolId": tool_id,
+    "name": name,
+    "packageName": package_name,
+    "latestVersion": "",
+    "recentVersions": [],
+    "source": Value::Null,
+    "attempts": attempts,
+    "packageUrl": npm_package_web_url(package_name),
+    "registryUrl": "",
+    "install": {
+      "global": format!("{} install -g {}@latest", npm_command(), package_name),
+      "domestic": format!("{} install -g {}@latest --registry={}", npm_command(), package_name, NPM_REGISTRY_CN),
+    },
+    "regions": ["global", "domestic"],
+    "error": if message.is_empty() { "版本源不可达".to_string() } else { message },
+  })
+}
+
+pub(crate) fn get_tool_updates_info() -> Result<Value, String> {
+  let specs = [
+    ("codex", "Codex CLI", OPENAI_CODEX_PACKAGE, "https://github.com/openai/codex"),
+    ("claudecode", "Claude Code", CLAUDE_CODE_PACKAGE, "https://github.com/anthropics/claude-code"),
+    ("opencode", "OpenCode", OPENCODE_PACKAGE, "https://github.com/opencode-ai/opencode"),
+    ("openclaw", "OpenClaw", OPENCLAW_PACKAGE, "https://github.com/openclaw/openclaw"),
+  ];
+  let mut items = Map::new();
+  let handles = specs
+    .into_iter()
+    .map(|(tool_id, name, package_name, repository_url_hint)| {
+      thread::spawn(move || {
+        (tool_id.to_string(), fetch_tool_update_info(tool_id, name, package_name, repository_url_hint))
+      })
+    })
+    .collect::<Vec<_>>();
+  for handle in handles {
+    let (tool_id, item) = handle
+      .join()
+      .map_err(|_| "版本检查任务异常退出".to_string())?;
+    items.insert(tool_id, item);
+  }
+  Ok(json!({
+    "generatedAt": chrono::Utc::now().to_rfc3339(),
+    "intervalMs": 12 * 60 * 60 * 1000_u64,
+    "sources": [
+      { "id": "global", "label": "海外", "registry": NPM_REGISTRY_GLOBAL },
+      { "id": "domestic", "label": "国内", "registry": NPM_REGISTRY_CN },
+    ],
+    "items": Value::Object(items),
+  }))
+}
+
 fn open_target_with_system_shell(target: &str) -> Result<(), String> {
   if target.trim().is_empty() {
     return Err("目标不能为空".to_string());
@@ -4694,6 +5417,433 @@ fn open_target_with_system_shell(target: &str) -> Result<(), String> {
   };
 
   result.map(|_| ()).map_err(|error| error.to_string())
+}
+
+fn codex_app_install_tasks() -> &'static Mutex<BTreeMap<String, CodexAppInstallTask>> {
+  CODEX_APP_INSTALL_TASKS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn codex_app_install_steps() -> Vec<OpenCodeInstallStep> {
+  let specs = if cfg!(target_os = "windows") {
+    vec![
+      ("inspect", "检查系统环境", "确认 Windows 商店安装入口", "正在检查系统支持情况。", 12_u64),
+      ("store", "打开 Microsoft Store", "交给系统商店安装或更新 Codex App", "请在商店里确认安装或更新。", 72_u64),
+      ("verify", "等待商店确认", "商店确认后系统会继续安装或更新", "Windows 商店安装由系统接管。", 96_u64),
+    ]
+  } else {
+    vec![
+      ("inspect", "检查系统环境", "识别 macOS 安装位置与权限", "正在检查系统支持情况。", 8_u64),
+      ("download", "下载安装包", "下载 Codex App 官方 DMG", "下载完成后会自动继续安装。", 46_u64),
+      ("install", "安装并打开", "挂载 DMG 并复制到 Applications", "会自动挂载并复制应用。", 86_u64),
+      ("verify", "验证安装结果", "确认 Codex App 已可打开", "马上完成，正在验证。", 96_u64),
+    ]
+  };
+
+  specs.into_iter().enumerate().map(|(index, (key, title, description, hint, progress))| OpenCodeInstallStep {
+    key: key.to_string(),
+    title: title.to_string(),
+    description: description.to_string(),
+    hint: hint.to_string(),
+    progress,
+    status: if index == 0 { "running".to_string() } else { "pending".to_string() },
+  }).collect()
+}
+
+fn create_codex_app_install_task(reinstall: bool) -> CodexAppInstallTask {
+  let id = format!(
+    "codex-app-{}-{}",
+    chrono::Utc::now().timestamp_millis(),
+    CODEX_APP_INSTALL_TASK_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
+  );
+  let started_at = now_rfc3339();
+  let steps = codex_app_install_steps();
+  CodexAppInstallTask {
+    task_id: id,
+    tool_id: "codex-app".to_string(),
+    action: if reinstall { "reinstall" } else { "install" }.to_string(),
+    status: "running".to_string(),
+    progress: steps.first().map(|step| step.progress).unwrap_or(8),
+    step_index: 0,
+    summary: if reinstall { "正在更新 Codex App…".to_string() } else { "正在安装 Codex App…".to_string() },
+    hint: if cfg!(target_os = "windows") { "会打开 Microsoft Store，请在商店里确认安装或更新。".to_string() } else { "会自动下载、挂载并复制到 Applications。".to_string() },
+    detail: "正在检查当前系统环境…".to_string(),
+    steps,
+    logs: Vec::new(),
+    started_at: started_at.clone(),
+    updated_at: started_at,
+    completed_at: None,
+    error: None,
+    cancel_requested: false,
+    download_path: None,
+  }
+}
+
+fn trim_codex_app_install_tasks(tasks: &mut BTreeMap<String, CodexAppInstallTask>) {
+  while tasks.len() > CODEX_APP_INSTALL_TASK_KEEP {
+    let removable = tasks.iter().find(|(_, task)| task.status != "running" && task.status != "cancelling").map(|(task_id, _)| task_id.clone());
+    if let Some(task_id) = removable {
+      tasks.remove(&task_id);
+    } else {
+      break;
+    }
+  }
+}
+
+fn insert_codex_app_install_task(task: CodexAppInstallTask) {
+  match codex_app_install_tasks().lock() {
+    Ok(mut tasks) => {
+      tasks.insert(task.task_id.clone(), task);
+      trim_codex_app_install_tasks(&mut tasks);
+    }
+    Err(e) => eprintln!("codex app tasks lock poisoned: {}", e),
+  }
+}
+
+fn with_codex_app_install_task<R>(task_id: &str, mut update: impl FnMut(&mut CodexAppInstallTask) -> R) -> Option<R> {
+  let mut tasks = codex_app_install_tasks().lock().ok()?;
+  let task = tasks.get_mut(task_id)?;
+  Some(update(task))
+}
+
+fn get_codex_app_install_task_snapshot(task_id: &str) -> Option<CodexAppInstallTask> {
+  let tasks = codex_app_install_tasks().lock().ok()?;
+  tasks.get(task_id).cloned()
+}
+
+fn touch_codex_app_install_task(task: &mut CodexAppInstallTask) {
+  task.updated_at = now_rfc3339();
+}
+
+fn set_codex_app_install_step(task: &mut CodexAppInstallTask, step_index: usize, detail: Option<String>) {
+  if task.steps.is_empty() {
+    return;
+  }
+  let safe_index = step_index.min(task.steps.len().saturating_sub(1));
+  task.step_index = safe_index;
+  task.progress = task.progress.max(task.steps[safe_index].progress);
+  task.summary = task.steps[safe_index].description.clone();
+  task.hint = task.steps[safe_index].hint.clone();
+  if let Some(text) = detail {
+    task.detail = text;
+  }
+  for (index, step) in task.steps.iter_mut().enumerate() {
+    step.status = if index < safe_index {
+      "done".to_string()
+    } else if index == safe_index {
+      if task.status == "error" { "error".to_string() } else { "running".to_string() }
+    } else {
+      "pending".to_string()
+    };
+  }
+  touch_codex_app_install_task(task);
+}
+
+fn push_codex_app_install_log(task_id: &str, source: &str, line: &str) {
+  let cleaned = line.trim().to_string();
+  if cleaned.is_empty() {
+    return;
+  }
+  let _ = with_codex_app_install_task(task_id, |task| {
+    task.logs.push(OpenCodeInstallLog {
+      source: source.to_string(),
+      text: cleaned.clone(),
+      at: now_rfc3339(),
+    });
+    if task.logs.len() > 120 {
+      let drain_len = task.logs.len() - 120;
+      task.logs.drain(0..drain_len);
+    }
+    task.detail = cleaned.clone();
+    touch_codex_app_install_task(task);
+  });
+}
+
+fn cancel_codex_app_install_task_inner(task_id: &str) -> Result<(), String> {
+  let exists = with_codex_app_install_task(task_id, |task| {
+    if task.status != "running" && task.status != "cancelling" {
+      return;
+    }
+    task.cancel_requested = true;
+    task.status = "cancelling".to_string();
+    task.summary = "正在中断 Codex App 安装…".to_string();
+    task.hint = "正在停止下载并清理临时状态。".to_string();
+    task.detail = "已收到中断请求，正在处理…".to_string();
+    touch_codex_app_install_task(task);
+  });
+  if exists.is_none() {
+    return Err("Codex App 任务不存在，可能已经过期，请重新开始".to_string());
+  }
+  Ok(())
+}
+
+fn finalize_codex_app_cancelled(task_id: &str, reason: &str) {
+  let _ = with_codex_app_install_task(task_id, |task| {
+    for (index, step) in task.steps.iter_mut().enumerate() {
+      step.status = if index < task.step_index {
+        "done".to_string()
+      } else if index == task.step_index {
+        "cancelled".to_string()
+      } else {
+        "pending".to_string()
+      };
+    }
+    task.status = "cancelled".to_string();
+    task.progress = 100;
+    task.error = None;
+    task.summary = "Codex App 安装已中断".to_string();
+    task.hint = "重新点击安装即可继续。".to_string();
+    task.detail = if reason.trim().is_empty() { "已停止当前安装任务。".to_string() } else { reason.to_string() };
+    task.completed_at = Some(now_rfc3339());
+    touch_codex_app_install_task(task);
+  });
+}
+
+fn fail_codex_app_install_task(task_id: &str, message: String) {
+  let _ = with_codex_app_install_task(task_id, |task| {
+    if task.cancel_requested || task.status == "cancelled" {
+      return;
+    }
+    for (index, step) in task.steps.iter_mut().enumerate() {
+      step.status = if index < task.step_index {
+        "done".to_string()
+      } else if index == task.step_index {
+        "error".to_string()
+      } else {
+        "pending".to_string()
+      };
+    }
+    task.status = "error".to_string();
+    task.summary = "Codex App 安装失败".to_string();
+    task.hint = "请查看最后一条日志确认是网络、权限还是系统商店问题。".to_string();
+    task.detail = message.clone();
+    task.error = Some(message.clone());
+    task.completed_at = Some(now_rfc3339());
+    touch_codex_app_install_task(task);
+  });
+}
+
+fn complete_codex_app_install_task(task_id: &str, summary: &str, hint: &str) {
+  let _ = with_codex_app_install_task(task_id, |task| {
+    for step in task.steps.iter_mut() {
+      step.status = "done".to_string();
+    }
+    task.status = "success".to_string();
+    task.progress = 100;
+    task.summary = summary.to_string();
+    task.hint = hint.to_string();
+    task.detail = hint.to_string();
+    task.completed_at = Some(now_rfc3339());
+    touch_codex_app_install_task(task);
+  });
+}
+
+fn is_codex_app_install_cancelled(task_id: &str) -> bool {
+  get_codex_app_install_task_snapshot(task_id)
+    .map(|task| task.cancel_requested || task.status == "cancelled" || task.status == "cancelling")
+    .unwrap_or(true)
+}
+
+fn parse_mounted_volume(text: &str) -> String {
+  for line in text.lines() {
+    if let Some(index) = line.find("/Volumes/") {
+      return line[index..].trim().to_string();
+    }
+  }
+  String::new()
+}
+
+fn download_codex_app_dmg(task_id: &str, destination: &Path) -> Result<(), String> {
+  if let Some(parent) = destination.parent() {
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+  }
+  let client = reqwest::blocking::Client::builder()
+    .timeout(Duration::from_secs(900))
+    .redirect(reqwest::redirect::Policy::limited(8))
+    .build()
+    .map_err(|error| error.to_string())?;
+  let mut response = client
+    .get(CODEX_APP_MAC_DOWNLOAD_URL)
+    .header(reqwest::header::USER_AGENT, "easy-ai-config/1.0")
+    .send()
+    .map_err(|error| error.to_string())?;
+  if !response.status().is_success() {
+    return Err(format!("下载安装包失败：HTTP {}", response.status()));
+  }
+  let total_bytes = response.content_length().unwrap_or(0);
+  let mut file = File::create(destination).map_err(|error| error.to_string())?;
+  let mut downloaded_bytes: u64 = 0;
+  let mut next_log_bytes = if total_bytes > 0 { (total_bytes / 10).max(1) } else { 5 * 1024 * 1024 };
+  let mut buffer = [0_u8; 64 * 1024];
+
+  loop {
+    if is_codex_app_install_cancelled(task_id) {
+      return Err("__cancelled__".to_string());
+    }
+    let read = response.read(&mut buffer).map_err(|error| error.to_string())?;
+    if read == 0 {
+      break;
+    }
+    file.write_all(&buffer[..read]).map_err(|error| error.to_string())?;
+    downloaded_bytes += read as u64;
+    if downloaded_bytes >= next_log_bytes {
+      let downloaded_mb = downloaded_bytes as f64 / 1024.0 / 1024.0;
+      let total_mb = if total_bytes > 0 { format!("{:.1}", total_bytes as f64 / 1024.0 / 1024.0) } else { "?".to_string() };
+      push_codex_app_install_log(task_id, "stdout", &format!("已下载 {:.1} MB / {} MB", downloaded_mb, total_mb));
+      let _ = with_codex_app_install_task(task_id, |task| {
+        let ratio = if total_bytes > 0 { downloaded_bytes as f64 / total_bytes as f64 } else { 0.5 };
+        task.progress = task.progress.max((46.0 + ratio.min(1.0) * 32.0).round() as u64).min(80);
+        task.download_path = Some(destination.to_path_buf());
+        touch_codex_app_install_task(task);
+      });
+      next_log_bytes += if total_bytes > 0 { (total_bytes / 10).max(1) } else { 5 * 1024 * 1024 };
+    }
+  }
+
+  push_codex_app_install_log(task_id, "stdout", "安装包下载完成");
+  Ok(())
+}
+
+fn install_codex_app_dmg(task_id: &str, installer_path: &Path) -> Result<PathBuf, String> {
+  push_codex_app_install_log(task_id, "stdout", "正在挂载 DMG 镜像…");
+  let attach = create_command("hdiutil")
+    .args(["attach", "-nobrowse", &installer_path.to_string_lossy()])
+    .output()
+    .map_err(|error| error.to_string())?;
+  if !attach.status.success() {
+    let message = String::from_utf8_lossy(&attach.stderr).trim().to_string();
+    return Err(if message.is_empty() { "挂载 DMG 失败".to_string() } else { message });
+  }
+  let mount_point = parse_mounted_volume(&format!("{}\n{}", String::from_utf8_lossy(&attach.stdout), String::from_utf8_lossy(&attach.stderr)));
+  if mount_point.is_empty() {
+    return Err("无法识别 DMG 挂载路径".to_string());
+  }
+  push_codex_app_install_log(task_id, "stdout", "DMG 已挂载");
+
+  let result = (|| -> Result<PathBuf, String> {
+    let mut source_app = PathBuf::new();
+    for entry in fs::read_dir(&mount_point).map_err(|error| error.to_string())? {
+      let entry = entry.map_err(|error| error.to_string())?;
+      let path = entry.path();
+      if path.is_dir() && path.extension().and_then(|item| item.to_str()) == Some("app") {
+        source_app = path;
+        break;
+      }
+    }
+    if source_app.as_os_str().is_empty() {
+      return Err("DMG 中未找到 Codex.app".to_string());
+    }
+
+    let mut targets = vec![PathBuf::from("/Applications")];
+    if let Ok(home) = home_dir() {
+      targets.push(home.join("Applications"));
+    }
+    for app_dir in targets {
+      let _ = fs::create_dir_all(&app_dir);
+      let target_app = app_dir.join(source_app.file_name().unwrap_or_default());
+      let script = format!(
+        "rm -rf {} && cp -R {} {}",
+        quote_posix_shell_arg(&target_app.to_string_lossy()),
+        quote_posix_shell_arg(&source_app.to_string_lossy()),
+        quote_posix_shell_arg(&app_dir.to_string_lossy())
+      );
+      let copy = create_command("sh")
+        .args(["-lc", &script])
+        .output()
+        .map_err(|error| error.to_string())?;
+      if copy.status.success() {
+        let target_text = target_app.to_string_lossy().to_string();
+        push_codex_app_install_log(task_id, "stdout", &format!("已安装到 {}", target_text));
+        let _ = create_command("xattr").args(["-dr", "com.apple.quarantine", &target_text]).output();
+        open_target_with_system_shell(&target_text)?;
+        return Ok(target_app);
+      }
+      let message = String::from_utf8_lossy(&copy.stderr).trim().to_string();
+      push_codex_app_install_log(task_id, "stderr", if message.is_empty() { "复制应用失败" } else { &message });
+    }
+    Err("无法把 Codex.app 安装到 Applications".to_string())
+  })();
+
+  let _ = create_command("hdiutil").args(["detach", &mount_point]).output();
+  result
+}
+
+fn spawn_codex_app_install_task_runner(task_id: String) {
+  thread::spawn(move || {
+    let supported = cfg!(target_os = "macos") || cfg!(target_os = "windows");
+    if !supported {
+      fail_codex_app_install_task(&task_id, "当前系统暂不支持 Codex App 自动安装".to_string());
+      return;
+    }
+
+    if cfg!(target_os = "windows") {
+      let _ = with_codex_app_install_task(&task_id, |task| {
+        set_codex_app_install_step(task, 1, Some("正在交给 Microsoft Store 处理…".to_string()));
+      });
+      let opened_store = open_target_with_system_shell(CODEX_APP_WIN_STORE_URI).is_ok();
+      if opened_store {
+        push_codex_app_install_log(&task_id, "stdout", "已打开 Microsoft Store");
+      } else if let Err(error) = open_target_with_system_shell(CODEX_APP_WIN_STORE_URL) {
+        fail_codex_app_install_task(&task_id, error);
+        return;
+      } else {
+        push_codex_app_install_log(&task_id, "stdout", "已打开 Microsoft Store 网页");
+      }
+      let _ = with_codex_app_install_task(&task_id, |task| {
+        set_codex_app_install_step(task, 2, Some("等待商店确认安装或更新…".to_string()));
+      });
+      complete_codex_app_install_task(&task_id, "Codex App 商店入口已打开", "在 Microsoft Store 里确认即可完成安装或更新。");
+      return;
+    }
+
+    let _ = with_codex_app_install_task(&task_id, |task| {
+      set_codex_app_install_step(task, 1, Some("正在连接官方安装源…".to_string()));
+    });
+    let downloads_dir = match home_dir() {
+      Ok(home) => home.join("Downloads").join("EasyAIConfig"),
+      Err(error) => {
+        fail_codex_app_install_task(&task_id, error);
+        return;
+      }
+    };
+    let installer_path = downloads_dir.join("Codex.dmg");
+    if let Err(error) = download_codex_app_dmg(&task_id, &installer_path) {
+      if error == "__cancelled__" {
+        finalize_codex_app_cancelled(&task_id, "已停止当前下载安装任务。");
+        let _ = fs::remove_file(&installer_path);
+      } else {
+        fail_codex_app_install_task(&task_id, error);
+      }
+      return;
+    }
+    if is_codex_app_install_cancelled(&task_id) {
+      finalize_codex_app_cancelled(&task_id, "已停止当前下载安装任务。");
+      let _ = fs::remove_file(&installer_path);
+      return;
+    }
+
+    let _ = with_codex_app_install_task(&task_id, |task| {
+      set_codex_app_install_step(task, 2, Some("正在准备安装…".to_string()));
+    });
+    match install_codex_app_dmg(&task_id, &installer_path) {
+      Ok(_installed_path) => {
+        let _ = with_codex_app_install_task(&task_id, |task| {
+          set_codex_app_install_step(task, 3, Some("正在确认安装结果…".to_string()));
+        });
+        let state = get_codex_app_state().unwrap_or_else(|_| json!({}));
+        if !state.get("installed").and_then(Value::as_bool).unwrap_or(false) {
+          fail_codex_app_install_task(&task_id, "安装命令完成，但还未检测到 Codex App".to_string());
+          return;
+        }
+        let version = state.get("version").and_then(Value::as_str).unwrap_or("").trim();
+        let hint = if version.is_empty() { "Codex App 已准备好。".to_string() } else { format!("当前版本 {}", version) };
+        let summary = with_codex_app_install_task(&task_id, |task| {
+          if task.action == "reinstall" { "Codex App 更新完成".to_string() } else { "Codex App 安装完成".to_string() }
+        }).unwrap_or_else(|| "Codex App 安装完成".to_string());
+        complete_codex_app_install_task(&task_id, &summary, &hint);
+      }
+      Err(error) => fail_codex_app_install_task(&task_id, error),
+    }
+  });
 }
 
 fn codex_app_installation_candidates() -> Vec<PathBuf> {
@@ -4722,10 +5872,70 @@ fn find_codex_app_installation() -> Option<PathBuf> {
     .find(|candidate| candidate.exists())
 }
 
+fn xml_unescape_basic(value: &str) -> String {
+  value
+    .replace("&lt;", "<")
+    .replace("&gt;", ">")
+    .replace("&quot;", "\"")
+    .replace("&apos;", "'")
+    .replace("&amp;", "&")
+}
+
+fn read_plist_string_value(text: &str, key: &str) -> String {
+  let needle = format!("<key>{}</key>", key);
+  let Some(key_pos) = text.find(&needle) else { return String::new(); };
+  let tail = &text[key_pos + needle.len()..];
+  let Some(start_pos) = tail.find("<string>") else { return String::new(); };
+  let value_tail = &tail[start_pos + "<string>".len()..];
+  let Some(end_pos) = value_tail.find("</string>") else { return String::new(); };
+  xml_unescape_basic(value_tail[..end_pos].trim())
+}
+
+fn read_mac_app_bundle_version(app_path: &Path) -> String {
+  let info_path = app_path.join("Contents").join("Info.plist");
+  let Ok(text) = fs::read_to_string(info_path) else { return String::new(); };
+  let short_version = read_plist_string_value(&text, "CFBundleShortVersionString");
+  if !short_version.trim().is_empty() {
+    return short_version.trim().to_string();
+  }
+  read_plist_string_value(&text, "CFBundleVersion").trim().to_string()
+}
+
+fn read_windows_file_version(file_path: &Path) -> String {
+  if !cfg!(target_os = "windows") {
+    return String::new();
+  }
+  let path_text = file_path.to_string_lossy().replace('\'', "''");
+  let output = raw_command("powershell.exe")
+    .args([
+      "-NoProfile",
+      "-Command",
+      &format!("(Get-Item -LiteralPath '{}').VersionInfo.ProductVersion", path_text),
+    ])
+    .output();
+  output
+    .ok()
+    .filter(|item| item.status.success())
+    .map(|item| String::from_utf8_lossy(&item.stdout).trim().to_string())
+    .unwrap_or_default()
+}
+
+fn read_codex_app_version(install_path: Option<&PathBuf>) -> String {
+  let Some(path) = install_path else { return String::new(); };
+  if cfg!(target_os = "macos") {
+    return read_mac_app_bundle_version(path);
+  }
+  if cfg!(target_os = "windows") {
+    return read_windows_file_version(path);
+  }
+  String::new()
+}
+
 pub(crate) fn get_codex_app_state() -> Result<Value, String> {
   let supported = cfg!(target_os = "macos") || cfg!(target_os = "windows");
   let install_path = find_codex_app_installation();
   let installed = install_path.is_some();
+  let version = read_codex_app_version(install_path.as_ref());
   let platform = if cfg!(target_os = "macos") {
     "macos"
   } else if cfg!(target_os = "windows") {
@@ -4748,10 +5958,45 @@ pub(crate) fn get_codex_app_state() -> Result<Value, String> {
     "supported": supported,
     "installed": installed,
     "installPath": install_path.map(|path| path.to_string_lossy().to_string()),
+    "version": version,
+    "currentVersion": version,
     "downloadUrl": download_url,
     "docsUrl": CODEX_APP_DOCS_URL,
     "storeUrl": CODEX_APP_WIN_STORE_URL,
   }))
+}
+
+pub(crate) fn start_codex_app_install_task(body: &Value) -> Result<Value, String> {
+  let obj = parse_json_object(body);
+  let reinstall = matches!(get_string(&obj, "reinstall").trim().to_lowercase().as_str(), "1" | "true" | "yes");
+  let task = create_codex_app_install_task(reinstall);
+  let response = serde_json::to_value(&task).map_err(|error| error.to_string())?;
+  insert_codex_app_install_task(task.clone());
+  spawn_codex_app_install_task_runner(task.task_id.clone());
+  Ok(response)
+}
+
+pub(crate) fn get_codex_app_install_task(query: &Value) -> Result<Value, String> {
+  let obj = parse_json_object(query);
+  let task_id = obj.get("taskId").and_then(Value::as_str).unwrap_or("").trim();
+  if task_id.is_empty() {
+    return Err("Codex App 任务不存在，可能已经过期，请重新开始".to_string());
+  }
+  let task = get_codex_app_install_task_snapshot(task_id)
+    .ok_or_else(|| "Codex App 任务不存在，可能已经过期，请重新开始".to_string())?;
+  serde_json::to_value(task).map_err(|error| error.to_string())
+}
+
+pub(crate) fn cancel_codex_app_install_task(body: &Value) -> Result<Value, String> {
+  let obj = parse_json_object(body);
+  let task_id = obj.get("taskId").and_then(Value::as_str).unwrap_or("").trim();
+  if task_id.is_empty() {
+    return Err("Codex App 任务不存在，可能已经过期，请重新开始".to_string());
+  }
+  cancel_codex_app_install_task_inner(task_id)?;
+  let task = get_codex_app_install_task_snapshot(task_id)
+    .ok_or_else(|| "Codex App 任务不存在，可能已经过期，请重新开始".to_string())?;
+  serde_json::to_value(task).map_err(|error| error.to_string())
 }
 
 pub(crate) fn install_codex_app(_body: &Value) -> Result<Value, String> {
@@ -8056,7 +9301,7 @@ pub(crate) fn stop_openclaw_gateway() -> Result<Value, String> {
       attempted = true;
       methods.push("taskkill openclaw.exe".to_string());
     }
-  } else if Command::new("pkill").args(["-f", "openclaw.*gateway"]).output().map(|out| out.status.success()).unwrap_or(false) {
+  } else if raw_command("pkill").args(["-f", "openclaw.*gateway"]).output().map(|out| out.status.success()).unwrap_or(false) {
     attempted = true;
     methods.push("pkill openclaw.*gateway".to_string());
   }
@@ -8106,7 +9351,7 @@ pub(crate) fn kill_openclaw_port_occupants(body: &Value) -> Result<Value, String
     let ok = if cfg!(target_os = "windows") {
       create_command("taskkill").args(["/F", "/T", "/PID", &pid]).output().map(|out| out.status.success()).unwrap_or(false)
     } else {
-      Command::new("kill").args(["-9", &pid]).output().map(|out| out.status.success()).unwrap_or(false)
+      raw_command("kill").args(["-9", &pid]).output().map(|out| out.status.success()).unwrap_or(false)
     };
     if ok { killed.push(item); } else { failed.push(item); }
   }

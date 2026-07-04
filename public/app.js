@@ -22,10 +22,18 @@ const state = {
   codexAppState: null,
   openCodeDesktopState: null,
   openCodeEcosystemState: null,
+  toolUpdates: null,
+  toolUpdatesLoading: false,
+  toolUpdatesFetchedAt: 0,
+  toolUpdatesError: '',
+  toolUpdatesTimer: 0,
+  toolUpdatesAutoCheck: true,
   toolsCatalogQuery: '',
   toolsCatalogTag: 'all',
   toolsCatalogPage: 1,
   toolsCatalogPageSize: 9,
+  toolsCatalogDetailId: '',
+  toolsVersionExpandedKey: '',
   providerHealth: {},
   claudeProviderHealth: {},
   claudeProviderModels: {},
@@ -176,8 +184,10 @@ const state = {
     status: null,
     loading: false,
     error: '',
+    lastFetchedAt: 0,
     activeTool: 'codex',
     activeTab: 'pool',
+    logFilter: { query: '', provider: 'all', status: 'all', tool: 'all' },
     probeLoading: false,
     primaryProviderKey: '',
     primaryProviderKeysByTool: {},
@@ -225,6 +235,7 @@ const state = {
   wizardSelectedMethod: 'npm',
   // Tasks
   tasks: [],
+  toolOperations: {},
   openClawInstallView: {
     lastRenderKey: '',
     lastLogsText: '',
@@ -483,6 +494,163 @@ function _ensureTaskTimer() {
   }
 }
 
+function normalizeToolOperationStatus(status = '') {
+  const value = String(status || '').trim().toLowerCase();
+  if (value === 'done') return 'success';
+  if (value === 'canceling') return 'cancelling';
+  if (['running', 'cancelling', 'success', 'error', 'cancelled'].includes(value)) return value;
+  return 'running';
+}
+
+function isToolOperationActive(operation) {
+  if (!operation || !operation.status) return false;
+  const status = normalizeToolOperationStatus(operation?.status);
+  return status === 'running' || status === 'cancelling';
+}
+
+function getToolOperation(toolId = '') {
+  const key = String(toolId || '').trim();
+  return key ? (state.toolOperations?.[key] || null) : null;
+}
+
+function renderToolsPageIfVisible() {
+  if (state.activePage === 'tools') renderToolsPage();
+}
+
+function clampToolOperationProgress(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(number)));
+}
+
+function cleanToolOperationText(text = '') {
+  return String(text || '')
+    .replace(/https?:\/\/\S+/gi, '官方源')
+    .replace(/ms-windows-store:\/\/\S+/gi, 'Microsoft Store')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function setToolOperation(toolId, updates = {}, { render = true, keepCompletedMs = 0 } = {}) {
+  const key = String(toolId || '').trim();
+  if (!key) return null;
+  const previous = getToolOperation(key) || {};
+  const status = updates.status ? normalizeToolOperationStatus(updates.status) : normalizeToolOperationStatus(previous.status);
+  const next = {
+    ...previous,
+    ...updates,
+    toolId: key,
+    status,
+    progress: clampToolOperationProgress(updates.progress, clampToolOperationProgress(previous.progress, 0)),
+    updatedAt: Date.now(),
+  };
+  if (!isToolOperationActive(next) && !next.completedAt) next.completedAt = Date.now();
+  state.toolOperations[key] = next;
+  if (render) renderToolsPageIfVisible();
+  if (keepCompletedMs > 0 && !isToolOperationActive(next)) {
+    window.setTimeout(() => {
+      const current = getToolOperation(key);
+      if (current && current.updatedAt === next.updatedAt && !isToolOperationActive(current)) {
+        delete state.toolOperations[key];
+        renderToolsPageIfVisible();
+      }
+    }, keepCompletedMs);
+  }
+  return next;
+}
+
+function clearToolOperation(toolId, { delayMs = 0 } = {}) {
+  const key = String(toolId || '').trim();
+  if (!key) return;
+  const clear = () => {
+    delete state.toolOperations[key];
+    renderToolsPageIfVisible();
+  };
+  if (delayMs > 0) window.setTimeout(clear, delayMs);
+  else clear();
+}
+
+function getToolOperationStepTitle(task = {}) {
+  const steps = Array.isArray(task.steps) ? task.steps : [];
+  const index = Number(task.stepIndex || 0) || 0;
+  return steps[index]?.title || '';
+}
+
+function syncToolOperationFromTask(toolId, task = {}, fallback = {}) {
+  if (!task) return null;
+  const status = normalizeToolOperationStatus(task.status || 'running');
+  const stepTitle = getToolOperationStepTitle(task);
+  const summary = cleanToolOperationText(task.summary || fallback.summary || stepTitle || '正在处理');
+  const detail = cleanToolOperationText(task.hint || task.detail || fallback.detail || '');
+  return setToolOperation(toolId, {
+    action: task.action || fallback.action || '',
+    taskId: task.taskId || task.id || fallback.taskId || '',
+    status,
+    progress: clampToolOperationProgress(task.progress, status === 'success' ? 100 : 8),
+    stepIndex: Number(task.stepIndex || 0) || 0,
+    stepTitle: cleanToolOperationText(stepTitle),
+    summary,
+    detail,
+    error: cleanToolOperationText(task.error || ''),
+  }, { keepCompletedMs: status === 'running' || status === 'cancelling' ? 0 : 9000 });
+}
+
+function startToolOperationTicker(toolId, ceiling = 86) {
+  const key = String(toolId || '').trim();
+  if (!key) return () => {};
+  const timer = window.setInterval(() => {
+    const operation = getToolOperation(key);
+    if (!isToolOperationActive(operation)) return;
+    const current = clampToolOperationProgress(operation.progress, 8);
+    if (current >= ceiling) return;
+    const increment = Math.max(1, Math.round((ceiling - current) * 0.12));
+    setToolOperation(key, { progress: Math.min(ceiling, current + increment) });
+  }, 850);
+  return () => window.clearInterval(timer);
+}
+
+function mapTaskStatusToTaskCardStatus(status = '') {
+  const normalized = normalizeToolOperationStatus(status);
+  if (normalized === 'success') return 'done';
+  if (normalized === 'cancelled') return 'cancelled';
+  if (normalized === 'error') return 'error';
+  return 'running';
+}
+
+function renderToolOperationProgress(item, { detail = false } = {}) {
+  const operation = getToolOperation(item?.id);
+  if (!operation) return '';
+  const status = normalizeToolOperationStatus(operation.status);
+  const active = isToolOperationActive(operation);
+  const progress = clampToolOperationProgress(operation.progress, active ? 8 : 100);
+  const label = status === 'success'
+    ? '完成'
+    : status === 'error'
+      ? '失败'
+      : status === 'cancelled'
+        ? '已中断'
+        : status === 'cancelling'
+          ? '中断中'
+          : (operation.stepTitle || '进行中');
+  const summary = cleanToolOperationText(operation.summary || label);
+  const detailText = cleanToolOperationText(operation.error || operation.detail || '');
+  return `
+    <div class="tool-operation tool-operation-${escapeHtml(status)} ${active ? 'is-active' : ''} ${detail ? 'is-detail' : ''}">
+      <div class="tool-operation-head">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(String(progress))}%</strong>
+      </div>
+      <div class="tool-operation-bar" aria-hidden="true">
+        <i style="width:${progress}%"></i>
+      </div>
+      <div class="tool-operation-copy">
+        <span>${escapeHtml(summary)}</span>
+        ${detail || detailText ? `<em>${escapeHtml(detailText)}</em>` : ''}
+      </div>
+    </div>
+  `;
+}
+
 /* ── Theme ── */
 function getAutoTheme() {
   const hour = new Date().getHours();
@@ -666,6 +834,7 @@ async function loadTools() {
       updateToolSelector();
       if (state.activePage === 'tools') {
         renderToolsPage();
+        void loadToolUpdates({ force: false, render: true });
         await loadCodexAppState({ render: false }).catch((e) => console.warn('[loadTools] loadCodexAppState failed:', e));
         await loadOpenCodeDesktopState({ render: false }).catch((e) => console.warn('[loadTools] loadOpenCodeDesktopState failed:', e));
         await loadOpenCodeEcosystemState({ render: false }).catch((e) => console.warn('[loadTools] loadOpenCodeEcosystemState failed:', e));
@@ -727,6 +896,30 @@ const OPENCODE_GITLAB_DOCS_URL = 'https://opencode.ai/docs/gitlab';
 const CODEX_APP_DOCS_URL = 'https://developers.openai.com/codex/app';
 const CODEX_APP_MAC_DOWNLOAD_URL = 'https://persistent.oaistatic.com/codex-app-prod/Codex.dmg';
 const CODEX_APP_WIN_STORE_URL = 'https://apps.microsoft.com/detail/9plm9xgg6vks';
+const TOOLS_UPDATE_CACHE_KEY = 'easyaiconfig_tools_updates_cache_v2';
+const TOOLS_UPDATE_AUTO_CHECK_KEY = 'easyaiconfig_tools_auto_update_check';
+const TOOLS_UPDATE_FALLBACK_TTL_MS = 12 * 60 * 60 * 1000;
+const TOOLS_UPDATE_REQUEST_TIMEOUT_MS = 30000;
+const TOOL_UPDATE_REGION_LABELS = {
+  global: '海外',
+  domestic: '国内',
+};
+
+state.toolUpdatesAutoCheck = readToolUpdatesAutoCheck();
+
+function readToolUpdatesAutoCheck() {
+  try {
+    return localStorage.getItem(TOOLS_UPDATE_AUTO_CHECK_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function writeToolUpdatesAutoCheck(enabled) {
+  try {
+    localStorage.setItem(TOOLS_UPDATE_AUTO_CHECK_KEY, enabled ? '1' : '0');
+  } catch {}
+}
 
 function getOpenCodeDesktopPlatformLabel(platform = '') {
   const text = String(platform || navigator.platform || '').toLowerCase();
@@ -734,6 +927,196 @@ function getOpenCodeDesktopPlatformLabel(platform = '') {
   if (text.includes('win')) return 'Windows';
   if (text.includes('linux')) return 'Linux';
   return '桌面端';
+}
+
+function normalizeToolVersionText(input = '') {
+  const text = String(input == null ? '' : input).trim();
+  if (!text) return '';
+  const match = text.match(/v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/);
+  return match ? match[1] : text.replace(/^v/i, '');
+}
+
+function splitToolVersion(input = '') {
+  const version = normalizeToolVersionText(input).split('+')[0];
+  const [core = '', pre = ''] = version.split('-', 2);
+  const nums = core.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  while (nums.length < 3) nums.push(0);
+  return { nums: nums.slice(0, 3), pre };
+}
+
+function compareToolVersions(left = '', right = '') {
+  const a = splitToolVersion(left);
+  const b = splitToolVersion(right);
+  for (let i = 0; i < 3; i += 1) {
+    if (a.nums[i] !== b.nums[i]) return a.nums[i] > b.nums[i] ? 1 : -1;
+  }
+  if (a.pre && !b.pre) return -1;
+  if (!a.pre && b.pre) return 1;
+  if (a.pre === b.pre) return 0;
+  return a.pre > b.pre ? 1 : -1;
+}
+
+function getToolUpdateInfo(toolId = '') {
+  const id = String(toolId || '').trim();
+  if (!id) return null;
+  return state.toolUpdates?.items?.[id] || null;
+}
+
+function getToolUpdateSourceLabel(info = null) {
+  const source = info?.source || null;
+  const id = String(source?.id || '').trim();
+  return source?.label || TOOL_UPDATE_REGION_LABELS[id] || '';
+}
+
+function readCachedToolUpdates() {
+  try {
+    const raw = localStorage.getItem(TOOLS_UPDATE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const fetchedAt = Number(parsed.fetchedAt || 0);
+    if (!fetchedAt || !parsed.data?.items) return null;
+    return { data: parsed.data, fetchedAt };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedToolUpdates(data) {
+  try {
+    localStorage.setItem(TOOLS_UPDATE_CACHE_KEY, JSON.stringify({ data, fetchedAt: Date.now() }));
+  } catch {}
+}
+
+function applyToolUpdates(data, fetchedAt = Date.now()) {
+  if (!data || typeof data !== 'object') return;
+  state.toolUpdates = data;
+  state.toolUpdatesFetchedAt = fetchedAt || Date.now();
+  state.toolUpdatesError = '';
+}
+
+function getToolUpdatesTtlMs() {
+  const fromApi = Number(state.toolUpdates?.intervalMs || 0);
+  return fromApi > 0 ? fromApi : TOOLS_UPDATE_FALLBACK_TTL_MS;
+}
+
+async function loadToolUpdates({ force = false, render = true } = {}) {
+  if (state.toolUpdatesLoading && !force) return state.toolUpdates;
+  if (!force && !state.toolUpdatesAutoCheck) {
+    const cached = !state.toolUpdates ? readCachedToolUpdates() : null;
+    if (cached?.data) applyToolUpdates(cached.data, cached.fetchedAt);
+    if (render && state.activePage === 'tools') renderToolsPage();
+    return state.toolUpdates;
+  }
+  const cached = readCachedToolUpdates();
+  const ttl = Math.max(60 * 60 * 1000, Number(cached?.data?.intervalMs || getToolUpdatesTtlMs()));
+  const cacheFresh = cached && Date.now() - cached.fetchedAt < ttl;
+  if (!force && cacheFresh) {
+    applyToolUpdates(cached.data, cached.fetchedAt);
+    if (render && state.activePage === 'tools') renderToolsPage();
+    return state.toolUpdates;
+  }
+  if (!force && cached?.data && !state.toolUpdates) {
+    applyToolUpdates(cached.data, cached.fetchedAt);
+    if (render && state.activePage === 'tools') renderToolsPage();
+  }
+
+  state.toolUpdatesLoading = true;
+  state.toolUpdatesError = '';
+  if (render && state.activePage === 'tools') renderToolsUpdateStrip();
+  try {
+    const json = await api('/api/tools/updates', { timeoutMs: TOOLS_UPDATE_REQUEST_TIMEOUT_MS });
+    if (!json.ok) throw new Error(json.error || '检查更新失败');
+    applyToolUpdates(json.data, Date.now());
+    writeCachedToolUpdates(json.data);
+    if (render && state.activePage === 'tools') renderToolsPage();
+    return state.toolUpdates;
+  } catch (error) {
+    state.toolUpdatesError = error instanceof Error ? error.message : String(error);
+    if (render && state.activePage === 'tools') renderToolsUpdateStrip();
+    return state.toolUpdates;
+  } finally {
+    state.toolUpdatesLoading = false;
+    if (render && state.activePage === 'tools') renderToolsPage();
+  }
+}
+
+function stopToolUpdatesTimer() {
+  if (!state.toolUpdatesTimer) return;
+  window.clearInterval(state.toolUpdatesTimer);
+  state.toolUpdatesTimer = 0;
+}
+
+function startToolUpdatesTimer() {
+  if (!state.toolUpdatesAutoCheck) {
+    stopToolUpdatesTimer();
+    return;
+  }
+  if (state.toolUpdatesTimer) return;
+  state.toolUpdatesTimer = window.setInterval(() => {
+    if (!state.toolUpdatesAutoCheck || document.hidden) return;
+    void loadToolUpdates({ force: false, render: state.activePage === 'tools' });
+  }, TOOLS_UPDATE_FALLBACK_TTL_MS);
+}
+
+function setToolUpdatesAutoCheck(enabled, { checkNow = true } = {}) {
+  state.toolUpdatesAutoCheck = Boolean(enabled);
+  writeToolUpdatesAutoCheck(state.toolUpdatesAutoCheck);
+  if (state.toolUpdatesAutoCheck) {
+    startToolUpdatesTimer();
+    if (checkNow) {
+      void loadToolUpdates({ force: false, render: true });
+      return;
+    }
+  } else {
+    stopToolUpdatesTimer();
+  }
+  if (state.activePage === 'tools') renderToolsUpdateStrip();
+}
+
+function getCatalogUpdateState(source = {}, { installed = false, currentVersion = '' } = {}) {
+  const registryInfo = getToolUpdateInfo(source.id);
+  const update = source.update && typeof source.update === 'object' ? source.update : {};
+  const latestVersion = String(
+    registryInfo?.latestVersion
+    || registryInfo?.version
+    || source.latestVersion
+    || source.latestStable
+    || source.availableVersion
+    || update.latestVersion
+    || update.version
+    || ''
+  ).trim();
+  const normalizedCurrent = normalizeToolVersionText(currentVersion || source.currentVersion || source.version || '');
+  const normalizedLatest = normalizeToolVersionText(latestVersion);
+  const effectiveLatestVersion = normalizedCurrent
+    && normalizedLatest
+    && compareToolVersions(normalizedCurrent, normalizedLatest) > 0
+    ? normalizedCurrent
+    : latestVersion;
+  const effectiveNormalizedLatest = normalizeToolVersionText(effectiveLatestVersion);
+  const hasVersionUpdate = Boolean(installed && normalizedCurrent && normalizedLatest && compareToolVersions(normalizedLatest, normalizedCurrent) > 0);
+  const hasUpdate = hasVersionUpdate || Boolean(
+    source.updateAvailable
+    || source.hasUpdate
+    || source.needsUpdate
+    || update.available
+    || update.hasUpdate
+  );
+  const hasCheckError = Boolean(state.toolUpdatesError);
+  const checking = Boolean(!hasCheckError && (source.updateChecking || update.checking || state.toolUpdatesLoading));
+  const canCheck = Boolean(installed);
+  return {
+    hasUpdate,
+    checking,
+    hasCheckError,
+    canCheck,
+    latestVersion: effectiveLatestVersion,
+    sourceLatestVersion: latestVersion,
+    currentVersion: String(currentVersion || source.currentVersion || source.version || '').trim(),
+    sourceLabel: getToolUpdateSourceLabel(registryInfo),
+    label: hasUpdate ? (effectiveLatestVersion ? `可升级到 ${effectiveLatestVersion}` : '有更新') : checking ? '检查中' : hasCheckError && canCheck ? '可重试' : effectiveNormalizedLatest ? `最新 ${effectiveLatestVersion}` : canCheck ? '可检查更新' : '',
+  };
 }
 
 function getToolsCatalogQuery() {
@@ -749,25 +1132,30 @@ function getCodexAppCatalogItem() {
   const platformLabel = getOpenCodeDesktopPlatformLabel(data.platform);
   const supported = data.supported !== false && ['macOS', 'Windows'].includes(platformLabel);
   const installed = Boolean(data.installed);
-  const fallbackDownloadUrl = platformLabel === 'Windows' ? CODEX_APP_WIN_STORE_URL : CODEX_APP_MAC_DOWNLOAD_URL;
+  const currentVersion = normalizeToolVersionText(data.currentVersion || data.version || '');
+  const updateState = getCatalogUpdateState(data, { installed, currentVersion });
   const docsUrl = data.docsUrl || CODEX_APP_DOCS_URL;
+  const installLabel = '安装';
+  const updateLabel = '更新';
   return {
     id: 'codex-app',
     kind: 'desktop',
     iconId: 'codex-app',
-    typeLabel: '客户端',
+    typeLabel: '桌面端',
     name: 'Codex App',
     description: 'OpenAI 官方 Codex 客户端，独立于 Codex CLI。',
     supported,
     installed,
-    version: installed ? (data.installPath || `${platformLabel} 已安装`) : supported ? `${platformLabel} 一键安装` : `${platformLabel} 暂未支持`,
-    badge: installed ? '已安装' : supported ? '可安装' : '官方入口',
-    tags: ['desktop'].concat(installed ? ['installed'] : []),
-    chips: [platformLabel, installed ? '已安装' : '未安装', '独立客户端'],
-    primaryAction: { toolId: 'codex-app', action: installed ? 'open' : 'install', label: installed ? '打开 App' : '一键安装', disabled: !supported },
+    updateState,
+    version: installed ? (currentVersion ? `${platformLabel} ${currentVersion}` : `${platformLabel} 已安装`) : supported ? `${platformLabel} 可下载` : `${platformLabel} 暂未支持`,
+    badge: updateState.hasUpdate ? '有更新' : installed ? '已安装' : supported ? '可下载' : '官方入口',
+    tags: ['desktop', 'global', 'automation', 'codex'].concat(installed ? ['installed'] : []),
+    aliases: ['Codex CLI', 'OpenAI Codex', 'Codex Desktop', 'Codex 桌面端'],
+    chips: [platformLabel, '桌面端', '海外下载', installed ? '已安装' : '可下载'].concat(currentVersion ? [`当前 ${currentVersion}`] : []),
+    primaryAction: { toolId: 'codex-app', action: installed ? 'open' : 'install', label: installed ? '打开 App' : installLabel, disabled: !supported },
     secondaryAction: installed
-      ? { toolId: 'codex-app', action: 'reinstall', label: '重新安装' }
-      : { externalUrl: data.downloadUrl || fallbackDownloadUrl, label: platformLabel === 'Windows' ? '打开商店' : '下载安装包' },
+      ? { toolId: 'codex-app', action: 'update', label: updateLabel, disabled: !supported }
+      : null,
     tertiaryAction: { externalUrl: docsUrl, label: '官方说明' },
   };
 }
@@ -777,6 +1165,7 @@ function getOpenCodeDesktopCatalogItem() {
   const platformLabel = getOpenCodeDesktopPlatformLabel(data.platform);
   const supported = data.supported !== false && ['macOS', 'Windows'].includes(platformLabel);
   const installed = Boolean(data.installed);
+  const updateState = getCatalogUpdateState(data, { installed });
   return {
     id: 'opencode-desktop',
     kind: 'desktop',
@@ -786,13 +1175,14 @@ function getOpenCodeDesktopCatalogItem() {
     description: '内置下载器自动拉取官方桌面版，安装过程尽量全自动。',
     supported,
     installed,
-    version: installed ? (data.installPath || `${platformLabel} 已安装`) : supported ? `${platformLabel} 一键安装` : `${platformLabel} 暂未接入自动安装`,
-    badge: installed ? '已安装' : supported ? '可自动安装' : '官方入口',
-    tags: ['desktop', 'automation'].concat(installed ? ['installed'] : []),
-    chips: [platformLabel, installed ? '已安装' : '桌面端', supported ? '自动下载' : '需手动处理'],
-    primaryAction: { toolId: 'opencode-desktop', action: installed ? 'open' : 'install', label: installed ? '打开桌面版' : '一键安装', disabled: !supported },
+    updateState,
+    version: installed ? `${platformLabel} 已安装` : supported ? `${platformLabel} 一键安装` : `${platformLabel} 暂未接入自动安装`,
+    badge: updateState.hasUpdate ? '有更新' : installed ? '已安装' : supported ? '可自动安装' : '官方入口',
+    tags: ['desktop', 'automation', 'global'].concat(installed ? ['installed'] : []),
+    chips: [platformLabel, '海外下载', installed ? '已安装' : '桌面端', installed && updateState.label ? updateState.label : supported ? '自动下载' : '需手动处理'],
+    primaryAction: { toolId: 'opencode-desktop', action: installed ? 'open' : 'install', label: installed ? '打开桌面版' : '安装', disabled: !supported },
     secondaryAction: installed
-      ? { toolId: 'opencode-desktop', action: 'reinstall', label: '重新安装' }
+      ? { toolId: 'opencode-desktop', action: 'update', label: '更新', disabled: !supported }
       : { externalUrl: OPENCODE_DESKTOP_HOME_URL, label: '官网' },
   };
 }
@@ -813,10 +1203,11 @@ function getOpenCodeEcosystemCatalogItems() {
     const target = targets[spec.key] || {};
     const available = target.available !== false;
     const installed = Boolean(target.installed);
+    const updateState = getCatalogUpdateState(target, { installed });
     const statusValue = installed
-      ? (target.commandPath || target.workflowPath || target.settingsPath || target.repoRoot || '已配置')
+      ? '已配置'
       : available
-        ? (target.commandPath || target.repoRoot || '可一键处理')
+        ? '可一键处理'
         : spec.unavailable;
     return {
       id: spec.id,
@@ -828,10 +1219,11 @@ function getOpenCodeEcosystemCatalogItems() {
       description: spec.desc,
       supported: available,
       installed,
+      updateState,
       version: statusValue,
-      badge: installed ? '已就绪' : available ? '可自动化' : '待检测',
+      badge: updateState.hasUpdate ? '有更新' : installed ? '已就绪' : available ? '可自动化' : '待检测',
       tags: [spec.typeLabel === '扩展' ? 'extension' : 'integration', 'automation'].concat(installed ? ['installed'] : []),
-      chips: [spec.typeLabel, installed ? '已配置' : '未配置', available ? '一键处理' : '待环境就绪'],
+      chips: [spec.typeLabel, installed ? '已配置' : '未配置', installed && updateState.label ? updateState.label : available ? '一键处理' : '待环境就绪'],
       primaryAction: { toolId: spec.id, action: 'ecosystem-install', label: target.actionLabel || (installed ? '重新处理' : '立即安装'), disabled: !available, ecosystemTarget: spec.key },
       secondaryAction: { externalUrl: spec.docsUrl, label: '官方文档' },
     };
@@ -842,6 +1234,12 @@ function getToolCatalogItems() {
   const baseItems = (state.tools || []).map((tool) => {
     const isSoon = !tool.supported;
     const installed = Boolean(tool.binary?.installed);
+    const updateInfo = getToolUpdateInfo(tool.id);
+    const updateState = getCatalogUpdateState(tool, {
+      installed,
+      currentVersion: tool.binary?.version || '',
+    });
+    const autoChip = installed ? '可更新' : '可安装';
     return {
       id: tool.id,
       kind: 'tool',
@@ -851,10 +1249,12 @@ function getToolCatalogItems() {
       description: tool.description,
       supported: !isSoon,
       installed,
-      version: installed ? (tool.binary?.version || tool.binary?.path || '已安装') : (isSoon ? '暂未支持' : '未安装'),
-      badge: installed ? '已安装' : isSoon ? '即将支持' : 'CLI',
-      tags: ['cli'].concat(installed ? ['installed'] : []),
-      chips: ['CLI'],
+      updateState,
+      version: installed ? (tool.binary?.version || '已安装') : (isSoon ? '暂未支持' : '未安装'),
+      badge: updateState.hasUpdate ? '有更新' : installed ? '已安装' : isSoon ? '即将支持' : '可安装',
+      tags: ['cli', 'global', 'domestic', 'automation'].concat(installed ? ['installed'] : []),
+      chips: ['CLI', '海外', '国内', autoChip].concat(updateState.hasUpdate ? [updateState.label] : []),
+      updateInfo,
       tool,
     };
   });
@@ -872,6 +1272,7 @@ function filterToolCatalogItems(items = []) {
       item.description,
       item.typeLabel,
       item.version,
+      ...(item.aliases || []),
       ...(item.tags || []),
       ...(item.chips || []),
     ].join(' '));
@@ -888,6 +1289,7 @@ function compareToolCatalogSidebarItems(a, b) {
 }
 
 function getToolsSidebarBadge(item) {
+  if (item.updateState?.hasUpdate) return '有更新';
   if (item.installed) return item.kind === 'ecosystem' ? '已就绪' : '已安装';
   return item.kind === 'ecosystem' ? '待配置' : '待安装';
 }
@@ -905,6 +1307,7 @@ function renderToolsSidebarItem(item) {
   const active = getToolsCatalogQuery() === normalizeStoreText(item.name || '');
   const subtitle = [item.typeLabel, item.version].filter(Boolean).join(' · ');
   const badge = getToolsSidebarBadge(item);
+  const badgeClass = item.updateState?.hasUpdate ? 'is-update' : item.installed ? 'is-installed' : 'is-pending';
   return `
     <button
       type="button"
@@ -920,7 +1323,7 @@ function renderToolsSidebarItem(item) {
         <span class="sec-name">${escapeHtml(item.name)}</span>
         <span class="sec-subtitle">${escapeHtml(subtitle)}</span>
       </span>
-      <span class="tools-sec-badge ${item.installed ? 'is-installed' : 'is-pending'}">${escapeHtml(badge)}</span>
+      <span class="tools-sec-badge ${badgeClass}">${escapeHtml(badge)}</span>
     </button>
   `;
 }
@@ -972,58 +1375,98 @@ function renderToolsSecondaryPanel() {
   if (pendingMeta) pendingMeta.textContent = `${pendingItems.length} 项`;
 
   installedList.innerHTML = installedItems.length
-    ? installedItems.slice(0, 6).map((item) => renderToolsSidebarItem(item)).join('')
+    ? installedItems.map((item) => renderToolsSidebarItem(item)).join('')
     : renderToolsSidebarEmpty('还没有已安装项', '先从右侧列表安装 CLI、桌面版或扩展');
   pendingList.innerHTML = pendingItems.length
-    ? pendingItems.slice(0, 5).map((item) => renderToolsSidebarItem(item)).join('')
+    ? pendingItems.map((item) => renderToolsSidebarItem(item)).join('')
     : renderToolsSidebarEmpty('当前已补齐', '没有待处理的安装或配置项');
 }
 
 function renderToolCardActions(item, actionSvgs) {
-  if (item.kind === 'tool') {
-    const tool = item.tool;
-    const isInstalled = item.installed;
-    if (!item.supported) return '<button class="secondary tool-action-btn" disabled>安装</button>';
-    return `
-      <button class="secondary tool-action-btn" data-tool-action="update" data-tool-id="${tool.id}">
-        ${actionSvgs.update}
-        <span>${isInstalled ? '更新' : '安装'}</span>
-      </button>
-      ${isInstalled ? `
-        <button class="secondary tool-action-btn" data-tool-action="reinstall" data-tool-id="${tool.id}">
-          ${actionSvgs.reinstall}
-          <span>重装</span>
-        </button>
-        <button class="secondary tool-action-btn tool-action-danger" data-tool-action="uninstall" data-tool-id="${tool.id}">
-          ${actionSvgs.uninstall}
+  const operationActive = isToolOperationActive(getToolOperation(item?.id));
+  const detailButton = `
+    <button class="secondary tool-action-btn tool-detail-btn" data-tool-detail="${escapeHtml(item.id)}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></svg>
+      <span>详情</span>
+    </button>
+  `;
+	  if (item.kind === 'tool') {
+	    const tool = item.tool;
+	    const isInstalled = item.installed;
+	    if (!item.supported) return '<button class="secondary tool-action-btn" disabled>暂未支持</button>';
+	    return `
+	      ${detailButton}
+	      <button class="secondary tool-action-btn tool-action-primary" data-tool-action="update" data-tool-id="${tool.id}" ${operationActive ? 'disabled' : ''}>
+	        ${actionSvgs.update}
+	        <span>${isInstalled ? '更新' : '安装'}</span>
+	      </button>
+	      ${isInstalled ? `
+	        <button class="secondary tool-action-btn tool-action-danger" data-tool-action="uninstall" data-tool-id="${tool.id}" ${operationActive ? 'disabled' : ''}>
+	          ${actionSvgs.uninstall}
           <span>卸载</span>
         </button>
       ` : ''}
     `;
-  }
-  const buttons = [item.primaryAction, item.secondaryAction, item.tertiaryAction].filter(Boolean).map((action) => {
-    if (action.externalUrl) {
-      return `
-        <button class="secondary tool-action-btn" data-external-url="${escapeHtml(action.externalUrl)}">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
-          <span>${escapeHtml(action.label)}</span>
-        </button>
-      `;
-    }
+	  }
+	  const buttons = [item.primaryAction, item.secondaryAction, item.tertiaryAction].filter(Boolean).map((action) => {
+	    const actionLabel = action.label
+	      || (action.action === 'install'
+	        ? (item.installed ? '更新' : '安装')
+	        : action.action === 'update' || action.action === 'reinstall'
+	          ? '更新'
+	          : action.action === 'ecosystem-install'
+	            ? (item.installed ? '处理' : '安装')
+	            : '');
+	    if (action.externalUrl) {
+	      return `
+	        <button class="secondary tool-action-btn" data-external-url="${escapeHtml(action.externalUrl)}">
+	          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+	          <span>${escapeHtml(actionLabel)}</span>
+	        </button>
+	      `;
+	    }
     return `
-      <button class="secondary tool-action-btn" data-tool-id="${escapeHtml(action.toolId)}" data-tool-action="${escapeHtml(action.action)}" ${action.ecosystemTarget ? `data-ecosystem-target="${escapeHtml(action.ecosystemTarget)}"` : ''} ${action.disabled ? 'disabled' : ''}>
-        ${action.action === 'reinstall' ? actionSvgs.reinstall : action.action === 'open' ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>' : actionSvgs.update}
-        <span>${escapeHtml(action.label)}</span>
-      </button>
-    `;
-  });
-  return buttons.join('');
+	      <button class="secondary tool-action-btn ${['install', 'update'].includes(action.action) ? 'tool-action-primary' : ''}" data-tool-id="${escapeHtml(action.toolId)}" data-tool-action="${escapeHtml(action.action)}" ${action.ecosystemTarget ? `data-ecosystem-target="${escapeHtml(action.ecosystemTarget)}"` : ''} ${action.disabled || operationActive ? 'disabled' : ''}>
+	        ${action.action === 'open' ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>' : actionSvgs.update}
+	        <span>${escapeHtml(actionLabel)}</span>
+	      </button>
+	    `;
+	  });
+  return [detailButton, ...buttons].join('');
+}
+
+function getToolCatalogStatusText(item) {
+  if (!item) return '';
+  if (item.updateState?.latestVersion) {
+    if (item.updateState?.hasUpdate) return '可更新';
+    if (item.installed) return '已安装';
+    return item.supported ? '可安装' : '待环境就绪';
+  }
+  if (item.kind === 'desktop') {
+    const current = normalizeToolVersionText(item.updateState?.currentVersion || '');
+    if (item.installed) return current ? `当前 ${current}` : '已安装';
+    return item.supported ? '可下载' : '待环境就绪';
+  }
+  if (item.kind === 'tool') {
+    const current = normalizeToolVersionText(item.updateState?.currentVersion || '');
+    if (item.installed) return current ? `当前 ${current}` : '已安装';
+    return item.supported ? '未安装' : '暂未支持';
+  }
+  if (item.updateState?.latestVersion) return `最新 ${item.updateState.latestVersion}`;
+  if (item.installed) return item.kind === 'ecosystem' ? '已配置' : '已安装';
+  return item.supported ? '可处理' : '待环境就绪';
 }
 
 function renderToolCatalogCard(item, actionSvgs) {
   const chips = (item.chips || []).filter(Boolean);
+  const hasUpdate = Boolean(item.updateState?.hasUpdate);
+  const badgeClass = hasUpdate ? 'tool-badge-update' : item.installed ? 'tool-badge-ok' : '';
+  const selected = state.toolsCatalogDetailId === item.id;
+  const currentVersion = normalizeToolVersionText(item.updateState?.currentVersion) || (item.installed ? '未知' : '未安装');
+  const latestVersion = normalizeToolVersionText(item.updateState?.latestVersion || '');
+  const showCurrentOnlyVersion = !latestVersion && item.kind === 'desktop' && item.installed && currentVersion && currentVersion !== '未知';
   return `
-    <div class="tool-card ${!item.supported ? 'tool-card-soon' : ''}" data-tool-id="${item.id}">
+    <div class="tool-card ${selected ? 'is-selected' : ''} ${!item.supported ? 'tool-card-soon' : ''} ${hasUpdate ? 'tool-card-has-update' : ''}" data-tool-id="${item.id}">
       <div class="tool-card-head">
         <div class="tool-icon tool-icon-${item.iconId}">
           ${toolIconSvg(item.iconId)}
@@ -1038,17 +1481,312 @@ function renderToolCatalogCard(item, actionSvgs) {
       </div>
       ${chips.length ? `
       <div class="tool-chip-row">
-        ${chips.map((chip, index) => `<span class="tool-chip ${index === 1 && item.installed ? 'tool-chip-active' : ''}">${escapeHtml(chip)}</span>`).join('')}
+        ${chips.map((chip) => `<span class="tool-chip ${hasUpdate && chip === item.updateState?.label ? 'tool-chip-update' : item.installed && chip === '已安装' ? 'tool-chip-active' : ''}">${escapeHtml(chip)}</span>`).join('')}
+      </div>` : ''}
+      ${latestVersion || showCurrentOnlyVersion ? `
+      <div class="tool-version-pair">
+        <span><em>当前</em><strong>${escapeHtml(currentVersion)}</strong></span>
+        ${latestVersion ? `<span><em>最新</em><strong>${escapeHtml(latestVersion)}</strong></span>` : ''}
       </div>` : ''}
       <div class="tool-status">
-        <span class="tool-version ${!item.installed ? 'tool-version-muted' : ''}">${escapeHtml(item.version)}</span>
-        <span class="tool-badge ${item.installed ? 'tool-badge-ok' : ''}">${escapeHtml(item.badge)}</span>
+        <span class="tool-version ${!item.installed ? 'tool-version-muted' : ''}">${escapeHtml(getToolCatalogStatusText(item))}</span>
+        <span class="tool-badge ${badgeClass}">${escapeHtml(item.badge)}</span>
       </div>
+      ${renderToolOperationProgress(item)}
       <div class="tool-actions">${renderToolCardActions(item, actionSvgs)}</div>
     </div>
   `;
 }
 
+function findToolCatalogItemById(id = '') {
+  const target = String(id || '').trim();
+  if (!target) return null;
+  return getToolCatalogItems().find((item) => item.id === target) || null;
+}
+
+function renderToolDetailMetaChips(item, info, regionLabels = []) {
+  const regions = Array.from(new Set(regionLabels.filter(Boolean)))
+    .map((label) => `<span class="tool-detail-chip">${escapeHtml(label)}</span>`);
+  const links = [];
+  if (info?.packageUrl) links.push({ url: info.packageUrl, label: 'npm' });
+  if (info?.repositoryUrl) links.push({ url: info.repositoryUrl, label: '代码仓库' });
+  if (info?.homepage && info.homepage !== info.repositoryUrl) links.push({ url: info.homepage, label: '官网' });
+  if (item?.secondaryAction?.externalUrl) links.push({ url: item.secondaryAction.externalUrl, label: item.secondaryAction.label || '下载' });
+  if (item?.tertiaryAction?.externalUrl) links.push({ url: item.tertiaryAction.externalUrl, label: item.tertiaryAction.label || '文档' });
+  const unique = [];
+  const seen = new Set();
+  links.forEach((link) => {
+    if (!link.url || seen.has(link.url)) return;
+    seen.add(link.url);
+    unique.push(link);
+  });
+  if (!regions.length && !unique.length) return '';
+  return `
+    <div class="tool-detail-meta-chips">
+      ${regions.join('')}
+      ${unique.map((link) => `<button type="button" class="tool-detail-chip tool-detail-link" data-external-url="${escapeHtml(link.url)}">${escapeHtml(link.label)}</button>`).join('')}
+    </div>
+  `;
+}
+
+function getToolVersionActionLabel(item, version) {
+  const current = normalizeToolVersionText(item?.updateState?.currentVersion || item?.tool?.binary?.version || '');
+  const target = normalizeToolVersionText(version);
+  if (current && target && compareToolVersions(target, current) === 0) return '当前已安装';
+  if (item?.installed && current && target && compareToolVersions(target, current) < 0) return '回滚到此版本';
+  return '安装此版本';
+}
+
+function formatToolVersionPublishedAt(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) return raw;
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+}
+
+function getToolVersionNotes(entry, info) {
+  const releaseNotes = String(entry?.releaseNotes || entry?.changelog || entry?.notes || '').trim();
+  const description = String(entry?.description || info?.description || '').trim();
+  return {
+    hasReleaseNotes: Boolean(releaseNotes),
+    body: releaseNotes || '上游未在 npm 元数据或 GitHub Releases 中提供此版本更新日志。',
+    description: releaseNotes ? '' : description,
+  };
+}
+
+function renderToolVersionHistory(item, info) {
+  const versions = Array.isArray(info?.recentVersions) ? info.recentVersions : [];
+  if (!versions.length) return '<div class="tool-detail-empty">暂无版本历史</div>';
+  const operationActive = isToolOperationActive(getToolOperation(item?.id));
+  return `
+    <div class="tool-version-history">
+      ${versions.map((entry) => {
+        const version = String(entry.version || '').trim();
+        if (!version) return '';
+        const at = entry.publishedAt ? formatRelativeTime(entry.publishedAt) : '';
+        const expandedKey = `${item.id}@${version}`;
+        const expanded = state.toolsVersionExpandedKey === expandedKey;
+        const actionLabel = getToolVersionActionLabel(item, version);
+        const isCurrent = actionLabel === '当前已安装';
+        const publishedAt = formatToolVersionPublishedAt(entry.publishedAt);
+        const notes = getToolVersionNotes(entry, info);
+        const releaseUrl = String(entry.releaseUrl || '').trim();
+        const npmUrl = String(entry.npmUrl || '').trim();
+        return `
+          <div class="tool-version-history-row ${expanded ? 'is-expanded' : ''}">
+            <button type="button" class="tool-version-history-toggle" data-tool-version-toggle data-tool-id="${escapeHtml(item.id)}" data-tool-version="${escapeHtml(version)}" aria-expanded="${expanded ? 'true' : 'false'}">
+              <strong>${escapeHtml(version)}</strong>
+              <span>${escapeHtml(at || entry.publishedAt || '')}</span>
+              <i>${expanded ? '收起' : '展开'}</i>
+            </button>
+            ${expanded ? `
+              <div class="tool-version-history-expanded">
+                <div class="tool-version-history-copy">
+                  <div class="tool-version-history-meta">
+                    <span>${escapeHtml(publishedAt ? `发布 ${publishedAt}` : '发布时间未知')}</span>
+                    ${releaseUrl ? `<button type="button" class="tool-version-history-link" data-external-url="${escapeHtml(releaseUrl)}">GitHub Release</button>` : ''}
+                    ${npmUrl ? `<button type="button" class="tool-version-history-link" data-external-url="${escapeHtml(npmUrl)}">npm 版本页</button>` : ''}
+                  </div>
+                  <p class="${notes.hasReleaseNotes ? '' : 'is-muted'}">${escapeHtml(notes.body)}</p>
+                  ${notes.description ? `<small>${escapeHtml(`包说明：${notes.description}`)}</small>` : ''}
+                </div>
+                <div class="tool-version-history-actions">
+                  <button type="button" class="tool-detail-action is-primary" data-tool-version-action="install-version" data-tool-id="${escapeHtml(item.id)}" data-tool-version="${escapeHtml(version)}" ${isCurrent || operationActive ? 'disabled' : ''}>${escapeHtml(actionLabel)}</button>
+                  <button type="button" class="tool-detail-action" data-tool-version-action="install-version-domestic" data-tool-id="${escapeHtml(item.id)}" data-tool-version="${escapeHtml(version)}" ${isCurrent || operationActive ? 'disabled' : ''}>国内镜像</button>
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function updateToolVersionHistoryExpansion(toolId, version) {
+  const key = toolId && version ? `${toolId}@${version}` : '';
+  if (!key) return false;
+  const item = findToolCatalogItemById(toolId);
+  const panel = el('toolsDetailPanel');
+  const history = panel?.querySelector('.tool-version-history');
+  if (!item || !history) return false;
+  state.toolsVersionExpandedKey = state.toolsVersionExpandedKey === key ? '' : key;
+  const info = item.updateInfo || getToolUpdateInfo(item.id);
+  history.outerHTML = renderToolVersionHistory(item, info);
+  window.EasyAIConfigI18n?.apply?.(panel.querySelector('.tool-version-history'));
+  return true;
+}
+
+function renderToolDetailActionButtons(item) {
+  if (!item) return '';
+  const operationActive = isToolOperationActive(getToolOperation(item.id));
+  if (item.kind === 'tool') {
+    const primaryLabel = item.installed ? '更新' : '安装';
+    const domesticLabel = item.installed ? '国内镜像更新' : '国内镜像安装';
+    const uninstall = item.installed ? `
+      <button type="button" class="tool-detail-action is-danger" data-tool-detail-action="uninstall" data-tool-id="${escapeHtml(item.id)}" ${operationActive ? 'disabled' : ''}>卸载</button>
+    ` : '';
+    return `
+      <div class="tool-detail-actions">
+        <button type="button" class="tool-detail-action is-primary" data-tool-detail-action="update" data-tool-id="${escapeHtml(item.id)}" ${operationActive ? 'disabled' : ''}>${escapeHtml(primaryLabel)}</button>
+        <button type="button" class="tool-detail-action" data-tool-detail-action="update-domestic" data-tool-id="${escapeHtml(item.id)}" ${operationActive ? 'disabled' : ''}>${escapeHtml(domesticLabel)}</button>
+        ${uninstall}
+      </div>
+    `;
+  }
+  const actions = [item.primaryAction, item.secondaryAction, item.tertiaryAction].filter(Boolean);
+  if (!actions.length) return '';
+  return `
+	    <div class="tool-detail-actions">
+	      ${actions.map((action, index) => {
+	        const actionLabel = action.label
+	          || (action.action === 'install'
+	            ? (item.installed ? '更新' : '安装')
+	            : action.action === 'update' || action.action === 'reinstall'
+	              ? '更新'
+	              : action.action === 'ecosystem-install'
+	                ? (item.installed ? '处理' : '安装')
+	                : '');
+	        if (action.externalUrl) {
+	          return `<button type="button" class="tool-detail-action ${index === 0 ? 'is-primary' : ''}" data-external-url="${escapeHtml(action.externalUrl)}">${escapeHtml(actionLabel)}</button>`;
+	        }
+	        return `<button type="button" class="tool-detail-action ${index === 0 ? 'is-primary' : ''}" data-tool-id="${escapeHtml(action.toolId)}" data-tool-detail-action="${escapeHtml(action.action)}" ${action.ecosystemTarget ? `data-ecosystem-target="${escapeHtml(action.ecosystemTarget)}"` : ''} ${action.disabled || operationActive ? 'disabled' : ''}>${escapeHtml(actionLabel)}</button>`;
+	      }).join('')}
+	    </div>
+	  `;
+}
+
+function renderToolDetailPanel(item) {
+  if (!item) {
+    return `
+      <div class="tool-detail-placeholder">
+        <strong>选择一个工具</strong>
+        <span>版本、更新和历史记录会显示在这里。</span>
+      </div>
+    `;
+  }
+  const info = item.updateInfo || getToolUpdateInfo(item.id);
+  const currentVersion = normalizeToolVersionText(item.updateState?.currentVersion || item.tool?.binary?.version || '');
+  const latestVersion = item.updateState?.latestVersion || info?.latestVersion || '';
+  const sourceLabel = item.id === 'codex-app'
+    ? '官方安装源'
+    : getToolUpdateSourceLabel(info) || (state.toolUpdatesLoading ? '检查中' : state.toolUpdatesError ? '版本源暂不可用' : '版本源');
+  const regions = (info?.regions || item.tags || [])
+    .filter((tag) => tag === 'global' || tag === 'domestic')
+    .map((tag) => tag === 'global' ? '海外源' : tag === 'domestic' ? '国内镜像' : (TOOL_UPDATE_REGION_LABELS[tag] || tag));
+  const regionLabels = Array.from(new Set(regions));
+  const summaryRows = item.id === 'codex-app'
+    ? [
+      { label: '当前版本', value: currentVersion || (item.installed ? '已安装' : '未安装') },
+      { label: '安装源', value: sourceLabel },
+      { label: '更新方式', value: item.installed ? '更新' : '安装' },
+    ]
+    : [
+      { label: '当前版本', value: currentVersion || (item.installed ? '待检测' : '未安装') },
+      { label: '最新版本', value: latestVersion || (state.toolUpdatesLoading ? '检查中' : state.toolUpdatesError ? '可重试' : '暂无') },
+      { label: '更新来源', value: sourceLabel },
+    ];
+  return `
+    <div class="tool-detail-page">
+      <div class="tool-detail-head">
+        <div class="tool-icon tool-icon-${escapeHtml(item.iconId)}">${toolIconSvg(item.iconId)}</div>
+        <div>
+          <span>${escapeHtml(item.typeLabel || 'Tools')}</span>
+          <strong>${escapeHtml(item.name)}</strong>
+          <em>${escapeHtml(item.description || '')}</em>
+        </div>
+        <button type="button" class="tool-detail-close" data-tools-detail-close aria-label="关闭详情">×</button>
+      </div>
+      ${renderToolDetailMetaChips(item, info, regionLabels)}
+      <div class="tool-detail-summary">
+        ${summaryRows.map((row) => `<div><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(row.value)}</strong></div>`).join('')}
+      </div>
+      ${renderToolOperationProgress(item, { detail: true })}
+      ${renderToolDetailActionButtons(item)}
+      <div class="tool-detail-section">
+        <h4>版本历史</h4>
+        ${renderToolVersionHistory(item, info)}
+      </div>
+      ${info?.error ? `<div class="tool-detail-empty is-error">版本源暂不可用</div>` : ''}
+    </div>
+  `;
+}
+
+function renderToolsDetailPanel(items = getToolCatalogItems()) {
+  const panel = el('toolsDetailPanel');
+  const content = el('toolsContent');
+  if (!panel || !content) return;
+  const selected = state.toolsCatalogDetailId
+    ? (items.find((item) => item.id === state.toolsCatalogDetailId) || findToolCatalogItemById(state.toolsCatalogDetailId))
+    : null;
+  content.classList.toggle('is-detail-open', Boolean(selected));
+  panel.classList.toggle('is-open', Boolean(selected));
+  panel.innerHTML = renderToolDetailPanel(selected);
+  window.EasyAIConfigI18n?.apply?.(panel);
+}
+
+function openToolCatalogDetail(itemOrId) {
+  const item = typeof itemOrId === 'string' ? findToolCatalogItemById(itemOrId) : itemOrId;
+  if (!item) return;
+  if (state.toolsCatalogDetailId !== item.id) state.toolsVersionExpandedKey = '';
+  state.toolsCatalogDetailId = item.id;
+  if (item.kind === 'tool' && state.toolUpdatesAutoCheck && !getToolUpdateInfo(item.id) && !state.toolUpdatesLoading) {
+    void loadToolUpdates({ force: false, render: true });
+  }
+  renderToolsPage();
+}
+
+function renderToolsUpdateStrip() {
+  const wrap = el('toolsUpdateStrip');
+  if (!wrap) return;
+  const fetchedAt = Number(state.toolUpdatesFetchedAt || 0);
+  const latestCount = Object.values(state.toolUpdates?.items || {}).filter((item) => item?.latestVersion).length;
+  const label = state.toolUpdatesLoading
+    ? '正在检查版本'
+    : state.toolUpdatesError
+      ? '检查失败'
+      : fetchedAt
+        ? `已检查 ${formatRelativeTime(new Date(fetchedAt).toISOString())}`
+        : '可检查更新';
+  const detail = state.toolUpdatesError
+    ? '稍后再试'
+    : latestCount
+      ? `${latestCount} 个工具有版本源`
+      : state.toolUpdatesAutoCheck
+        ? '自动检测已开启'
+        : '自动检测已关闭';
+  wrap.innerHTML = `
+    <div class="tools-update-copy">
+      <span>${escapeHtml(label)}</span>
+      <em>${escapeHtml(detail)}</em>
+    </div>
+    <div class="tools-update-actions">
+      <label class="tools-update-toggle" title="自动检测更新">
+        <input type="checkbox" id="toolsUpdateAutoCheckToggle" ${state.toolUpdatesAutoCheck ? 'checked' : ''}>
+        <span class="tools-update-toggle-text">自动检测</span>
+        <span class="tools-update-switch" aria-hidden="true"></span>
+      </label>
+      <button type="button" class="tools-update-btn" id="toolsUpdateRefreshBtn" ${state.toolUpdatesLoading ? 'disabled' : ''}>
+        ${state.toolUpdatesLoading ? '检查中' : '检查更新'}
+      </button>
+    </div>
+  `;
+  const toggle = el('toolsUpdateAutoCheckToggle');
+  if (toggle && !toggle._bound) {
+    toggle._bound = true;
+    toggle.addEventListener('change', () => {
+      setToolUpdatesAutoCheck(toggle.checked);
+    });
+  }
+  const btn = el('toolsUpdateRefreshBtn');
+  if (btn && !btn._bound) {
+    btn._bound = true;
+    btn.addEventListener('click', () => {
+      void loadToolUpdates({ force: true, render: true });
+    });
+  }
+}
 
 function bindToolsCatalogControls() {
   const searchInput = el('toolsCatalogSearchInput');
@@ -1071,11 +1809,55 @@ function bindToolsCatalogControls() {
       renderToolsPage();
     });
   }
+  const detailPanel = el('toolsDetailPanel');
+  if (detailPanel && !detailPanel._bound) {
+    detailPanel._bound = true;
+    detailPanel.addEventListener('click', (event) => {
+      const closeBtn = event.target.closest('[data-tools-detail-close]');
+      if (closeBtn) {
+        state.toolsCatalogDetailId = '';
+        state.toolsVersionExpandedKey = '';
+        renderToolsPage();
+        return;
+      }
+      const external = event.target.closest('[data-external-url]');
+      if (external) {
+        void openExternalUrl(external.getAttribute('data-external-url') || '');
+        return;
+      }
+      const actionBtn = event.target.closest('[data-tool-detail-action]');
+      if (actionBtn) {
+        handleToolAction(
+          actionBtn.getAttribute('data-tool-id') || '',
+          actionBtn.getAttribute('data-tool-detail-action') || '',
+          actionBtn,
+        );
+        return;
+      }
+      const versionActionBtn = event.target.closest('[data-tool-version-action]');
+      if (versionActionBtn) {
+        handleToolAction(
+          versionActionBtn.getAttribute('data-tool-id') || '',
+          versionActionBtn.getAttribute('data-tool-version-action') || '',
+          versionActionBtn,
+        );
+        return;
+      }
+      const versionToggle = event.target.closest('[data-tool-version-toggle]');
+      if (versionToggle) {
+        const toolId = versionToggle.getAttribute('data-tool-id') || '';
+        const version = versionToggle.getAttribute('data-tool-version') || '';
+        updateToolVersionHistoryExpansion(toolId, version);
+      }
+    });
+  }
 }
 
 function renderToolsPage() {
   const grid = document.querySelector('.tools-page .tools-grid');
+  const page = document.querySelector('.tools-page');
   renderToolsSecondaryPanel();
+  renderToolsUpdateStrip();
   if (!grid || !state.tools.length) return;
   bindToolsCatalogControls();
 
@@ -1085,7 +1867,26 @@ function renderToolsPage() {
     uninstall: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>',
   };
 
-  const items = filterToolCatalogItems(getToolCatalogItems());
+  const allItems = getToolCatalogItems();
+  const selectedDetail = state.toolsCatalogDetailId
+    ? (allItems.find((item) => item.id === state.toolsCatalogDetailId) || findToolCatalogItemById(state.toolsCatalogDetailId))
+    : null;
+  const detailOpen = Boolean(selectedDetail);
+  page?.classList.toggle('is-detail-mode', detailOpen);
+
+  if (detailOpen) {
+    grid.innerHTML = '';
+    renderToolsDetailPanel(allItems);
+    el('toolsCatalogEmpty')?.classList.add('hide');
+    el('toolsCatalogPagination')?.classList.add('hide');
+    requestAnimationFrame(() => {
+      window.EasyAIConfigI18n?.apply?.(document.querySelector('.tools-page'));
+      window.EasyAIConfigI18n?.apply?.(el('secondaryBody'));
+    });
+    return;
+  }
+
+  const items = filterToolCatalogItems(allItems);
   const searchInput = el('toolsCatalogSearchInput');
   if (searchInput && searchInput.value !== state.toolsCatalogQuery) searchInput.value = state.toolsCatalogQuery;
   document.querySelectorAll('[data-tools-tag]').forEach((node) => {
@@ -1099,6 +1900,7 @@ function renderToolsPage() {
   const pageItems = items.slice(start, start + pageSize);
 
   grid.innerHTML = pageItems.map((item) => renderToolCatalogCard(item, actionSvgs)).join('');
+  renderToolsDetailPanel(allItems);
   el('toolsCatalogEmpty')?.classList.toggle('hide', items.length > 0);
   const pagination = el('toolsCatalogPagination');
   const prevBtn = el('toolsCatalogPrevBtn');
@@ -1130,11 +1932,127 @@ function renderToolsPage() {
         void openExternalUrl(linkBtn.dataset.externalUrl || '');
         return;
       }
+      const detailBtn = e.target.closest('[data-tool-detail]');
+      if (detailBtn) {
+        void openToolCatalogDetail(detailBtn.dataset.toolDetail || '');
+        return;
+      }
       const btn = e.target.closest('[data-tool-action]');
-      if (!btn) return;
-      handleToolAction(btn.dataset.toolId, btn.dataset.toolAction, btn);
+      if (btn) {
+        handleToolAction(btn.dataset.toolId, btn.dataset.toolAction, btn);
+        return;
+      }
+      const card = e.target.closest('.tool-card[data-tool-id]');
+      if (card) void openToolCatalogDetail(card.dataset.toolId || '');
     });
   }
+  requestAnimationFrame(() => {
+    window.EasyAIConfigI18n?.apply?.(document.querySelector('.tools-page'));
+    window.EasyAIConfigI18n?.apply?.(el('secondaryBody'));
+  });
+}
+
+async function runSimpleToolOperation(toolId, config, btn) {
+  const toolName = config.toolName || toolId;
+  const taskName = config.taskName || `${toolName} 操作`;
+  const taskId = addTask(taskName, {
+    progress: 8,
+    message: '准备执行',
+  });
+  setToolBtnBusy(btn, true, config.busyText);
+  setToolOperation(toolId, {
+    action: config.action || '',
+    status: 'running',
+    progress: 8,
+    stepTitle: '准备',
+    summary: config.startText || '正在准备操作',
+    detail: '正在检查当前状态',
+  });
+  const stopTicker = startToolOperationTicker(toolId, 82);
+
+  try {
+    await sleep(120);
+    setToolOperation(toolId, {
+      progress: 22,
+      stepTitle: '执行',
+      summary: config.executeText || config.busyText || '正在执行命令',
+      detail: '请保持应用打开',
+    });
+    updateTask(taskId, { progress: 22, message: config.executeText || config.busyText || '正在执行命令' });
+
+    const requestOptions = { method: 'POST' };
+    if (config.body !== undefined) {
+      requestOptions.headers = { 'Content-Type': 'application/json' };
+      requestOptions.body = JSON.stringify(config.body);
+    }
+    const json = await api(config.api, requestOptions);
+    if (!json.ok) {
+      throw new Error(json.error || `${toolName} 操作失败`);
+    }
+
+    stopTicker();
+    setToolOperation(toolId, {
+      progress: 88,
+      stepTitle: '验证',
+      summary: '正在刷新工具状态',
+      detail: '确认版本和安装状态',
+    });
+    updateTask(taskId, { progress: 88, message: '正在刷新工具状态' });
+    await refreshToolRuntimeAfterMutation(toolId);
+
+    setToolOperation(toolId, {
+      status: 'success',
+      progress: 100,
+      stepTitle: '完成',
+      summary: config.successText,
+      detail: '状态已刷新',
+    }, { keepCompletedMs: 9000 });
+    updateTask(taskId, { status: 'done', progress: 100, message: config.successText });
+    flash(config.successText, 'success');
+    return { ok: true, data: json.data };
+  } catch (error) {
+    stopTicker();
+    const message = error?.message || `${toolName} 操作失败`;
+    setToolOperation(toolId, {
+      status: 'error',
+      progress: 100,
+      stepTitle: '失败',
+      summary: `${toolName} 操作失败`,
+      detail: message,
+      error: message,
+    }, { keepCompletedMs: 12000 });
+    updateTask(taskId, { status: 'error', progress: 100, message });
+    flash(message, 'error');
+    return { ok: false, error: message };
+  } finally {
+    stopTicker();
+    setToolBtnBusy(btn, false);
+  }
+}
+
+function getToolVersionActionConfig({ toolId, action, btn, toolName, apiPrefix }) {
+  if (!['install-version', 'install-version-domestic'].includes(action)) return null;
+  const version = normalizeToolVersionText(btn?.getAttribute?.('data-tool-version') || btn?.dataset?.toolVersion || '');
+  if (!version) {
+    flash('缺少目标版本', 'error');
+    return null;
+  }
+  const domestic = action === 'install-version-domestic';
+  const item = findToolCatalogItemById(toolId);
+  const currentVersion = normalizeToolVersionText(item?.updateState?.currentVersion || item?.tool?.binary?.version || '');
+  const rollback = Boolean(item?.installed && currentVersion && compareToolVersions(version, currentVersion) < 0);
+  const verb = rollback ? '回滚' : '安装';
+  const sourceText = domestic ? '国内镜像' : 'npm';
+  return {
+    api: `/api/${apiPrefix}/${domestic ? 'install-version-domestic' : 'install-version'}`,
+    body: { version },
+    busyText: `${verb}中…`,
+    successText: `${toolName} 已${verb}到 ${version}`,
+    startText: `正在准备${sourceText}${verb} ${toolName} ${version}`,
+    executeText: `正在通过${sourceText}${verb} ${toolName} ${version}`,
+    confirm: null,
+    taskName: `${toolName} ${verb} ${version}`,
+  };
 }
 
 // Generic tool action handler
@@ -1144,6 +2062,12 @@ async function handleToolAction(toolId, action, btn) {
 
   const apiPrefixMap = { codex: 'codex', claudecode: 'claudecode', opencode: 'opencode', openclaw: 'openclaw' };
   const apiPrefix = apiPrefixMap[toolId] || toolId;
+
+  const versionConfig = getToolVersionActionConfig({ toolId, action, btn, toolName, apiPrefix });
+  if (versionConfig) {
+    await runSimpleToolOperation(toolId, { ...versionConfig, action, toolName }, btn);
+    return;
+  }
 
   if (toolId === 'openclaw' && action === 'update') {
     await openClawInstallMethodDialog(btn);
@@ -1158,22 +2082,62 @@ async function handleToolAction(toolId, action, btn) {
   if (action === 'ecosystem-install') {
     const target = btn?.dataset?.ecosystemTarget || toolId.replace('opencode-', '');
     setToolBtnBusy(btn, true, '处理中…');
+    setToolOperation(toolId, {
+      action,
+      status: 'running',
+      progress: 12,
+      stepTitle: '准备',
+      summary: '正在处理集成项',
+      detail: '正在检查本机环境',
+    });
+    const stopTicker = startToolOperationTicker(toolId, 82);
     try {
       const cwd = el('launchCwdInput')?.value?.trim() || state.current?.launch?.cwd || '';
+      setToolOperation(toolId, {
+        progress: 30,
+        stepTitle: '执行',
+        summary: '正在写入或安装集成',
+        detail: '完成后会刷新状态',
+      });
       const json = await api('/api/opencode/ecosystem/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target, cwd }),
       });
       if (!json.ok) {
-        flash(json.error || 'OpenCode 生态项处理失败', 'error');
-        return;
+        throw new Error(json.error || 'OpenCode 生态项处理失败');
       }
+      stopTicker();
+      setToolOperation(toolId, {
+        progress: 88,
+        stepTitle: '验证',
+        summary: '正在刷新集成状态',
+        detail: '确认配置是否生效',
+      });
+      await loadOpenCodeEcosystemState({ render: false });
+      setToolOperation(toolId, {
+        status: 'success',
+        progress: 100,
+        stepTitle: '完成',
+        summary: json.data?.message || 'OpenCode 生态项已处理',
+        detail: '状态已刷新',
+      }, { keepCompletedMs: 9000 });
       flash(json.data?.message || 'OpenCode 生态项已处理', 'success');
-      await loadOpenCodeEcosystemState({ render: state.activePage === 'tools' });
+      if (state.activePage === 'tools') renderToolsPage();
     } catch (error) {
-      flash(error?.message || 'OpenCode 生态项处理失败', 'error');
+      stopTicker();
+      const message = error?.message || 'OpenCode 生态项处理失败';
+      setToolOperation(toolId, {
+        status: 'error',
+        progress: 100,
+        stepTitle: '失败',
+        summary: 'OpenCode 生态项处理失败',
+        detail: message,
+        error: message,
+      }, { keepCompletedMs: 12000 });
+      flash(message, 'error');
     } finally {
+      stopTicker();
       setToolBtnBusy(btn, false);
     }
     return;
@@ -1182,6 +2146,10 @@ async function handleToolAction(toolId, action, btn) {
   if (toolId === 'opencode-desktop') {
     if (action === 'install') {
       await runOpenCodeDesktopInstallAction(btn, { reinstall: false });
+      return;
+    }
+    if (action === 'update') {
+      await runOpenCodeDesktopInstallAction(btn, { update: true });
       return;
     }
     if (action === 'reinstall') {
@@ -1208,21 +2176,8 @@ async function handleToolAction(toolId, action, btn) {
   }
 
   if (toolId === 'codex-app') {
-    if (action === 'install' || action === 'reinstall') {
-      setToolBtnBusy(btn, true, action === 'reinstall' ? '重装中…' : '安装中…');
-      try {
-        const json = await api('/api/codex-app/install', { method: 'POST' });
-        if (!json.ok) {
-          flash(json.error || 'Codex App 安装失败', 'error');
-          return;
-        }
-        flash(json.data?.message || '已触发 Codex App 安装流程', 'success');
-        await loadCodexAppState({ render: state.activePage === 'tools' });
-      } catch (error) {
-        flash(error?.message || 'Codex App 安装失败', 'error');
-      } finally {
-        setToolBtnBusy(btn, false);
-      }
+    if (action === 'install' || action === 'update' || action === 'reinstall') {
+      await runCodexAppInstallAction(btn, { update: action === 'update', reinstall: action === 'reinstall' });
       return;
     }
     if (action === 'open') {
@@ -1244,6 +2199,11 @@ async function handleToolAction(toolId, action, btn) {
     }
   }
 
+  if (toolId === 'opencode' && action === 'update-domestic') {
+    await runOpenCodeToolAction('update', btn, { method: 'domestic' });
+    return;
+  }
+
   if (toolId === 'opencode' && ['update', 'reinstall', 'uninstall'].includes(action)) {
     await runOpenCodeToolAction(action, btn);
     return;
@@ -1254,12 +2214,24 @@ async function handleToolAction(toolId, action, btn) {
       api: `/api/${apiPrefix}/update`,
       busyText: '更新中…',
       successText: `${toolName} 已更新到最新版`,
+      startText: `正在准备更新 ${toolName}`,
+      executeText: `正在更新 ${toolName}`,
+      confirm: null,
+    },
+    'update-domestic': {
+      api: `/api/${apiPrefix}/update-domestic`,
+      busyText: '更新中…',
+      successText: `${toolName} 已通过国内镜像更新`,
+      startText: `正在准备国内镜像更新 ${toolName}`,
+      executeText: `正在通过国内镜像更新 ${toolName}`,
       confirm: null,
     },
     reinstall: {
       api: `/api/${apiPrefix}/reinstall`,
       busyText: '重装中…',
       successText: `${toolName} 重装完成`,
+      startText: `正在准备重装 ${toolName}`,
+      executeText: `正在重装 ${toolName}`,
       confirm: {
         eyebrow: toolName,
         title: `重装 ${toolName}`,
@@ -1272,6 +2244,8 @@ async function handleToolAction(toolId, action, btn) {
       api: `/api/${apiPrefix}/uninstall`,
       busyText: '卸载中…',
       successText: `${toolName} 已卸载`,
+      startText: `正在准备卸载 ${toolName}`,
+      executeText: `正在卸载 ${toolName}`,
       confirm: {
         eyebrow: toolName,
         title: `卸载 ${toolName}`,
@@ -1294,21 +2268,7 @@ async function handleToolAction(toolId, action, btn) {
     }
   }
 
-  setToolBtnBusy(btn, true, config.busyText);
-
-  try {
-    const json = await api(config.api, { method: 'POST' });
-    if (!json.ok) {
-      flash(json.error || `${toolName} 操作失败`, 'error');
-      return;
-    }
-    flash(config.successText, 'success');
-    await refreshToolRuntimeAfterMutation(toolId);
-  } catch (e) {
-    flash(e.message || `${toolName} 操作失败`, 'error');
-  } finally {
-    setToolBtnBusy(btn, false);
-  }
+  await runSimpleToolOperation(toolId, { ...config, action, toolName, taskName: `${toolName} ${config.successText.includes('卸载') ? '卸载' : config.successText.includes('重装') ? '重装' : '更新'}` }, btn);
 }
 const SPINNER_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.22-8.56" /></svg>';
 
@@ -1329,7 +2289,7 @@ function setToolBtnBusy(btn, busy, text) {
 function getOpenCodeActionCopy(action, installedBefore = false) {
   if (action === 'desktop-install') {
     return installedBefore
-      ? { busy: '重装中…', title: '正在重装 OpenCode Desktop', done: 'OpenCode Desktop 已重装完成' }
+      ? { busy: '更新中…', title: '正在更新 OpenCode Desktop', done: 'OpenCode Desktop 已更新完成' }
       : { busy: '安装中…', title: '正在安装 OpenCode Desktop', done: 'OpenCode Desktop 安装完成' };
   }
   if (action === 'install') {
@@ -1840,6 +2800,23 @@ async function cancelOpenCodeDesktopInstallTask(taskId) {
   return json.data;
 }
 
+async function fetchCodexAppInstallTask(taskId) {
+  const json = await api(`/api/codex-app/install/status?taskId=${encodeURIComponent(taskId)}`, { timeoutMs: 12000 });
+  if (!json.ok) throw new Error(json.error || '获取 Codex App 安装进度失败');
+  return json.data;
+}
+
+async function cancelCodexAppInstallTask(taskId) {
+  const json = await api('/api/codex-app/install/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId }),
+    timeoutMs: 120000,
+  });
+  if (!json.ok) throw new Error(json.error || '中断 Codex App 安装失败');
+  return json.data;
+}
+
 function syncOpenCodeTrackerWithTask(tracker, task) {
   if (!tracker || !task) return tracker;
   tracker.taskId = task.taskId || tracker.taskId || '';
@@ -1869,6 +2846,15 @@ function isUnsupportedOpenCodeTaskApi(error) {
   return message.includes('Unsupported request: POST /api/opencode/install/start')
     || message.includes('Unsupported request: GET /api/opencode/install/status')
     || message.includes('Unsupported request: POST /api/opencode/install/cancel');
+}
+
+function isUnsupportedCodexAppTaskApi(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('Unsupported request: POST /api/codex-app/install/start')
+    || message.includes('Unsupported request: GET /api/codex-app/install/status')
+    || message.includes('Unsupported request: POST /api/codex-app/install/cancel')
+    || message.includes('Cannot POST /api/codex-app/install/start')
+    || message.includes('Cannot GET /api/codex-app/install/status');
 }
 
 async function runLegacyOpenCodeRequest(action, requestedMethod) {
@@ -1948,6 +2934,36 @@ async function runTrackedOpenCodeDesktopTask(onUpdate, { reinstall = false } = {
   return task;
 }
 
+async function runTrackedCodexAppTask(onUpdate, { reinstall = false } = {}) {
+  const startJson = await api('/api/codex-app/install/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reinstall: Boolean(reinstall) }),
+    timeoutMs: 12000,
+  });
+  if (!startJson.ok || !startJson.data?.taskId) {
+    throw new Error(startJson.error || '启动 Codex App 安装任务失败');
+  }
+
+  let task = startJson.data;
+  if (typeof onUpdate === 'function') onUpdate(task);
+
+  let refreshFailures = 0;
+  while (task.status === 'running' || task.status === 'cancelling') {
+    await sleep(900);
+    try {
+      task = await fetchCodexAppInstallTask(task.taskId);
+      refreshFailures = 0;
+      if (typeof onUpdate === 'function') onUpdate(task);
+    } catch (error) {
+      refreshFailures += 1;
+      if (refreshFailures >= 3) throw error;
+    }
+  }
+
+  return task;
+}
+
 async function runOpenCodeToolAction(action, btn, options = {}) {
   const installedBefore = action === 'install'
     ? false
@@ -1982,6 +2998,14 @@ async function runOpenCodeToolAction(action, btn, options = {}) {
   }
 
   const tracker = createOpenCodeTracker(action, { installedBefore, requestedMethod });
+  setToolOperation('opencode', {
+    action,
+    status: 'running',
+    progress: tracker.progress || 8,
+    stepTitle: tracker.steps?.[0]?.title || '准备',
+    summary: tracker.summary || copy.title,
+    detail: tracker.hint || '',
+  });
   if (requestedMethod) {
     pushOpenCodeTrackerLog(tracker, 'stdout', `安装方式请求：${getOpenCodeRequestedMethodLabel(requestedMethod)}`);
   }
@@ -2041,12 +3065,14 @@ async function runOpenCodeToolAction(action, btn, options = {}) {
       state.openCodeInstallView.activeTaskId = task.taskId || state.openCodeInstallView.activeTaskId;
       state.openCodeInstallView.cancelBusy = task.status === 'cancelling';
       syncOpenCodeTrackerWithTask(tracker, task);
+      syncToolOperationFromTask('opencode', task, { action, summary: copy.title });
       renderTrackedOpenCodeDialog(tracker);
     });
 
     state.updateDialogCancelHandler = null;
     state.openCodeInstallView.cancelBusy = false;
     syncOpenCodeTrackerWithTask(tracker, finalTask);
+    syncToolOperationFromTask('opencode', finalTask, { action, summary: copy.done });
     renderTrackedOpenCodeDialog(tracker, { force: true });
     setUpdateDialogLocked(false);
     patchUpdateDialog({
@@ -2094,6 +3120,14 @@ async function runOpenCodeToolAction(action, btn, options = {}) {
         await refreshToolRuntimeAfterMutation('opencode');
         setUpdateDialogLocked(false);
         await finishOpenCodeTracker(tracker, legacyResult, legacyResult?.ok === false ? (legacyResult?.stderr || 'OpenCode 操作失败') : '');
+        setToolOperation('opencode', {
+          status: legacyResult?.ok === false ? 'error' : 'success',
+          progress: 100,
+          stepTitle: legacyResult?.ok === false ? '失败' : '完成',
+          summary: legacyResult?.ok === false ? 'OpenCode 操作失败' : copy.done,
+          detail: legacyResult?.stderr || legacyResult?.stdout || '',
+          error: legacyResult?.ok === false ? (legacyResult?.stderr || 'OpenCode 操作失败') : '',
+        }, { keepCompletedMs: 9000 });
         patchUpdateDialog({ confirmText: '知道了', confirmDisabled: false, cancelHidden: true, trackerMode: true });
         if (legacyResult?.ok === false) {
           const errMsg = legacyResult?.stderr || 'OpenCode 操作失败';
@@ -2113,6 +3147,14 @@ async function runOpenCodeToolAction(action, btn, options = {}) {
         tracker.hint = '兼容模式也执行失败了，请看最后日志。';
         tracker.detail = errMsg;
         renderTrackedOpenCodeDialog(tracker, { force: true });
+        setToolOperation('opencode', {
+          status: 'error',
+          progress: 100,
+          stepTitle: '失败',
+          summary: 'OpenCode 操作失败',
+          detail: errMsg,
+          error: errMsg,
+        }, { keepCompletedMs: 12000 });
         setUpdateDialogLocked(false);
         patchUpdateDialog({ confirmText: '知道了', confirmDisabled: false, cancelHidden: true, trackerMode: true });
         if (!suppressFlash) flash(errMsg, 'error');
@@ -2130,6 +3172,14 @@ async function runOpenCodeToolAction(action, btn, options = {}) {
     tracker.hint = '无法继续获取实时安装状态，请重试。';
     tracker.detail = errMsg;
     renderTrackedOpenCodeDialog(tracker, { force: true });
+    setToolOperation('opencode', {
+      status: 'error',
+      progress: 100,
+      stepTitle: '失败',
+      summary: 'OpenCode 操作失败',
+      detail: errMsg,
+      error: errMsg,
+    }, { keepCompletedMs: 12000 });
     setUpdateDialogLocked(false);
     patchUpdateDialog({ confirmText: '知道了', confirmDisabled: false, cancelHidden: true, trackerMode: true });
     if (!suppressFlash) flash(errMsg, 'error');
@@ -2139,13 +3189,135 @@ async function runOpenCodeToolAction(action, btn, options = {}) {
   }
 }
 
-async function runOpenCodeDesktopInstallAction(btn, { reinstall = false } = {}) {
+async function runCodexAppInstallAction(btn, { reinstall = false, update = false } = {}) {
+  const installedBefore = Boolean(state.codexAppState?.installed);
+  const updateMode = Boolean(update || reinstall || installedBefore);
+  const operationAction = updateMode ? 'update' : 'install';
+  const taskTitle = updateMode ? '更新 Codex App' : '安装 Codex App';
+  const taskCardId = addTask(taskTitle, {
+    progress: 8,
+    message: updateMode ? '正在准备更新' : '正在准备安装',
+  });
+  setToolBtnBusy(btn, true, updateMode ? '更新中…' : '安装中…');
+  setToolOperation('codex-app', {
+    action: operationAction,
+    status: 'running',
+    progress: 8,
+    stepTitle: '准备',
+    summary: updateMode ? '正在准备更新 Codex App' : '正在准备安装 Codex App',
+    detail: '正在检查系统环境',
+  });
+
+  try {
+    const finalTask = await runTrackedCodexAppTask((task) => {
+      syncToolOperationFromTask('codex-app', task, {
+        action: operationAction,
+        summary: taskTitle,
+      });
+      updateTask(taskCardId, {
+        name: taskTitle,
+        status: mapTaskStatusToTaskCardStatus(task.status),
+        progress: Math.max(4, clampToolOperationProgress(task.progress, 8)),
+        message: cleanToolOperationText(task.summary || task.detail || ''),
+      });
+    }, { reinstall: updateMode });
+
+    syncToolOperationFromTask('codex-app', finalTask, {
+      action: operationAction,
+      summary: finalTask.status === 'success' ? 'Codex App 已准备好' : taskTitle,
+    });
+    await loadCodexAppState({ render: false });
+    if (state.activePage === 'tools') renderToolsPage();
+
+    if (finalTask.status === 'success') {
+      const message = finalTask.summary || (updateMode ? 'Codex App 更新完成' : 'Codex App 安装完成');
+      flash(message, 'success');
+      updateTask(taskCardId, { status: 'done', progress: 100, message });
+      return { ok: true, data: finalTask };
+    }
+    if (finalTask.status === 'cancelled') {
+      flash(updateMode ? 'Codex App 更新已中断' : 'Codex App 安装已中断', 'info');
+      updateTask(taskCardId, { status: 'cancelled', progress: 100, message: finalTask.summary || (updateMode ? '更新已中断' : '安装已中断') });
+      return { ok: false, cancelled: true, data: finalTask };
+    }
+
+    const errMsg = finalTask.error || (updateMode ? 'Codex App 更新失败' : 'Codex App 安装失败');
+    flash(errMsg, 'error');
+    updateTask(taskCardId, { status: 'error', progress: 100, message: errMsg });
+    return { ok: false, error: errMsg, data: finalTask };
+  } catch (error) {
+    if (isUnsupportedCodexAppTaskApi(error)) {
+      const stopTicker = startToolOperationTicker('codex-app', 72);
+      try {
+        setToolOperation('codex-app', {
+          status: 'running',
+          progress: 28,
+          stepTitle: '兼容模式',
+          summary: '正在调用旧版安装入口',
+          detail: '安装包会继续由系统处理',
+        });
+        updateTask(taskCardId, { progress: 28, message: '正在调用旧版安装入口' });
+        const json = await api('/api/codex-app/install', { method: 'POST' });
+        if (!json.ok) throw new Error(json.error || 'Codex App 安装失败');
+        stopTicker();
+        setToolOperation('codex-app', {
+          status: 'success',
+          progress: 100,
+          stepTitle: '完成',
+          summary: cleanToolOperationText(json.data?.message || (updateMode ? 'Codex App 更新流程已触发' : 'Codex App 安装流程已触发')),
+          detail: updateMode ? '状态会在更新完成后自动刷新' : '状态会在安装完成后自动刷新',
+        }, { keepCompletedMs: 9000 });
+        await loadCodexAppState({ render: state.activePage === 'tools' });
+        flash(json.data?.message || (updateMode ? '已触发 Codex App 更新流程' : '已触发 Codex App 安装流程'), 'success');
+        updateTask(taskCardId, { status: 'done', progress: 100, message: cleanToolOperationText(json.data?.message || (updateMode ? '已触发更新流程' : '已触发安装流程')) });
+        return { ok: true, data: json.data, compatibilityMode: true };
+      } catch (legacyError) {
+        stopTicker();
+        const message = legacyError?.message || (updateMode ? 'Codex App 更新失败' : 'Codex App 安装失败');
+        setToolOperation('codex-app', {
+          status: 'error',
+          progress: 100,
+          stepTitle: '失败',
+          summary: updateMode ? 'Codex App 更新失败' : 'Codex App 安装失败',
+          detail: message,
+          error: message,
+        }, { keepCompletedMs: 12000 });
+        flash(message, 'error');
+        updateTask(taskCardId, { status: 'error', progress: 100, message });
+        return { ok: false, error: message };
+      } finally {
+        stopTicker();
+      }
+    }
+
+    const errMsg = error?.message || (updateMode ? 'Codex App 更新失败' : 'Codex App 安装失败');
+    setToolOperation('codex-app', {
+      status: 'error',
+      progress: 100,
+      stepTitle: '失败',
+      summary: updateMode ? 'Codex App 更新失败' : 'Codex App 安装失败',
+      detail: errMsg,
+      error: errMsg,
+    }, { keepCompletedMs: 12000 });
+    flash(errMsg, 'error');
+    updateTask(taskCardId, { status: 'error', progress: 100, message: errMsg });
+    return { ok: false, error: errMsg };
+  } finally {
+    setToolBtnBusy(btn, false);
+  }
+}
+
+async function runOpenCodeDesktopInstallAction(btn, { reinstall = false, update = false } = {}) {
+  const installedBefore = Boolean(state.openCodeDesktopState?.installed);
+  const updateMode = Boolean(update || reinstall || installedBefore);
+  const operationAction = updateMode ? 'update' : 'install';
+  const taskName = updateMode ? '更新 OpenCode Desktop' : '安装 OpenCode Desktop';
   if (reinstall) {
     const confirmed = await openUpdateDialog({
       eyebrow: 'OpenCode Desktop',
-      title: '重新安装 OpenCode Desktop',
-      body: '<p>这会重新下载安装官方桌面版，并自动继续安装。</p>',
-      confirmText: '确认重装',
+      title: '更新 OpenCode Desktop',
+      body: '<p>这会下载官方最新版桌面端，并自动继续安装。</p>',
+      confirmText: '确认更新',
       cancelText: '取消',
     });
     if (!confirmed) {
@@ -2154,16 +3326,23 @@ async function runOpenCodeDesktopInstallAction(btn, { reinstall = false } = {}) 
     }
   }
 
-  const installedBefore = Boolean(state.openCodeDesktopState?.installed);
-  const copy = getOpenCodeActionCopy('desktop-install', reinstall || installedBefore);
-  const tracker = createOpenCodeTracker('desktop-install', { installedBefore: reinstall || installedBefore });
+  const copy = getOpenCodeActionCopy('desktop-install', updateMode);
+  const tracker = createOpenCodeTracker('desktop-install', { installedBefore: updateMode });
   tracker.toolId = 'opencode-desktop';
+  setToolOperation('opencode-desktop', {
+    action: operationAction,
+    status: 'running',
+    progress: tracker.progress || 10,
+    stepTitle: tracker.steps?.[0]?.title || '准备',
+    summary: tracker.summary || copy.title,
+    detail: tracker.hint || '',
+  });
   pushOpenCodeTrackerLog(tracker, 'stdout', '安装源：OpenCode 官方桌面版稳定渠道');
   (tracker.commandPreview || []).forEach((line, index) => {
     pushOpenCodeTrackerLog(tracker, 'stdout', `${tracker.commandPreview.length > 1 ? `预计步骤 ${index + 1}` : '预计步骤'}：${line}`);
   });
 
-  const taskCardId = addTask(reinstall ? '重装 OpenCode Desktop' : '安装 OpenCode Desktop', {
+  const taskCardId = addTask(taskName, {
     progress: Math.max(4, tracker.progress || 4),
     message: tracker.summary || copy.title,
   });
@@ -2217,9 +3396,10 @@ async function runOpenCodeDesktopInstallAction(btn, { reinstall = false } = {}) 
       state.openCodeInstallView.activeTaskId = task.taskId || state.openCodeInstallView.activeTaskId;
       state.openCodeInstallView.cancelBusy = task.status === 'cancelling';
       syncOpenCodeTrackerWithTask(tracker, task);
+      syncToolOperationFromTask('opencode-desktop', task, { action: operationAction, summary: copy.title });
       renderTrackedOpenCodeDialog(tracker);
       updateTask(taskCardId, {
-        name: reinstall ? '重装 OpenCode Desktop' : '安装 OpenCode Desktop',
+        name: taskName,
         status: task.status === 'running' || task.status === 'cancelling'
           ? 'running'
           : task.status === 'success'
@@ -2230,11 +3410,12 @@ async function runOpenCodeDesktopInstallAction(btn, { reinstall = false } = {}) 
         progress: Math.max(4, task.progress || 0),
         message: task.summary || '',
       });
-    }, { reinstall });
+    }, { reinstall: updateMode });
 
     state.updateDialogCancelHandler = null;
     state.openCodeInstallView.cancelBusy = false;
     syncOpenCodeTrackerWithTask(tracker, finalTask);
+    syncToolOperationFromTask('opencode-desktop', finalTask, { action: operationAction, summary: copy.done });
     renderTrackedOpenCodeDialog(tracker, { force: true });
     setUpdateDialogLocked(false);
     patchUpdateDialog({
@@ -2248,34 +3429,44 @@ async function runOpenCodeDesktopInstallAction(btn, { reinstall = false } = {}) 
       trackerMode: true,
     });
 
+    await loadOpenCodeDesktopState({ render: false });
     await refreshToolRuntimeAfterMutation('opencode');
+    if (state.activePage === 'tools') renderToolsPage();
 
     if (finalTask.status === 'success') {
       flash(copy.done, 'success');
-      updateTask(taskCardId, { status: 'done', progress: 100, message: '桌面版已安装完成' });
+      updateTask(taskCardId, { status: 'done', progress: 100, message: updateMode ? '桌面版已更新完成' : '桌面版已安装完成' });
       return { ok: true, data: finalTask };
     }
     if (finalTask.status === 'cancelled') {
-      flash('OpenCode Desktop 安装已中断', 'info');
-      updateTask(taskCardId, { status: 'cancelled', progress: 100, message: finalTask.summary || '安装已中断' });
+      flash(updateMode ? 'OpenCode Desktop 更新已中断' : 'OpenCode Desktop 安装已中断', 'info');
+      updateTask(taskCardId, { status: 'cancelled', progress: 100, message: finalTask.summary || (updateMode ? '更新已中断' : '安装已中断') });
       return { ok: false, cancelled: true, data: finalTask };
     }
 
-    const errMsg = finalTask.error || 'OpenCode Desktop 安装失败';
+    const errMsg = finalTask.error || (updateMode ? 'OpenCode Desktop 更新失败' : 'OpenCode Desktop 安装失败');
     flash(errMsg, 'error');
     updateTask(taskCardId, { status: 'error', message: errMsg });
     return { ok: false, error: errMsg, data: finalTask };
   } catch (error) {
-    const errMsg = error?.message || 'OpenCode Desktop 安装失败';
+    const errMsg = error?.message || (updateMode ? 'OpenCode Desktop 更新失败' : 'OpenCode Desktop 安装失败');
     state.updateDialogCancelHandler = null;
     state.openCodeInstallView.cancelBusy = false;
     tracker.status = 'error';
     tracker.error = errMsg;
     tracker.completedAt = new Date().toISOString();
-    tracker.summary = 'OpenCode Desktop 安装失败';
+    tracker.summary = updateMode ? 'OpenCode Desktop 更新失败' : 'OpenCode Desktop 安装失败';
     tracker.hint = '无法继续获取实时安装状态，请重试。';
     tracker.detail = errMsg;
     renderTrackedOpenCodeDialog(tracker, { force: true });
+    setToolOperation('opencode-desktop', {
+      status: 'error',
+      progress: 100,
+      stepTitle: '失败',
+      summary: updateMode ? 'OpenCode Desktop 更新失败' : 'OpenCode Desktop 安装失败',
+      detail: errMsg,
+      error: errMsg,
+    }, { keepCompletedMs: 12000 });
     setUpdateDialogLocked(false);
     patchUpdateDialog({ eyebrow: 'OpenCode Desktop', confirmText: '知道了', confirmDisabled: false, cancelHidden: true, trackerMode: true });
     flash(errMsg, 'error');
@@ -2287,22 +3478,23 @@ async function runOpenCodeDesktopInstallAction(btn, { reinstall = false } = {}) 
 }
 
 function toolIconSvg(toolId) {
-  const icons = {
-    codex: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z" opacity="0.4" /><path d="M12 12l9-5M12 12v10M12 12L3 7" /></svg>',
-    'codex-app': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" opacity="0.35" /><path d="M8 8h8M8 12h8M8 16h5" /></svg>',
-    claudecode: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity="0.4" /><path d="M8 12h8M12 8v8" /></svg>',
-    openclaw: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" opacity="0.4" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" /></svg>',
-    opencode: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5" opacity="0.4" /><path d="M9 8l-3 4 3 4" /><path d="M15 8l3 4-3 4" /><path d="M13 6l-2 12" /></svg>',
-    'opencode-desktop': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="5" opacity="0.4" /><path d="M9 8l-3 4 3 4" /><path d="M15 8l3 4-3 4" /><path d="M13 6l-2 12" /></svg>',
-    'opencode-vscode': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3 6 8v8l9 5 6-3V6l-6-3Z" opacity="0.35" /><path d="m6 8 4 4-4 4" /><path d="m10 6 4 2v8l-4 2" /></svg>',
-    'opencode-cursor': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v14H5z" opacity="0.35" /><path d="m8 8 4 4-4 4" /><path d="M13 8h3" /><path d="M13 16h3" /></svg>',
-    'opencode-windsurf': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15c2.5-5 5.5-7.5 9-7.5 3 0 5.3 1.4 7 4.5" opacity="0.4" /><path d="M4 12c2.5 5 5.5 7.5 9 7.5 3 0 5.3-1.4 7-4.5" /><path d="M8 12h8" /></svg>',
-    'opencode-vscodium': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3 6 8v8l9 5 6-3V6l-6-3Z" opacity="0.35" /><path d="m6 8 4 4-4 4" /><path d="m15-10-5 6 5 6" opacity="0.85" /></svg>',
-    'opencode-zed': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h14v14H5z" opacity="0.35" /><path d="M8 8h8l-8 8h8" /></svg>',
-    'opencode-github': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-4.5 1.5-5-2-7-2" /><path d="M15 22v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 19 4.77 5.07 5.07 0 0 0 18.91 1S17.73.65 15 2.48a13.38 13.38 0 0 0-6 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77 5.44 5.44 0 0 0 3.5 8.5c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" /></svg>',
-    'opencode-gitlab': '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 21 4.2-12.8H7.8L12 21Z" /><path d="M4.8 8.2 12 21l-7-5.2.8-7.6Z" opacity="0.45" /><path d="M19.2 8.2 12 21l7-5.2-.8-7.6Z" opacity="0.45" /></svg>',
+  const images = {
+    codex: '/tool-icons/openai.png',
+    'codex-app': '/tool-icons/openai.png',
+    claudecode: '/tool-icons/claude-code.png',
+    openclaw: '/tool-icons/openclaw.png',
+    opencode: '/tool-icons/opencode.png',
+    'opencode-desktop': '/tool-icons/opencode.png',
+    'opencode-vscode': '/tool-icons/opencode.png',
+    'opencode-cursor': '/tool-icons/opencode.png',
+    'opencode-windsurf': '/tool-icons/opencode.png',
+    'opencode-vscodium': '/tool-icons/opencode.png',
+    'opencode-zed': '/tool-icons/opencode.png',
+    'opencode-github': '/tool-icons/opencode.png',
+    'opencode-gitlab': '/tool-icons/opencode.png',
   };
-  return icons[toolId] || icons.codex;
+  const src = images[toolId] || images.codex;
+  return `<img class="tool-official-icon" src="${src}" alt="" loading="lazy" decoding="async">`;
 }
 
 function updateToolSelector() {
@@ -6434,9 +7626,9 @@ const PAGE_META = {
   terminal: { eyebrow: 'Terminal', title: '内置终端', subtitle: '一站启动 codex / claude code，多会话 tab、token 实时监控与命令面板。' },
   dashboard: { eyebrow: 'Dashboard', title: '数据看板', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的状态、用量与趋势。' },
   providerRouter: { eyebrow: 'Router', title: '自动路由网关', subtitle: '启动本地 OpenAI-compatible 网关，按 provider 池做请求级路由。' },
-  tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新、重装或卸载 AI 编程工具。' },
+  tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新或卸载 AI 编程工具。' },
   tasks: { eyebrow: 'Tasks', title: '任务管理', subtitle: '查看当前进行中和历史安装任务。' },
-  about: { eyebrow: 'About', title: '关于 EasyAIConfig', subtitle: '查看桌面版本、更新源与当前运行信息。' },
+  about: { eyebrow: 'About', title: '关于 EasyAIConfig', subtitle: '本地优先、开源透明的 AI 工具配置中心。' },
   systemSettings: { eyebrow: 'System', title: '系统设置', subtitle: '管理界面模式、存储占用、缓存清理与卸载操作。' },
   configEditor: { eyebrow: 'Current Config', title: '配置编辑', subtitle: '表单编辑 + 原始配置，选择工具后搜索预设方案快速配置。' },
 };
@@ -6659,6 +7851,57 @@ async function loadDashboardSideStates() {
 
 function formatDashboardMeta(value) {
   return typeof value === 'number' ? formatDashboardMetric(value) : String(value ?? '0');
+}
+
+const DASHBOARD_ANALYTIC_COLORS = ['#5b8cff', '#22c55e', '#7c3aed', '#f59e0b', '#06b6d4', '#ef4444', '#ec4899', '#14b8a6'];
+
+function renderDashboardTokenMix(items = []) {
+  const normalized = (items || []).map((item, index) => {
+    const rawMetric = item.meta ?? item.value ?? 0;
+    const metric = Number(rawMetric || 0);
+    return {
+      label: item.label,
+      value: Number(item.value || 0),
+      metric: Number.isFinite(metric) ? metric : 0,
+      color: DASHBOARD_ANALYTIC_COLORS[index % DASHBOARD_ANALYTIC_COLORS.length],
+    };
+  });
+  const total = normalized.reduce((sum, item) => sum + item.metric, 0);
+  const active = normalized.filter((item) => item.metric > 0 || item.value > 0);
+  if (!active.length) {
+    return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无 Token 构成数据。'))}</div>`;
+  }
+
+  const segments = active.map((item) => {
+    const pct = total ? (item.metric / total * 100) : item.value;
+    const width = pct > 0 ? Math.max(2, pct) : 0;
+    const full = formatDashboardMetricFull(item.metric);
+    return `<span class="db3-token-segment" style="width:${width}%;background:${item.color}" title="${escapeHtml(appText(item.label))} · ${escapeHtml(full)}"></span>`;
+  }).join('');
+
+  const rows = normalized.map((item, index) => {
+    const pct = total ? (item.metric / total * 100) : item.value;
+    const pctLabel = pct > 0 && pct < 1 ? '<1%' : `${Math.round(pct)}%`;
+    const meta = formatDashboardMeta(item.metric);
+    const full = formatDashboardMetricFull(item.metric);
+    return `<div class="db3-token-row ${item.metric > 0 || item.value > 0 ? '' : 'is-muted'}" style="--mix-color:${item.color}">
+      <span class="db3-token-row-label"><i></i>${escapeHtml(appText(item.label))}</span>
+      <span class="db3-token-row-pct">${escapeHtml(pctLabel)}</span>
+      <strong title="${escapeHtml(full)}">${escapeHtml(meta)}</strong>
+    </div>`;
+  }).join('');
+
+  const leading = active[0];
+  const leadingPct = total ? Math.round(leading.metric / total * 100) : Math.round(leading.value);
+  return `<div class="db3-token-mix">
+    <div class="db3-token-mix-top">
+      <span>${escapeHtml(appText('总计'))}</span>
+      <strong>${escapeHtml(formatDashboardMetric(total))}</strong>
+      <em>${escapeHtml(appText(leading.label))} ${leadingPct}%</em>
+    </div>
+    <div class="db3-token-stack">${segments}</div>
+    <div class="db3-token-rows">${rows}</div>
+  </div>`;
 }
 
 function renderDashboardLoadingCard() {
@@ -7322,17 +8565,8 @@ function renderDashboardPage() {
         </div>`).join('')}
     </div>`;
 
-  // ── Mini bar list ──
-  const miniBars = (items = []) => `
-    <div class="dashboard-mini-bars">
-      ${items.map((item) => {
-        const rawWidth = Math.min(100, Number(item.value || 0));
-        const width = rawWidth > 0 ? Math.max(4, rawWidth) : 0;
-        const meta = formatDashboardMeta(item.meta ?? item.value ?? 0);
-        const fullMeta = typeof (item.meta ?? item.value) === 'number' ? formatDashboardMetricFull(item.meta ?? item.value) : meta;
-        return `<div class="dashboard-mini-bar"><span>${escapeHtml(appText(item.label))}</span><div class="dashboard-mini-bar-track"><div class="dashboard-mini-bar-fill" style="width:${width}%"></div></div><strong title="${escapeHtml(fullMeta)}">${escapeHtml(meta)}</strong></div>`;
-      }).join('')}
-    </div>`;
+  // ── Token mix ──
+  const miniBars = (items = []) => renderDashboardTokenMix(items);
 
   // ── Key-Value list ──
   const kvList = (rows = []) => `
@@ -7394,8 +8628,8 @@ function renderDashboardPage() {
         </div>
       </section>
 
-      <div class="db3-dashboard-grid">
-        <section class="db2-section db3-panel">
+      <div class="db3-analytics-board">
+        <section class="db2-section db3-panel db3-panel--standards">
           <div class="db2-card-head">
           <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
@@ -7406,7 +8640,7 @@ function renderDashboardPage() {
           ${renderPricingStandardsCards(codexModels, ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex'])}
         </section>
 
-        <section class="db2-section db3-panel db3-panel--wide">
+        <section class="db2-section db3-panel db3-panel--primary">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
@@ -7417,7 +8651,7 @@ function renderDashboardPage() {
           ${renderModelCostRows(codexModels, codexModelTotal)}
         </section>
 
-        <section class="db2-section db3-panel">
+        <section class="db2-section db3-panel db3-panel--mix">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10.5h12M3.5 8.5l2-2 2.5 2 4.5-4"/></svg>
@@ -7428,7 +8662,7 @@ function renderDashboardPage() {
           ${miniBars(codexBreakdownItems)}
         </section>
 
-        <section class="db2-section db3-panel">
+        <section class="db2-section db3-panel db3-panel--trend">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
@@ -7439,7 +8673,7 @@ function renderDashboardPage() {
           ${renderDashboardCostTrendChart(codexDaily, codexModels)}
         </section>
 
-        <section class="db2-section db3-panel">
+        <section class="db2-section db3-panel db3-panel--dist">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
@@ -7496,8 +8730,8 @@ function renderDashboardPage() {
         </div>
       </section>
 
-      <div class="db3-dashboard-grid">
-        <section class="db2-section db3-panel">
+      <div class="db3-analytics-board">
+        <section class="db2-section db3-panel db3-panel--standards">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
@@ -7508,7 +8742,7 @@ function renderDashboardPage() {
           ${renderPricingStandardsCards(opencodeModels, ['gpt-5.4', 'gpt-5.3-codex', 'gpt-5.2-codex'])}
         </section>
 
-        <section class="db2-section db3-panel db3-panel--wide">
+        <section class="db2-section db3-panel db3-panel--primary">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
@@ -7519,7 +8753,7 @@ function renderDashboardPage() {
           ${renderModelCostRows(opencodeModels, opencodeModelTotal)}
         </section>
 
-        <section class="db2-section db3-panel">
+        <section class="db2-section db3-panel db3-panel--mix">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10.5h12M3.5 8.5l2-2 2.5 2 4.5-4"/></svg>
@@ -7530,7 +8764,7 @@ function renderDashboardPage() {
           ${miniBars(opencodeBreakdownItems)}
         </section>
 
-        <section class="db2-section db3-panel">
+        <section class="db2-section db3-panel db3-panel--trend">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
@@ -7541,7 +8775,7 @@ function renderDashboardPage() {
           ${renderCostTrendPanel(opencodeDaily.map((item) => ({ label: (item.date || '').slice(5), value: item.cost || 0 })), isEnglishAppLanguage() ? `${winRecentLabel} total` : `${winRecentLabel}合计`, '#5b8cff')}
         </section>
 
-        <section class="db2-section db3-panel">
+        <section class="db2-section db3-panel db3-panel--dist">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
@@ -7670,8 +8904,8 @@ function renderDashboardPage() {
         </div>
       </section>
 
-      <div class="db3-dashboard-grid db3-dashboard-grid--claude">
-        <section class="db2-section db3-panel db3-panel--chart">
+      <div class="db3-analytics-board db3-analytics-board--claude">
+        <section class="db2-section db3-panel db3-panel--trend db3-panel--chart">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 1.5v13M11.5 4.5H6.25a2.25 2.25 0 1 0 0 4.5H9.75a2.25 2.25 0 0 1 0 4.5H4"/></svg>
@@ -7682,7 +8916,7 @@ function renderDashboardPage() {
           ${renderClaudeCostTrendChart(claudeDailySliced, daysWindow)}
         </section>
 
-        <section class="db2-section db3-panel">
+        <section class="db2-section db3-panel db3-panel--dist">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3m0 6V8m6-3l-6 3"/></svg>
@@ -7693,7 +8927,7 @@ function renderDashboardPage() {
           ${renderDashboardModelDistChart(claudeModels, claudeModelTotal)}
         </section>
 
-        <section class="db2-section db3-panel db3-panel--wide db3-panel--pricing">
+        <section class="db2-section db3-panel db3-panel--primary db3-panel--pricing">
           <div class="db2-card-head">
             <div class="db2-card-title">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M6 6h4M6 8h4M6 10h2"/></svg>
@@ -7945,6 +9179,11 @@ function _initDbInteractiveChart(chartId) {
       x: padL + step * i,
       y: padT + cH - (values[i] / max) * cH
     }));
+    const compositionMax = Math.max(
+      ...series.map((s) => Number(s.input || 0) + Number(s.output || 0) + Number(s.cached || 0)),
+      max,
+      1
+    );
 
     const isLight = document.documentElement.getAttribute('data-theme') === 'light';
     const gridColor = isLight ? 'rgba(15,23,42,0.055)' : 'rgba(255,255,255,0.055)';
@@ -7978,6 +9217,37 @@ function _initDbInteractiveChart(chartId) {
         if (i % labelStep !== 0 && i !== series.length - 1) return;
         ctx.fillStyle = textColor;
         ctx.fillText(series[i].label, p.x, H - 6);
+      });
+
+      // Compact stacked bars behind the line: input / output / cached.
+      const barW = Math.max(2, Math.min(10, cW / Math.max(8, series.length * 2.8)));
+      pts.forEach((p, i) => {
+        const s = series[i] || {};
+        const parts = [
+          { value: Number(s.cached || 0), color: isLight ? 'rgba(124,58,237,0.20)' : 'rgba(167,139,250,0.22)' },
+          { value: Number(s.input || 0), color: isLight ? 'rgba(91,140,255,0.22)' : 'rgba(141,189,255,0.24)' },
+          { value: Number(s.output || 0), color: isLight ? 'rgba(34,197,94,0.22)' : 'rgba(74,222,128,0.24)' },
+        ];
+        let yCursor = padT + cH;
+        parts.forEach((part) => {
+          if (!(part.value > 0)) return;
+          const h = Math.max(1, part.value / compositionMax * cH * 0.72);
+          ctx.fillStyle = part.color;
+          ctx.beginPath();
+          const x = p.x - barW / 2;
+          const y = yCursor - h;
+          const r = Math.min(3, barW / 2, h / 2);
+          ctx.moveTo(x + r, y);
+          ctx.lineTo(x + barW - r, y);
+          ctx.quadraticCurveTo(x + barW, y, x + barW, y + r);
+          ctx.lineTo(x + barW, y + h);
+          ctx.lineTo(x, y + h);
+          ctx.lineTo(x, y + r);
+          ctx.quadraticCurveTo(x, y, x + r, y);
+          ctx.closePath();
+          ctx.fill();
+          yCursor -= h + 1;
+        });
       });
 
       // Area fill gradient
@@ -8146,37 +9416,80 @@ function _initDbInteractiveChart(chartId) {
   }
 }
 
-// Model distribution donut/bar chart
+// Model contribution ranking
 function renderDashboardModelDistChart(models = [], totalTokens = 0) {
   if (!models.length) return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无模型分布数据。'))}</div>`;
   const chartId = 'dbModelDist_' + (++__dbChartId);
   const sorted = [...models].sort((a, b) => (b.totals?.total || 0) - (a.totals?.total || 0));
-  const colors = ['#5b8cff', '#7c3aed', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316'];
+  const topRows = sorted.slice(0, 6);
+  const overflowRows = sorted.slice(6);
+  const overflowTokens = overflowRows.reduce((sum, item) => sum + (item.totals?.total || 0), 0);
+  const overflowCost = overflowRows.reduce((sum, item) => sum + (calcModelCost(item)?.totalCost || 0), 0);
+  const rows = overflowTokens > 0
+    ? [...topRows, { model: appText('其他模型'), totals: { total: overflowTokens }, _overflow: true, _cost: overflowCost, events: overflowRows.reduce((sum, item) => sum + (item.events || 0), 0) }]
+    : topRows;
+  const resolvedTotal = totalTokens || sorted.reduce((sum, item) => sum + (item.totals?.total || 0), 0);
+  const totalCost = sorted.reduce((sum, item) => sum + (calcModelCost(item)?.totalCost || 0), 0);
+  const primary = sorted[0];
+  const primaryCost = primary ? calcModelCost(primary) : null;
+  const primaryTokens = primary?.totals?.total || 0;
+  const primaryPct = resolvedTotal ? (primaryTokens / resolvedTotal * 100) : 0;
+  const primaryLabel = primary ? (primaryCost?.pricing?.label || primary.model) : '—';
 
-  const bars = sorted.map((m, i) => {
+  const rowHtml = rows.map((m, i) => {
     const tokens = m.totals?.total || 0;
-    const pct = totalTokens ? (tokens / totalTokens * 100) : 0;
-    const cost = calcModelCost(m);
-    const costStr = cost ? '$' + cost.totalCost.toFixed(3) : '–';
-    const label = cost?.pricing?.label || m.model;
-    const color = colors[i % colors.length];
-    return `
-      <div class="db2-mdist-item" style="--bar-color:${color}">
-        <div class="db2-mdist-hdr">
-          <span class="db2-mdist-dot" style="background:${color}"></span>
-          <span class="db2-mdist-name" title="${escapeHtml(m.model)}">${escapeHtml(label)}</span>
-          <span class="db2-mdist-tokens">${escapeHtml(formatDashboardMetric(tokens))}</span>
-          <span class="db2-mdist-cost">${escapeHtml(costStr)}</span>
-        </div>
-        <div class="db2-mdist-bar-track">
-          <div class="db2-mdist-bar-fill" style="width:${Math.max(2, pct)}%;background:${color}">
-            <span class="db2-mdist-bar-label">${Math.round(pct)}%</span>
-          </div>
-        </div>
-      </div>`;
+    const pct = resolvedTotal ? (tokens / resolvedTotal * 100) : 0;
+    const cost = m._overflow ? { totalCost: m._cost || 0, pricing: null } : calcModelCost(m);
+    const costStr = cost ? formatDashboardUsd(cost.totalCost, { min: 2, max: 3 }) : '–';
+    const label = m._overflow ? appText('其他模型') : (cost?.pricing?.label || m.model);
+    const color = DASHBOARD_ANALYTIC_COLORS[i % DASHBOARD_ANALYTIC_COLORS.length];
+    const pctLabel = pct > 0 && pct < 1 ? '<1%' : `${Math.round(pct)}%`;
+    const events = Number(m.events || 0);
+    const rawLabel = m._overflow
+      ? (isEnglishAppLanguage() ? `${overflowRows.length} models` : `${overflowRows.length} 个模型`)
+      : m.model;
+    return `<div class="db3-model-rank-row" style="--rank-color:${color}">
+      <span class="db3-model-rank-index">${String(i + 1).padStart(2, '0')}</span>
+      <div class="db3-model-rank-main">
+        <div class="db3-model-rank-name" title="${escapeHtml(rawLabel)}"><i></i><strong>${escapeHtml(label)}</strong></div>
+        <div class="db3-model-rank-meter"><span style="width:${Math.max(2, pct)}%"></span></div>
+      </div>
+      <div class="db3-model-rank-stat">
+        <strong>${escapeHtml(pctLabel)}</strong>
+        <span>${escapeHtml(appText('占比'))}</span>
+      </div>
+      <div class="db3-model-rank-stat">
+        <strong title="${escapeHtml(formatDashboardMetricFull(tokens))}">${escapeHtml(formatDashboardMetric(tokens))}</strong>
+        <span>${escapeHtml(events ? (isEnglishAppLanguage() ? `${events} runs` : `${events} 次`) : appText('Token'))}</span>
+      </div>
+      <div class="db3-model-rank-stat db3-model-rank-cost">
+        <strong>${escapeHtml(costStr)}</strong>
+        <span>${escapeHtml(appText('费用'))}</span>
+      </div>
+    </div>`;
   }).join('');
 
-  return `<div class="db2-mdist-chart" id="${chartId}">${bars}</div>`;
+  return `<div class="db3-model-rank" id="${chartId}">
+    <div class="db3-model-rank-summary">
+      <div>
+        <span>${escapeHtml(appText('主模型'))}</span>
+        <strong title="${escapeHtml(primary?.model || '')}">${escapeHtml(primaryLabel)}</strong>
+      </div>
+      <div>
+        <span>${escapeHtml(appText('贡献'))}</span>
+        <strong>${escapeHtml(primaryPct > 0 && primaryPct < 1 ? '<1%' : `${Math.round(primaryPct)}%`)}</strong>
+      </div>
+      <div>
+        <span>${escapeHtml(appText('模型数'))}</span>
+        <strong>${escapeHtml(String(sorted.length))}</strong>
+      </div>
+      <div>
+        <span>${escapeHtml(appText('费用'))}</span>
+        <strong>${escapeHtml(totalCost ? formatDashboardUsd(totalCost, { min: 2, max: 3 }) : '–')}</strong>
+      </div>
+    </div>
+    <div class="db3-model-rank-list">${rowHtml}</div>
+  </div>`;
 }
 
 // 重做版费用趋势图：放弃丑陋的柱状条，改成柔和 SVG 面积图（和 Token 用量趋势同风格）。
@@ -8187,6 +9500,8 @@ function renderCostTrendPanel(costSeries = [], summaryLabel = '', accentColor = 
   const values = costSeries.map((s) => Number(s.value || 0));
   const maxCost = Math.max(...values, 0.001);
   const totalCost = values.reduce((sum, v) => sum + v, 0);
+  const activeDays = values.filter((v) => v > 0).length;
+  const avgCost = totalCost / Math.max(1, activeDays || values.length);
   const usdFmt = (value) => formatDashboardUsd(value, { min: value < 1 ? 3 : 2, max: value < 1 ? 3 : 2 });
 
   // 画布尺寸用 viewBox 自适应，外层容器固定高度，由 CSS 控制宽度
@@ -8247,6 +9562,13 @@ function renderCostTrendPanel(costSeries = [], summaryLabel = '', accentColor = 
     .map(({ p, i }) => ({ x: p.x, label: costSeries[i].label }));
 
   const gradientId = `${chartId}_grad`;
+  const barWidth = Math.max(4, Math.min(14, innerW / Math.max(8, n * 2.4)));
+  const bars = pts.map((p) => {
+    const h = p.value > 0 ? Math.max(2, (p.value / maxCost) * innerH * 0.76) : 0;
+    const x = p.x - barWidth / 2;
+    const y = baselineY - h;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${h.toFixed(1)}" rx="${Math.min(4, barWidth / 2).toFixed(1)}" fill="${accentColor}" opacity="0.2" class="db3-cost-area-bar"/>`;
+  }).join('');
   const dots = pts.map((p, i) => `<circle data-i="${i}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.4" fill="${accentColor}" opacity="0" class="db3-cost-area-dot"/>`).join('');
   const gridLines = yTicks.map((t) => `<line x1="${padL}" x2="${W - padR}" y1="${t.y.toFixed(1)}" y2="${t.y.toFixed(1)}" stroke="currentColor" stroke-width="0.5" stroke-dasharray="2 3" opacity="0.18"/>`).join('');
   const yLabels = yTicks.map((t) => `<text x="${padL - 8}" y="${(t.y + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="currentColor" opacity="0.55">${escapeHtml(t.label)}</text>`).join('');
@@ -8262,6 +9584,7 @@ function renderCostTrendPanel(costSeries = [], summaryLabel = '', accentColor = 
           </linearGradient>
         </defs>
         ${gridLines}
+        ${bars}
         ${areaPath ? `<path d="${areaPath}" fill="url(#${gradientId})"/>` : ''}
         ${linePath ? `<path d="${linePath}" fill="none" stroke="${accentColor}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>` : ''}
         ${yLabels}
@@ -8271,7 +9594,8 @@ function renderCostTrendPanel(costSeries = [], summaryLabel = '', accentColor = 
       <div class="db3-cost-area-foot">
         <span class="db3-cost-area-summary">${escapeHtml(summaryLabel)}</span>
         <div class="db3-cost-area-totals">
-	          <em>${escapeHtml(appText('峰值'))} ${escapeHtml(usdFmt(maxCost))}</em>
+          <em>${escapeHtml(appText('日均'))} ${escapeHtml(usdFmt(avgCost))}</em>
+          <em>${escapeHtml(appText('峰值'))} ${escapeHtml(usdFmt(maxCost))}</em>
           <strong>${escapeHtml(usdFmt(totalCost))}</strong>
         </div>
       </div>
@@ -10934,8 +12258,18 @@ let localApiAuth = { token: '', header: 'x-local-token' };
 
 async function ensureLocalApiAuth() {
   if (tauriInvoke || localApiAuth.token) return localApiAuth;
-  const response = await fetch('/api/bootstrap', { cache: 'no-store' });
-  const json = await response.json();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  let json;
+  try {
+    const response = await fetch('/api/bootstrap', { cache: 'no-store', signal: controller.signal });
+    json = await response.json();
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('本地服务无响应，请稍后再试');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!json?.ok || !json?.data?.token) {
     throw new Error(json?.error || '本地服务鉴权初始化失败');
   }
@@ -12712,9 +14046,9 @@ const SECONDARY_META = {
   dashboard:      { sub: '查看各工具的模型用量、会话趋势与耗时分布。' },
   providerRouter: { sub: '启动本地网关，选择主 provider 和 API Key 候选池。' },
   configEditor:   { sub: '搜索配置项，直接编辑底层配置文件。' },
-  tools:          { sub: '安装、更新、重装或卸载已接入的 AI 编程工具。' },
+  tools:          { sub: '安装、更新或卸载已接入的 AI 编程工具。' },
   tasks:          { sub: '查看当前进行中和历史的安装/更新任务。' },
-  about:          { sub: '客户端版本、更新源与当前运行信息。' },
+  about:          { sub: '本地优先、开源透明的 AI 工具配置中心。' },
   systemSettings: { sub: '界面主题、存储占用与缓存清理。' },
 };
 
@@ -12831,10 +14165,16 @@ function setPage(page = 'quick') {
   }
   if (page === 'tools') {
     renderToolsPage();
+    void loadToolUpdates({ force: false, render: true });
     void loadCodexAppState({ render: true });
     void loadOpenCodeDesktopState({ render: true });
     void loadOpenCodeEcosystemState({ render: true });
   }
+  requestAnimationFrame(() => {
+    window.EasyAIConfigI18n?.apply?.(document.querySelector(`[data-page="${page}"]`));
+    window.EasyAIConfigI18n?.apply?.(el('secondaryPanel') || el('secondaryBody'));
+    window.EasyAIConfigI18n?.apply?.(document.querySelector('.page-head'));
+  });
 }
 
 function syncAboutUpdateActions() {
@@ -12843,11 +14183,31 @@ function syncAboutUpdateActions() {
   const checkBtn = el('aboutCheckUpdateBtn');
   if (!installBtn || !checkBtn) return;
   const progress = state.appUpdateProgress || {};
-  const updating = ['checking', 'downloading', 'installing'].includes(String(progress.status || ''));
-  installBtn.hidden = !Boolean(info.available);
+  const progressStatus = String(progress.status || '');
+  const updating = ['checking', 'downloading', 'installing'].includes(progressStatus);
+  const panel = document.querySelector('.about-update-panel');
+  const setButtonLabel = (button, text) => {
+    const label = button.querySelector('span');
+    if (label) label.textContent = text;
+    else button.textContent = text;
+  };
+  if (panel) {
+    panel.classList.toggle('is-updating', updating);
+    if (updating) panel.dataset.updateStatus = progressStatus;
+    else delete panel.dataset.updateStatus;
+  }
+  installBtn.hidden = !Boolean(info.available || progressStatus === 'downloading' || progressStatus === 'installing');
   installBtn.disabled = updating;
   checkBtn.disabled = updating;
   checkBtn.classList.toggle('about-update-btn-secondary', Boolean(info.available));
+  checkBtn.classList.toggle('checking', progressStatus === 'checking');
+  checkBtn.classList.toggle('is-updating', updating);
+  installBtn.classList.toggle('is-updating', updating);
+  setButtonLabel(checkBtn, progressStatus === 'checking' ? '检查中' : '检查更新');
+  setButtonLabel(
+    installBtn,
+    progressStatus === 'downloading' ? '下载中' : progressStatus === 'installing' ? '安装中' : '立即更新',
+  );
 }
 
 function renderAboutUpdateProgress() {
@@ -12860,6 +14220,8 @@ function renderAboutUpdateProgress() {
   const active = ['checking', 'downloading', 'installing'].includes(status);
   if (!active) {
     wrap.classList.add('hide');
+    wrap.classList.remove('is-checking', 'is-downloading', 'is-installing', 'is-indeterminate');
+    delete wrap.dataset.updateStatus;
     bar.style.width = '0%';
     meta.textContent = '';
     return;
@@ -12867,8 +14229,14 @@ function renderAboutUpdateProgress() {
   const pct = Math.max(0, Math.min(100, Number(progress.percent || 0)));
   const downloaded = Number(progress.downloadedBytes || 0);
   const total = Number(progress.totalBytes || 0);
+  const indeterminate = status !== 'downloading' || total <= 0;
   wrap.classList.remove('hide');
-  bar.style.width = `${pct.toFixed(1)}%`;
+  wrap.dataset.updateStatus = status;
+  wrap.classList.toggle('is-checking', status === 'checking');
+  wrap.classList.toggle('is-downloading', status === 'downloading');
+  wrap.classList.toggle('is-installing', status === 'installing');
+  wrap.classList.toggle('is-indeterminate', indeterminate);
+  bar.style.width = indeterminate ? '42%' : `${pct.toFixed(1)}%`;
   if (status === 'downloading') {
     meta.textContent = total > 0
       ? `${pct.toFixed(1)}% · ${formatBytes(downloaded)} / ${formatBytes(total)}`
@@ -12928,6 +14296,14 @@ function populateAboutPanel() {
   el('aboutRepo').textContent = info.repository || '-';
   el('aboutEndpoint').textContent = info.endpoint || '-';
   el('aboutPubkeyStatus').textContent = info.publicKeyConfigured ? '已配置' : '未配置';
+}
+
+function setAboutTrustOpen(open = false) {
+  const dialog = el('aboutTrustDialog');
+  if (!dialog) return;
+  dialog.classList.toggle('hide', !open);
+  document.body.classList.toggle('about-trust-open', Boolean(open));
+  if (open) requestAnimationFrame(() => el('aboutTrustCloseBtn')?.focus?.());
 }
 
 function formatBytes(bytes = 0) {
@@ -19468,14 +20844,18 @@ async function handleAppUpdate(buttonId = 'appUpdateBtn', { skipConfirm = false 
   }
 
   setBusy('appUpdateBtn', true, '下载中...');
-  if (buttonId !== 'appUpdateBtn') setBusy(buttonId, true, '更新中...');
+  if (buttonId !== 'appUpdateBtn' && buttonId !== 'aboutInstallUpdateBtn') setBusy(buttonId, true, '更新中...');
+  state.appUpdateProgress = { status: 'downloading', percent: 0, downloadedBytes: 0, totalBytes: 0 };
+  populateAboutPanel();
   startAppUpdateProgressPolling();
   const json = await api('/api/app/update', { method: 'POST', timeoutMs: 300000 });
   await loadAppUpdateProgressState({ silent: true });
   setBusy('appUpdateBtn', false);
-  if (buttonId !== 'appUpdateBtn') setBusy(buttonId, false);
+  if (buttonId !== 'appUpdateBtn' && buttonId !== 'aboutInstallUpdateBtn') setBusy(buttonId, false);
   if (!json.ok) {
     const errorText = json.error || '客户端更新失败';
+    state.appUpdateProgress = { status: 'error', error: errorText };
+    populateAboutPanel();
     const isSignatureError = /签名|signature|verify/i.test(errorText);
     const isNetworkError = /网络|network|dns|timeout|timed out|connect|reset|tls|certificate/i.test(errorText);
     const repo = info.repository || 'lmk1010/EasyAIConfig';
@@ -20782,6 +22162,7 @@ const PROVIDER_ROUTER_NO_PROXY = '127.0.0.1,localhost,::1';
 const PROVIDER_ROUTER_STRATEGY_LS = 'easyaiconfig_provider_router_strategy_v1';
 const PROVIDER_ROUTER_WEIGHTS_LS = 'easyaiconfig_provider_router_weights_v1';
 const PROVIDER_ROUTER_BALANCE_GUARD_LS = 'easyaiconfig_provider_router_balance_guard_v1';
+const PROVIDER_ROUTER_STATUS_LOG_LIMIT = 500;
 const PROVIDER_ROUTER_STRATEGIES = [
   { value: 'auto', label: '智能自动', hint: '余额保护 + 权重轮询' },
   { value: 'weighted', label: '权重轮询', hint: '按每行权重分摊请求' },
@@ -21192,6 +22573,75 @@ function formatProviderRouterTraffic(item = {}) {
   return `${formatBytes(requestBytes)} -> ${formatBytes(responseBytes)}`;
 }
 
+function getProviderRouterProviderNames() {
+  return new Map([
+    ...getProviderRouterRows('codex'),
+    ...getProviderRouterRows('claudecode'),
+  ].flatMap((item) => [[item.routeKey, item.name || item.key], [item.key, item.name || item.key]]));
+}
+
+function getProviderRouterLogFilter() {
+  const current = state.providerRouter.logFilter && typeof state.providerRouter.logFilter === 'object'
+    ? state.providerRouter.logFilter
+    : {};
+  const rawStatus = String(current.status || 'all').trim();
+  const rawTool = String(current.tool || 'all').trim();
+  const filter = {
+    query: String(current.query || ''),
+    provider: String(current.provider || 'all').trim() || 'all',
+    status: ['all', 'success', 'failed', 'retry'].includes(rawStatus) ? rawStatus : 'all',
+    tool: ['all', 'codex', 'claudecode'].includes(rawTool) ? rawTool : 'all',
+  };
+  state.providerRouter.logFilter = filter;
+  return filter;
+}
+
+function providerRouterLogTool(item = {}) {
+  const direct = String(item.tool || '').trim().toLowerCase();
+  if (direct) return normalizeProviderRouterTool(direct);
+  const providerKey = String(item.providerKey || '').trim().toLowerCase();
+  if (providerKey.startsWith('claudecode:') || providerKey.startsWith('claude:')) return 'claudecode';
+  if (providerKey.startsWith('codex:')) return 'codex';
+  return '';
+}
+
+function isProviderRouterLogFilterActive(filter = getProviderRouterLogFilter()) {
+  return Boolean(String(filter.query || '').trim())
+    || filter.provider !== 'all'
+    || filter.status !== 'all'
+    || filter.tool !== 'all';
+}
+
+function providerRouterLogMatchesFilter(item = {}, filter = getProviderRouterLogFilter(), providerNames = getProviderRouterProviderNames()) {
+  const providerKey = String(item.providerKey || '').trim();
+  const providerText = String(providerNames.get(providerKey) || providerKey || '').trim();
+  if (filter.provider !== 'all' && providerKey !== filter.provider) return false;
+  if (filter.tool !== 'all' && providerRouterLogTool(item) !== filter.tool) return false;
+  if (filter.status === 'success' && (!item.success || item.retry)) return false;
+  if (filter.status === 'failed' && (item.success || item.retry)) return false;
+  if (filter.status === 'retry' && !item.retry) return false;
+
+  const query = String(filter.query || '').trim().toLowerCase();
+  if (!query) return true;
+  const haystack = [
+    item.at,
+    item.method,
+    item.target,
+    item.status == null ? 'ERR' : String(item.status),
+    item.error,
+    item.retry ? 'retry' : '',
+    providerKey,
+    providerText,
+    providerRouterToolLabel(providerRouterLogTool(item) || 'codex'),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(query);
+}
+
+function getFilteredProviderRouterLogs(logs = [], providerNames = getProviderRouterProviderNames()) {
+  const filter = getProviderRouterLogFilter();
+  return logs.filter((item) => providerRouterLogMatchesFilter(item, filter, providerNames));
+}
+
 function getProviderRouterBalanceMeta(row) {
   const cacheKey = providerRouterRemoteCacheKey(row);
   const cached = state.providerRemoteUsageByKey?.[cacheKey] || null;
@@ -21303,11 +22753,12 @@ function getProviderRouterCopyText(kind = 'base') {
   if (kind === 'router-logs') {
     const status = state.providerRouter.status || {};
     const stats = status.stats || {};
-    const logs = Array.isArray(stats.logs) ? stats.logs : [];
+    const providerNames = getProviderRouterProviderNames();
+    const logs = getFilteredProviderRouterLogs(Array.isArray(stats.logs) ? stats.logs : [], providerNames);
     if (!logs.length) return 'EasyAIConfig Router: no logs';
     return logs.map((item) => {
       const at = item.at ? formatRelativeTime(item.at) : '-';
-      const provider = item.providerKey || '-';
+      const provider = providerNames.get(item.providerKey) || item.providerKey || '-';
       const statusText = item.status == null ? 'ERR' : String(item.status);
       const latency = item.latencyMs == null ? '-' : `${item.latencyMs}ms`;
       const traffic = formatProviderRouterTraffic(item);
@@ -21329,9 +22780,11 @@ async function fetchProviderRouterStatus(force = false) {
     return;
   }
   try {
-    const res = await api('/api/provider-router/status');
+    const params = new URLSearchParams({ limit: String(PROVIDER_ROUTER_STATUS_LOG_LIMIT) });
+    const res = await api(`/api/provider-router/status?${params.toString()}`);
     if (res?.ok) {
       state.providerRouter.status = res.data || null;
+      state.providerRouter.lastFetchedAt = Date.now();
       state.providerRouter.error = '';
     } else if (force) {
       state.providerRouter.error = res?.error || '读取路由状态失败';
@@ -21371,6 +22824,7 @@ async function probeProviderRouterProxy(options = {}) {
     });
     if (res?.ok && res.data) {
       state.providerRouter.status = res.data;
+      state.providerRouter.lastFetchedAt = Date.now();
       const probe = res.data.probe || {};
       if (!options.silent) {
         if (res.data.proxyReady || probe.ok) flash('网关反代探测通过', 'success');
@@ -21453,6 +22907,7 @@ async function actionProviderRouterStart() {
     });
     if (res?.ok && res.data) {
       state.providerRouter.status = res.data;
+      state.providerRouter.lastFetchedAt = Date.now();
       const label = providerRouterToolLabel(tool);
       const noProxyHint = res.data.localRouterNoProxyAdded ? '；已写入 NO_PROXY，当前已打开的 Codex 进程需要重启后生效' : '';
       flash(res.data.portFallback ? `${label} 网关已启动，默认端口被占用，已使用自动端口${noProxyHint}` : `${label} 本地网关已启动${noProxyHint}`, 'success');
@@ -21510,6 +22965,7 @@ async function actionProviderRouterStop() {
     const res = await api('/api/provider-router/stop', { method: 'POST', timeoutMs: 10000 });
     if (res?.ok) {
       state.providerRouter.status = res.data || { running: false };
+      state.providerRouter.lastFetchedAt = Date.now();
       flash(restoreCodexAfterStop ? '已恢复 Codex Provider，并停止本地自动路由' : '本地自动路由已停止', 'success');
     } else {
       state.providerRouter.error = res?.error || '停止本地路由失败';
@@ -21618,12 +23074,198 @@ async function actionProviderRouterApplyClient(tool) {
   }
 }
 
+function getProviderRouterPageTarget(target) {
+  if (!(target instanceof Element)) return null;
+  return target.closest('#providerRouterPage');
+}
+
+function getProviderRouterLogSearchFocusState() {
+  const activeElement = document.activeElement;
+  if (!(activeElement instanceof HTMLInputElement)) return null;
+  if (!activeElement.matches('#providerRouterPage [data-provider-router-log-search]')) return null;
+  return {
+    start: activeElement.selectionStart,
+    end: activeElement.selectionEnd,
+  };
+}
+
+function restoreProviderRouterLogSearchFocus(container, focusState) {
+  if (!focusState || !container) return;
+  const input = container.querySelector('[data-provider-router-log-search]');
+  if (!(input instanceof HTMLInputElement)) return;
+  input.focus({ preventScroll: true });
+  try {
+    const start = focusState.start ?? input.value.length;
+    const end = focusState.end ?? start;
+    input.setSelectionRange(start, end);
+  } catch (_) {}
+}
+
+function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter.loading) } = {}) {
+  const esc = escapeHtml;
+  const status = state.providerRouter.status || {};
+  const stats = status.stats || {};
+  const providerStats = Array.isArray(stats.providers) ? stats.providers : [];
+  const routerLogs = Array.isArray(stats.logs) ? stats.logs : [];
+  const providerNames = getProviderRouterProviderNames();
+  const logFilter = getProviderRouterLogFilter();
+  const filteredRouterLogs = getFilteredProviderRouterLogs(routerLogs, providerNames);
+  const logFiltersActive = isProviderRouterLogFilterActive(logFilter);
+  const routerLogProviderOptionMap = new Map();
+  routerLogs.forEach((item) => {
+    const key = String(item.providerKey || '').trim();
+    if (key) routerLogProviderOptionMap.set(key, providerNames.get(key) || key);
+  });
+  if (logFilter.provider !== 'all' && !routerLogProviderOptionMap.has(logFilter.provider)) {
+    routerLogProviderOptionMap.set(logFilter.provider, providerNames.get(logFilter.provider) || logFilter.provider);
+  }
+  const routerLogProviderOptions = [
+    `<option value="all" ${logFilter.provider === 'all' ? 'selected' : ''}>全部 Provider</option>`,
+    ...[...routerLogProviderOptionMap.entries()]
+      .sort((a, b) => String(a[1] || a[0]).localeCompare(String(b[1] || b[0]), 'zh-Hans-CN'))
+      .map(([key, label]) => `<option value="${esc(key)}" ${logFilter.provider === key ? 'selected' : ''}>${esc(label || key)}</option>`),
+  ].join('');
+  const routerLogToolOptions = [
+    ['all', '全部工具'],
+    ['codex', 'Codex'],
+    ['claudecode', 'Claude Code'],
+  ].map(([value, label]) => `<option value="${esc(value)}" ${logFilter.tool === value ? 'selected' : ''}>${esc(label)}</option>`).join('');
+  const routerLogStatusOptions = [
+    ['all', '全部状态'],
+    ['success', '成功'],
+    ['failed', '失败'],
+    ['retry', '重试'],
+  ].map(([value, label]) => `<option value="${esc(value)}" ${logFilter.status === value ? 'selected' : ''}>${esc(label)}</option>`).join('');
+  const statsTrafficLabel = [
+    Number(stats.requestBytes || 0) ? `请求 ${formatBytes(stats.requestBytes)}` : '',
+    Number(stats.responseBytes || 0) ? `响应 ${formatBytes(stats.responseBytes)}` : '',
+  ].filter(Boolean).join(' / ') || '暂无流量';
+  const statsTokenLabel = [
+    Number(stats.inputTokens || 0) ? `输入 ${formatProviderRouterTokens(stats.inputTokens)}` : '',
+    Number(stats.cachedInputTokens || 0) ? `缓存 ${formatProviderRouterTokens(stats.cachedInputTokens)}` : '',
+    Number(stats.outputTokens || 0) ? `输出 ${formatProviderRouterTokens(stats.outputTokens)}` : '',
+  ].filter(Boolean).join(' / ') || '暂无 token';
+  const routerLogCountText = `${filteredRouterLogs.length} / ${routerLogs.length} 条`;
+  const routerLogRefreshText = state.providerRouter.lastFetchedAt
+    ? `已刷新 ${formatRelativeTime(new Date(state.providerRouter.lastFetchedAt).toISOString())}`
+    : '可刷新';
+  const routerLogRows = filteredRouterLogs.map((item) => {
+    const statusText = item.status == null ? 'ERR' : String(item.status);
+    const tone = item.success ? 'is-ok' : item.retry ? 'is-warn' : 'is-bad';
+    const providerText = providerNames.get(item.providerKey) || item.providerKey || '-';
+    const latencyText = item.latencyMs == null ? '-' : `${item.latencyMs}ms`;
+    const trafficText = formatProviderRouterTraffic(item);
+    const usageText = getProviderRouterLogUsageParts(item).join(' / ');
+    const errorText = item.error ? String(item.error) : (item.retry ? '已尝试切换下一个 Provider' : '');
+    return `
+      <div class="pd-router-log-row ${tone}">
+        <span>${esc(item.at ? formatRelativeTime(item.at) : '-')}</span>
+        <code>${esc(item.method || '-')} ${esc(item.target || '-')}</code>
+        <strong>${esc(providerText)}</strong>
+        <em>${esc(statusText)} · ${esc(latencyText)}${trafficText ? ` · ${esc(trafficText)}` : ''}${usageText ? ` · ${esc(usageText)}` : ''}${item.retry ? ' · retry' : ''}${errorText ? ` · ${esc(errorText)}` : ''}</em>
+      </div>`;
+  }).join('');
+  const routerLogEmpty = routerLogs.length
+    ? '<div class="pd-empty pd-empty-small">没有匹配的历史日志</div>'
+    : '<div class="pd-empty pd-empty-small">暂无历史日志</div>';
+  return `
+    <div class="pd-router-panel" data-provider-router-panel="stats">
+      <div class="pd-router-stat-summary">
+        <span><strong>${esc(String(stats.requests || 0))}</strong><em>累计请求</em></span>
+        <span><strong>${esc(statsTokenLabel)}</strong><em>输入 / 缓存 / 输出</em></span>
+        <span><strong>${esc(statsTrafficLabel)}</strong><em>请求 / 响应流量</em></span>
+        <span><strong>${esc(String(routerLogs.length))}</strong><em>最近日志</em></span>
+      </div>
+      ${providerStats.length ? `
+        <div class="pd-router-provider-stats">
+          <div class="pd-router-stat-head">
+            <span>Provider</span>
+            <span>状态</span>
+            <span>请求</span>
+            <span>Token / 流量</span>
+          </div>
+          ${providerStats.map((item) => {
+            const itemTraffic = formatProviderRouterTraffic(item);
+            const itemUsage = getProviderRouterLogUsageParts(item).join(' / ');
+            return `
+              <div class="pd-router-stat-row">
+                <span>${esc(providerNames.get(item.providerKey) || item.providerKey || '-')}</span>
+                <code>${esc(String(item.lastStatus || '-'))}</code>
+                <em>请求 ${esc(String(item.requests || 0))} · 成功 ${esc(String(item.successes || 0))} · 失败 ${esc(String(item.failures || 0))}${item.lastError ? ` · ${esc(item.lastError)}` : ''}</em>
+                <em>${esc(itemUsage || '暂无 token')}${itemTraffic ? ` · ${esc(itemTraffic)}` : ''}</em>
+              </div>`;
+          }).join('')}
+        </div>` : '<div class="pd-empty pd-empty-small">暂无 Provider 统计</div>'}
+      <div class="pd-router-log-block">
+        <div class="pd-router-log-head">
+          <div>
+            <strong>历史请求日志</strong>
+            <span>${esc(routerLogCountText)} · ${esc(routerLogRefreshText)}</span>
+          </div>
+          <div>
+            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${loading ? 'disabled' : ''}>刷新</button>
+            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="router-logs" ${filteredRouterLogs.length ? '' : 'disabled'}>复制日志</button>
+          </div>
+        </div>
+        <div class="pd-router-log-filters">
+          <label class="pd-router-log-search">
+            <span>搜索</span>
+            <input type="search" value="${esc(logFilter.query)}" placeholder="路径 / Provider / 错误" data-provider-router-log-search ${routerLogs.length ? '' : 'disabled'} />
+          </label>
+          <label class="pd-router-log-filter">
+            <span>工具</span>
+            <div class="select-wrap"><select data-provider-router-log-filter="tool" ${routerLogs.length ? '' : 'disabled'}>${routerLogToolOptions}</select></div>
+          </label>
+          <label class="pd-router-log-filter">
+            <span>Provider</span>
+            <div class="select-wrap"><select data-provider-router-log-filter="provider" ${routerLogs.length ? '' : 'disabled'}>${routerLogProviderOptions}</select></div>
+          </label>
+          <label class="pd-router-log-filter">
+            <span>状态</span>
+            <div class="select-wrap"><select data-provider-router-log-filter="status" ${routerLogs.length ? '' : 'disabled'}>${routerLogStatusOptions}</select></div>
+          </label>
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-log-filter-reset ${logFiltersActive ? '' : 'disabled'}>重置</button>
+        </div>
+        ${filteredRouterLogs.length ? `
+          <div class="pd-router-log-list">
+            <div class="pd-router-log-row is-head">
+              <span>时间</span>
+              <span>请求</span>
+              <span>Provider</span>
+              <span>结果</span>
+            </div>
+            ${routerLogRows}
+          </div>` : routerLogEmpty}
+      </div>
+    </div>`;
+}
+
+function refreshProviderRouterStatsPanel() {
+  const container = document.getElementById('providerRouterPage');
+  const panel = container?.querySelector('[data-provider-router-panel="stats"]');
+  if (!container || !panel || state.providerRouter.activeTab !== 'stats') {
+    renderProviderRouterPage();
+    return;
+  }
+  const focusState = getProviderRouterLogSearchFocusState();
+  panel.outerHTML = renderProviderRouterStatsPanel();
+  const nextPanel = container.querySelector('[data-provider-router-panel="stats"]');
+  if (window.initCustomSelect) {
+    nextPanel?.querySelectorAll('.select-wrap > select').forEach((select) => window.initCustomSelect(select));
+  } else if (window.refreshCustomSelects) {
+    window.refreshCustomSelects();
+  }
+  restoreProviderRouterLogSearchFocus(container, focusState);
+  requestAnimationFrame(() => window.EasyAIConfigI18n?.apply?.(nextPanel));
+}
+
 function ensureProviderRouterEvents() {
   if (state.providerRouter.wired) return;
   state.providerRouter.wired = true;
   document.addEventListener('click', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
+    if (!getProviderRouterPageTarget(target)) return;
     const routerTab = target.closest('[data-provider-router-tab]');
     if (routerTab) {
       const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'pool').trim();
@@ -21655,6 +23297,11 @@ function ensureProviderRouterEvents() {
     if (target.closest('[data-provider-router-stop]')) { actionProviderRouterStop(); return; }
     if (target.closest('[data-provider-router-refresh]')) { fetchProviderRouterStatus(true); return; }
     if (target.closest('[data-provider-router-probe]')) { probeProviderRouterProxy(); return; }
+    if (target.closest('[data-provider-router-log-filter-reset]')) {
+      state.providerRouter.logFilter = { query: '', provider: 'all', status: 'all', tool: 'all' };
+      refreshProviderRouterStatsPanel();
+      return;
+    }
     const copyBtn = target.closest('[data-provider-router-copy]');
     if (copyBtn) {
       actionProviderRouterCopy(copyBtn.getAttribute('data-provider-router-copy') || 'base');
@@ -21668,6 +23315,17 @@ function ensureProviderRouterEvents() {
   });
   document.addEventListener('change', (e) => {
     const target = e.target;
+    if (!(target instanceof Element) || !getProviderRouterPageTarget(target)) return;
+    if (target instanceof HTMLSelectElement && target.matches('[data-provider-router-log-filter]')) {
+      const key = target.getAttribute('data-provider-router-log-filter') || '';
+      const filter = getProviderRouterLogFilter();
+      if (['provider', 'status', 'tool'].includes(key)) {
+        filter[key] = target.value || 'all';
+        state.providerRouter.logFilter = filter;
+        refreshProviderRouterStatsPanel();
+      }
+      return;
+    }
     if (target instanceof HTMLSelectElement && target.matches('[data-provider-router-strategy]')) {
       setProviderRouterStrategy(target.value, getProviderRouterActiveTool());
       renderProviderRouterPage();
@@ -21717,7 +23375,14 @@ function ensureProviderRouterEvents() {
   });
   document.addEventListener('input', (e) => {
     const target = e.target;
-    if (!(target instanceof HTMLInputElement)) return;
+    if (!(target instanceof HTMLInputElement) || !getProviderRouterPageTarget(target)) return;
+    if (target.matches('[data-provider-router-log-search]')) {
+      const filter = getProviderRouterLogFilter();
+      filter.query = target.value;
+      state.providerRouter.logFilter = filter;
+      refreshProviderRouterStatsPanel();
+      return;
+    }
     if (target.matches('[data-provider-router-weight]')) {
       setProviderRouterWeight(target.getAttribute('data-provider-router-weight') || '', target.value, getProviderRouterActiveTool());
       return;
@@ -21739,6 +23404,11 @@ function ensureProviderRouterEvents() {
 function renderProviderRouterPage() {
   const container = document.getElementById('providerRouterPage');
   if (!container) return;
+  const activeElement = document.activeElement;
+  const restoreLogSearch = activeElement instanceof HTMLInputElement && activeElement.matches('[data-provider-router-log-search]');
+  const logSearchSelection = restoreLogSearch
+    ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
+    : null;
   const esc = escapeHtml;
   const status = state.providerRouter.status || {};
   const running = Boolean(status.running);
@@ -21763,8 +23433,6 @@ function renderProviderRouterPage() {
   const selectedRows = getProviderRouterSelectedRows(candidates, activeTool);
   const activeKeys = Array.isArray(status.providerKeys) ? status.providerKeys : [];
   const stats = status.stats || {};
-  const providerStats = Array.isArray(stats.providers) ? stats.providers : [];
-  const routerLogs = Array.isArray(stats.logs) ? stats.logs : [];
   const startedAt = status.startedAt ? formatRelativeTime(status.startedAt) : '';
   const activeStatusTool = normalizeProviderRouterTool(status.tool || activeTool);
   const runningDifferentTool = running && activeStatusTool !== activeTool;
@@ -21772,10 +23440,6 @@ function renderProviderRouterPage() {
   const claudeBaseUrl = getProviderRouterEndpoint('claudecode', status);
   const currentBaseUrl = getProviderRouterEndpoint(activeTool, status);
   const originUrl = getProviderRouterOrigin(status);
-  const providerNames = new Map([
-    ...getProviderRouterRows('codex'),
-    ...getProviderRouterRows('claudecode'),
-  ].flatMap((item) => [[item.routeKey, item.name || item.key], [item.key, item.name || item.key]]));
   const strategyOptions = PROVIDER_ROUTER_STRATEGIES.map((item) => (
     `<option value="${esc(item.value)}" ${item.value === activeRouteStrategy ? 'selected' : ''}>${esc(item.label)}</option>`
   )).join('');
@@ -21830,16 +23494,18 @@ function renderProviderRouterPage() {
   }).join('');
   const probe = status.probe || {};
   const probeLoading = Boolean(state.providerRouter.probeLoading);
-  const proxyReady = running;
   const upstreamReady = running && Boolean(status.proxyReady || probe.ok);
+  const proxyReady = upstreamReady;
   const probeFailed = running && !upstreamReady && Boolean(probe.error);
   const probeChecked = Boolean(probe.checkedAt || probe.status || probe.error);
   const routerStateText = probeLoading
       ? '运行中 · 探测中'
       : probeFailed
         ? '运行中 · 反代异常'
-        : running
+        : proxyReady
           ? '运行中 · 反代中'
+          : running
+            ? (probeChecked ? '运行中 · 未通过' : '运行中 · 待探测')
           : '未启动';
   const probeStateText = upstreamReady
     ? '已通过'
@@ -21867,7 +23533,7 @@ function renderProviderRouterPage() {
   const selectedSummary = `${selectedRows.length} / ${candidates.filter((item) => item.canRoute).length}`;
   const statusNote = runningDifferentTool
     ? `当前运行的是 ${providerRouterToolLabel(activeStatusTool)} 网关，切换到 ${toolLabel} 会自动重启监听。`
-    : (startedAt ? `启动于 ${startedAt}` : '启动后会监听 127.0.0.1 本地端口');
+    : (startedAt ? `启动于 ${startedAt}` : '本机监听 127.0.0.1');
   const startActionText = loading
     ? '处理中'
     : runningDifferentTool
@@ -21877,16 +23543,6 @@ function renderProviderRouterPage() {
         : '启动网关';
   const activeTab = ['pool', 'clients', 'stats'].includes(state.providerRouter.activeTab) ? state.providerRouter.activeTab : 'pool';
   state.providerRouter.activeTab = activeTab;
-  const statsMaxRows = Number(stats.maxRows || 10000) || 10000;
-  const statsTrafficLabel = [
-    Number(stats.requestBytes || 0) ? `请求 ${formatBytes(stats.requestBytes)}` : '',
-    Number(stats.responseBytes || 0) ? `响应 ${formatBytes(stats.responseBytes)}` : '',
-  ].filter(Boolean).join(' / ') || '暂无流量';
-  const statsTokenLabel = [
-    Number(stats.inputTokens || 0) ? `输入 ${formatProviderRouterTokens(stats.inputTokens)}` : '',
-    Number(stats.cachedInputTokens || 0) ? `缓存 ${formatProviderRouterTokens(stats.cachedInputTokens)}` : '',
-    Number(stats.outputTokens || 0) ? `输出 ${formatProviderRouterTokens(stats.outputTokens)}` : '',
-  ].filter(Boolean).join(' / ') || '暂无 token';
   const routerTabs = [
     { key: 'pool', label: '负载池', meta: selectedSummary },
     { key: 'clients', label: '客户端配置', meta: '复制 / 写入' },
@@ -21903,7 +23559,7 @@ function renderProviderRouterPage() {
         <div class="pd-router-pool-summary">
           <strong>${esc(toolLabel)}</strong>
           <span>${esc(selectedSummary)} 个已加入负载池</span>
-          <em>OAuth 不进入路由池；Claude Code 只纳入能读取到明文 API Key / Auth Token 的 Provider。</em>
+          <em>仅路由可读取密钥的 Provider。</em>
         </div>
       </div>
       <div class="pd-router-strategy-bar">
@@ -21928,7 +23584,7 @@ function renderProviderRouterPage() {
           <span>最低余额</span>
           <input type="number" min="0" step="0.01" value="${esc(balanceMinAmount)}" data-provider-router-balance-min-amount ${loading || !balanceGuardEnabled ? 'disabled' : ''} />
         </label>
-        <div class="pd-router-strategy-note">余额来自已同步缓存；未知余额继续允许路由，明确低于阈值才跳过。</div>
+        <div class="pd-router-strategy-note">低余额自动跳过，未知余额仍可路由。</div>
       </div>
       ${candidates.length ? `
         <div class="pd-router-provider-list">
@@ -21974,73 +23630,7 @@ function renderProviderRouterPage() {
         </div>
       </div>
     </div>`;
-  const routerLogRows = routerLogs.map((item) => {
-    const statusText = item.status == null ? 'ERR' : String(item.status);
-    const tone = item.success ? 'is-ok' : item.retry ? 'is-warn' : 'is-bad';
-    const providerText = providerNames.get(item.providerKey) || item.providerKey || '-';
-    const latencyText = item.latencyMs == null ? '-' : `${item.latencyMs}ms`;
-    const trafficText = formatProviderRouterTraffic(item);
-    const usageText = getProviderRouterLogUsageParts(item).join(' / ');
-    const errorText = item.error ? String(item.error) : (item.retry ? '已尝试切换下一个 Provider' : '');
-    return `
-      <div class="pd-router-log-row ${tone}">
-        <span>${esc(item.at ? formatRelativeTime(item.at) : '-')}</span>
-        <code>${esc(item.method || '-')} ${esc(item.target || '-')}</code>
-        <strong>${esc(providerText)}</strong>
-        <em>${esc(statusText)} · ${esc(latencyText)}${trafficText ? ` · ${esc(trafficText)}` : ''}${usageText ? ` · ${esc(usageText)}` : ''}${item.retry ? ' · retry' : ''}${errorText ? ` · ${esc(errorText)}` : ''}</em>
-      </div>`;
-  }).join('');
-  const statsPanel = `
-    <div class="pd-router-panel">
-      <div class="pd-router-stat-summary">
-        <span><strong>${esc(String(stats.requests || 0))}</strong><em>累计请求</em></span>
-        <span><strong>${esc(statsTokenLabel)}</strong><em>输入 / 缓存 / 输出</em></span>
-        <span><strong>${esc(statsTrafficLabel)}</strong><em>请求 / 响应流量</em></span>
-        <span><strong>SQLite</strong><em>最多保留 ${esc(String(statsMaxRows))} 条</em></span>
-      </div>
-      ${providerStats.length ? `
-        <div class="pd-router-provider-stats">
-          <div class="pd-router-stat-head">
-            <span>Provider</span>
-            <span>状态</span>
-            <span>请求</span>
-            <span>Token / 流量</span>
-          </div>
-          ${providerStats.map((item) => {
-            const itemTraffic = formatProviderRouterTraffic(item);
-            const itemUsage = getProviderRouterLogUsageParts(item).join(' / ');
-            return `
-              <div class="pd-router-stat-row">
-                <span>${esc(providerNames.get(item.providerKey) || item.providerKey || '-')}</span>
-                <code>${esc(String(item.lastStatus || '-'))}</code>
-                <em>请求 ${esc(String(item.requests || 0))} · 成功 ${esc(String(item.successes || 0))} · 失败 ${esc(String(item.failures || 0))}${item.lastError ? ` · ${esc(item.lastError)}` : ''}</em>
-                <em>${esc(itemUsage || '暂无 token')}${itemTraffic ? ` · ${esc(itemTraffic)}` : ''}</em>
-              </div>`;
-          }).join('')}
-        </div>` : '<div class="pd-empty pd-empty-small">网关启动并收到请求后，这里会显示每个 Provider 的转发统计。</div>'}
-      <div class="pd-router-log-block">
-        <div class="pd-router-log-head">
-          <div>
-            <strong>最近请求日志</strong>
-            <span>${esc(String(routerLogs.length))} 条 · 只记录路径、Provider、状态、流量和 token 摘要</span>
-          </div>
-          <div>
-            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${loading ? 'disabled' : ''}>刷新</button>
-            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="router-logs" ${routerLogs.length ? '' : 'disabled'}>复制日志</button>
-          </div>
-        </div>
-        ${routerLogs.length ? `
-          <div class="pd-router-log-list">
-            <div class="pd-router-log-row is-head">
-              <span>时间</span>
-              <span>请求</span>
-              <span>Provider</span>
-              <span>结果</span>
-            </div>
-            ${routerLogRows}
-          </div>` : '<div class="pd-empty pd-empty-small">暂无网关日志。如果 Codex 仍报 502 但这里没有日志，说明请求没有进到本机网关，大概率是当前 Codex 进程没有继承 NO_PROXY，被系统代理截获了。</div>'}
-      </div>
-    </div>`;
+  const statsPanel = renderProviderRouterStatsPanel({ loading });
   const activePanel = activeTab === 'clients' ? clientsPanel : activeTab === 'stats' ? statsPanel : poolPanel;
 
   container.innerHTML = `
@@ -22052,7 +23642,7 @@ function renderProviderRouterPage() {
             <em>·</em>
             <span>自动路由网关</span>
           </div>
-          <p>选择 Codex / Claude Code 的 Provider 池，启动后客户端只连接本机网关，由本机按负载池转发。</p>
+          <p>选择 Provider 池，本机网关自动转发请求。</p>
         </div>
         <div class="pd-router-page-meta">
           <span>${esc(statusScopeLabel)}</span>
@@ -22065,9 +23655,9 @@ function renderProviderRouterPage() {
           <div class="pd-router-gateway-title">
             <div class="pd-router-kicker">GATEWAY</div>
             <div class="pd-router-title">本地监听与路由</div>
-            <div class="pd-router-sub">${esc(statusNote)} 客户端只连本机地址，真实 Provider 密钥仍由本机后端读取。</div>
+            <div class="pd-router-sub">${esc(statusNote)} · 客户端接入本机地址</div>
           </div>
-          <div class="pd-router-state-pill ${running ? 'is-on' : 'is-off'} ${proxyReady ? 'is-proxying' : ''} ${(probeLoading || probeFailed) ? 'is-warning' : ''}">
+          <div class="pd-router-state-pill ${proxyReady ? 'is-on is-proxying' : running ? 'is-running' : 'is-off'} ${(probeLoading || probeFailed || (running && !proxyReady)) ? 'is-warning' : ''}">
             <span></span>
             <strong>${esc(runningText)}</strong>
           </div>
@@ -22141,6 +23731,18 @@ function renderProviderRouterPage() {
   } else if (window.refreshCustomSelects) {
     window.refreshCustomSelects();
   }
+  if (restoreLogSearch) {
+    const input = container.querySelector('[data-provider-router-log-search]');
+    if (input instanceof HTMLInputElement) {
+      input.focus({ preventScroll: true });
+      try {
+        const start = logSearchSelection?.start ?? input.value.length;
+        const end = logSearchSelection?.end ?? start;
+        input.setSelectionRange(start, end);
+      } catch (_) {}
+    }
+  }
+  requestAnimationFrame(() => window.EasyAIConfigI18n?.apply?.(container));
 }
 
 function closeProviderDetail() {
@@ -29898,6 +31500,7 @@ function bindEvents() {
       if (state.configEditorOpen) setConfigEditorOpen(false);
       if (state.updateDialogOpen) closeUpdateDialog(false);
       if (state.aboutOpen) setAboutOpen(false);
+      setAboutTrustOpen(false);
     }
   });
   el('backups').addEventListener('click', (event) => {
@@ -29906,30 +31509,13 @@ function bindEvents() {
   });
   el('closeAboutBtn').addEventListener('click', () => setPage('quick'));
   el('aboutCheckUpdateBtn').addEventListener('click', async () => {
-    const btn = el('aboutCheckUpdateBtn');
-    const status = el('aboutUpdaterStatus');
-    btn.classList.add('checking');
-    btn.querySelector('span').textContent = '检查中...';
-    status.textContent = '';
-    status.className = 'about-status';
-
+    state.appUpdateProgress = { status: 'checking' };
+    populateAboutPanel();
     const result = await loadAppUpdateState({ manual: true });
-
-    btn.classList.remove('checking');
-    btn.querySelector('span').textContent = '检查更新';
-
     if (!result) {
-      status.textContent = '检测失败，请检查网络连接';
-      status.className = 'about-status about-status-error';
-    } else if (result.networkBlocked) {
-      status.textContent = result.statusMessage || '你的网络可能无法访问 GitHub 更新源，暂时无法检查更新。';
-      status.className = 'about-status about-status-error';
-    } else if (result.available) {
-      status.textContent = `发现新版本 v${result.version}`;
-      status.className = 'about-status about-status-update';
+      state.appUpdateProgress = { status: 'error', error: '检测失败，请检查网络连接' };
     } else {
-      status.textContent = '已是最新版本';
-      status.className = 'about-status about-status-ok';
+      state.appUpdateProgress = null;
     }
     populateAboutPanel();
   });
@@ -29937,7 +31523,12 @@ function bindEvents() {
   el('aboutFeedbackBtn')?.addEventListener('click', () => {
     void openExternalUrl('https://github.com/lmk1010/EasyAIConfig/issues/new/choose');
   });
-  el('aboutOpenSystemSettingsBtn')?.addEventListener('click', () => setPage('systemSettings'));
+  el('aboutTrustBtn')?.addEventListener('click', () => setAboutTrustOpen(true));
+  el('aboutTrustCloseBtn')?.addEventListener('click', () => setAboutTrustOpen(false));
+  el('aboutTrustDialog')?.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('[data-about-trust-close]')) setAboutTrustOpen(false);
+  });
 
   el('sysThemeModes')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-sys-theme]');
@@ -30174,6 +31765,7 @@ loadBackups();
 loadAppUpdateState();
 loadAppUpdateProgressState({ silent: true });
 loadTools();
+startToolUpdatesTimer();
 
 /* ── Window drag support ── */
 (function initWindowDrag() {

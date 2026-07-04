@@ -15,13 +15,18 @@ import { applyAdapterToProvider } from './cn-provider-adapters.js';
 const APP_HOME_DIRNAME = '.codex-config-ui';
 const BACKUPS_DIRNAME = 'backups';
 const OPENAI_CODEX_PACKAGE = '@openai/codex';
+const CLAUDE_CODE_PACKAGE = '@anthropic-ai/claude-code';
 const OPENCODE_PACKAGE = 'opencode-ai';
+const OPENCLAW_PACKAGE = 'openclaw';
 const OPENCODE_INSTALL_SCRIPT_UNIX = 'curl -fsSL https://opencode.ai/install | bash';
 const OPENCODE_INSTALL_TASK_TTL_MS = 30 * 60 * 1000;
 const OPENCODE_INSTALL_TASKS = new Map();
 const OPENCLAW_INSTALL_TASK_TTL_MS = 30 * 60 * 1000;
 const OPENCLAW_INSTALL_TASKS = new Map();
 const OPENCLAW_NPM_REGISTRY_CN = 'https://registry.npmmirror.com';
+const NPM_REGISTRY_GLOBAL = 'https://registry.npmjs.org';
+const NPM_REGISTRY_CN = 'https://registry.npmmirror.com';
+const TOOL_VERSION_TIMEOUT_MS = 2500;
 
 let opencodeInstallTaskSeq = 0;
 let openclawInstallTaskSeq = 0;
@@ -89,7 +94,7 @@ const TOOL_REGISTRY = {
     configFileName: 'openclaw.json',
     envFileName: '.env',
     binaryName: 'openclaw',
-    npmPackage: 'openclaw',
+    npmPackage: OPENCLAW_PACKAGE,
     installMethod: 'multi',
     providerKeyField: 'provider',
     projectConfigDir: '.openclaw',
@@ -409,29 +414,39 @@ function windowsBinaryCandidateRank(binPath = '') {
 }
 
 function readBinaryVersion(binPath, { passive = true } = {}) {
-
   if (!binPath) return { installed: false, version: null, path: null };
   const lower = String(binPath || '').toLowerCase();
-  if (passive) {
+  if (!existsSync(binPath)) {
     return {
-      installed: existsSync(binPath),
+      installed: false,
       version: null,
       path: binPath,
     };
   }
-  if (process.platform === 'win32' && (lower.endsWith('.cmd') || lower.endsWith('.bat') || lower.endsWith('.ps1'))) {
+
+  let result;
+  try {
+    if (process.platform === 'win32' && lower.endsWith('.ps1')) {
+      result = runSpawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', binPath, '--version'], { encoding: 'utf8', timeout: TOOL_VERSION_TIMEOUT_MS });
+    } else if (process.platform === 'win32' && (lower.endsWith('.cmd') || lower.endsWith('.bat'))) {
+      result = runSpawnSync('cmd.exe', ['/d', '/s', '/c', `"${binPath}" --version`], { encoding: 'utf8', timeout: TOOL_VERSION_TIMEOUT_MS });
+    } else {
+      result = runSpawnSync(binPath, ['--version'], { encoding: 'utf8', timeout: passive ? TOOL_VERSION_TIMEOUT_MS : 5000 });
+    }
+  } catch {
     return {
-      installed: existsSync(binPath),
+      installed: true,
       version: null,
       path: binPath,
     };
   }
-  const result = process.platform === 'win32' && lower.endsWith('.ps1')
-    ? runSpawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', binPath, '--version'], { encoding: 'utf8' })
-    : runSpawnSync(binPath, ['--version'], { encoding: 'utf8' });
+
+  const versionText = result.status === 0
+    ? String(result.stdout || result.stderr || '').trim()
+    : null;
   return {
-    installed: result.status === 0,
-    version: result.status === 0 ? (result.stdout || result.stderr || '').trim() : null,
+    installed: true,
+    version: versionText,
     path: binPath,
   };
 }
@@ -466,6 +481,432 @@ export function listTools(options = {}) {
     npmPackage: tool.npmPackage,
     binary: findToolBinary(tool.id, options),
   }));
+}
+
+const TOOL_UPDATE_SPECS = [
+  { id: 'codex', name: 'Codex CLI', packageName: OPENAI_CODEX_PACKAGE, repositoryUrl: 'https://github.com/openai/codex' },
+  { id: 'claudecode', name: 'Claude Code', packageName: CLAUDE_CODE_PACKAGE, repositoryUrl: 'https://github.com/anthropics/claude-code' },
+  { id: 'opencode', name: 'OpenCode', packageName: OPENCODE_PACKAGE, repositoryUrl: 'https://github.com/opencode-ai/opencode' },
+  { id: 'openclaw', name: 'OpenClaw', packageName: OPENCLAW_PACKAGE, repositoryUrl: 'https://github.com/openclaw/openclaw' },
+];
+
+function npmPackageMetadataUrl(registry, packageName) {
+  return `${String(registry || NPM_REGISTRY_GLOBAL).replace(/\/+$/, '')}/${encodeURIComponent(packageName)}`;
+}
+
+function npmPackageLatestUrl(registry, packageName) {
+  return `${npmPackageMetadataUrl(registry, packageName)}/latest`;
+}
+
+function npmPackageWebUrl(packageName) {
+  return `https://www.npmjs.com/package/${encodeURIComponent(packageName)}`;
+}
+
+function npmPackageVersionWebUrl(packageName, version) {
+  return `${npmPackageWebUrl(packageName)}/v/${encodeURIComponent(version)}`;
+}
+
+function normalizeRepositoryUrl(repository) {
+  const raw = typeof repository === 'string'
+    ? repository
+    : (repository && typeof repository === 'object' ? repository.url : '');
+  let url = String(raw || '').trim();
+  if (!url) return '';
+  url = url.replace(/^git\+/, '').replace(/^git:\/\//, 'https://');
+  url = url.replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/');
+  url = url.replace(/^git@github\.com:/, 'https://github.com/');
+  url = url.replace(/\.git(?:#.*)?$/, '');
+  return url;
+}
+
+function requestJson(url, { timeoutMs = 3000, maxBytes = 5 * 1024 * 1024, redirects = 2, accept = 'application/json' } = {}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let hardTimer = null;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (hardTimer) clearTimeout(hardTimer);
+      fn(value);
+    };
+    const req = https.get(url, {
+      timeout: timeoutMs,
+      headers: {
+        Accept: accept,
+        'User-Agent': 'EasyAIConfig update checker',
+      },
+    }, (res) => {
+      const statusCode = Number(res.statusCode || 0);
+      const location = res.headers.location;
+      if ([301, 302, 303, 307, 308].includes(statusCode) && location && redirects > 0) {
+        res.resume();
+        const nextUrl = new URL(location, url).toString();
+        requestJson(nextUrl, { timeoutMs, maxBytes, redirects: redirects - 1, accept }).then(
+          (value) => settle(resolve, value),
+          (error) => settle(reject, error),
+        );
+        return;
+      }
+      if (statusCode < 200 || statusCode >= 300) {
+        res.resume();
+        settle(reject, new Error(`HTTP ${statusCode}`));
+        return;
+      }
+      const chunks = [];
+      let total = 0;
+      res.on('data', (chunk) => {
+        total += chunk.length;
+        if (total > maxBytes) {
+          settle(reject, new Error('响应过大'));
+          req.destroy();
+          res.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('end', () => {
+        try {
+          settle(resolve, JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
+        } catch (error) {
+          settle(reject, error);
+        }
+      });
+    });
+    hardTimer = setTimeout(() => req.destroy(new Error('请求超时')), timeoutMs);
+    req.on('timeout', () => req.destroy(new Error('请求超时')));
+    req.on('error', (error) => settle(reject, error));
+  });
+}
+
+function latestNpmMetadataFallback(packageName, latest) {
+  const version = String(latest?.version || '').trim();
+  return {
+    name: latest?.name || packageName,
+    description: latest?.description || '',
+    'dist-tags': { latest: version },
+    versions: version ? { [version]: latest } : {},
+    time: {},
+    repository: latest?.repository || null,
+    homepage: latest?.homepage || '',
+    bugs: latest?.bugs || null,
+  };
+}
+
+function mergeLatestNpmMetadata(packageName, latest, metadata) {
+  const latestVersion = String(latest?.version || metadata?.['dist-tags']?.latest || metadata?.version || '').trim();
+  const versions = {
+    ...(metadata?.versions && typeof metadata.versions === 'object' ? metadata.versions : {}),
+  };
+  if (latestVersion) {
+    versions[latestVersion] = versions[latestVersion]
+      ? { ...latest, ...versions[latestVersion], description: versions[latestVersion].description || latest?.description || '' }
+      : latest;
+  }
+  return {
+    ...metadata,
+    name: metadata?.name || latest?.name || packageName,
+    description: metadata?.description || latest?.description || '',
+    'dist-tags': {
+      ...(metadata?.['dist-tags'] && typeof metadata['dist-tags'] === 'object' ? metadata['dist-tags'] : {}),
+      latest: latestVersion,
+    },
+    versions,
+    repository: metadata?.repository || latest?.repository || null,
+    homepage: metadata?.homepage || latest?.homepage || '',
+    bugs: metadata?.bugs || latest?.bugs || null,
+  };
+}
+
+async function fetchNpmMetadata(registry, packageName) {
+  let latest = null;
+  try {
+    latest = await requestJson(npmPackageLatestUrl(registry, packageName), {
+      timeoutMs: 2500,
+      maxBytes: 512 * 1024,
+    });
+  } catch (latestError) {
+    try {
+      return await requestJson(npmPackageMetadataUrl(registry, packageName), {
+        timeoutMs: 2500,
+        maxBytes: 2 * 1024 * 1024,
+        accept: 'application/vnd.npm.install-v1+json',
+      });
+    } catch (metadataError) {
+      throw new Error(`${latestError instanceof Error ? latestError.message : String(latestError)}; metadata ${metadataError instanceof Error ? metadataError.message : String(metadataError)}`);
+    }
+  }
+
+  const fallback = latestNpmMetadataFallback(packageName, latest);
+  try {
+    const metadata = await requestJson(npmPackageMetadataUrl(registry, packageName), {
+      timeoutMs: 1200,
+      maxBytes: 2 * 1024 * 1024,
+      accept: 'application/vnd.npm.install-v1+json',
+    });
+    return mergeLatestNpmMetadata(packageName, latest, metadata);
+  } catch {
+    return fallback;
+  }
+}
+
+function compactVersionText(value, maxLength = 1000) {
+  const text = String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function normalizeNpmVersionNote(value, depth = 0) {
+  if (value == null || depth > 2) return '';
+  if (typeof value === 'string') return compactVersionText(value);
+  if (Array.isArray(value)) {
+    return compactVersionText(value.map((item) => normalizeNpmVersionNote(item, depth + 1)).filter(Boolean).join('\n'));
+  }
+  if (typeof value === 'object') {
+    const fields = ['releaseNotes', 'release_notes', 'changelog', 'changeLog', 'changes', 'notes', 'body', 'markdown', 'text', 'summary'];
+    for (const field of fields) {
+      const note = normalizeNpmVersionNote(value[field], depth + 1);
+      if (note) return note;
+    }
+  }
+  return '';
+}
+
+function pickNpmVersionReleaseNotes(versionMeta) {
+  if (!versionMeta || typeof versionMeta !== 'object') return '';
+  const fields = ['releaseNotes', 'release_notes', 'changelog', 'changeLog', 'changes', 'notes'];
+  for (const field of fields) {
+    const note = normalizeNpmVersionNote(versionMeta[field]);
+    if (note) return note;
+  }
+  return '';
+}
+
+function normalizeReleaseVersionKey(value) {
+  let text = String(value || '').trim().toLowerCase();
+  if (!text) return '';
+  text = text.replace(/^refs\/tags\//, '');
+  text = text.replace(/^rust[-_/]v?/, '');
+  text = text.replace(/^release[-_/]v?/, '');
+  text = text.replace(/^codex[-_/]v?/, '');
+  text = text.replace(/^cli[-_/]v?/, '');
+  text = text.replace(/^v(?=\d)/, '');
+  return text;
+}
+
+function releaseVersionCandidates(release) {
+  const candidates = new Set();
+  const add = (value) => {
+    const key = normalizeReleaseVersionKey(value);
+    if (key) candidates.add(key);
+  };
+  add(release?.tag_name);
+  add(release?.name);
+  [release?.tag_name, release?.name].forEach((value) => {
+    String(value || '').match(/\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*/g)?.forEach(add);
+  });
+  return Array.from(candidates);
+}
+
+function githubReleasesApiUrl(repositoryUrl) {
+  const normalized = normalizeRepositoryUrl(repositoryUrl).replace(/[?#].*$/, '').replace(/\/+$/, '');
+  const match = normalized.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/.*)?$/i);
+  if (!match) return '';
+  const owner = match[1];
+  const repo = match[2].replace(/\.git$/, '');
+  if (!owner || !repo) return '';
+  return `https://api.github.com/repos/${owner}/${repo}/releases?per_page=100`;
+}
+
+async function fetchGithubReleaseNotes(repositoryUrl) {
+  const url = githubReleasesApiUrl(repositoryUrl);
+  if (!url) return new Map();
+  try {
+    const releases = await requestJson(url, {
+      timeoutMs: 15000,
+      maxBytes: 30 * 1024 * 1024,
+      accept: 'application/vnd.github+json',
+    });
+    if (!Array.isArray(releases)) return new Map();
+    const byVersion = new Map();
+    releases.forEach((release) => {
+      const body = compactVersionText(release?.body || '', 1200);
+      if (!body) return;
+      const releaseInfo = {
+        releaseNotes: body,
+        releaseUrl: String(release?.html_url || '').trim(),
+        releaseName: String(release?.name || release?.tag_name || '').trim(),
+        releaseTag: String(release?.tag_name || '').trim(),
+      };
+      releaseVersionCandidates(release).forEach((key) => {
+        if (key && !byVersion.has(key)) byVersion.set(key, releaseInfo);
+      });
+    });
+    return byVersion;
+  } catch {
+    return new Map();
+  }
+}
+
+function recentNpmVersions(metadata, packageName = '', releaseNotesByVersion = new Map(), limit = 20) {
+  const versions = Object.keys(metadata?.versions || {});
+  const time = metadata?.time || {};
+  versions.sort((left, right) => {
+    const leftTime = Date.parse(time[left] || '');
+    const rightTime = Date.parse(time[right] || '');
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return rightTime - leftTime;
+    }
+    return compareCodexVersions(right, left);
+  });
+  return versions.slice(0, limit).map((version) => ({
+    version,
+    publishedAt: time[version] || '',
+    ...(() => {
+      const versionMeta = metadata?.versions?.[version] || {};
+      const releaseInfo = releaseNotesByVersion.get(normalizeReleaseVersionKey(version)) || null;
+      const releaseNotes = releaseInfo?.releaseNotes || pickNpmVersionReleaseNotes(versionMeta);
+      return {
+        description: compactVersionText(versionMeta?.description || metadata?.description || '', 360),
+        releaseNotes,
+        hasReleaseNotes: Boolean(releaseNotes),
+        releaseUrl: releaseInfo?.releaseUrl || '',
+        releaseName: releaseInfo?.releaseName || '',
+        npmUrl: packageName ? npmPackageVersionWebUrl(packageName, version) : '',
+      };
+    })(),
+  }));
+}
+
+function normalizeNpmPackageInfo(spec, metadata, source, releaseNotesByVersion = new Map()) {
+  const distTags = metadata?.['dist-tags'] || {};
+  const latestVersion = String(distTags.latest || metadata?.version || '').trim();
+  const latestMeta = latestVersion && metadata?.versions ? metadata.versions[latestVersion] || null : null;
+  const repositoryUrl = normalizeRepositoryUrl(latestMeta?.repository || metadata?.repository || spec.repositoryUrl);
+  const homepage = String(latestMeta?.homepage || metadata?.homepage || repositoryUrl || npmPackageWebUrl(spec.packageName)).trim();
+  const bugsUrl = metadata?.bugs && typeof metadata.bugs === 'object' ? String(metadata.bugs.url || '').trim() : '';
+  return {
+    toolId: spec.id,
+    name: spec.name,
+    packageName: spec.packageName,
+    latestVersion,
+    distTags,
+    description: String(latestMeta?.description || metadata?.description || '').trim(),
+    license: String(latestMeta?.license || metadata?.license || '').trim(),
+    publishedAt: metadata?.time?.[latestVersion] || metadata?.time?.modified || '',
+    recentVersions: recentNpmVersions(metadata, spec.packageName, releaseNotesByVersion),
+    source,
+    packageUrl: npmPackageWebUrl(spec.packageName),
+    registryUrl: npmPackageMetadataUrl(source.registry, spec.packageName),
+    repositoryUrl,
+    homepage,
+    bugsUrl,
+    tarballUrl: String(latestMeta?.dist?.tarball || '').trim(),
+    install: {
+      global: `${npmCommand()} install -g ${spec.packageName}@latest`,
+      domestic: `${npmCommand()} install -g ${spec.packageName}@latest --registry=${NPM_REGISTRY_CN}`,
+    },
+    regions: ['global', 'domestic'],
+  };
+}
+
+function getNpmMetadataLatestVersion(metadata) {
+  return String(metadata?.['dist-tags']?.latest || metadata?.version || '').trim();
+}
+
+function pickBestNpmMetadataResult(results) {
+  const sourceRank = new Map([
+    ['global', 0],
+    ['domestic', 1],
+  ]);
+  return results
+    .filter((item) => item.ok && item.metadata)
+    .sort((left, right) => {
+      const versionOrder = compareCodexVersions(
+        getNpmMetadataLatestVersion(right.metadata),
+        getNpmMetadataLatestVersion(left.metadata),
+      );
+      if (versionOrder !== 0) return versionOrder;
+      return (sourceRank.get(left.source.id) ?? 99) - (sourceRank.get(right.source.id) ?? 99);
+    })[0] || null;
+}
+
+async function fetchNpmPackageInfo(spec) {
+  const sources = [
+    { id: 'global', label: '海外', registry: NPM_REGISTRY_GLOBAL },
+    { id: 'domestic', label: '国内', registry: NPM_REGISTRY_CN },
+  ];
+  const checks = sources.map(async (source) => {
+    try {
+      const metadata = await fetchNpmMetadata(source.registry, spec.packageName);
+      return {
+        ok: true,
+        source,
+        metadata,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+  const results = await Promise.all(checks);
+  const attempts = results.map((item) => ({
+    id: item.source.id,
+    label: item.source.label,
+    ok: item.ok,
+    ...(item.ok ? { version: getNpmMetadataLatestVersion(item.metadata) } : { error: item.error || 'failed' }),
+  }));
+  const success = pickBestNpmMetadataResult(results);
+  if (success) {
+    const repositoryUrl = normalizeRepositoryUrl(
+      success.metadata?.versions?.[getNpmMetadataLatestVersion(success.metadata)]?.repository
+      || success.metadata?.repository
+      || spec.repositoryUrl,
+    );
+    const releaseNotesByVersion = await fetchGithubReleaseNotes(repositoryUrl);
+    return {
+      ...normalizeNpmPackageInfo(spec, success.metadata, success.source, releaseNotesByVersion),
+      attempts,
+    };
+  }
+  const message = attempts.map((item) => `${item.label || item.id}: ${item.error || 'failed'}`).join('; ') || '版本源不可达';
+  return {
+    toolId: spec.id,
+    name: spec.name,
+    packageName: spec.packageName,
+    latestVersion: '',
+    recentVersions: [],
+    source: null,
+    attempts,
+    packageUrl: npmPackageWebUrl(spec.packageName),
+    registryUrl: '',
+    install: {
+      global: `${npmCommand()} install -g ${spec.packageName}@latest`,
+      domestic: `${npmCommand()} install -g ${spec.packageName}@latest --registry=${NPM_REGISTRY_CN}`,
+    },
+    regions: ['global', 'domestic'],
+    error: message,
+  };
+}
+
+export async function getToolUpdatesInfo() {
+  const entries = await Promise.all(TOOL_UPDATE_SPECS.map(fetchNpmPackageInfo));
+  return {
+    generatedAt: new Date().toISOString(),
+    intervalMs: 12 * 60 * 60 * 1000,
+    sources: [
+      { id: 'global', label: '海外', registry: NPM_REGISTRY_GLOBAL },
+      { id: 'domestic', label: '国内', registry: NPM_REGISTRY_CN },
+    ],
+    items: Object.fromEntries(entries.map((item) => [item.toolId, item])),
+  };
 }
 
 function defaultCodexHome() {
@@ -4514,6 +4955,19 @@ async function codexNpmAction(args) {
   };
 }
 
+function assertSafeNpmPackageVersion(input) {
+  const version = String(input || '').trim();
+  if (!version) throw new Error('缺少目标版本');
+  if (version.length > 128 || !/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(version)) {
+    throw new Error('目标版本格式无效');
+  }
+  return version;
+}
+
+function npmPackageVersionSpec(packageName, version) {
+  return `${packageName}@${assertSafeNpmPackageVersion(version)}`;
+}
+
 export async function getCodexReleaseInfo() {
   const result = await runCommand(npmCommand(), ['view', OPENAI_CODEX_PACKAGE, 'dist-tags', '--json']);
   if (!result.ok) {
@@ -4552,6 +5006,16 @@ export async function reinstallCodex() {
 
 export async function updateCodex() {
   return codexNpmAction(['install', '-g', `${OPENAI_CODEX_PACKAGE}@latest`]);
+}
+
+export async function updateCodexDomestic() {
+  return codexNpmAction(['install', '-g', `${OPENAI_CODEX_PACKAGE}@latest`, '--registry', NPM_REGISTRY_CN]);
+}
+
+export async function installCodexVersion({ version, domestic = false } = {}) {
+  const args = ['install', '-g', npmPackageVersionSpec(OPENAI_CODEX_PACKAGE, version)];
+  if (domestic) args.push('--registry', NPM_REGISTRY_CN);
+  return codexNpmAction(args);
 }
 
 export async function uninstallCodex() {
@@ -4851,7 +5315,6 @@ export async function loginCodex({ cwd, terminalProfile = 'auto', codexHome = ''
 }
 
 /* ═══════════════  Claude Code  ═══════════════ */
-const CLAUDE_CODE_PACKAGE = '@anthropic-ai/claude-code';
 const CLAUDECODE_PROFILES_DIRNAME = 'claudecode-oauth-profiles';
 const CLAUDECODE_PROFILES_INDEX = 'profiles.json';
 
@@ -5429,6 +5892,16 @@ export async function updateClaudeCode() {
   return claudeCodeNpmAction(['install', '-g', `${CLAUDE_CODE_PACKAGE}@latest`]);
 }
 
+export async function updateClaudeCodeDomestic() {
+  return claudeCodeNpmAction(['install', '-g', `${CLAUDE_CODE_PACKAGE}@latest`, '--registry', NPM_REGISTRY_CN]);
+}
+
+export async function installClaudeCodeVersion({ version, domestic = false } = {}) {
+  const args = ['install', '-g', npmPackageVersionSpec(CLAUDE_CODE_PACKAGE, version)];
+  if (domestic) args.push('--registry', NPM_REGISTRY_CN);
+  return claudeCodeNpmAction(args);
+}
+
 export async function uninstallClaudeCode() {
   return claudeCodeNpmAction(['uninstall', '-g', CLAUDE_CODE_PACKAGE]);
 }
@@ -5588,6 +6061,18 @@ async function openCodeUpdateAction(method = '') {
   else if (installMethod === 'choco') result = await openCodeShellAction('choco upgrade opencode -y');
   else result = await openCodeShellAction(OPENCODE_INSTALL_SCRIPT_UNIX);
   return { ...result, requestedMethod: resolved.requestedMethod, method: installMethod, googleReachable: resolved.googleReachable, usedDomesticMirror: installMethod === 'domestic' };
+}
+
+async function openCodeInstallVersionAction({ version, domestic = false } = {}) {
+  const packageSpec = npmPackageVersionSpec(OPENCODE_PACKAGE, version);
+  const result = await openCodeNpmAction(['install', '-g', packageSpec], { domestic });
+  return {
+    ...result,
+    requestedMethod: domestic ? 'domestic' : 'npm',
+    method: domestic ? 'domestic' : 'npm',
+    googleReachable: null,
+    usedDomesticMirror: Boolean(domestic),
+  };
 }
 
 async function openCodeUninstallAction(method = '') {
@@ -6142,6 +6627,10 @@ export async function reinstallOpenCode({ method = '' } = {}) {
 
 export async function updateOpenCode({ method = '' } = {}) {
   return openCodeUpdateAction(method);
+}
+
+export async function installOpenCodeVersion({ version, domestic = false } = {}) {
+  return openCodeInstallVersionAction({ version, domestic });
 }
 
 export async function uninstallOpenCode({ method = '' } = {}) {
@@ -6766,6 +7255,19 @@ export async function installOpenClaw({ method = process.platform === 'win32' ? 
 export async function updateOpenClaw() {
   const setup = await prepareOpenClawWindowsInstall();
   return runCommand(npmCommand(), ['install', '-g', 'openclaw@latest'], { env: setup.env });
+}
+
+export async function updateOpenClawDomestic() {
+  const setup = await prepareOpenClawWindowsInstall();
+  return runCommand(npmCommand(), ['install', '-g', 'openclaw@latest', '--registry', NPM_REGISTRY_CN], { env: setup.env });
+}
+
+export async function installOpenClawVersion({ version, domestic = false } = {}) {
+  const setup = await prepareOpenClawWindowsInstall();
+  const args = ['install', '-g', npmPackageVersionSpec(OPENCLAW_PACKAGE, version)];
+  if (domestic) args.push('--registry', NPM_REGISTRY_CN);
+  const result = await runCommand(npmCommand(), args, { env: setup.env });
+  return { ...result, command: `${npmCommand()} ${args.join(' ')}` };
 }
 
 export async function reinstallOpenClaw() {

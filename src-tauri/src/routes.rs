@@ -5,8 +5,9 @@ use crate::codex::{
   login_codex, get_codex_usage_metrics, list_codex_sessions, get_codex_session_detail,
   list_codex_session_homes, migrate_codex_sessions,
   resume_codex_session, fork_codex_session, export_codex_session,
-  get_codex_app_state, install_codex_app, open_codex_app,
-  list_tools, load_claudecode_state, model_eval_claudecode_provider, save_claudecode_config, save_claudecode_raw_config,
+  get_codex_app_state, start_codex_app_install_task, get_codex_app_install_task,
+  cancel_codex_app_install_task, install_codex_app, open_codex_app,
+  list_tools, get_tool_updates_info, load_claudecode_state, model_eval_claudecode_provider, save_claudecode_config, save_claudecode_raw_config,
   delete_claudecode_provider,
   launch_claudecode, login_claudecode, load_opencode_state, save_opencode_config,
   save_opencode_raw_config, install_opencode, reinstall_opencode, update_opencode,
@@ -58,7 +59,33 @@ use crate::codex_oauth_usage::query_codex_oauth_usage;
 use crate::usage_stats::{claudecode_local_usage, codex_session_stats};
 use crate::updater::{get_app_update_info, get_app_update_progress, install_app_update};
 use crate::terminal::{terminal_close, terminal_create, terminal_list, terminal_read, terminal_resize, terminal_write};
-use crate::{fail, ok, OPENAI_CODEX_PACKAGE, CLAUDE_CODE_PACKAGE, OPENCLAW_PACKAGE};
+use crate::{fail, ok, OPENAI_CODEX_PACKAGE, CLAUDE_CODE_PACKAGE, OPENCODE_PACKAGE, OPENCLAW_PACKAGE};
+
+const NPM_REGISTRY_CN: &str = "https://registry.npmmirror.com";
+
+fn read_safe_npm_version(body: &Value) -> Result<String, String> {
+  let version = body.get("version").and_then(Value::as_str).unwrap_or("").trim();
+  let safe = !version.is_empty()
+    && version.len() <= 128
+    && version.chars().next().map(|ch| ch.is_ascii_alphanumeric()).unwrap_or(false)
+    && version.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '+' | '-'));
+  if !safe {
+    return Err("目标版本格式无效".to_string());
+  }
+  Ok(version.to_string())
+}
+
+fn npm_install_package_version(package_name: &str, body: &Value, use_cn_registry: bool) -> Result<Value, String> {
+  let version = read_safe_npm_version(body)?;
+  let package_spec = format!("{}@{}", package_name, version);
+  if use_cn_registry {
+    let args = ["install", "-g", package_spec.as_str(), "--registry", NPM_REGISTRY_CN];
+    codex_npm_action(&args)
+  } else {
+    let args = ["install", "-g", package_spec.as_str()];
+    codex_npm_action(&args)
+  }
+}
 
 async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value, body: &Value) -> Result<Value, String> {
   match (path, method) {
@@ -96,10 +123,18 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/config/settings-save", "POST") => save_settings(body),
 
     ("/api/tools", "GET") => list_tools(),
+    ("/api/tools/updates", "GET") => {
+      tokio::task::spawn_blocking(move || get_tool_updates_info())
+        .await
+        .map_err(|e| format!("spawn_blocking error: {}", e))?
+    },
     ("/api/codex/install", "POST") => codex_npm_action(&["install", "-g", OPENAI_CODEX_PACKAGE]),
     ("/api/codex/release", "GET") => get_codex_release_info(),
     ("/api/codex/reinstall", "POST") => codex_npm_action(&["install", "-g", OPENAI_CODEX_PACKAGE, "--force"]),
     ("/api/codex/update", "POST") => codex_npm_action(&["install", "-g", &format!("{}@latest", OPENAI_CODEX_PACKAGE)]),
+    ("/api/codex/update-domestic", "POST") => codex_npm_action(&["install", "-g", &format!("{}@latest", OPENAI_CODEX_PACKAGE), "--registry", NPM_REGISTRY_CN]),
+    ("/api/codex/install-version", "POST") => npm_install_package_version(OPENAI_CODEX_PACKAGE, body, false),
+    ("/api/codex/install-version-domestic", "POST") => npm_install_package_version(OPENAI_CODEX_PACKAGE, body, true),
     ("/api/codex/uninstall", "POST") => codex_npm_action(&["uninstall", "-g", OPENAI_CODEX_PACKAGE]),
     ("/api/codex/launch", "POST") => launch_codex(body),
     ("/api/codex/login", "POST") => login_codex(body),
@@ -128,6 +163,9 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/codex/sessions/migrate", "POST") => migrate_codex_sessions(body),
     ("/api/dashboard/codex-usage", "GET") => get_codex_usage_metrics(query),
     ("/api/codex-app/state", "GET") => get_codex_app_state(),
+    ("/api/codex-app/install/start", "POST") => start_codex_app_install_task(body),
+    ("/api/codex-app/install/status", "GET") => get_codex_app_install_task(query),
+    ("/api/codex-app/install/cancel", "POST") => cancel_codex_app_install_task(body),
     ("/api/codex-app/install", "POST") => install_codex_app(body),
     ("/api/codex-app/open", "POST") => open_codex_app(body),
     ("/api/claudecode/state", "GET") => load_claudecode_state(query),
@@ -137,6 +175,9 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/claudecode/install", "POST") => codex_npm_action(&["install", "-g", CLAUDE_CODE_PACKAGE]),
     ("/api/claudecode/reinstall", "POST") => codex_npm_action(&["install", "-g", CLAUDE_CODE_PACKAGE, "--force"]),
     ("/api/claudecode/update", "POST") => codex_npm_action(&["install", "-g", &format!("{}@latest", CLAUDE_CODE_PACKAGE)]),
+    ("/api/claudecode/update-domestic", "POST") => codex_npm_action(&["install", "-g", &format!("{}@latest", CLAUDE_CODE_PACKAGE), "--registry", NPM_REGISTRY_CN]),
+    ("/api/claudecode/install-version", "POST") => npm_install_package_version(CLAUDE_CODE_PACKAGE, body, false),
+    ("/api/claudecode/install-version-domestic", "POST") => npm_install_package_version(CLAUDE_CODE_PACKAGE, body, true),
     ("/api/claudecode/uninstall", "POST") => codex_npm_action(&["uninstall", "-g", CLAUDE_CODE_PACKAGE]),
     ("/api/claudecode/launch", "POST") => launch_claudecode(body),
     ("/api/claudecode/login", "POST") => login_claudecode(body),
@@ -154,6 +195,8 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/opencode/install", "POST") => install_opencode(body),
     ("/api/opencode/reinstall", "POST") => reinstall_opencode(body),
     ("/api/opencode/update", "POST") => update_opencode(body),
+    ("/api/opencode/install-version", "POST") => npm_install_package_version(OPENCODE_PACKAGE, body, false),
+    ("/api/opencode/install-version-domestic", "POST") => npm_install_package_version(OPENCODE_PACKAGE, body, true),
     ("/api/opencode/uninstall", "POST") => uninstall_opencode(body),
     ("/api/opencode/launch", "POST") => launch_opencode(body),
     ("/api/opencode/login", "POST") => login_opencode(body),
@@ -174,6 +217,9 @@ async fn dispatch(app: tauri::AppHandle, path: &str, method: &str, query: &Value
     ("/api/openclaw/install/cancel", "POST") => cancel_openclaw_install_task(body),
     ("/api/openclaw/install/remote", "POST") => install_openclaw_remote(body),
     ("/api/openclaw/update", "POST") => codex_npm_action(&["install", "-g", &format!("{}@latest", OPENCLAW_PACKAGE)]),
+    ("/api/openclaw/update-domestic", "POST") => codex_npm_action(&["install", "-g", &format!("{}@latest", OPENCLAW_PACKAGE), "--registry", NPM_REGISTRY_CN]),
+    ("/api/openclaw/install-version", "POST") => npm_install_package_version(OPENCLAW_PACKAGE, body, false),
+    ("/api/openclaw/install-version-domestic", "POST") => npm_install_package_version(OPENCLAW_PACKAGE, body, true),
     ("/api/openclaw/reinstall", "POST") => codex_npm_action(&["install", "-g", OPENCLAW_PACKAGE, "--force"]),
     ("/api/openclaw/uninstall", "POST") => uninstall_openclaw(body),
     ("/api/openclaw/launch", "POST") => {

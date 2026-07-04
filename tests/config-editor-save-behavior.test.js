@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 const appJs = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const indexHtml = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const stylesCss = readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
+const i18nJs = readFileSync(new URL('../public/i18n.js', import.meta.url), 'utf8');
+const serverJs = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 const configStoreJs = readFileSync(new URL('../src/lib/config-store.js', import.meta.url), 'utf8');
 const tauriConfigRs = readFileSync(new URL('../src-tauri/src/config.rs', import.meta.url), 'utf8');
 const tauriCodexRs = readFileSync(new URL('../src-tauri/src/codex.rs', import.meta.url), 'utf8');
@@ -14,6 +16,8 @@ const providerRemoteUsageRs = readFileSync(new URL('../src-tauri/src/provider_re
 const providerRemoteUsageCacheRs = readFileSync(new URL('../src-tauri/src/provider_remote_usage_cache.rs', import.meta.url), 'utf8');
 const codexOauthUsageRs = readFileSync(new URL('../src-tauri/src/codex_oauth_usage.rs', import.meta.url), 'utf8');
 const tauriRoutesRs = readFileSync(new URL('../src-tauri/src/routes.rs', import.meta.url), 'utf8');
+const toolIconPngs = ['openai.png', 'claude-code.png', 'opencode.png', 'openclaw.png']
+  .map((name) => readFileSync(new URL(`../public/tool-icons/${name}`, import.meta.url)));
 
 function sliceFunction(source, name, nextName) {
   const start = source.indexOf(`async function ${name}(`);
@@ -57,6 +61,236 @@ test('config editor copy says save, not save-and-launch', () => {
   assert.equal(indexHtml.includes('保存并启动'), false);
   assert.equal(appJs.includes('保存并生效'), false);
   assert.equal(indexHtml.includes('保存并生效'), false);
+});
+
+test('tools catalog uses full-width detail mode without visible urls', () => {
+  assert.match(indexHtml, /id="toolsContent"/);
+  assert.match(indexHtml, /id="toolsDetailPanel"/);
+  assert.match(stylesCss, /\.tools-page\.is-detail-mode \.tools-toolbar\s*\{[^}]*display:\s*none/);
+  assert.match(stylesCss, /\.tools-content\.is-detail-open\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(stylesCss, /\.tools-page\.is-detail-mode \.tools-grid,[^}]*\.tools-page\.is-detail-mode \.tools-pagination\s*\{[^}]*display:\s*none/);
+  assert.match(stylesCss, /\.tools-detail-panel\.is-open\s*\{[^}]*position:\s*static/);
+  assert.match(stylesCss, /\.tools-detail-panel\.is-open\s*\{[^}]*border-left:\s*0/);
+
+  const pageBody = sliceAnyFunction(appJs, 'renderToolsPage', 'runSimpleToolOperation');
+  assert.match(pageBody, /classList\.toggle\('is-detail-mode',\s*detailOpen\)/);
+  assert.match(pageBody, /grid\.innerHTML\s*=\s*''/);
+
+  const cardBody = sliceAnyFunction(appJs, 'renderToolCatalogCard', 'findToolCatalogItemById');
+  assert.match(cardBody, /getToolCatalogStatusText\(item\)/);
+  assert.doesNotMatch(cardBody, /item\.version/);
+
+  const detailBody = sliceAnyFunction(appJs, 'renderToolDetailPanel', 'renderToolsDetailPanel');
+  assert.match(detailBody, /renderToolDetailMetaChips\(item,\s*info,\s*regionLabels\)/);
+  assert.doesNotMatch(detailBody, /registryUrl/);
+  assert.doesNotMatch(detailBody, /tarballUrl/);
+  assert.doesNotMatch(detailBody, /install\./);
+  assert.equal(appJs.includes('renderToolInstallCommands'), false);
+
+  const metaChipBody = sliceAnyFunction(appJs, 'renderToolDetailMetaChips', 'getToolVersionActionLabel');
+  assert.match(metaChipBody, /tool-detail-meta-chips/);
+  assert.match(metaChipBody, /tool-detail-chip tool-detail-link/);
+  assert.doesNotMatch(appJs, /tool-region-chips/);
+  assert.doesNotMatch(appJs, /tool-detail-links/);
+  assert.match(stylesCss, /\.tool-detail-meta-chips\s*\{[^}]*flex-wrap:\s*nowrap/);
+  assert.doesNotMatch(stylesCss, /\.tool-region-chips/);
+});
+
+test('tools version history expands and installs exact versions', () => {
+  assert.match(appJs, /toolsVersionExpandedKey:\s*''/);
+
+  const historyBody = sliceAnyFunction(appJs, 'renderToolVersionHistory', 'renderToolDetailActionButtons');
+  assert.match(historyBody, /data-tool-version-toggle/);
+  assert.match(historyBody, /data-tool-version-action="install-version"/);
+  assert.match(historyBody, /data-tool-version-action="install-version-domestic"/);
+  assert.match(historyBody, /getToolVersionActionLabel\(item,\s*version\)/);
+  assert.match(historyBody, /getToolVersionNotes\(entry,\s*info\)/);
+  assert.match(historyBody, /GitHub Release/);
+  assert.match(historyBody, /npm 版本页/);
+  assert.match(appJs, /上游未在 npm 元数据或 GitHub Releases 中提供此版本更新日志/);
+  assert.match(stylesCss, /\.tool-version-history-toggle\s*\{[^}]*background:\s*transparent\s*!important/);
+  assert.match(stylesCss, /\.tool-version-history-toggle\s*\{[^}]*background-image:\s*none\s*!important/);
+  assert.match(stylesCss, /\.tool-version-history-copy p\s*\{/);
+  assert.match(stylesCss, /\.tool-version-history-link\s*\{[^}]*background:\s*transparent\s*!important/);
+
+  const localExpandBody = sliceAnyFunction(appJs, 'updateToolVersionHistoryExpansion', 'renderToolDetailActionButtons');
+  assert.match(localExpandBody, /history\.outerHTML\s*=\s*renderToolVersionHistory\(item,\s*info\)/);
+  assert.doesNotMatch(localExpandBody, /renderToolsPage\(/);
+
+  const bindBody = sliceAnyFunction(appJs, 'bindToolsCatalogControls', 'renderToolsPage');
+  assert.match(bindBody, /data-tool-version-action/);
+  assert.match(bindBody, /data-tool-version-toggle/);
+  assert.match(bindBody, /toolsVersionExpandedKey/);
+  assert.match(bindBody, /updateToolVersionHistoryExpansion\(toolId,\s*version\)/);
+  assert.doesNotMatch(bindBody, /state\.toolsVersionExpandedKey\s*=\s*state\.toolsVersionExpandedKey === key \? '' : key;\s*renderToolsPage\(\)/);
+
+  const versionActionBody = sliceAnyFunction(appJs, 'getToolVersionActionConfig', 'handleToolAction');
+  assert.match(versionActionBody, /install-version-domestic/);
+  assert.match(versionActionBody, /body:\s*\{\s*version\s*\}/);
+  assert.match(versionActionBody, /\/api\/\$\{apiPrefix\}\/\$\{domestic \? 'install-version-domestic' : 'install-version'\}/);
+
+  assert.match(appJs, /if \(config\.body !== undefined\)/);
+  assert.match(serverJs, /\/api\/codex\/install-version/);
+  assert.match(serverJs, /\/api\/claudecode\/install-version/);
+  assert.match(serverJs, /\/api\/opencode\/install-version/);
+  assert.match(serverJs, /\/api\/openclaw\/install-version/);
+  assert.match(configStoreJs, /function\s+assertSafeNpmPackageVersion/);
+  assert.match(configStoreJs, /async function\s+fetchGithubReleaseNotes/);
+  assert.match(configStoreJs, /function\s+npmPackageVersionWebUrl/);
+  assert.match(configStoreJs, /releaseNotesByVersion/);
+  assert.match(configStoreJs, /export async function installCodexVersion/);
+  assert.match(configStoreJs, /export async function installClaudeCodeVersion/);
+  assert.match(configStoreJs, /export async function installOpenCodeVersion/);
+  assert.match(configStoreJs, /export async function installOpenClawVersion/);
+  assert.match(configStoreJs, /function recentNpmVersions\(metadata,\s*packageName = ''/);
+  assert.match(tauriCodexRs, /fn\s+fetch_github_release_notes/);
+  assert.match(tauriRoutesRs, /fn\s+read_safe_npm_version/);
+  assert.match(tauriRoutesRs, /\/api\/codex\/install-version/);
+  assert.match(tauriRoutesRs, /\/api\/claudecode\/install-version/);
+  assert.match(tauriRoutesRs, /\/api\/opencode\/install-version/);
+  assert.match(tauriRoutesRs, /\/api\/openclaw\/install-version/);
+});
+
+test('tools update strip has auto check toggle and manual refresh', () => {
+  assert.match(appJs, /toolUpdatesAutoCheck:\s*true/);
+  assert.match(appJs, /TOOLS_UPDATE_AUTO_CHECK_KEY\s*=\s*'easyaiconfig_tools_auto_update_check'/);
+  assert.match(appJs, /TOOLS_UPDATE_CACHE_KEY\s*=\s*'easyaiconfig_tools_updates_cache_v2'/);
+  assert.match(appJs, /function\s+setToolUpdatesAutoCheck\(/);
+
+  const loadBody = sliceAnyFunction(appJs, 'loadToolUpdates', 'stopToolUpdatesTimer');
+  assert.match(loadBody, /!force && !state\.toolUpdatesAutoCheck/);
+  assert.match(loadBody, /readCachedToolUpdates\(\)/);
+
+  const timerBody = sliceAnyFunction(appJs, 'startToolUpdatesTimer', 'getCatalogUpdateState');
+  assert.match(timerBody, /!state\.toolUpdatesAutoCheck/);
+  assert.match(timerBody, /stopToolUpdatesTimer\(\)/);
+
+  const stripBody = sliceAnyFunction(appJs, 'renderToolsUpdateStrip', 'bindToolsCatalogControls');
+  assert.match(stripBody, /toolsUpdateAutoCheckToggle/);
+  assert.match(stripBody, /setToolUpdatesAutoCheck\(toggle\.checked\)/);
+  assert.match(stripBody, /toolsUpdateRefreshBtn/);
+  assert.match(stripBody, /force:\s*true/);
+
+  assert.match(stylesCss, /\.tools-update-toggle/);
+  assert.match(stylesCss, /\.tools-update-switch/);
+});
+
+test('tool update detection chooses the highest returned source version', () => {
+  const nodeBody = sliceAnyFunction(configStoreJs, 'fetchNpmPackageInfo', 'getToolUpdatesInfo');
+  assert.match(configStoreJs, /function\s+pickBestNpmMetadataResult/);
+  assert.match(nodeBody, /Promise\.all\(checks\)/);
+  assert.doesNotMatch(nodeBody, /Promise\.any/);
+  assert.match(nodeBody, /pickBestNpmMetadataResult\(results\)/);
+
+  const frontendBody = sliceAnyFunction(appJs, 'getCatalogUpdateState', 'getOpenCodeDesktopCatalogItem');
+  assert.match(frontendBody, /compareToolVersions\(normalizedCurrent,\s*normalizedLatest\)\s*>\s*0/);
+  assert.match(frontendBody, /sourceLatestVersion/);
+
+  assert.match(tauriCodexRs, /fn\s+npm_metadata_latest_version/);
+  assert.match(tauriCodexRs, /fn\s+npm_source_rank/);
+  assert.match(tauriCodexRs, /successes\.sort_by/);
+});
+
+test('tools catalog includes Codex App desktop download and update card', () => {
+  const codexAppBody = sliceAnyFunction(appJs, 'getCodexAppCatalogItem', 'getOpenCodeDesktopCatalogItem');
+  assert.match(codexAppBody, /id:\s*'codex-app'/);
+  assert.match(codexAppBody, /typeLabel:\s*'桌面端'/);
+  assert.match(codexAppBody, /aliases:\s*\[[^\]]*'Codex CLI'/);
+  assert.match(codexAppBody, /const installLabel = '安装'/);
+  assert.match(codexAppBody, /const updateLabel = '更新'/);
+  assert.match(codexAppBody, /action:\s*'update'/);
+  assert.doesNotMatch(codexAppBody, /更新安装|打开商店更新|重新安装/);
+
+  const filterBody = sliceAnyFunction(appJs, 'filterToolCatalogItems', 'compareToolCatalogSidebarItems');
+  assert.match(filterBody, /\.\.\.\(item\.aliases \|\| \[\]\)/);
+
+  const actionBody = sliceAnyFunction(appJs, 'renderToolCardActions', 'getToolCatalogStatusText');
+  assert.match(actionBody, /tool-action-primary/);
+  assert.doesNotMatch(actionBody, /自动重装/);
+
+  assert.match(serverJs, /function\s+getCodexAppVersion/);
+  assert.match(serverJs, /currentVersion:\s*version/);
+  assert.match(tauriCodexRs, /fn\s+read_codex_app_version/);
+  assert.match(tauriCodexRs, /"currentVersion": version/);
+});
+
+test('tool install and update actions expose card-level progress', () => {
+  assert.match(appJs, /toolOperations:\s*\{\}/);
+  assert.match(appJs, /function\s+setToolOperation\(/);
+  assert.match(appJs, /function\s+renderToolOperationProgress\(/);
+
+  const activeBody = sliceAnyFunction(appJs, 'isToolOperationActive', 'getToolOperation');
+  assert.match(activeBody, /if\s*\(!operation\s*\|\|\s*!operation\.status\)\s*return false/);
+
+  const cardBody = sliceAnyFunction(appJs, 'renderToolCatalogCard', 'findToolCatalogItemById');
+  assert.match(cardBody, /renderToolOperationProgress\(item\)/);
+
+  const detailBody = sliceAnyFunction(appJs, 'renderToolDetailPanel', 'renderToolsDetailPanel');
+  assert.match(detailBody, /renderToolOperationProgress\(item,\s*\{\s*detail:\s*true\s*\}\)/);
+
+  const simpleActionBody = sliceAnyFunction(appJs, 'runSimpleToolOperation', 'handleToolAction');
+  assert.match(simpleActionBody, /startToolOperationTicker\(toolId,\s*82\)/);
+  assert.match(simpleActionBody, /setToolOperation\(toolId/);
+
+  assert.match(stylesCss, /\.tool-operation/);
+  assert.match(stylesCss, /\.tool-operation-bar/);
+  assert.match(stylesCss, /\.tool-operation-success/);
+});
+
+test('tools catalog uses PNG logos and scrollable secondary lists', () => {
+  const sidebarBody = sliceAnyFunction(appJs, 'renderToolsSecondaryPanel', 'renderToolCardActions');
+  assert.doesNotMatch(sidebarBody, /slice\(0,/);
+  assert.match(sidebarBody, /installedItems\.map/);
+  assert.match(sidebarBody, /pendingItems\.map/);
+
+  const iconBody = sliceAnyFunction(appJs, 'toolIconSvg', 'updateToolSelector');
+  assert.match(iconBody, /\/tool-icons\/openai\.png/);
+  assert.match(iconBody, /\/tool-icons\/claude-code\.png/);
+  assert.match(iconBody, /\/tool-icons\/opencode\.png/);
+  assert.match(iconBody, /\/tool-icons\/openclaw\.png/);
+  assert.match(iconBody, /<img class="tool-official-icon"/);
+  assert.doesNotMatch(iconBody, /<svg/);
+  for (const png of toolIconPngs) assert.ok(png.length > 1000);
+
+  assert.match(stylesCss, /\.sec-group\[data-sec-for="tools"\]\s*\{[^}]*display:\s*flex/);
+  assert.match(stylesCss, /#toolsInstalledList,\s*#toolsPendingList\s*\{[^}]*overflow-y:\s*auto/);
+  assert.match(stylesCss, /\.tool-official-icon\s*\{[^}]*object-fit:\s*contain/);
+});
+
+test('Codex App install supports realtime task progress in node and tauri backends', () => {
+  const codexTrackedBody = sliceAnyFunction(appJs, 'runTrackedCodexAppTask', 'runOpenCodeToolAction');
+  assert.match(codexTrackedBody, /\/api\/codex-app\/install\/start/);
+  assert.match(codexTrackedBody, /fetchCodexAppInstallTask/);
+
+  const codexActionBody = sliceAnyFunction(appJs, 'runCodexAppInstallAction', 'runOpenCodeDesktopInstallAction');
+  assert.match(codexActionBody, /syncToolOperationFromTask\('codex-app'/);
+  assert.match(codexActionBody, /isUnsupportedCodexAppTaskApi/);
+
+  assert.match(serverJs, /CODEX_APP_TASKS/);
+  assert.match(serverJs, /function\s+createCodexAppTask/);
+  assert.match(serverJs, /downloadCodexAppInstaller/);
+  assert.match(serverJs, /installCodexAppOnMac/);
+  assert.match(serverJs, /\/api\/codex-app\/install\/start/);
+  assert.match(serverJs, /\/api\/codex-app\/install\/status/);
+  assert.match(serverJs, /\/api\/codex-app\/install\/cancel/);
+
+  assert.match(tauriCodexRs, /struct\s+CodexAppInstallTask/);
+  assert.match(tauriCodexRs, /fn\s+spawn_codex_app_install_task_runner/);
+  assert.match(tauriCodexRs, /pub\(crate\)\s+fn\s+start_codex_app_install_task/);
+  assert.match(tauriRoutesRs, /\/api\/codex-app\/install\/start/);
+  assert.match(tauriRoutesRs, /\/api\/codex-app\/install\/status/);
+  assert.match(tauriRoutesRs, /\/api\/codex-app\/install\/cancel/);
+});
+
+test('tool update endpoints include domestic mirror routes', () => {
+  assert.match(serverJs, /\/api\/tools\/updates/);
+  assert.match(serverJs, /\/api\/codex\/update-domestic/);
+  assert.match(serverJs, /\/api\/claudecode\/update-domestic/);
+  assert.match(serverJs, /\/api\/openclaw\/update-domestic/);
+  assert.match(tauriRoutesRs, /\/api\/tools\/updates/);
+  assert.match(tauriRoutesRs, /\/api\/codex\/update-domestic/);
+  assert.match(tauriRoutesRs, /\/api\/claudecode\/update-domestic/);
+  assert.match(tauriRoutesRs, /\/api\/openclaw\/update-domestic/);
 });
 
 test('provider detail tab clicks bypass stale render cache', () => {
@@ -429,6 +663,8 @@ test('provider rows have per-row balance and OAuth allowance visibility', () => 
 
 test('provider router is a standalone local API-key gateway page', () => {
   const clickBody = sliceAnyFunction(appJs, 'handleProviderDetailClick', 'ensureProviderDetailEvents');
+  const routerEventsBody = sliceAnyFunction(appJs, 'ensureProviderRouterEvents', 'renderProviderRouterPage');
+  const routerRenderBody = sliceAnyFunction(appJs, 'renderProviderRouterPage', 'closeProviderDetail');
   assert.equal(/data-pd-router-start/.test(clickBody), false);
   assert.equal(/data-pd-router-stop/.test(clickBody), false);
   assert.equal(/data-pd-router-copy/.test(clickBody), false);
@@ -439,6 +675,9 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(appJs, /providerRouter:\s*\{/);
   assert.match(appJs, /function renderProviderRouterPage/);
   assert.match(appJs, /function ensureProviderRouterEvents/);
+  assert.match(appJs, /function getProviderRouterPageTarget/);
+  assert.match(appJs, /function renderProviderRouterStatsPanel/);
+  assert.match(appJs, /function refreshProviderRouterStatsPanel/);
   assert.match(appJs, /data-provider-router-start/);
   assert.match(appJs, /data-provider-router-stop/);
   assert.match(appJs, /data-provider-router-copy/);
@@ -452,14 +691,26 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(appJs, /balanceGuardEnabled/);
   assert.match(appJs, /balanceRemaining/);
   assert.match(appJs, /routeStrategy/);
-  assert.match(appJs, /OAuth 不进入路由池/);
+  assert.match(appJs, /仅路由可读取密钥的 Provider/);
   assert.match(appJs, /PROVIDER_ROUTER_NO_PROXY = '127\.0\.0\.1,localhost,::1'/);
   assert.match(appJs, /运行中 · 反代中/);
   assert.match(appJs, /requestBytes/);
   assert.match(appJs, /responseBytes/);
   assert.match(appJs, /cachedInputTokens/);
   assert.match(appJs, /SQLite/);
-  assert.match(appJs, /最多保留/);
+  assert.match(appJs, /历史请求日志/);
+  assert.match(appJs, /最近日志/);
+  assert.match(appJs, /data-provider-router-log-search/);
+  assert.match(appJs, /data-provider-router-panel="stats"/);
+  assert.match(routerEventsBody, /getProviderRouterPageTarget\(target\)/);
+  assert.match(routerEventsBody, /target\.matches\('\[data-provider-router-log-search\]'\)[\s\S]{0,260}refreshProviderRouterStatsPanel\(\)/);
+  assert.doesNotMatch(routerEventsBody, /target\.matches\('\[data-provider-router-log-search\]'\)[\s\S]{0,260}renderProviderRouterPage\(\)/);
+  assert.doesNotMatch(appJs, /const\s+proxyReady\s*=\s*running\s*;/);
+  assert.match(routerRenderBody, /const\s+upstreamReady\s*=\s*running\s*&&\s*Boolean\(status\.proxyReady\s*\|\|\s*probe\.ok\)/);
+  assert.match(routerRenderBody, /const\s+proxyReady\s*=\s*upstreamReady/);
+  assert.match(routerRenderBody, /运行中 · 待探测/);
+  assert.doesNotMatch(appJs, /网关收到请求后会写入 SQLite/);
+  assert.doesNotMatch(appJs, /最多保留/);
   assert.equal(/\{ id: 'router',\s+label: '自动路由' \}/.test(appJs), false);
   assert.match(appJs, /\/api\/provider-router\/start/);
   assert.match(appJs, /\/api\/provider-router\/status/);
@@ -471,6 +722,8 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(stylesCss, /\.pd-router-strategy-bar/);
   assert.match(stylesCss, /\.pd-router-balance/);
   assert.match(stylesCss, /\.pd-router-stat-summary/);
+  assert.match(stylesCss, /body\[data-page="providerRouter"\]\s+\.shell-v2\s+\.page-view\.active::-webkit-scrollbar/);
+  assert.match(stylesCss, /padding:\s*58px 42px 72px/);
 
   assert.match(tauriRoutesRs, /"\/api\/provider-router\/status", "GET"/);
   assert.match(tauriRoutesRs, /"\/api\/provider-router\/start", "POST"/);
@@ -502,6 +755,59 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(tauriCodexRs, /LOCAL_ROUTER_NO_PROXY_VALUE: &str = "127\.0\.0\.1,localhost,::1"/);
   assert.match(tauriCodexRs, /codex_launch_uses_local_router/);
   assert.match(tauriCodexRs, /env\.push\(\("NO_PROXY"/);
+});
+
+test('about page uses a full-width local-first update layout', () => {
+  const aboutStart = indexHtml.indexOf('<section class="page-view" data-page="about">');
+  const aboutEnd = indexHtml.indexOf('<section class="page-view" data-page="systemSettings">');
+  assert.notEqual(aboutStart, -1);
+  assert.notEqual(aboutEnd, -1);
+  const aboutHtml = indexHtml.slice(aboutStart, aboutEnd);
+  const progressBody = sliceAnyFunction(appJs, 'renderAboutUpdateProgress', 'populateAboutPanel');
+
+  assert.match(aboutHtml, /class="about-page"/);
+  assert.match(aboutHtml, /class="about-update-panel"/);
+  assert.match(aboutHtml, /class="about-section about-actions-panel"/);
+  assert.match(aboutHtml, /class="about-section about-trust-summary"/);
+  assert.match(aboutHtml, /class="about-section about-update-flow"/);
+  assert.match(aboutHtml, /id="aboutTrustBtn"/);
+  assert.match(aboutHtml, /查看说明/);
+  assert.match(aboutHtml, /EasyAIConfig 专注本地配置管理。/);
+  assert.match(aboutHtml, /id="aboutTrustDialog" class="about-trust-dialog hide"/);
+  assert.match(aboutHtml, /不内置遥测 SDK/);
+  assert.match(aboutHtml, /不进行用户行为分析/);
+  assert.match(aboutHtml, /不会把 API Key 或配置内容上传到项目服务器/);
+  assert.match(aboutHtml, /项目代码公开/);
+  assert.doesNotMatch(aboutHtml, /class="about-transparency"/);
+  assert.doesNotMatch(aboutHtml, /aboutOpenSystemSettingsBtn/);
+  assert.doesNotMatch(aboutHtml, />系统设置</);
+  assert.doesNotMatch(appJs, /aboutOpenSystemSettingsBtn[\s\S]{0,140}setPage\('systemSettings'\)/);
+
+  assert.match(appJs, /本地优先、开源透明的 AI 工具配置中心。/);
+  assert.match(appJs, /function setAboutTrustOpen/);
+  assert.match(appJs, /aboutTrustBtn'\)\?\.addEventListener\('click', \(\) => setAboutTrustOpen\(true\)\)/);
+  assert.match(appJs, /data-about-trust-close/);
+  assert.match(progressBody, /is-indeterminate/);
+  assert.match(progressBody, /wrap\.dataset\.updateStatus\s*=\s*status/);
+  assert.match(progressBody, /bar\.style\.width\s*=\s*indeterminate\s*\?\s*'42%'/);
+  assert.match(appJs, /panel\.classList\.toggle\('is-updating', updating\)/);
+  assert.match(appJs, /state\.appUpdateProgress\s*=\s*\{\s*status:\s*'checking'\s*\}/);
+  assert.match(stylesCss, /body\[data-page="about"\]\s+\.desktop-layout\.shell-v2\s*\{[^}]*grid-template-columns:\s*var\(--rail-w\) minmax\(0,\s*1fr\)/);
+  assert.match(stylesCss, /body\[data-page="about"\]\s+\.shell-secondary\s*\{[^}]*display:\s*none\s*!important/);
+  assert.match(stylesCss, /body\[data-page="about"\]\s+\.shell-v2 \.page-stack\s*\{[^}]*padding:\s*0\s*!important/);
+  assert.match(stylesCss, /\.about-content-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(210px,\s*0\.42fr\) minmax\(300px,\s*0\.58fr\)/);
+  assert.match(stylesCss, /\.about-content-grid\s*\{[^}]*grid-template-areas:\s*"trust actions info"\s*"flow flow flow"/);
+  assert.match(stylesCss, /\.about-section\s*\{/);
+  assert.match(stylesCss, /\.about-page \.about-icon-wrap\s*\{[^}]*width:\s*88px/);
+  assert.match(stylesCss, /\.about-page \.about-app-name\s*\{[^}]*font-size:\s*clamp\(1\.95rem,\s*3vw,\s*2\.75rem\)/);
+  assert.match(stylesCss, /\.about-page \.about-update-btn\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+  assert.match(stylesCss, /\.about-trust-dialog/);
+  assert.match(stylesCss, /\.about-trust-panel/);
+  assert.match(stylesCss, /\.about-page \.about-update-progress-wrap\.is-indeterminate \.about-update-progress-bar/);
+  assert.match(stylesCss, /@keyframes aboutIndeterminate/);
+  assert.match(stylesCss, /@keyframes aboutPanelSweep/);
+  assert.match(i18nJs, /Open source & privacy/);
+  assert.match(i18nJs, /does not include telemetry SDKs/);
 });
 
 test('Codex OAuth actions warn once per hour on risky outbound IP', () => {
@@ -558,8 +864,28 @@ test('dashboard usage cache is keyed by tool window and Codex home', () => {
   const renderBody = sliceAnyFunction(appJs, 'renderDashboardPage', 'renderDashboardProviderFilter');
   assert.match(renderBody, /getDashboardMetricsForTool\('codex', win\)/);
   assert.match(renderBody, /getDashboardMetricsForTool\('opencode', win\)/);
+  assert.match(renderBody, /db3-analytics-board/);
+  assert.match(renderBody, /db3-panel--primary/);
+  assert.match(renderBody, /renderDashboardTokenMix\(items\)/);
+  assert.equal(renderBody.includes('db3-dashboard-grid">'), false);
   assert.equal(renderBody.includes('state.dashboardMetrics.codex'), false);
   assert.equal(renderBody.includes('state.dashboardMetrics.opencode'), false);
+
+  const tokenMixBody = sliceAnyFunction(appJs, 'renderDashboardTokenMix', 'renderDashboardLoadingCard');
+  assert.match(tokenMixBody, /db3-token-stack/);
+  assert.match(tokenMixBody, /db3-token-row/);
+
+  const modelDistBody = sliceAnyFunction(appJs, 'renderDashboardModelDistChart', 'renderCostTrendPanel');
+  assert.match(modelDistBody, /db3-model-rank-summary/);
+  assert.match(modelDistBody, /db3-model-rank-row/);
+  assert.doesNotMatch(modelDistBody, /db2-mdist-bar-fill/);
+
+  const costTrendBody = sliceAnyFunction(appJs, 'renderCostTrendPanel', 'renderClaudeCostTrendChart');
+  assert.match(costTrendBody, /db3-cost-area-bar/);
+  assert.match(costTrendBody, /appText\('日均'\)/);
+  assert.match(stylesCss, /\.shell-v2 \.dashboard-page \.db3-analytics-board\s*\{/);
+  assert.match(stylesCss, /\.shell-v2 \.dashboard-page \.db3-token-mix\s*\{/);
+  assert.match(stylesCss, /\.shell-v2 \.dashboard-page \.db3-model-rank\s*\{/);
 
   const usageBody = sliceAnyFunction(appJs, 'renderPdUsage', 'renderClaudeProviderDetailUsage');
   assert.match(usageBody, /getDashboardMetricsForTool\('codex'\)/);
