@@ -6,30 +6,19 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { listCodexSessions } from './config-store.js';
+import {
+  LOCAL_USAGE_TOOL_IDS,
+  readLocalUsageSource,
+} from './local-usage-sources.js';
 
 const DEFAULT_TOOLS = [
   'codex',
   'claudecode',
   'opencode',
-  'gemini',
-  'openclaw',
-  'hermes',
-  'qwen-code',
-  'codebuddy-code',
-  'cline',
-  'roo-code',
-  'kilo-code',
-  'continue',
-  'cursor',
-  'windsurf',
-  'zed',
-  'trae',
-  'qoder',
-  'zcode',
-  'lingma',
+  ...LOCAL_USAGE_TOOL_IDS,
 ];
 
-const FILE_ARCHIVE_TOOLS = ['codex', 'claudecode', 'gemini', 'openclaw', 'hermes', 'qwen-code', 'codebuddy-code'];
+const FILE_ARCHIVE_TOOLS = ['codex', 'claudecode'];
 
 function defaultCodexHome() {
   return process.env.CODEX_HOME?.trim()
@@ -69,6 +58,34 @@ function defaultHermesHome() {
   return path.join(os.homedir(), '.hermes');
 }
 
+function defaultAmpHome() {
+  return path.join(os.homedir(), '.amp');
+}
+
+function defaultDroidHome() {
+  return path.join(os.homedir(), '.droid');
+}
+
+function defaultCodebuffHome() {
+  return path.join(os.homedir(), '.codebuff');
+}
+
+function defaultPiAgentHome() {
+  return path.join(os.homedir(), '.pi-agent');
+}
+
+function defaultGooseHome() {
+  return path.join(os.homedir(), '.goose');
+}
+
+function defaultKimiHome() {
+  return path.join(os.homedir(), '.kimi');
+}
+
+function defaultCopilotHome() {
+  return path.join(os.homedir(), '.copilot');
+}
+
 function appHome() {
   return path.join(os.homedir(), '.codex-config-ui');
 }
@@ -94,117 +111,7 @@ function extensionStateRoots(extensionIds = [], products = ['Code', 'Cursor', 'W
   )));
 }
 
-const SESSION_BACKED_TOOL_META = {
-  gemini: {
-    label: 'Gemini CLI sessions',
-    provider: 'google-gemini',
-    canDelete: true,
-    roots: (options = {}) => {
-      const home = path.resolve(String(options.geminiHome || defaultGeminiHome()));
-      return [path.join(home, 'sessions'), path.join(home, 'history')];
-    },
-  },
-  openclaw: {
-    label: 'OpenClaw sessions',
-    provider: 'unknown',
-    canDelete: true,
-    roots: (options = {}) => {
-      const home = path.resolve(String(options.openClawHome || defaultOpenClawHome()));
-      return [path.join(home, 'sessions'), path.join(home, 'history')];
-    },
-  },
-  hermes: {
-    label: 'Hermes Agent sessions',
-    provider: 'unknown',
-    canDelete: true,
-    roots: (options = {}) => {
-      const home = path.resolve(String(options.hermesHome || defaultHermesHome()));
-      return [path.join(home, 'sessions'), path.join(home, 'history')];
-    },
-  },
-  'qwen-code': {
-    label: 'Qwen Code local state',
-    provider: 'qwen',
-    canDelete: true,
-    roots: (options = {}) => {
-      const home = path.resolve(String(options.qwenHome || defaultQwenHome()));
-      return [path.join(home, 'sessions'), path.join(home, 'history'), path.join(home, 'tmp')];
-    },
-  },
-  'codebuddy-code': {
-    label: 'CodeBuddy Code local state',
-    provider: 'tencent-codebuddy',
-    canDelete: true,
-    roots: (options = {}) => {
-      const home = path.resolve(String(options.codeBuddyHome || defaultCodeBuddyHome()));
-      return [path.join(home, 'sessions'), path.join(home, 'history'), path.join(home, 'logs')];
-    },
-  },
-  cline: {
-    label: 'Cline extension state',
-    provider: 'extension',
-    roots: () => [
-      path.join(os.homedir(), '.cline', 'sessions'),
-      ...extensionStateRoots(['saoudrizwan.claude-dev', 'cline.cline']),
-    ],
-  },
-  'roo-code': {
-    label: 'Roo Code extension state',
-    provider: 'extension',
-    roots: () => [
-      path.join(os.homedir(), '.roo-code', 'sessions'),
-      ...extensionStateRoots(['rooveterinaryinc.roo-cline', 'roo-cline.roo-cline']),
-    ],
-  },
-  'kilo-code': {
-    label: 'Kilo Code extension state',
-    provider: 'extension',
-    roots: () => [
-      path.join(os.homedir(), '.kilo-code', 'sessions'),
-      ...extensionStateRoots(['kilocode.kilo-code', 'kilo-code.kilo-code']),
-    ],
-  },
-  continue: {
-    label: 'Continue local state',
-    provider: 'extension',
-    roots: () => [path.join(os.homedir(), '.continue'), ...extensionStateRoots(['continue.continue'])],
-  },
-  cursor: {
-    label: 'Cursor local state',
-    provider: 'editor',
-    roots: () => [path.join(os.homedir(), '.cursor', 'sessions'), path.join(appSupportRoot('Cursor'), 'User', 'globalStorage', 'cursor.cursor')],
-  },
-  windsurf: {
-    label: 'Windsurf local state',
-    provider: 'editor',
-    roots: () => [path.join(os.homedir(), '.windsurf', 'sessions'), path.join(appSupportRoot('Windsurf'), 'User', 'globalStorage', 'codeium.windsurf')],
-  },
-  zed: {
-    label: 'Zed local state',
-    provider: 'editor',
-    roots: () => [path.join(os.homedir(), '.zed', 'sessions'), path.join(appSupportRoot('Zed'), 'sessions')],
-  },
-  trae: {
-    label: 'Trae local state',
-    provider: 'editor',
-    roots: () => [path.join(os.homedir(), '.trae', 'sessions'), path.join(appSupportRoot('Trae'), 'User', 'globalStorage')],
-  },
-  qoder: {
-    label: 'Qoder local state',
-    provider: 'editor',
-    roots: () => [path.join(os.homedir(), '.qoder', 'sessions'), path.join(appSupportRoot('Qoder'), 'sessions')],
-  },
-  zcode: {
-    label: 'ZCode local state',
-    provider: 'editor',
-    roots: () => [path.join(os.homedir(), '.zcode', 'sessions'), path.join(appSupportRoot('ZCode'), 'sessions')],
-  },
-  lingma: {
-    label: 'Tongyi Lingma local state',
-    provider: 'editor',
-    roots: () => [path.join(os.homedir(), '.lingma', 'sessions'), path.join(appSupportRoot('Lingma'), 'sessions')],
-  },
-};
+const SESSION_BACKED_TOOL_META = {};
 
 async function readText(filePath) {
   try {
@@ -293,10 +200,99 @@ function modelProvider(tool, model = '', fallback = 'unknown') {
   const normalized = String(model || '').toLowerCase();
   if (tool === 'claudecode') return 'anthropic';
   if (tool === 'gemini') return 'google-gemini';
+  if (tool === 'qwen-code') return 'qwen';
+  if (tool === 'codebuddy-code') return 'tencent-codebuddy';
+  if (tool === 'kimi') return 'moonshot-kimi';
+  if (tool === 'copilot') return 'github-copilot';
   if (normalized.includes('claude')) return 'anthropic';
   if (normalized.includes('gemini')) return 'google-gemini';
+  if (normalized.includes('qwen')) return 'qwen';
+  if (normalized.includes('kimi') || normalized.includes('moonshot')) return 'moonshot-kimi';
   if (normalized.includes('gpt') || normalized.includes('o3') || normalized.includes('o4')) return 'openai';
   return fallback;
+}
+
+function createSessionTotals() {
+  return {
+    input: 0,
+    cachedInput: 0,
+    output: 0,
+    reasoning: 0,
+    cacheRead: 0,
+    cacheCreation: 0,
+    total: 0,
+    cost: 0,
+    officialCost: 0,
+    requests: 0,
+  };
+}
+
+function numericTokenValue(source, keys = []) {
+  if (!source || typeof source !== 'object') return 0;
+  for (const key of keys) {
+    const value = source[key];
+    const num = Number(value);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return 0;
+}
+
+function usagePatchFromObject(source) {
+  if (!source || typeof source !== 'object') return createSessionTotals();
+  const input = numericTokenValue(source, ['input', 'inputTokens', 'input_tokens', 'promptTokens', 'prompt_tokens', 'prompt']);
+  const output = numericTokenValue(source, ['output', 'outputTokens', 'output_tokens', 'completionTokens', 'completion_tokens', 'completion']);
+  const reasoning = numericTokenValue(source, ['reasoning', 'reasoningTokens', 'reasoning_tokens']);
+  const cachedInput = numericTokenValue(source, ['cachedInput', 'cachedInputTokens', 'cached_input_tokens', 'cacheReadInputTokens', 'cache_read_input_tokens', 'cacheReadTokens', 'cache_read_tokens']);
+  const cacheRead = numericTokenValue(source, ['cacheRead', 'cacheReadTokens', 'cache_read_tokens', 'cacheReadInputTokens', 'cache_read_input_tokens']) || cachedInput;
+  const cacheCreation = numericTokenValue(source, ['cacheCreation', 'cacheCreationTokens', 'cache_creation_tokens', 'cacheCreationInputTokens', 'cache_creation_input_tokens']);
+  const explicitTotal = numericTokenValue(source, ['total', 'totalTokens', 'total_tokens']);
+  const total = explicitTotal || input + output + reasoning + cacheRead + cacheCreation;
+  const cost = numericTokenValue(source, ['cost', 'totalCost', 'total_cost', 'usd', 'totalUsd', 'total_usd']);
+  return {
+    input,
+    cachedInput,
+    output,
+    reasoning,
+    cacheRead,
+    cacheCreation,
+    total,
+    cost,
+    officialCost: numericTokenValue(source, ['officialCost', 'official_cost']),
+    requests: total || cost ? 1 : 0,
+  };
+}
+
+function addSessionTotals(target, patch = {}) {
+  for (const key of Object.keys(target)) {
+    target[key] += Number(patch[key] || 0);
+  }
+  return target;
+}
+
+function extractRecordUsageTotals(record = {}) {
+  if (!record || typeof record !== 'object') return createSessionTotals();
+  const candidates = [
+    record.usage,
+    record.tokenUsage,
+    record.token_usage,
+    record.message?.usage,
+    record.response?.usage,
+    record.result?.usage,
+    record.metrics?.usage,
+    record.metrics,
+    record,
+  ].filter((item) => item && typeof item === 'object');
+  let best = createSessionTotals();
+  let bestScore = 0;
+  for (const candidate of candidates) {
+    const patch = usagePatchFromObject(candidate);
+    const score = patch.total + patch.cost;
+    if (score > bestScore) {
+      best = patch;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 function isSameOrNestedPath(left = '', right = '') {
@@ -356,6 +352,7 @@ function normalizeSessionItem(item = {}) {
     updatedAtMs,
     sourcePath: String(item.sourcePath || '').trim(),
     sourceLabel: String(item.sourceLabel || '').trim(),
+    totals: item.totals && typeof item.totals === 'object' ? item.totals : undefined,
     actions: {
       resume: Boolean(item.actions?.resume),
       fork: Boolean(item.actions?.fork),
@@ -552,6 +549,29 @@ async function readOpenCodeSource(options = {}) {
   }
 }
 
+async function readLocalUsageSessionSource(tool, options = {}) {
+  const source = await readLocalUsageSource(tool, options);
+  const items = (Array.isArray(source.items) ? source.items : []).map((item) => normalizeSessionItem({
+    ...item,
+    tool,
+    sourceLabel: item.sourceLabel || source.label,
+    actions: { resume: false, fork: false, delete: false },
+  }));
+  return {
+    ...source,
+    items,
+    count: items.length,
+    capabilities: {
+      browse: true,
+      search: true,
+      resume: false,
+      fork: false,
+      delete: false,
+      ...(source.capabilities || {}),
+    },
+  };
+}
+
 async function readGenericJsonSessionFile(filePath, { tool, provider, sourceLabel, actions = {} }) {
   const raw = await readText(filePath);
   if (!raw) return null;
@@ -575,6 +595,7 @@ async function readGenericJsonSessionFile(filePath, { tool, provider, sourceLabe
   let title = '';
   let model = '';
   let cwd = '';
+  const totals = createSessionTotals();
   let updatedAtMs = Number(stat?.mtimeMs || 0);
   for (const record of records) {
     if (!record || typeof record !== 'object') continue;
@@ -583,6 +604,7 @@ async function readGenericJsonSessionFile(filePath, { tool, provider, sourceLabe
     cwd = cwd || String(record.cwd || record.projectPath || record.workspaceRoot || '').trim();
     model = model || String(record.model || record.message?.model || '').trim();
     if (!title) title = extractUserText(record) || record.title || record.name || '';
+    addSessionTotals(totals, extractRecordUsageTotals(record));
   }
 
   const sessionId = path.basename(filePath, path.extname(filePath));
@@ -598,6 +620,7 @@ async function readGenericJsonSessionFile(filePath, { tool, provider, sourceLabe
     updatedAtMs,
     sourcePath: filePath,
     sourceLabel,
+    totals,
     actions: { delete: Boolean(actions.delete) },
   });
 }
@@ -641,6 +664,13 @@ function normalizeTool(tool = '') {
   if (value === 'open-claw' || value === 'open_claw') return 'openclaw';
   if (key === 'openclaw') return 'openclaw';
   if (key === 'hermes' || key === 'hermesagent') return 'hermes';
+  if (['amp', 'ampcode'].includes(key)) return 'amp';
+  if (['droid', 'factorydroid'].includes(key)) return 'droid';
+  if (['codebuff'].includes(key)) return 'codebuff';
+  if (['pi', 'piagent'].includes(key)) return 'pi-agent';
+  if (['goose', 'blockgoose'].includes(key)) return 'goose';
+  if (['kimi', 'kimicode', 'moonshot', 'moonshotkimi'].includes(key)) return 'kimi';
+  if (['copilot', 'githubcopilot', 'copilotcli', 'githubcopilotcli'].includes(key)) return 'copilot';
   if (['qwen', 'qwencode', 'qwencli', 'qwencodecli'].includes(key)) return 'qwen-code';
   if (['codebuddy', 'codebuddycode', 'codebuddycli', 'tencentcodebuddy'].includes(key)) return 'codebuddy-code';
   if (['roo', 'roocode', 'roocline'].includes(key)) return 'roo-code';
@@ -662,17 +692,9 @@ function sessionRootCandidates(options = {}, tool = '') {
   const roots = [];
   const codexHome = path.resolve(String(options.codexHome || defaultCodexHome()));
   const claudeHome = path.resolve(String(options.claudeHome || defaultClaudeHome()));
-  const geminiHome = path.resolve(String(options.geminiHome || defaultGeminiHome()));
-  const openClawHome = path.resolve(String(options.openClawHome || defaultOpenClawHome()));
-  const hermesHome = path.resolve(String(options.hermesHome || defaultHermesHome()));
 
   if (!normalized || normalized === 'codex') roots.push(path.join(codexHome, 'sessions'));
   if (!normalized || normalized === 'claudecode') roots.push(path.join(claudeHome, 'projects'));
-  if (!normalized || normalized === 'gemini') roots.push(path.join(geminiHome, 'sessions'), path.join(geminiHome, 'history'));
-  if (!normalized || normalized === 'openclaw') roots.push(path.join(openClawHome, 'sessions'), path.join(openClawHome, 'history'));
-  if (!normalized || normalized === 'hermes') roots.push(path.join(hermesHome, 'sessions'), path.join(hermesHome, 'history'));
-  if (!normalized || normalized === 'qwen-code') roots.push(...SESSION_BACKED_TOOL_META['qwen-code'].roots(options));
-  if (!normalized || normalized === 'codebuddy-code') roots.push(...SESSION_BACKED_TOOL_META['codebuddy-code'].roots(options));
   return roots.map((root) => path.resolve(root));
 }
 
@@ -722,7 +744,7 @@ async function writeSessionTrashIndex(entries = [], options = {}) {
 async function validateArchiveTarget(input = {}, options = {}) {
   const tool = normalizeTool(input.tool || input.targetTool || '');
   if (!tool || !FILE_ARCHIVE_TOOLS.includes(tool)) {
-    throw new Error('Session archive only supports file-based Codex, Claude Code, Gemini, OpenClaw, Hermes, Qwen Code, and CodeBuddy Code sessions');
+    throw new Error('Session archive only supports verified file-based Codex and Claude Code sessions');
   }
   const rawSourcePath = String(input.sourcePath || input.filePath || '').trim();
   if (!rawSourcePath) throw new Error('sourcePath is required');
@@ -979,6 +1001,10 @@ export async function listSessionInventory(options = {}) {
   if (includeTools.includes('codex')) sources.push(await readCodexSource(sourceOptions));
   if (includeTools.includes('claudecode')) sources.push(await readClaudeSource(sourceOptions));
   if (includeTools.includes('opencode')) sources.push(await readOpenCodeSource(sourceOptions));
+  for (const tool of includeTools) {
+    if (!LOCAL_USAGE_TOOL_IDS.includes(tool)) continue;
+    sources.push(await readLocalUsageSessionSource(tool, sourceOptions));
+  }
   for (const tool of includeTools) {
     const meta = SESSION_BACKED_TOOL_META[tool];
     if (!meta) continue;

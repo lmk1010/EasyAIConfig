@@ -7,47 +7,20 @@ import {
   getOpenCodeUsageMetrics,
   loadClaudeCodeState,
 } from './config-store.js';
+import {
+  LOCAL_USAGE_TOOL_IDS,
+  LOCAL_USAGE_TOOL_META,
+  readLocalUsageSource,
+} from './local-usage-sources.js';
 import { listSessionInventory } from './session-manager.js';
 
 const DEFAULT_TOOLS = [
   'codex',
   'claudecode',
   'opencode',
-  'gemini',
-  'openclaw',
-  'hermes',
-  'qwen-code',
-  'codebuddy-code',
-  'cline',
-  'roo-code',
-  'kilo-code',
-  'continue',
-  'cursor',
-  'windsurf',
-  'zed',
-  'trae',
-  'qoder',
-  'zcode',
-  'lingma',
+  ...LOCAL_USAGE_TOOL_IDS,
 ];
-const SESSION_USAGE_TOOL_META = {
-  gemini: { label: 'Gemini CLI session analytics', provider: 'google-gemini' },
-  openclaw: { label: 'OpenClaw session analytics', provider: 'unknown' },
-  hermes: { label: 'Hermes Agent session analytics', provider: 'unknown' },
-  'qwen-code': { label: 'Qwen Code session analytics', provider: 'qwen' },
-  'codebuddy-code': { label: 'CodeBuddy Code session analytics', provider: 'tencent-codebuddy' },
-  cline: { label: 'Cline extension activity', provider: 'extension' },
-  'roo-code': { label: 'Roo Code extension activity', provider: 'extension' },
-  'kilo-code': { label: 'Kilo Code extension activity', provider: 'extension' },
-  continue: { label: 'Continue extension activity', provider: 'extension' },
-  cursor: { label: 'Cursor activity', provider: 'editor' },
-  windsurf: { label: 'Windsurf activity', provider: 'editor' },
-  zed: { label: 'Zed activity', provider: 'editor' },
-  trae: { label: 'Trae activity', provider: 'editor' },
-  qoder: { label: 'Qoder activity', provider: 'editor' },
-  zcode: { label: 'ZCode activity', provider: 'editor' },
-  lingma: { label: 'Tongyi Lingma activity', provider: 'editor' },
-};
+const SESSION_USAGE_TOOL_META = LOCAL_USAGE_TOOL_META;
 
 function normalizeTool(value = '') {
   const key = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -57,6 +30,13 @@ function normalizeTool(value = '') {
   if (key === 'gemini' || key === 'geminicli') return 'gemini';
   if (key === 'openclaw') return 'openclaw';
   if (key === 'hermes' || key === 'hermesagent') return 'hermes';
+  if (['amp', 'ampcode'].includes(key)) return 'amp';
+  if (['droid', 'factorydroid'].includes(key)) return 'droid';
+  if (key === 'codebuff') return 'codebuff';
+  if (['pi', 'piagent'].includes(key)) return 'pi-agent';
+  if (['goose', 'blockgoose'].includes(key)) return 'goose';
+  if (['kimi', 'kimicode', 'moonshot', 'moonshotkimi'].includes(key)) return 'kimi';
+  if (['copilot', 'githubcopilot', 'copilotcli', 'githubcopilotcli'].includes(key)) return 'copilot';
   if (['qwen', 'qwencode', 'qwencli', 'qwencodecli'].includes(key)) return 'qwen-code';
   if (['codebuddy', 'codebuddycode', 'codebuddycli', 'tencentcodebuddy'].includes(key)) return 'codebuddy-code';
   if (['roo', 'roocode', 'roocline'].includes(key)) return 'roo-code';
@@ -176,6 +156,107 @@ function normalizeClaudeTotals(totals = {}, requests = 0, officialCost = 0) {
   };
 }
 
+function normalizeGenericTotals(totals = {}, requests = 0) {
+  return {
+    input: num(totals.input),
+    cachedInput: num(totals.cachedInput || totals.cacheRead),
+    output: num(totals.output),
+    reasoning: num(totals.reasoning),
+    cacheRead: num(totals.cacheRead || totals.cachedInput),
+    cacheCreation: num(totals.cacheCreation),
+    total: num(totals.total),
+    cost: num(totals.cost),
+    officialCost: num(totals.officialCost),
+    requests: num(totals.requests) || requests,
+  };
+}
+
+function tokenizedLogCount(logs = []) {
+  return (Array.isArray(logs) ? logs : []).filter((log) => {
+    const totals = normalizeGenericTotals(log?.totals || log || {});
+    return totals.total > 0 || totals.cost > 0 || totals.officialCost > 0;
+  }).length;
+}
+
+function usageEvidence({ source = '', inventory = null, requestLogs = [], totals = {}, sources = [] } = {}) {
+  const inventorySources = Array.isArray(inventory?.sources)
+    ? inventory.sources
+    : (Array.isArray(sources) ? sources : []);
+  const configuredSourceCount = inventorySources.length || String(source || '').split('|').map((item) => item.trim()).filter(Boolean).length;
+  const existingInventorySourceCount = inventorySources.filter((item) => Boolean(item?.exists) || num(item?.count) > 0).length;
+  const existingSourceCount = inventorySources.length
+    ? existingInventorySourceCount
+    : (String(source || '').trim() ? configuredSourceCount : 0);
+  const logs = Array.isArray(requestLogs) ? requestLogs : [];
+  const normalizedTotals = normalizeGenericTotals(totals, logs.length);
+  return {
+    configuredSourceCount,
+    existingSourceCount,
+    sessionCount: logs.length,
+    tokenizedSessionCount: tokenizedLogCount(logs),
+    totalTokens: normalizedTotals.total,
+    cost: normalizedTotals.cost,
+    officialCost: normalizedTotals.officialCost,
+    requests: normalizedTotals.requests || logs.length,
+  };
+}
+
+function withUsageStatus(source = {}, context = {}) {
+  const evidence = usageEvidence({
+    ...context,
+    source: source.source,
+    requestLogs: source.requestLogs,
+    totals: source.totals,
+  });
+  const hasTokens = evidence.totalTokens > 0 || evidence.cost > 0 || evidence.officialCost > 0;
+  const hasSessions = evidence.sessionCount > 0;
+  const hasExistingSource = evidence.existingSourceCount > 0;
+  let usageLevel = 'missing';
+  let usageStatusLabel = '未发现数据';
+  let usageStatusDetail = '本机还没有发现可读取的会话或用量文件。';
+
+  if (source.unsupported) {
+    usageLevel = 'unsupported';
+    usageStatusLabel = '未支持用量';
+    usageStatusDetail = '没有确认稳定的本地 JSONL/SQLite 数据源，不进入用量分析。';
+  } else if (source.ok === false) {
+    usageLevel = 'error';
+    usageStatusLabel = '读取异常';
+    usageStatusDetail = '发现本地来源，但解析或读取时返回异常。';
+  } else if (['codex', 'claudecode', 'opencode', ...LOCAL_USAGE_TOOL_IDS].includes(source.tool)) {
+    if (hasTokens) {
+      usageLevel = 'exact';
+      usageStatusLabel = '精准用量';
+      usageStatusDetail = '来自该工具已接入的本地用量数据源。';
+    } else if (hasExistingSource) {
+      usageLevel = 'connected-empty';
+      usageStatusLabel = '已接入无数据';
+      usageStatusDetail = '读取入口已接通，但当前窗口内没有 token 记录。';
+    }
+  } else if (hasTokens) {
+    usageLevel = 'parsed';
+    usageStatusLabel = '已解析 Token';
+    usageStatusDetail = '从本机会话文件中提取到 usage/token 字段。';
+  } else if (hasSessions) {
+    usageLevel = 'sessions-only';
+    usageStatusLabel = '仅会话记录';
+    usageStatusDetail = '已找到会话或活动日志，但没有发现可统计的 token 字段。';
+  } else if (hasExistingSource) {
+    usageLevel = 'source-only';
+    usageStatusLabel = '仅发现来源';
+    usageStatusDetail = '发现本地目录或配置入口，但还没有可解析的会话记录。';
+  }
+
+  return {
+    ...source,
+    usageLevel,
+    usageStatus: usageLevel,
+    usageStatusLabel,
+    usageStatusDetail,
+    usageEvidence: evidence,
+  };
+}
+
 function normalizeDaily(tool, daily = []) {
   return (Array.isArray(daily) ? daily : [])
     .map((item) => ({
@@ -194,7 +275,7 @@ function normalizeSessionLog(tool, item = {}, index = 0) {
   const model = String(item.model || 'unknown').trim() || 'unknown';
   const totals = tool === 'opencode'
     ? normalizeOpenCodeTotals(item, 1)
-    : (tool === 'claudecode' ? normalizeClaudeTotals(item, 1) : normalizeCodexTotals(item, 1));
+    : (tool === 'claudecode' ? normalizeClaudeTotals(item, 1) : normalizeGenericTotals(item, 1));
   return {
     id: `${tool}:${sessionId}`,
     tool,
@@ -225,7 +306,7 @@ function normalizeDimension(tool, kind, entries = []) {
 function normalizeCodexSource(metrics = {}) {
   const requests = sumEvents(metrics.providers) || (Array.isArray(metrics.sessions) ? metrics.sessions.length : 0);
   const sessions = (Array.isArray(metrics.sessions) ? metrics.sessions : []).map((item, index) => normalizeSessionLog('codex', item, index));
-  return {
+  return withUsageStatus({
     tool: 'codex',
     label: 'Codex local usage',
     ok: metrics.ok !== false,
@@ -238,13 +319,13 @@ function normalizeCodexSource(metrics = {}) {
     models: normalizeDimension('codex', 'model', metrics.models),
     requestLogs: sessions,
     warnings: [],
-  };
+  });
 }
 
 function normalizeOpenCodeSource(metrics = {}) {
   const requests = sumEvents(metrics.providers) || (Array.isArray(metrics.sessions) ? metrics.sessions.length : 0);
   const sessions = (Array.isArray(metrics.sessions) ? metrics.sessions : []).map((item, index) => normalizeSessionLog('opencode', item, index));
-  return {
+  return withUsageStatus({
     tool: 'opencode',
     label: 'OpenCode local usage',
     ok: metrics.ok !== false,
@@ -257,7 +338,7 @@ function normalizeOpenCodeSource(metrics = {}) {
     models: normalizeDimension('opencode', 'model', metrics.models),
     requestLogs: sessions,
     warnings: [],
-  };
+  });
 }
 
 function normalizeClaudeSource(input = {}) {
@@ -266,7 +347,7 @@ function normalizeClaudeSource(input = {}) {
   const requests = num(usage.messagesInWindow) || sessions.length;
   const models = normalizeDimension('claudecode', 'model', usage.models);
   const providerTotals = normalizeClaudeTotals(usage.totals, requests, usage.officialCost);
-  return {
+  return withUsageStatus({
     tool: 'claudecode',
     label: 'Claude Code local usage',
     ok: !usage.cacheMiss,
@@ -280,7 +361,7 @@ function normalizeClaudeSource(input = {}) {
     models,
     requestLogs: sessions,
     warnings: usage.cacheMiss ? ['cache miss'] : [],
-  };
+  });
 }
 
 function sessionIdFromItem(tool, item = {}, index = 0) {
@@ -292,7 +373,9 @@ function sessionIdFromItem(tool, item = {}, index = 0) {
 }
 
 function sourcePathsFromInventory(inventory = {}) {
-  return (Array.isArray(inventory.sources) ? inventory.sources : [])
+  const sources = Array.isArray(inventory.sources) ? inventory.sources : [];
+  const existing = sources.filter((source) => Boolean(source?.exists) || num(source?.count) > 0);
+  return existing
     .map((source) => source.sourcePath || source.path || source.label || source.tool || '')
     .filter(Boolean);
 }
@@ -340,7 +423,7 @@ function normalizeSessionBackedUsageSource(tool, inventory = {}) {
     .filter((source) => source.parseError || source.readError)
     .map((source) => `${source.label || source.tool || tool}: ${source.parseError || source.readError}`);
   const sourcePaths = sourcePathsFromInventory(inventory);
-  return {
+  return withUsageStatus({
     tool,
     label: meta.label,
     ok: warnings.length === 0,
@@ -353,11 +436,29 @@ function normalizeSessionBackedUsageSource(tool, inventory = {}) {
     models: normalizeSessionUsageDimension(tool, requestLogs, 'model'),
     requestLogs,
     warnings,
+  }, { inventory });
+}
+
+function inventoryFromLocalUsageSource(source = {}) {
+  const items = Array.isArray(source.items) ? source.items : [];
+  return {
+    schema: 'easyaiconfig.session-inventory.v1',
+    generatedAt: new Date().toISOString(),
+    sources: [source],
+    items,
+    summary: {
+      sources: 1,
+      existingSources: source.exists ? 1 : 0,
+      readErrors: source.readError ? 1 : 0,
+      sessions: items.length,
+      returned: items.length,
+      tools: { [source.tool]: items.length },
+    },
   };
 }
 
 function errorSource(tool, error) {
-  return {
+  return withUsageStatus({
     tool,
     label: `${tool} usage`,
     ok: false,
@@ -370,7 +471,25 @@ function errorSource(tool, error) {
     models: [],
     requestLogs: [],
     warnings: [error instanceof Error ? error.message : String(error)],
-  };
+  });
+}
+
+function unsupportedSource(tool) {
+  return withUsageStatus({
+    tool,
+    label: `${tool} usage`,
+    ok: true,
+    unsupported: true,
+    source: '',
+    sourceType: 'unsupported',
+    generatedAt: new Date().toISOString(),
+    totals: createTotals(),
+    daily: [],
+    providers: [],
+    models: [],
+    requestLogs: [],
+    warnings: ['local usage source is not supported'],
+  });
 }
 
 function mergeDaily(sources = []) {
@@ -430,13 +549,20 @@ async function loadSource(tool, options) {
       });
     return normalizeClaudeSource(state);
   }
+  if (LOCAL_USAGE_TOOL_IDS.includes(tool)) {
+    const loaded = loaders[tool]
+      ? await loaders[tool](options)
+      : await readLocalUsageSource(tool, options);
+    const inventory = Array.isArray(loaded?.sources) ? loaded : inventoryFromLocalUsageSource(loaded);
+    return normalizeSessionBackedUsageSource(tool, inventory);
+  }
   if (SESSION_USAGE_TOOL_META[tool]) {
     const inventory = loaders[tool]
       ? await loaders[tool](options)
       : await listSessionInventory({ ...options, includeTools: [tool] });
     return normalizeSessionBackedUsageSource(tool, inventory);
   }
-  return errorSource(tool, 'usage source is not implemented');
+  return unsupportedSource(tool);
 }
 
 export async function readCustomPriceBook(options = {}) {

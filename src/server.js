@@ -74,6 +74,9 @@ import {
   saveCustomPriceBook,
 } from './lib/usage-manager.js';
 import {
+  listConfigDiagnostics,
+} from './lib/config-diagnostics.js';
+import {
   listSyncTargets,
   listSyncSnapshots,
   pushSyncSnapshot,
@@ -236,6 +239,52 @@ function validatePathOrThrow(userPath, paramName = 'path') {
     throw new Error(`Invalid ${paramName}: path traversal detected`);
   }
   return userPath;
+}
+
+function validatePathListOrThrow(userPathList, paramName = 'path') {
+  if (!userPathList) return undefined;
+  const raw = Array.isArray(userPathList) ? userPathList.join(',') : String(userPathList);
+  if (!raw.trim()) return undefined;
+  for (const userPath of raw.split(',').map((item) => item.trim()).filter(Boolean)) {
+    validatePathOrThrow(userPath, paramName);
+  }
+  return raw;
+}
+
+const LOCAL_USAGE_PATH_KEYS = [
+  'ampDataDir',
+  'ampHome',
+  'codebuffDataDir',
+  'codebuffHome',
+  'copilotHome',
+  'copilotOtelDir',
+  'droidHome',
+  'droidSessionsDir',
+  'geminiDataDir',
+  'gooseDataDir',
+  'gooseHome',
+  'goosePathRoot',
+  'hermesDataDir',
+  'hermesHome',
+  'kiloDataDir',
+  'kiloHome',
+  'kimiDataDir',
+  'kimiHome',
+  'openClawDir',
+  'openClawHome',
+  'piAgentDir',
+  'piPath',
+  'qwenDataDir',
+  'qwenHome',
+];
+
+function validateLocalUsagePathOptions(source = {}) {
+  const options = {};
+  for (const key of LOCAL_USAGE_PATH_KEYS) {
+    const value = validatePathListOrThrow(source?.[key], key);
+    if (value) options[key] = value;
+  }
+  return options;
 }
 
 function emptyAssetImportResult({
@@ -1944,14 +1993,16 @@ export async function startServer(options = {}) {
       const projectPath = validatePathOrThrow(req.query.projectPath, 'projectPath');
       const cwd = validatePathOrThrow(req.query.cwd, 'cwd');
       const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const claudeHome = validatePathOrThrow(req.query.claudeHome, 'claudeHome');
       const qwenHome = validatePathOrThrow(req.query.qwenHome, 'qwenHome');
       const codeBuddyHome = validatePathOrThrow(req.query.codeBuddyHome, 'codeBuddyHome');
       const geminiSettingsPath = validatePathOrThrow(req.query.geminiSettingsPath, 'geminiSettingsPath');
       const qwenSettingsPath = validatePathOrThrow(req.query.qwenSettingsPath, 'qwenSettingsPath');
       const codeBuddyMcpPath = validatePathOrThrow(req.query.codeBuddyMcpPath, 'codeBuddyMcpPath');
       const codeBuddySkillsRoot = validatePathOrThrow(req.query.codeBuddySkillsRoot, 'codeBuddySkillsRoot');
+      const localUsagePaths = validateLocalUsagePathOptions(req.query);
       const includeUsage = req.query.usage === '1' || req.query.usage === 'true';
-      const [providerCatalog, mcpInventory, promptInventory, skillInventory, sessionInventory, usageInventory] = await Promise.all([
+      const [providerCatalog, mcpInventory, promptInventory, skillInventory, sessionInventory, usageInventory, configDiagnostics] = await Promise.all([
         Promise.resolve(exportProviderCatalog()),
         listMcpInventory({
           codexHome: codexHome || undefined,
@@ -1969,6 +2020,7 @@ export async function startServer(options = {}) {
           codeBuddySkillsRoot: codeBuddySkillsRoot || undefined,
         }),
         listSessionInventory({
+          ...localUsagePaths,
           codexHome: codexHome || undefined,
           qwenHome: qwenHome || undefined,
           codeBuddyHome: codeBuddyHome || undefined,
@@ -1977,13 +2029,19 @@ export async function startServer(options = {}) {
         }),
         includeUsage
           ? listUsageInventory({
+            ...localUsagePaths,
             codexHome: codexHome || undefined,
+            claudeHome: claudeHome || undefined,
             qwenHome: qwenHome || undefined,
             codeBuddyHome: codeBuddyHome || undefined,
             days: req.query.days || undefined,
             cacheOnly: req.query.cacheOnly === '1' || req.query.cacheOnly === 'true',
           })
           : Promise.resolve(null),
+        listConfigDiagnostics({
+          claudeHome: claudeHome || undefined,
+          limit: req.query.configLimit || 20,
+        }),
       ]);
       ok(res, {
         data: {
@@ -1995,6 +2053,7 @@ export async function startServer(options = {}) {
           skillInventory,
           sessionInventory,
           usageInventory,
+          configDiagnostics,
         },
       });
     } catch (error) {
@@ -2397,11 +2456,13 @@ export async function startServer(options = {}) {
       const codeBuddyHome = validatePathOrThrow(req.query.codeBuddyHome, 'codeBuddyHome');
       const openClawHome = validatePathOrThrow(req.query.openClawHome, 'openClawHome');
       const hermesHome = validatePathOrThrow(req.query.hermesHome, 'hermesHome');
+      const localUsagePaths = validateLocalUsagePathOptions(req.query);
       const includeTools = req.query.tools
         ? String(req.query.tools).split(',').map((item) => item.trim()).filter(Boolean)
         : undefined;
       ok(res, {
         data: await listSessionInventory({
+          ...localUsagePaths,
           codexHome: codexHome || undefined,
           claudeHome: claudeHome || undefined,
           geminiHome: geminiHome || undefined,
@@ -2505,11 +2566,13 @@ export async function startServer(options = {}) {
       const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
       const qwenHome = validatePathOrThrow(req.query.qwenHome, 'qwenHome');
       const codeBuddyHome = validatePathOrThrow(req.query.codeBuddyHome, 'codeBuddyHome');
+      const localUsagePaths = validateLocalUsagePathOptions(req.query);
       const includeTools = req.query.tools
         ? String(req.query.tools).split(',').map((item) => item.trim()).filter(Boolean)
         : undefined;
       ok(res, {
         data: await listUsageInventory({
+          ...localUsagePaths,
           codexHome: codexHome || undefined,
           qwenHome: qwenHome || undefined,
           codeBuddyHome: codeBuddyHome || undefined,
@@ -2519,6 +2582,20 @@ export async function startServer(options = {}) {
           claudeUsageScope: req.query.claudeUsageScope || req.query.usageScope || 'active',
           limit: req.query.limit || undefined,
           includeTools,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/config-diagnostics', async (req, res) => {
+    try {
+      const claudeHome = validatePathOrThrow(req.query.claudeHome, 'claudeHome');
+      ok(res, {
+        data: await listConfigDiagnostics({
+          claudeHome: claudeHome || undefined,
+          limit: req.query.limit || undefined,
         }),
       });
     } catch (error) {

@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -245,6 +246,36 @@ fn codex_home_from_query(query: &Value) -> PathBuf {
     query_path(query, "codexHome").unwrap_or_else(|| {
         default_codex_home().unwrap_or_else(|_| fallback_home_dir().join(".codex"))
     })
+}
+
+fn app_support_root(app_name: &str) -> PathBuf {
+    let home = fallback_home_dir();
+    if cfg!(target_os = "macos") {
+        return home
+            .join("Library")
+            .join("Application Support")
+            .join(app_name);
+    }
+    if cfg!(target_os = "windows") {
+        let base = std::env::var("APPDATA")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData").join("Roaming"));
+        return base.join(app_name);
+    }
+    let lower = app_name
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-");
+    std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join(lower)
 }
 
 fn path_string(path: &Path) -> String {
@@ -1045,18 +1076,338 @@ fn session_preview(record: &Value) -> String {
     )
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct UsageTotals {
+    input: u64,
+    cached_input: u64,
+    output: u64,
+    reasoning: u64,
+    cache_read: u64,
+    cache_creation: u64,
+    total: u64,
+    cost: f64,
+    official_cost: f64,
+    requests: u64,
+}
+
+impl UsageTotals {
+    fn add(&mut self, other: UsageTotals) {
+        self.input = self.input.saturating_add(other.input);
+        self.cached_input = self.cached_input.saturating_add(other.cached_input);
+        self.output = self.output.saturating_add(other.output);
+        self.reasoning = self.reasoning.saturating_add(other.reasoning);
+        self.cache_read = self.cache_read.saturating_add(other.cache_read);
+        self.cache_creation = self.cache_creation.saturating_add(other.cache_creation);
+        self.total = self.total.saturating_add(other.total);
+        self.cost += other.cost;
+        self.official_cost += other.official_cost;
+        self.requests = self.requests.saturating_add(other.requests);
+    }
+
+    fn score(&self) -> f64 {
+        self.total as f64 + self.cost
+    }
+
+    fn has_usage(&self) -> bool {
+        self.total > 0 || self.cost > 0.0 || self.official_cost > 0.0
+    }
+
+    fn to_json(self) -> Value {
+        json!({
+          "input": self.input,
+          "cachedInput": self.cached_input,
+          "output": self.output,
+          "reasoning": self.reasoning,
+          "cacheRead": self.cache_read,
+          "cacheCreation": self.cache_creation,
+          "total": self.total,
+          "cost": self.cost,
+          "officialCost": self.official_cost,
+          "requests": self.requests,
+        })
+    }
+}
+
+fn usage_u64(source: &Value, keys: &[&str]) -> u64 {
+    keys.iter()
+        .filter_map(|key| source.get(*key))
+        .find_map(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_f64()
+                    .filter(|num| num.is_finite() && *num > 0.0)
+                    .map(|num| num.round() as u64)
+            })
+        })
+        .unwrap_or(0)
+}
+
+fn usage_f64(source: &Value, keys: &[&str]) -> f64 {
+    keys.iter()
+        .filter_map(|key| source.get(*key))
+        .find_map(|value| {
+            value.as_f64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<f64>().ok())
+            })
+        })
+        .filter(|num| num.is_finite() && *num > 0.0)
+        .unwrap_or(0.0)
+}
+
+fn usage_totals_from_object(source: &Value) -> UsageTotals {
+    if !source.is_object() {
+        return UsageTotals::default();
+    }
+    let mut input = usage_u64(
+        source,
+        &[
+            "input",
+            "inputTokens",
+            "input_tokens",
+            "promptTokens",
+            "prompt_tokens",
+            "promptTokenCount",
+            "prompt",
+            "input_other",
+            "gen_ai.usage.input_tokens",
+        ],
+    );
+    let output = usage_u64(
+        source,
+        &[
+            "output",
+            "outputTokens",
+            "output_tokens",
+            "completionTokens",
+            "completion_tokens",
+            "completion",
+            "candidates",
+            "candidatesTokenCount",
+            "candidatesTokens",
+            "candidates_tokens",
+            "gen_ai.usage.output_tokens",
+        ],
+    );
+    let reasoning = usage_u64(
+        source,
+        &[
+            "reasoning",
+            "reasoningTokens",
+            "reasoning_tokens",
+            "thinkingTokens",
+            "thoughts",
+            "thoughts_tokens",
+            "thoughtsTokenCount",
+            "gen_ai.usage.reasoning.output_tokens",
+            "gen_ai.usage.reasoning_tokens",
+        ],
+    );
+    let cached_input = usage_u64(
+        source,
+        &[
+            "cachedInput",
+            "cachedInputTokens",
+            "cached_input_tokens",
+            "cacheReadInputTokens",
+            "cache_read_input_tokens",
+            "cacheReadTokens",
+            "cache_read_tokens",
+            "cached",
+            "cached_tokens",
+            "cachedContentTokenCount",
+            "input_cache_read",
+            "gen_ai.usage.cache_read.input_tokens",
+        ],
+    );
+    let cache_read = usage_u64(
+        source,
+        &[
+            "cacheRead",
+            "cacheReadTokens",
+            "cache_read_tokens",
+            "cacheReadInputTokens",
+            "cache_read_input_tokens",
+            "cached",
+            "cached_tokens",
+            "cachedContentTokenCount",
+            "input_cache_read",
+            "gen_ai.usage.cache_read.input_tokens",
+        ],
+    )
+    .max(cached_input);
+    if source.get("gen_ai.usage.input_tokens").is_some() && cache_read > 0 {
+        input = input.saturating_sub(cache_read);
+    }
+    let cache_creation = usage_u64(
+        source,
+        &[
+            "cacheCreation",
+            "cacheCreationTokens",
+            "cache_creation_tokens",
+            "cacheCreationInputTokens",
+            "cache_creation_input_tokens",
+            "cacheWrite",
+            "cacheWriteTokens",
+            "cacheWriteInputTokens",
+            "input_cache_creation",
+            "gen_ai.usage.cache_write.input_tokens",
+            "gen_ai.usage.cache_creation.input_tokens",
+        ],
+    );
+    let explicit_total = usage_u64(
+        source,
+        &[
+            "total",
+            "totalTokens",
+            "total_tokens",
+            "totalTokenCount",
+            "gen_ai.usage.total_tokens",
+            "gen_ai.usage.total.token_count",
+        ],
+    );
+    let total = explicit_total.max(
+        input
+            .saturating_add(output)
+            .saturating_add(reasoning)
+            .saturating_add(cache_read)
+            .saturating_add(cache_creation),
+    );
+    let cost = usage_f64(
+        source,
+        &[
+            "cost",
+            "totalCost",
+            "total_cost",
+            "usd",
+            "totalUsd",
+            "total_usd",
+        ],
+    );
+    let explicit_requests = usage_u64(source, &["requests", "requestCount", "count", "events"]);
+    UsageTotals {
+        input,
+        cached_input,
+        output,
+        reasoning,
+        cache_read,
+        cache_creation,
+        total,
+        cost,
+        official_cost: usage_f64(source, &["officialCost", "official_cost"]),
+        requests: explicit_requests.max(if total > 0 || cost > 0.0 { 1 } else { 0 }),
+    }
+}
+
+fn usage_totals_from_record(record: &Value) -> UsageTotals {
+    let candidates = [
+        record.get("usage"),
+        record.get("tokenUsage"),
+        record.get("token_usage"),
+        record.get("usageMetadata"),
+        record.get("tokens"),
+        record.get("attributes"),
+        record.get("metadata").and_then(|value| value.get("usage")),
+        record
+            .get("metadata")
+            .and_then(|value| value.get("codebuff"))
+            .and_then(|value| value.get("usage")),
+        record
+            .get("providerOptions")
+            .and_then(|value| value.get("usage")),
+        record
+            .get("providerOptions")
+            .and_then(|value| value.get("codebuff"))
+            .and_then(|value| value.get("usage")),
+        record.get("message").and_then(|value| value.get("usage")),
+        record
+            .get("message")
+            .and_then(|value| value.get("payload"))
+            .and_then(|value| value.get("token_usage")),
+        record.get("response").and_then(|value| value.get("usage")),
+        record.get("result").and_then(|value| value.get("usage")),
+        record.get("metrics").and_then(|value| value.get("usage")),
+        record.get("metrics"),
+        Some(record),
+    ];
+    let mut best = candidates
+        .into_iter()
+        .flatten()
+        .map(usage_totals_from_object)
+        .max_by(|left, right| {
+            left.score()
+                .partial_cmp(&right.score())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or_default();
+
+    if let Some(events) = record
+        .get("usageLedger")
+        .and_then(|value| value.get("events"))
+        .and_then(Value::as_array)
+    {
+        let mut ledger_totals = UsageTotals::default();
+        for event in events {
+            ledger_totals.add(usage_totals_from_record(event));
+        }
+        if ledger_totals.has_usage() {
+            best.add(ledger_totals);
+        }
+    }
+
+    if let Some(messages) = record.get("messages").and_then(Value::as_array) {
+        let mut message_totals = UsageTotals::default();
+        for message in messages {
+            message_totals.add(usage_totals_from_record(message));
+        }
+        if message_totals.has_usage() {
+            best.add(message_totals);
+        }
+    }
+
+    if !best.has_usage() {
+        if let Some(history) = record
+            .get("metadata")
+            .and_then(|value| value.get("runState"))
+            .and_then(|value| value.get("sessionState"))
+            .and_then(|value| value.get("mainAgentState"))
+            .and_then(|value| value.get("messageHistory"))
+            .and_then(Value::as_array)
+        {
+            for entry in history.iter().rev() {
+                if value_string(entry.get("role")) != "assistant" {
+                    continue;
+                }
+                let history_totals = usage_totals_from_record(entry);
+                if history_totals.has_usage() {
+                    best = history_totals;
+                    break;
+                }
+            }
+        }
+    }
+
+    best
+}
+
 fn parse_session_file(file_path: &Path, tool: &str, provider: &str, label: &str) -> Option<Value> {
     let modified_ms = file_modified_ms(file_path);
     let raw = fs::read_to_string(file_path).ok()?;
     let mut first_object: Option<Value> = None;
     let mut last_object: Option<Value> = None;
+    let mut totals = UsageTotals::default();
     let trimmed = raw.trim();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
         if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
             if let Some(array) = parsed.as_array() {
+                for item in array.iter().filter(|item| item.is_object()) {
+                    totals.add(usage_totals_from_record(item));
+                }
                 first_object = array.iter().find(|item| item.is_object()).cloned();
                 last_object = array.iter().rev().find(|item| item.is_object()).cloned();
             } else if parsed.is_object() {
+                totals.add(usage_totals_from_record(&parsed));
                 first_object = Some(parsed.clone());
                 last_object = Some(parsed);
             }
@@ -1070,6 +1421,7 @@ fn parse_session_file(file_path: &Path, tool: &str, provider: &str, label: &str)
         {
             if let Ok(parsed) = serde_json::from_str::<Value>(line) {
                 if parsed.is_object() {
+                    totals.add(usage_totals_from_record(&parsed));
                     if first_object.is_none() {
                         first_object = Some(parsed.clone());
                     }
@@ -1079,11 +1431,14 @@ fn parse_session_file(file_path: &Path, tool: &str, provider: &str, label: &str)
         }
     }
     let object = last_object.or(first_object).unwrap_or_else(|| json!({}));
-    let file_stem = file_path
+    let mut file_stem = file_path
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("session")
         .to_string();
+    if let Some(stripped) = file_stem.strip_suffix(".settings") {
+        file_stem = stripped.to_string();
+    }
     let session_id = [
         value_string(object.get("sessionId")),
         value_string(object.get("session_id")),
@@ -1106,7 +1461,10 @@ fn parse_session_file(file_path: &Path, tool: &str, provider: &str, label: &str)
         object
             .get("timestamp")
             .or_else(|| object.get("updatedAt"))
+            .or_else(|| object.get("lastUpdated"))
             .or_else(|| object.get("createdAt"))
+            .or_else(|| object.get("startTime"))
+            .or_else(|| object.get("providerLockTimestamp"))
             .or_else(|| object.get("time")),
         modified_ms,
     );
@@ -1114,11 +1472,48 @@ fn parse_session_file(file_path: &Path, tool: &str, provider: &str, label: &str)
         value_string(object.get("model")),
         value_string(object.get("model_id")),
         value_string(object.get("modelId")),
+        value_string(object.get("modelID")),
+        value_string(object.get("metadata").and_then(|value| value.get("model"))),
+        value_string(object.get("usage").and_then(|value| value.get("model"))),
+        value_string(object.get("message").and_then(|value| value.get("model"))),
+        value_string(object.get("message").and_then(|value| value.get("modelId"))),
+        value_string(object.get("message").and_then(|value| value.get("modelID"))),
+        value_string(
+            object
+                .get("attributes")
+                .and_then(|value| value.get("gen_ai.response.model")),
+        ),
+        value_string(
+            object
+                .get("attributes")
+                .and_then(|value| value.get("gen_ai.request.model")),
+        ),
     ]
     .into_iter()
     .find(|value| !value.is_empty())
     .unwrap_or_else(|| "unknown".to_string());
-    let provider = if provider == "unknown" {
+    let provider_hint = [
+        value_string(object.get("provider")),
+        value_string(object.get("providerLock")),
+        value_string(object.get("providerID")),
+        value_string(object.get("billing_provider")),
+        value_string(
+            object
+                .get("message")
+                .and_then(|value| value.get("provider")),
+        ),
+        value_string(
+            object
+                .get("message")
+                .and_then(|value| value.get("providerID")),
+        ),
+    ]
+    .into_iter()
+    .find(|value| !value.is_empty())
+    .unwrap_or_default();
+    let provider = if !provider_hint.is_empty() {
+        provider_hint
+    } else if provider == "unknown" {
         if model.to_lowercase().contains("claude") {
             "anthropic".to_string()
         } else if model.to_lowercase().contains("gemini") {
@@ -1158,6 +1553,7 @@ fn parse_session_file(file_path: &Path, tool: &str, provider: &str, label: &str)
       "updatedAtMs": updated_ms,
       "sourcePath": path_string(file_path),
       "sourceLabel": label,
+      "totals": totals.to_json(),
       "actions": { "resume": tool == "codex", "fork": tool == "codex", "delete": false },
     }))
 }
@@ -1181,6 +1577,9 @@ fn session_source(
                 break;
             }
             if let Some(item) = parse_session_file(&file, tool, provider, label) {
+                if is_usage_only_session_tool(tool) && !usage_totals_from_log(&item).has_usage() {
+                    continue;
+                }
                 items.push(item);
             }
         }
@@ -1192,12 +1591,504 @@ fn session_source(
       "tool": tool,
       "label": label,
       "sourcePath": roots.iter().map(|path| path_string(path)).collect::<Vec<_>>().join(if cfg!(target_os = "windows") { ";" } else { ":" }),
+      "sourceType": if is_usage_only_session_tool(tool) { "local-usage-files" } else { "filesystem" },
       "exists": existing,
       "readError": "",
       "count": items.len(),
       "capabilities": { "browse": true, "search": true, "resume": tool == "codex", "fork": tool == "codex", "delete": false },
       "items": items,
     })
+}
+
+fn usage_session_item(
+    tool: &str,
+    session_id: String,
+    title: String,
+    provider: String,
+    model: String,
+    project_path: String,
+    updated_ms: u64,
+    source_path: &Path,
+    source_label: &str,
+    totals: UsageTotals,
+) -> Option<Value> {
+    if totals.total == 0 && totals.cost <= 0.0 && totals.official_cost <= 0.0 {
+        return None;
+    }
+    let safe_title = if title.is_empty() {
+        session_id.clone()
+    } else {
+        title
+    };
+    let safe_provider = if provider.is_empty() {
+        "unknown".to_string()
+    } else {
+        provider
+    };
+    let safe_model = if model.is_empty() {
+        "unknown".to_string()
+    } else {
+        model
+    };
+    let item_id = format!("{tool}:{session_id}");
+    let project_key = Path::new(&project_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(tool)
+        .to_string();
+    Some(json!({
+      "id": item_id,
+      "sessionId": session_id,
+      "tool": tool,
+      "title": safe_title,
+      "provider": safe_provider,
+      "model": safe_model,
+      "projectPath": project_path,
+      "projectKey": project_key,
+      "cwd": project_path,
+      "updatedAt": ms_to_iso(updated_ms),
+      "updatedAtMs": updated_ms,
+      "sourcePath": path_string(source_path),
+      "sourceLabel": source_label,
+      "totals": totals.to_json(),
+      "actions": { "resume": false, "fork": false, "delete": false },
+    }))
+}
+
+fn is_usage_only_session_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "gemini"
+            | "amp"
+            | "droid"
+            | "codebuff"
+            | "pi-agent"
+            | "openclaw"
+            | "kimi"
+            | "qwen-code"
+            | "copilot"
+    )
+}
+
+fn sqlite_source_result(
+    tool: &str,
+    label: &str,
+    db_paths: Vec<PathBuf>,
+    items: Vec<Value>,
+    read_errors: Vec<String>,
+) -> Value {
+    let exists = db_paths.iter().any(|path| path_exists(path));
+    json!({
+      "tool": tool,
+      "label": label,
+      "sourcePath": db_paths.iter().map(|path| path_string(path)).collect::<Vec<_>>().join(if cfg!(target_os = "windows") { ";" } else { ":" }),
+      "sourceType": "sqlite",
+      "exists": exists,
+      "readError": read_errors.into_iter().take(5).collect::<Vec<_>>().join("; "),
+      "count": items.len(),
+      "capabilities": { "browse": true, "search": true, "resume": false, "fork": false, "delete": false },
+      "items": items,
+    })
+}
+
+fn local_usage_provider(model: &str, fallback: &str) -> String {
+    let normalized = model.to_lowercase();
+    if normalized.contains("claude") {
+        "anthropic".to_string()
+    } else if normalized.contains("gemini") {
+        "google".to_string()
+    } else if normalized.contains("qwen") {
+        "qwen".to_string()
+    } else if normalized.contains("kimi") || normalized.contains("moonshot") {
+        "moonshot".to_string()
+    } else if normalized.contains("gpt") || normalized.starts_with('o') {
+        "openai".to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn i64_to_u64(value: Option<i64>) -> u64 {
+    value.unwrap_or(0).max(0) as u64
+}
+
+fn sqlite_hermes_source(db_paths: Vec<PathBuf>, limit: usize) -> Value {
+    let mut items = Vec::new();
+    let mut read_errors = Vec::new();
+    for db_path in db_paths.iter().filter(|path| path_exists(path)) {
+        match Connection::open(db_path) {
+            Ok(conn) => {
+                let sql = "SELECT id, model, billing_provider, started_at, message_count, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, estimated_cost_usd, actual_cost_usd FROM sessions WHERE model IS NOT NULL AND TRIM(model) != '' ORDER BY started_at DESC LIMIT ?1";
+                match conn.prepare(sql).and_then(|mut stmt| {
+                    let rows = stmt.query_map([limit as i64], |row| {
+                        let id: String = row.get(0)?;
+                        let model: String = row.get(1)?;
+                        let provider: Option<String> = row.get(2)?;
+                        let started_at: Option<String> = row.get(3)?;
+                        let message_count: Option<i64> = row.get(4)?;
+                        let input_tokens: Option<i64> = row.get(5)?;
+                        let output_tokens: Option<i64> = row.get(6)?;
+                        let cache_read_tokens: Option<i64> = row.get(7)?;
+                        let cache_write_tokens: Option<i64> = row.get(8)?;
+                        let reasoning_tokens: Option<i64> = row.get(9)?;
+                        let estimated_cost: Option<f64> = row.get(10)?;
+                        let actual_cost: Option<f64> = row.get(11)?;
+                        Ok((
+                            id,
+                            model,
+                            provider,
+                            started_at,
+                            message_count,
+                            input_tokens,
+                            output_tokens,
+                            cache_read_tokens,
+                            cache_write_tokens,
+                            reasoning_tokens,
+                            estimated_cost,
+                            actual_cost,
+                        ))
+                    })?;
+                    rows.collect::<Result<Vec<_>, _>>()
+                }) {
+                    Ok(rows) => {
+                        for (
+                            id,
+                            model,
+                            provider,
+                            started_at,
+                            message_count,
+                            input,
+                            output,
+                            cache_read,
+                            cache_write,
+                            reasoning,
+                            estimated_cost,
+                            actual_cost,
+                        ) in rows
+                        {
+                            let total = i64_to_u64(input)
+                                .saturating_add(i64_to_u64(output))
+                                .saturating_add(i64_to_u64(cache_read))
+                                .saturating_add(i64_to_u64(cache_write))
+                                .saturating_add(i64_to_u64(reasoning));
+                            let totals = UsageTotals {
+                                input: i64_to_u64(input),
+                                cached_input: i64_to_u64(cache_read),
+                                output: i64_to_u64(output),
+                                reasoning: i64_to_u64(reasoning),
+                                cache_read: i64_to_u64(cache_read),
+                                cache_creation: i64_to_u64(cache_write),
+                                total,
+                                cost: actual_cost.or(estimated_cost).unwrap_or(0.0),
+                                official_cost: 0.0,
+                                requests: i64_to_u64(message_count).max(1),
+                            };
+                            if let Some(item) = usage_session_item(
+                                "hermes",
+                                id.clone(),
+                                id,
+                                provider.unwrap_or_else(|| local_usage_provider(&model, "unknown")),
+                                model,
+                                String::new(),
+                                {
+                                    let timestamp = started_at.as_ref().map(|value| json!(value));
+                                    parse_timestamp_ms(timestamp.as_ref(), 0)
+                                },
+                                db_path,
+                                "Hermes state database",
+                                totals,
+                            ) {
+                                items.push(item);
+                            }
+                        }
+                    }
+                    Err(error) => read_errors.push(format!("{}: {error}", path_string(db_path))),
+                }
+            }
+            Err(error) => read_errors.push(format!("{}: {error}", path_string(db_path))),
+        }
+    }
+    sqlite_source_result(
+        "hermes",
+        "Hermes Agent local usage",
+        db_paths,
+        items,
+        read_errors,
+    )
+}
+
+fn sqlite_goose_source(db_paths: Vec<PathBuf>, limit: usize) -> Value {
+    let mut items = Vec::new();
+    let mut read_errors = Vec::new();
+    for db_path in db_paths.iter().filter(|path| path_exists(path)) {
+        match Connection::open(db_path) {
+            Ok(conn) => {
+                let sql = "SELECT id, model_config_json, provider_name, created_at, total_tokens, input_tokens, output_tokens, accumulated_total_tokens, accumulated_input_tokens, accumulated_output_tokens FROM sessions WHERE model_config_json IS NOT NULL AND TRIM(model_config_json) != '' ORDER BY created_at DESC LIMIT ?1";
+                match conn.prepare(sql).and_then(|mut stmt| {
+                    let rows = stmt.query_map([limit as i64], |row| {
+                        let id: String = row.get(0)?;
+                        let model_config_json: String = row.get(1)?;
+                        let provider_name: Option<String> = row.get(2)?;
+                        let created_at: Option<String> = row.get(3)?;
+                        let total_tokens: Option<i64> = row.get(4)?;
+                        let input_tokens: Option<i64> = row.get(5)?;
+                        let output_tokens: Option<i64> = row.get(6)?;
+                        let acc_total_tokens: Option<i64> = row.get(7)?;
+                        let acc_input_tokens: Option<i64> = row.get(8)?;
+                        let acc_output_tokens: Option<i64> = row.get(9)?;
+                        Ok((
+                            id,
+                            model_config_json,
+                            provider_name,
+                            created_at,
+                            total_tokens,
+                            input_tokens,
+                            output_tokens,
+                            acc_total_tokens,
+                            acc_input_tokens,
+                            acc_output_tokens,
+                        ))
+                    })?;
+                    rows.collect::<Result<Vec<_>, _>>()
+                }) {
+                    Ok(rows) => {
+                        for (
+                            id,
+                            config,
+                            provider_name,
+                            created_at,
+                            total_tokens,
+                            input_tokens,
+                            output_tokens,
+                            acc_total,
+                            acc_input,
+                            acc_output,
+                        ) in rows
+                        {
+                            let parsed = serde_json::from_str::<Value>(&config)
+                                .unwrap_or_else(|_| json!({}));
+                            let model = value_string(parsed.get("model_name")).if_empty("unknown");
+                            let input = i64_to_u64(acc_input).max(i64_to_u64(input_tokens));
+                            let output = i64_to_u64(acc_output).max(i64_to_u64(output_tokens));
+                            let total = i64_to_u64(acc_total)
+                                .max(i64_to_u64(total_tokens))
+                                .max(input.saturating_add(output));
+                            let totals = UsageTotals {
+                                input,
+                                cached_input: 0,
+                                output,
+                                reasoning: 0,
+                                cache_read: 0,
+                                cache_creation: 0,
+                                total,
+                                cost: 0.0,
+                                official_cost: 0.0,
+                                requests: if total > 0 { 1 } else { 0 },
+                            };
+                            if let Some(item) = usage_session_item(
+                                "goose",
+                                id.clone(),
+                                id,
+                                provider_name
+                                    .unwrap_or_else(|| local_usage_provider(&model, "goose"))
+                                    .replace('-', "_"),
+                                model,
+                                String::new(),
+                                {
+                                    let timestamp = created_at.as_ref().map(|value| json!(value));
+                                    parse_timestamp_ms(timestamp.as_ref(), 0)
+                                },
+                                db_path,
+                                "Goose sessions database",
+                                totals,
+                            ) {
+                                items.push(item);
+                            }
+                        }
+                    }
+                    Err(error) => read_errors.push(format!("{}: {error}", path_string(db_path))),
+                }
+            }
+            Err(error) => read_errors.push(format!("{}: {error}", path_string(db_path))),
+        }
+    }
+    sqlite_source_result("goose", "Goose local usage", db_paths, items, read_errors)
+}
+
+fn sqlite_kilo_source(db_paths: Vec<PathBuf>, limit: usize) -> Value {
+    let mut items = Vec::new();
+    let mut read_errors = Vec::new();
+    for db_path in db_paths.iter().filter(|path| path_exists(path)) {
+        match Connection::open(db_path) {
+            Ok(conn) => {
+                let sql = "SELECT id, session_id, data FROM message LIMIT ?1";
+                match conn.prepare(sql).and_then(|mut stmt| {
+                    let rows = stmt.query_map([limit as i64], |row| {
+                        let id: String = row.get(0)?;
+                        let session_id: Option<String> = row.get(1)?;
+                        let data: String = row.get(2)?;
+                        Ok((id, session_id, data))
+                    })?;
+                    rows.collect::<Result<Vec<_>, _>>()
+                }) {
+                    Ok(rows) => {
+                        for (row_id, row_session_id, data_raw) in rows {
+                            let data = serde_json::from_str::<Value>(&data_raw)
+                                .unwrap_or_else(|_| json!({}));
+                            if value_string(data.get("role")) != "assistant" {
+                                continue;
+                            }
+                            let mut totals = usage_totals_from_record(&data);
+                            if let Some(cache) =
+                                data.get("tokens").and_then(|value| value.get("cache"))
+                            {
+                                totals.cache_read = usage_u64(cache, &["read"]);
+                                totals.cached_input = totals.cache_read;
+                                totals.cache_creation = usage_u64(cache, &["write"]);
+                                totals.total = totals.total.max(
+                                    totals
+                                        .input
+                                        .saturating_add(totals.output)
+                                        .saturating_add(totals.reasoning)
+                                        .saturating_add(totals.cache_read)
+                                        .saturating_add(totals.cache_creation),
+                                );
+                            }
+                            let session_id = value_string(data.get("session_id"))
+                                .if_empty(&row_session_id.unwrap_or_else(|| row_id.clone()));
+                            let model = value_string(data.get("modelID")).if_empty("unknown");
+                            if let Some(item) = usage_session_item(
+                                "kilo-code",
+                                session_id.clone(),
+                                session_id,
+                                value_string(data.get("providerID"))
+                                    .if_empty(&local_usage_provider(&model, "extension")),
+                                model,
+                                String::new(),
+                                parse_timestamp_ms(
+                                    data.get("time").and_then(|value| value.get("created")),
+                                    0,
+                                ),
+                                db_path,
+                                "Kilo message database",
+                                totals,
+                            ) {
+                                items.push(item);
+                            }
+                        }
+                    }
+                    Err(error) => read_errors.push(format!("{}: {error}", path_string(db_path))),
+                }
+            }
+            Err(error) => read_errors.push(format!("{}: {error}", path_string(db_path))),
+        }
+    }
+    sqlite_source_result(
+        "kilo-code",
+        "Kilo Code local usage",
+        db_paths,
+        items,
+        read_errors,
+    )
+}
+
+fn query_tool_list(query: &Value) -> Option<Vec<String>> {
+    let raw = query
+        .get("tools")
+        .or_else(|| query.get("tool"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let tools = raw
+        .split(',')
+        .map(normalize_session_tool)
+        .filter(|tool| !tool.is_empty())
+        .collect::<Vec<_>>();
+    if tools.is_empty() {
+        None
+    } else {
+        Some(tools)
+    }
+}
+
+fn includes_tool(selected: &Option<Vec<String>>, tool: &str) -> bool {
+    const VERIFIED_SESSION_TOOLS: &[&str] = &[
+        "codex",
+        "claudecode",
+        "opencode",
+        "gemini",
+        "amp",
+        "droid",
+        "codebuff",
+        "hermes",
+        "pi-agent",
+        "goose",
+        "openclaw",
+        "kilo-code",
+        "kimi",
+        "qwen-code",
+        "copilot",
+    ];
+    if !VERIFIED_SESSION_TOOLS.contains(&tool) {
+        return false;
+    }
+    selected
+        .as_ref()
+        .map(|tools| tools.iter().any(|item| item == tool))
+        .unwrap_or(true)
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(|value| expand_home_path(&value).unwrap_or_else(|| PathBuf::from(value)))
+}
+
+fn query_or_env_paths(
+    query: &Value,
+    query_key: &str,
+    env_key: &str,
+    fallback: Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    let raw = query
+        .get(query_key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::var(env_key)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
+    let Some(raw) = raw else {
+        return fallback;
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| expand_home_path(value).unwrap_or_else(|| PathBuf::from(value)))
+        .collect()
+}
+
+fn extension_state_roots(extension_ids: &[&str]) -> Vec<PathBuf> {
+    ["Code", "Cursor", "Windsurf", "Trae"]
+        .iter()
+        .flat_map(|product| {
+            extension_ids.iter().map(move |extension_id| {
+                app_support_root(product)
+                    .join("User")
+                    .join("globalStorage")
+                    .join(extension_id)
+            })
+        })
+        .collect()
 }
 
 fn session_matches(item: &Value, query: &str, cwd: &str) -> bool {
@@ -1328,23 +2219,38 @@ fn session_inventory(query: &Value) -> Value {
     let home = fallback_home_dir();
     let opencode_data =
         opencode_data_home().unwrap_or_else(|_| home.join(".local").join("share").join("opencode"));
-    let openclaw = openclaw_home().unwrap_or_else(|_| home.join(".openclaw"));
-    let sources = vec![
-        session_source(
+    let openclaw = query_path(query, "openClawHome")
+        .or_else(|| query_path(query, "openClawDir"))
+        .or_else(|| openclaw_home().ok())
+        .unwrap_or_else(|| home.join(".openclaw"));
+    let qwen_home = query_path(query, "qwenDataDir")
+        .or_else(|| query_path(query, "qwenHome"))
+        .unwrap_or_else(|| home.join(".qwen"));
+    let codebuddy_home = query_path(query, "codeBuddyHome")
+        .or_else(|| env_path("CODEBUDDY_CONFIG_DIR"))
+        .unwrap_or_else(|| home.join(".codebuddy"));
+    let selected_tools = query_tool_list(query);
+    let mut sources = Vec::new();
+    if includes_tool(&selected_tools, "codex") {
+        sources.push(session_source(
             "codex",
             "Codex sessions",
             vec![codex_home.join("sessions")],
             "unknown",
             limit,
-        ),
-        session_source(
+        ));
+    }
+    if includes_tool(&selected_tools, "claudecode") {
+        sources.push(session_source(
             "claudecode",
             "Claude Code projects",
             vec![home.join(".claude").join("projects")],
             "anthropic",
             limit,
-        ),
-        session_source(
+        ));
+    }
+    if includes_tool(&selected_tools, "opencode") {
+        sources.push(session_source(
             "opencode",
             "OpenCode sessions",
             vec![
@@ -1353,35 +2259,362 @@ fn session_inventory(query: &Value) -> Value {
             ],
             "unknown",
             limit,
-        ),
-        session_source(
-            "gemini",
-            "Gemini CLI sessions",
+        ));
+    }
+    if includes_tool(&selected_tools, "amp") {
+        let amp_roots = query_or_env_paths(
+            query,
+            "ampDataDir",
+            "AMP_DATA_DIR",
+            vec![home.join(".local").join("share").join("amp")],
+        )
+        .into_iter()
+        .map(|root| {
+            if root.file_name().and_then(|value| value.to_str()) == Some("threads") {
+                root
+            } else {
+                root.join("threads")
+            }
+        })
+        .collect::<Vec<_>>();
+        sources.push(session_source(
+            "amp",
+            "Amp local usage",
+            amp_roots,
+            "sourcegraph-amp",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "droid") {
+        sources.push(session_source(
+            "droid",
+            "Droid local usage",
+            query_or_env_paths(
+                query,
+                "droidSessionsDir",
+                "DROID_SESSIONS_DIR",
+                vec![home.join(".factory").join("sessions")],
+            ),
+            "unknown",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "codebuff") {
+        let codebuff_roots = query_or_env_paths(
+            query,
+            "codebuffDataDir",
+            "CODEBUFF_DATA_DIR",
             vec![
-                home.join(".gemini").join("sessions"),
-                home.join(".gemini").join("history"),
+                home.join(".config").join("manicode"),
+                home.join(".config").join("manicode-dev"),
+                home.join(".config").join("manicode-staging"),
             ],
+        )
+        .into_iter()
+        .map(|root| {
+            if root.file_name().and_then(|value| value.to_str()) == Some("projects") {
+                root
+            } else {
+                root.join("projects")
+            }
+        })
+        .collect::<Vec<_>>();
+        sources.push(session_source(
+            "codebuff",
+            "Codebuff local usage",
+            codebuff_roots,
+            "codebuff",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "gemini") {
+        let gemini_roots = query_or_env_paths(
+            query,
+            "geminiDataDir",
+            "GEMINI_DATA_DIR",
+            vec![home.join(".gemini").join("tmp")],
+        )
+        .into_iter()
+        .map(|root| {
+            if root.file_name().and_then(|value| value.to_str()) == Some("tmp") {
+                root
+            } else {
+                root.join("tmp")
+            }
+        })
+        .collect::<Vec<_>>();
+        sources.push(session_source(
+            "gemini",
+            "Gemini CLI local usage",
+            gemini_roots,
             "google-gemini",
             limit,
-        ),
-        session_source(
+        ));
+    }
+    if includes_tool(&selected_tools, "openclaw") {
+        sources.push(session_source(
             "openclaw",
-            "OpenClaw sessions",
-            vec![openclaw.join("sessions"), openclaw.join("history")],
+            "OpenClaw local usage",
+            vec![openclaw],
             "unknown",
             limit,
-        ),
-        session_source(
-            "hermes",
-            "Hermes Agent sessions",
+        ));
+    }
+    if includes_tool(&selected_tools, "hermes") {
+        let hermes_roots = query_or_env_paths(
+            query,
+            "hermesHome",
+            "HERMES_HOME",
+            vec![home.join(".hermes")],
+        );
+        sources.push(sqlite_hermes_source(
+            hermes_roots
+                .into_iter()
+                .map(|root| root.join("state.db"))
+                .collect(),
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "pi-agent") {
+        sources.push(session_source(
+            "pi-agent",
+            "pi-agent local usage",
+            query_or_env_paths(
+                query,
+                "piAgentDir",
+                "PI_AGENT_DIR",
+                vec![home.join(".pi").join("agent").join("sessions")],
+            ),
+            "pi-agent",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "goose") {
+        let goose_roots = query_or_env_paths(
+            query,
+            "goosePathRoot",
+            "GOOSE_PATH_ROOT",
             vec![
-                home.join(".hermes").join("sessions"),
-                home.join(".hermes").join("history"),
+                home.join(".local").join("share").join("goose"),
+                home.join("Library")
+                    .join("Application Support")
+                    .join("goose"),
+                home.join(".local")
+                    .join("share")
+                    .join("Block")
+                    .join("goose"),
             ],
-            "unknown",
+        );
+        sources.push(sqlite_goose_source(
+            goose_roots
+                .into_iter()
+                .map(|root| root.join("sessions").join("sessions.db"))
+                .collect(),
             limit,
-        ),
-    ];
+        ));
+    }
+    if includes_tool(&selected_tools, "qwen-code") {
+        sources.push(session_source(
+            "qwen-code",
+            "Qwen Code local usage",
+            vec![qwen_home.join("projects")],
+            "qwen",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "kimi") {
+        let kimi_home = query_path(query, "kimiDataDir")
+            .or_else(|| query_path(query, "kimiHome"))
+            .unwrap_or_else(|| home.join(".kimi"));
+        sources.push(session_source(
+            "kimi",
+            "Kimi local usage",
+            vec![kimi_home.join("sessions")],
+            "moonshot-kimi",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "copilot") {
+        let copilot_roots = query_or_env_paths(
+            query,
+            "copilotOtelDir",
+            "COPILOT_DATA_DIR",
+            vec![home.join(".copilot")],
+        )
+        .into_iter()
+        .map(|root| {
+            if root.file_name().and_then(|value| value.to_str()) == Some("otel") {
+                root
+            } else {
+                root.join("otel")
+            }
+        })
+        .collect::<Vec<_>>();
+        sources.push(session_source(
+            "copilot",
+            "GitHub Copilot CLI local usage",
+            copilot_roots,
+            "github-copilot",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "codebuddy-code") {
+        sources.push(session_source(
+            "codebuddy-code",
+            "CodeBuddy Code local state",
+            vec![
+                codebuddy_home.join("sessions"),
+                codebuddy_home.join("history"),
+                codebuddy_home.join("logs"),
+            ],
+            "tencent-codebuddy",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "cline") {
+        let mut roots = vec![home.join(".cline").join("sessions")];
+        roots.extend(extension_state_roots(&[
+            "saoudrizwan.claude-dev",
+            "cline.cline",
+        ]));
+        sources.push(session_source(
+            "cline",
+            "Cline extension state",
+            roots,
+            "extension",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "roo-code") {
+        let mut roots = vec![home.join(".roo-code").join("sessions")];
+        roots.extend(extension_state_roots(&[
+            "rooveterinaryinc.roo-cline",
+            "roo-cline.roo-cline",
+        ]));
+        sources.push(session_source(
+            "roo-code",
+            "Roo Code extension state",
+            roots,
+            "extension",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "kilo-code") {
+        let kilo_roots = query_or_env_paths(
+            query,
+            "kiloDataDir",
+            "KILO_DATA_DIR",
+            vec![home.join(".local").join("share").join("kilo")],
+        );
+        sources.push(sqlite_kilo_source(
+            kilo_roots
+                .into_iter()
+                .map(|root| root.join("kilo.db"))
+                .collect(),
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "continue") {
+        let mut roots = vec![home.join(".continue")];
+        roots.extend(extension_state_roots(&["continue.continue"]));
+        sources.push(session_source(
+            "continue",
+            "Continue local state",
+            roots,
+            "extension",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "cursor") {
+        sources.push(session_source(
+            "cursor",
+            "Cursor local state",
+            vec![
+                home.join(".cursor").join("sessions"),
+                app_support_root("Cursor")
+                    .join("User")
+                    .join("globalStorage")
+                    .join("cursor.cursor"),
+            ],
+            "editor",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "windsurf") {
+        sources.push(session_source(
+            "windsurf",
+            "Windsurf local state",
+            vec![
+                home.join(".windsurf").join("sessions"),
+                app_support_root("Windsurf")
+                    .join("User")
+                    .join("globalStorage")
+                    .join("codeium.windsurf"),
+            ],
+            "editor",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "zed") {
+        sources.push(session_source(
+            "zed",
+            "Zed local state",
+            vec![
+                home.join(".zed").join("sessions"),
+                app_support_root("Zed").join("sessions"),
+            ],
+            "editor",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "trae") {
+        sources.push(session_source(
+            "trae",
+            "Trae local state",
+            vec![
+                home.join(".trae").join("sessions"),
+                app_support_root("Trae").join("User").join("globalStorage"),
+            ],
+            "editor",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "qoder") {
+        sources.push(session_source(
+            "qoder",
+            "Qoder local state",
+            vec![
+                home.join(".qoder").join("sessions"),
+                app_support_root("Qoder").join("sessions"),
+            ],
+            "editor",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "zcode") {
+        sources.push(session_source(
+            "zcode",
+            "ZCode local state",
+            vec![
+                home.join(".zcode").join("sessions"),
+                app_support_root("ZCode").join("sessions"),
+            ],
+            "editor",
+            limit,
+        ));
+    }
+    if includes_tool(&selected_tools, "lingma") {
+        sources.push(session_source(
+            "lingma",
+            "Tongyi Lingma local state",
+            vec![
+                home.join(".lingma").join("sessions"),
+                app_support_root("Lingma").join("sessions"),
+            ],
+            "editor",
+            limit,
+        ));
+    }
     let query_text = value_string(query.get("query"));
     let cwd = query_path(query, "cwd")
         .map(|path| path_string(&path))
@@ -1429,11 +2662,58 @@ fn session_inventory(query: &Value) -> Value {
 }
 
 fn normalize_session_tool(tool: &str) -> String {
-    match tool.trim().to_lowercase().as_str() {
-        "claude" | "claude-code" | "claude_code" => "claudecode".to_string(),
-        "gemini-cli" | "geminicli" => "gemini".to_string(),
-        "open-claw" | "open_claw" => "openclaw".to_string(),
-        other => other.to_string(),
+    let value = tool.trim().to_lowercase().replace(['_', ' '], "-");
+    let compact = value.replace('-', "");
+    match value.as_str() {
+        "claude" | "claude-code" => "claudecode".to_string(),
+        "gemini-cli" => "gemini".to_string(),
+        "open-code" => "opencode".to_string(),
+        "open-claw" => "openclaw".to_string(),
+        "hermes-agent" => "hermes".to_string(),
+        "qwen" | "qwen-cli" | "qwen-code-cli" => "qwen-code".to_string(),
+        "codebuddy" | "codebuddy-cli" | "tencent-codebuddy" => "codebuddy-code".to_string(),
+        "roo" | "roocode" => "roo-code".to_string(),
+        "kilo" | "kilocode" => "kilo-code".to_string(),
+        "continue-dev" => "continue".to_string(),
+        "cursor-editor" => "cursor".to_string(),
+        "codeium-windsurf" => "windsurf".to_string(),
+        "zed-editor" => "zed".to_string(),
+        "trae-ai" => "trae".to_string(),
+        "qoder-ide" => "qoder".to_string(),
+        "z-code" | "z-ai-code" | "z-ai-ide" => "zcode".to_string(),
+        "tongyi-lingma" | "aliyun-lingma" | "qoder-cn" => "lingma".to_string(),
+        "cline-extension" => "cline".to_string(),
+        "amp-code" => "amp".to_string(),
+        "pi" | "piagent" | "pi-agent" => "pi-agent".to_string(),
+        "block-goose" => "goose".to_string(),
+        "kimi-code" | "moonshot" | "moonshot-kimi" => "kimi".to_string(),
+        "github-copilot" | "github-copilot-cli" | "copilot-cli" => "copilot".to_string(),
+        other => match compact.as_str() {
+            "claudecode" => "claudecode".to_string(),
+            "geminicli" => "gemini".to_string(),
+            "opencode" => "opencode".to_string(),
+            "openclaw" => "openclaw".to_string(),
+            "hermesagent" => "hermes".to_string(),
+            "qwencode" | "qwencli" | "qwencodecli" => "qwen-code".to_string(),
+            "codebuddycode" | "codebuddycli" | "tencentcodebuddy" => "codebuddy-code".to_string(),
+            "roocode" | "roocline" => "roo-code".to_string(),
+            "kilocode" => "kilo-code".to_string(),
+            "continuedev" => "continue".to_string(),
+            "cursoreditor" => "cursor".to_string(),
+            "codeiumwindsurf" => "windsurf".to_string(),
+            "zededitor" => "zed".to_string(),
+            "traeai" => "trae".to_string(),
+            "qoderide" => "qoder".to_string(),
+            "zaicode" | "zaiide" => "zcode".to_string(),
+            "tongyilingma" | "aliyunlingma" | "qodercn" => "lingma".to_string(),
+            "clineextension" => "cline".to_string(),
+            "ampcode" => "amp".to_string(),
+            "piagent" => "pi-agent".to_string(),
+            "blockgoose" => "goose".to_string(),
+            "kimicode" | "moonshotkimi" => "kimi".to_string(),
+            "githubcopilot" | "githubcopilotcli" | "copilotcli" => "copilot".to_string(),
+            _ => other.to_string(),
+        },
     }
 }
 
@@ -1460,30 +2740,12 @@ fn session_root_candidates(input: &Value, tool: &str) -> Vec<PathBuf> {
     let home = fallback_home_dir();
     let codex_home = codex_home_from_query(input);
     let claude_home = query_path(input, "claudeHome").unwrap_or_else(|| home.join(".claude"));
-    let gemini_home = query_path(input, "geminiHome").unwrap_or_else(|| home.join(".gemini"));
-    let openclaw_home_path = query_path(input, "openClawHome")
-        .or_else(|| query_path(input, "openclawHome"))
-        .or_else(|| openclaw_home().ok())
-        .unwrap_or_else(|| home.join(".openclaw"));
-    let hermes_home = query_path(input, "hermesHome").unwrap_or_else(|| home.join(".hermes"));
     let mut roots = Vec::new();
     if normalized.is_empty() || normalized == "codex" {
         roots.push(codex_home.join("sessions"));
     }
     if normalized.is_empty() || normalized == "claudecode" {
         roots.push(claude_home.join("projects"));
-    }
-    if normalized.is_empty() || normalized == "gemini" {
-        roots.push(gemini_home.join("sessions"));
-        roots.push(gemini_home.join("history"));
-    }
-    if normalized.is_empty() || normalized == "openclaw" {
-        roots.push(openclaw_home_path.join("sessions"));
-        roots.push(openclaw_home_path.join("history"));
-    }
-    if normalized.is_empty() || normalized == "hermes" {
-        roots.push(hermes_home.join("sessions"));
-        roots.push(hermes_home.join("history"));
     }
     roots
         .into_iter()
@@ -1544,11 +2806,11 @@ fn validate_session_archive_target(
     body: &Value,
 ) -> Result<(String, PathBuf, fs::Metadata), String> {
     let tool = normalize_session_tool(body.get("tool").and_then(Value::as_str).unwrap_or(""));
-    if !["codex", "claudecode", "gemini", "openclaw", "hermes"].contains(&tool.as_str()) {
+    if !["codex", "claudecode"].contains(&tool.as_str()) {
         return Err(
-      "Session archive only supports file-based Codex, Claude Code, Gemini, OpenClaw, and Hermes sessions"
-        .to_string(),
-    );
+            "Session archive only supports verified file-based Codex and Claude Code sessions"
+                .to_string(),
+        );
     }
     let raw_source = body
         .get("sourcePath")
@@ -1826,94 +3088,399 @@ fn restore_session(body: &Value) -> Result<Value, String> {
     }))
 }
 
-fn usage_inventory(query: &Value) -> Value {
-    let limit = query
-        .get("limit")
-        .and_then(Value::as_str)
-        .and_then(|value| value.parse::<u64>().ok())
-        .or_else(|| query.get("limit").and_then(Value::as_u64))
-        .unwrap_or(100)
-        .clamp(1, 500);
-    let status =
-        query_provider_router_status(&json!({ "limit": limit })).unwrap_or_else(|_| json!({}));
-    let logs = status
-        .get("logs")
+fn usage_totals_from_log(item: &Value) -> UsageTotals {
+    item.get("totals")
+        .filter(|value| value.is_object())
+        .map(usage_totals_from_object)
+        .unwrap_or_else(|| usage_totals_from_object(item))
+}
+
+fn usage_source_path_count(source_path: &str) -> usize {
+    let separator = if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    };
+    source_path
+        .split(separator)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .count()
+}
+
+fn tokenized_usage_log_count(logs: &[Value]) -> usize {
+    logs.iter()
+        .filter(|log| {
+            let totals = usage_totals_from_log(log);
+            totals.total > 0 || totals.cost > 0.0 || totals.official_cost > 0.0
+        })
+        .count()
+}
+
+fn usage_status_for_session_source(
+    source: &Value,
+    tool: &str,
+    totals: UsageTotals,
+    request_logs: &[Value],
+) -> (String, String, String, Value) {
+    let source_path = value_string(source.get("sourcePath"));
+    let configured_source_count = usage_source_path_count(&source_path);
+    let source_count = source.get("count").and_then(Value::as_u64).unwrap_or(0);
+    let existing_source_count = if value_bool(source.get("exists")) || source_count > 0 {
+        1_u64
+    } else {
+        0_u64
+    };
+    let session_count = request_logs.len() as u64;
+    let tokenized_session_count = tokenized_usage_log_count(request_logs) as u64;
+    let requests = if totals.requests > 0 {
+        totals.requests
+    } else {
+        session_count
+    };
+    let evidence = json!({
+      "configuredSourceCount": configured_source_count,
+      "existingSourceCount": existing_source_count,
+      "sessionCount": session_count,
+      "tokenizedSessionCount": tokenized_session_count,
+      "totalTokens": totals.total,
+      "cost": totals.cost,
+      "officialCost": totals.official_cost,
+      "requests": requests,
+    });
+    let has_tokens = totals.total > 0 || totals.cost > 0.0 || totals.official_cost > 0.0;
+    let has_sessions = session_count > 0;
+    let has_existing_source = existing_source_count > 0;
+    let read_error = value_string(source.get("readError"));
+    let (level, label, detail) = if !read_error.is_empty() {
+        (
+            "error",
+            "读取异常",
+            "发现本地来源，但解析或读取时返回异常。",
+        )
+    } else if matches!(
+        tool,
+        "codex"
+            | "claudecode"
+            | "opencode"
+            | "gemini"
+            | "amp"
+            | "droid"
+            | "codebuff"
+            | "hermes"
+            | "pi-agent"
+            | "goose"
+            | "openclaw"
+            | "kilo-code"
+            | "kimi"
+            | "qwen-code"
+            | "copilot"
+    ) {
+        if has_tokens {
+            ("exact", "精准用量", "来自该工具已接入的本地用量数据源。")
+        } else if has_existing_source {
+            (
+                "connected-empty",
+                "已接入无数据",
+                "读取入口已接通，但当前窗口内没有 token 记录。",
+            )
+        } else {
+            (
+                "missing",
+                "未发现数据",
+                "本机还没有发现可读取的会话或用量文件。",
+            )
+        }
+    } else if has_tokens {
+        (
+            "parsed",
+            "已解析 Token",
+            "从本机会话文件中提取到 usage/token 字段。",
+        )
+    } else if has_sessions {
+        (
+            "sessions-only",
+            "仅会话记录",
+            "已找到会话或活动日志，但没有发现可统计的 token 字段。",
+        )
+    } else if has_existing_source {
+        (
+            "source-only",
+            "仅发现来源",
+            "发现本地目录或配置入口，但还没有可解析的会话记录。",
+        )
+    } else {
+        (
+            "missing",
+            "未发现数据",
+            "本机还没有发现可读取的会话或用量文件。",
+        )
+    };
+    (
+        level.to_string(),
+        label.to_string(),
+        detail.to_string(),
+        evidence,
+    )
+}
+
+fn add_totals_to_group(
+    groups: &mut BTreeMap<String, (UsageTotals, u64)>,
+    key: String,
+    totals: UsageTotals,
+) {
+    let entry = groups.entry(key).or_insert((UsageTotals::default(), 0));
+    entry.0.add(totals);
+    entry.1 = entry.1.saturating_add(totals.requests.max(1));
+}
+
+fn usage_dimension_values(
+    tool: &str,
+    groups: BTreeMap<String, (UsageTotals, u64)>,
+    key_name: &str,
+) -> Vec<Value> {
+    let mut rows = groups
+        .into_iter()
+        .map(|(key, (totals, events))| {
+            json!({
+              "tool": tool,
+              key_name: key,
+              "totals": totals.to_json(),
+              "events": events,
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|row| {
+        std::cmp::Reverse(
+            row.get("totals")
+                .and_then(|value| value.get("total"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+    });
+    rows
+}
+
+fn usage_source_from_session_source(source: &Value, generated_at: &str) -> Value {
+    let tool = value_string(source.get("tool")).if_empty("unknown");
+    let items = source
+        .get("items")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let total_tokens = status
-        .get("totalTokens")
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| {
-            logs.iter()
-                .map(|item| item.get("totalTokens").and_then(Value::as_u64).unwrap_or(0))
-                .sum()
-        });
-    let requests = status
-        .get("requests")
-        .and_then(Value::as_u64)
-        .unwrap_or(logs.len() as u64);
+    let mut totals = UsageTotals::default();
+    let mut daily: BTreeMap<String, UsageTotals> = BTreeMap::new();
+    let mut providers: BTreeMap<String, (UsageTotals, u64)> = BTreeMap::new();
+    let mut models: BTreeMap<String, (UsageTotals, u64)> = BTreeMap::new();
+    let mut request_logs = Vec::new();
+    for mut item in items {
+        let item_totals = usage_totals_from_log(&item);
+        totals.add(item_totals);
+        if let Some(object) = item.as_object_mut() {
+            object.insert("totals".to_string(), item_totals.to_json());
+        }
+        let updated_at = item.get("updatedAt").and_then(Value::as_str).unwrap_or("");
+        let date = updated_at.chars().take(10).collect::<String>();
+        if date.len() == 10 {
+            daily.entry(date).or_default().add(item_totals);
+        }
+        add_totals_to_group(
+            &mut providers,
+            value_string(item.get("provider")).if_empty("unknown"),
+            item_totals,
+        );
+        add_totals_to_group(
+            &mut models,
+            value_string(item.get("model")).if_empty("unknown"),
+            item_totals,
+        );
+        request_logs.push(item);
+    }
+    let read_error = value_string(source.get("readError"));
+    let (usage_level, usage_status_label, usage_status_detail, usage_evidence) =
+        usage_status_for_session_source(source, &tool, totals, &request_logs);
+    let daily_values = daily
+        .into_iter()
+        .map(|(date, totals)| json!({ "tool": tool, "date": date, "totals": totals.to_json() }))
+        .collect::<Vec<_>>();
+    json!({
+      "tool": tool,
+      "label": value_string(source.get("label")).if_empty(&tool),
+      "ok": read_error.is_empty(),
+      "source": value_string(source.get("sourcePath")),
+      "sourcePath": value_string(source.get("sourcePath")),
+      "sourceType": value_string(source.get("sourceType")).if_empty("session-backed"),
+      "generatedAt": generated_at,
+      "totals": totals.to_json(),
+      "daily": daily_values,
+      "providers": usage_dimension_values(&tool, providers, "provider"),
+      "models": usage_dimension_values(&tool, models, "model"),
+      "requestLogs": request_logs,
+      "warnings": if read_error.is_empty() { json!([]) } else { json!([read_error]) },
+      "usageLevel": usage_level,
+      "usageStatus": usage_level,
+      "usageStatusLabel": usage_status_label,
+      "usageStatusDetail": usage_status_detail,
+      "usageEvidence": usage_evidence,
+    })
+}
+
+fn merge_usage_daily(sources: &[Value]) -> Vec<Value> {
+    let mut daily: BTreeMap<String, UsageTotals> = BTreeMap::new();
+    for source in sources {
+        for item in source
+            .get("daily")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let date = value_string(item.get("date"));
+            if date.is_empty() {
+                continue;
+            }
+            daily
+                .entry(date)
+                .or_default()
+                .add(usage_totals_from_log(&item));
+        }
+    }
+    daily
+        .into_iter()
+        .map(|(date, totals)| json!({ "date": date, "totals": totals.to_json() }))
+        .collect()
+}
+
+fn merge_usage_dimension(sources: &[Value], key_name: &str) -> Vec<Value> {
+    let mut groups: BTreeMap<String, (UsageTotals, u64)> = BTreeMap::new();
+    for source in sources {
+        let field = format!("{key_name}s");
+        for item in source
+            .get(&field)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            add_totals_to_group(
+                &mut groups,
+                value_string(item.get(key_name)).if_empty("unknown"),
+                usage_totals_from_log(&item),
+            );
+        }
+    }
+    usage_dimension_values("all", groups, key_name)
+}
+
+fn custom_prices_summary() -> Option<Value> {
     let custom_prices_path = app_home()
         .unwrap_or_else(|_| fallback_home_dir().join(".codex-config-ui"))
         .join("custom-prices.json");
-    let custom_prices = read_optional_text(&custom_prices_path)
-    .ok()
-    .flatten()
-    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-    .map(|parsed| json!({
-      "schema": parsed.get("schema").and_then(Value::as_str).unwrap_or("easyaiconfig.custom-prices.v1"),
-      "priceBookPath": path_string(&custom_prices_path),
-      "models": parsed.get("models").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
-      "updatedAt": parsed.get("updatedAt").and_then(Value::as_str).unwrap_or(""),
-    }));
+    read_optional_text(&custom_prices_path)
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .map(|parsed| json!({
+          "schema": parsed.get("schema").and_then(Value::as_str).unwrap_or("easyaiconfig.custom-prices.v1"),
+          "priceBookPath": path_string(&custom_prices_path),
+          "models": parsed.get("models").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+          "updatedAt": parsed.get("updatedAt").and_then(Value::as_str).unwrap_or(""),
+        }))
+}
+
+fn usage_inventory(query: &Value) -> Value {
+    let generated_at = now_iso();
+    let sessions = session_inventory(query);
+    let mut sources = sessions
+        .get("sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|source| usage_source_from_session_source(source, &generated_at))
+        .collect::<Vec<_>>();
+    let mut totals = UsageTotals::default();
+    for source in &sources {
+        totals.add(usage_totals_from_log(source));
+    }
+    let limit = query
+        .get("limit")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| {
+            query
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+        })
+        .unwrap_or(100)
+        .clamp(1, 500);
+    let mut request_logs = sources
+        .iter()
+        .flat_map(|source| {
+            source
+                .get("requestLogs")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    request_logs.sort_by_key(|item| {
+        std::cmp::Reverse(item.get("updatedAtMs").and_then(Value::as_u64).unwrap_or(0))
+    });
+    request_logs.truncate(limit);
+    let custom_prices = custom_prices_summary();
+    let custom_price_count = custom_prices
+        .as_ref()
+        .and_then(|value| value.get("models"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let summary_tools = sources
+        .iter()
+        .filter_map(|source| {
+            let tool = source.get("tool").and_then(Value::as_str)?;
+            let totals = usage_totals_from_log(source);
+            Some((
+                tool.to_string(),
+                json!({
+                  "ok": source.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                  "total": totals.total,
+                  "cost": totals.cost,
+                  "requests": totals.requests,
+                }),
+            ))
+        })
+        .collect::<Map<String, Value>>();
+    let read_errors = sources
+        .iter()
+        .filter(|source| !source.get("ok").and_then(Value::as_bool).unwrap_or(false))
+        .count();
+    sources.sort_by(|left, right| {
+        value_string(left.get("tool")).cmp(&value_string(right.get("tool")))
+    });
+    let daily = merge_usage_daily(&sources);
+    let providers = merge_usage_dimension(&sources, "provider");
+    let models = merge_usage_dimension(&sources, "model");
+    let request_log_count = request_logs.len();
     json!({
       "schema": "easyaiconfig.usage-inventory.v1",
-      "generatedAt": now_iso(),
+      "generatedAt": generated_at,
       "days": query.get("days").cloned().unwrap_or(json!(30)),
-      "sources": [{
-        "tool": "provider-router",
-        "ok": true,
-        "sourcePath": "provider_router_logs.db",
-        "totals": {
-          "input": status.get("inputTokens").and_then(Value::as_u64).unwrap_or(0),
-          "cachedInput": status.get("cachedInputTokens").and_then(Value::as_u64).unwrap_or(0),
-          "output": status.get("outputTokens").and_then(Value::as_u64).unwrap_or(0),
-          "reasoning": 0,
-          "cacheRead": 0,
-          "cacheCreation": 0,
-          "total": total_tokens,
-          "cost": 0,
-          "officialCost": 0,
-          "requests": requests,
-        },
-        "requestLogs": logs,
-      }],
-      "totals": {
-        "input": status.get("inputTokens").and_then(Value::as_u64).unwrap_or(0),
-        "cachedInput": status.get("cachedInputTokens").and_then(Value::as_u64).unwrap_or(0),
-        "output": status.get("outputTokens").and_then(Value::as_u64).unwrap_or(0),
-        "reasoning": 0,
-        "cacheRead": 0,
-        "cacheCreation": 0,
-        "total": total_tokens,
-        "cost": 0,
-        "officialCost": 0,
-        "requests": requests,
-      },
-      "daily": [],
-      "providers": status.get("providers").cloned().unwrap_or_else(|| json!([])),
-      "models": [],
-      "requestLogs": logs,
+      "sources": sources,
+      "totals": totals.to_json(),
+      "daily": daily,
+      "providers": providers,
+      "models": models,
+      "requestLogs": request_logs,
       "customPrices": custom_prices,
       "summary": {
-        "totalTokens": total_tokens,
-        "requests": requests,
-        "totalCost": 0,
-        "cost": 0,
-        "officialCost": 0,
-        "requestLogs": logs.len(),
-        "customPrices": custom_prices.as_ref().and_then(|value| value.get("models")).and_then(Value::as_u64).unwrap_or(0),
-        "readErrors": 0,
+        "tools": summary_tools,
+        "totalTokens": totals.total,
+        "requests": totals.requests,
+        "totalCost": totals.cost,
+        "cost": totals.cost,
+        "officialCost": totals.official_cost,
+        "requestLogs": request_log_count,
+        "customPrices": custom_price_count,
+        "readErrors": read_errors,
       },
     })
 }
@@ -3991,6 +5558,268 @@ SECRET_TOKEN = "do-not-expose"
     }
 
     #[test]
+    fn tauri_usage_inventory_parses_verified_local_usage_sources() {
+        let root = temp_routes_dir("local-usage");
+        let droid_dir = root.join("factory-sessions");
+        let gemini_tmp = root.join("gemini").join("tmp");
+        let amp_threads = root.join("amp").join("threads");
+        let codebuff_chat = root
+            .join("codebuff")
+            .join("projects")
+            .join("project-alpha")
+            .join("chats")
+            .join("chat-alpha");
+        let pi_dir = root
+            .join("pi")
+            .join("agent")
+            .join("sessions")
+            .join("project-alpha");
+        let openclaw_sessions = root.join("openclaw").join("sessions");
+        let copilot_otel = root.join("copilot").join("otel");
+        let qwen_chats = root
+            .join("qwen")
+            .join("projects")
+            .join("project-alpha")
+            .join("chats");
+        let kimi_session = root.join("kimi").join("sessions").join("kimi-alpha");
+
+        for dir in [
+            &droid_dir,
+            &gemini_tmp,
+            &amp_threads,
+            &codebuff_chat,
+            &pi_dir,
+            &openclaw_sessions,
+            &copilot_otel,
+            &qwen_chats,
+            &kimi_session,
+        ] {
+            fs::create_dir_all(dir).expect("create usage fixture dir");
+        }
+
+        fs::write(
+            droid_dir.join("droid-alpha.settings.json"),
+            r#"{"providerLock":"anthropic","providerLockTimestamp":"2026-07-04T12:00:00Z","model":"custom:claude-sonnet-4-20250514[anthropic]-1","tokenUsage":{"inputTokens":100,"outputTokens":40,"cacheCreationTokens":10,"cacheReadTokens":20,"thinkingTokens":5,"totalTokens":175}}"#,
+        )
+        .expect("write droid usage");
+        fs::write(
+            gemini_tmp.join("gemini-alpha.json"),
+            r#"{"sessionId":"gemini-alpha","lastUpdated":"2026-07-04T12:10:00Z","messages":[{"type":"gemini","model":"gemini-2.5-pro","tokens":{"input":10,"output":20,"cached":5,"total":35}}]}"#,
+        )
+        .expect("write gemini usage");
+        fs::write(
+            amp_threads.join("amp-alpha.json"),
+            r#"{"id":"amp-alpha","usageLedger":{"events":[{"id":"amp-usage-1","model":"claude-sonnet-4-20250514","timestamp":"2026-07-04T12:20:00Z","tokens":{"input":11,"output":22,"total":33}}]}}"#,
+        )
+        .expect("write amp usage");
+        fs::write(
+            codebuff_chat.join("chat-messages.json"),
+            r#"[{"id":"codebuff-msg-1","variant":"assistant","timestamp":"2026-07-04T12:30:00Z","metadata":{"model":"gpt-5","usage":{"inputTokens":12,"outputTokens":23,"totalTokens":35}}}]"#,
+        )
+        .expect("write codebuff usage");
+        fs::write(
+            pi_dir.join("prefix_pi-alpha.jsonl"),
+            r#"{"type":"message","timestamp":"2026-07-04T12:40:00Z","message":{"role":"assistant","model":"claude-sonnet-4-20250514","usage":{"input":13,"output":24,"totalTokens":37}}}"#,
+        )
+        .expect("write pi usage");
+        fs::write(
+            openclaw_sessions.join("openclaw-alpha.jsonl"),
+            r#"{"type":"message","timestamp":"2026-07-04T12:50:00Z","message":{"role":"assistant","model":"qwen3-coder-plus","provider":"qwen","usage":{"input":14,"output":25,"totalTokens":39}}}"#,
+        )
+        .expect("write openclaw usage");
+        fs::write(
+            copilot_otel.join("copilot-alpha.jsonl"),
+            r#"{"timestamp":"2026-07-04T12:55:00Z","attributes":{"gen_ai.conversation.id":"copilot-alpha","gen_ai.response.model":"gpt-4.1","gen_ai.usage.input_tokens":20,"gen_ai.usage.cache_read.input_tokens":5,"gen_ai.usage.output_tokens":30,"gen_ai.usage.total_tokens":50}}"#,
+        )
+        .expect("write copilot usage");
+        fs::write(
+            qwen_chats.join("qwen-alpha.jsonl"),
+            r#"{"type":"assistant","sessionId":"qwen-alpha","model":"qwen3-coder-plus","timestamp":"2026-07-04T13:00:00Z","usageMetadata":{"promptTokenCount":60,"candidatesTokenCount":30,"thoughtsTokenCount":3,"cachedContentTokenCount":7,"totalTokenCount":100}}"#,
+        )
+        .expect("write qwen usage");
+        fs::write(
+            kimi_session.join("wire.jsonl"),
+            r#"{"timestamp":1783180800,"message":{"type":"StatusUpdate","payload":{"message_id":"kimi-msg-1","token_usage":{"input_other":80,"output":45,"input_cache_creation":12,"input_cache_read":8,"total":145}}}}"#,
+        )
+        .expect("write kimi usage");
+
+        let inventory = usage_inventory(&json!({
+          "tools": "droid,gemini,amp,codebuff,pi-agent,openclaw,copilot,qwen-code,kimi",
+          "droidSessionsDir": path_string(&droid_dir),
+          "geminiDataDir": path_string(&gemini_tmp),
+          "ampDataDir": path_string(&amp_threads),
+          "codebuffDataDir": path_string(&root.join("codebuff")),
+          "piAgentDir": path_string(&root.join("pi").join("agent").join("sessions")),
+          "openClawHome": path_string(&root.join("openclaw")),
+          "copilotOtelDir": path_string(&copilot_otel),
+          "qwenDataDir": path_string(&root.join("qwen")),
+          "kimiDataDir": path_string(&root.join("kimi")),
+          "limit": 20,
+        }));
+
+        assert_eq!(
+            inventory
+                .get("summary")
+                .and_then(|value| value.get("totalTokens"))
+                .and_then(Value::as_u64),
+            Some(649)
+        );
+        assert_eq!(
+            inventory
+                .get("summary")
+                .and_then(|value| value.get("requests"))
+                .and_then(Value::as_u64),
+            Some(9)
+        );
+        for (tool, total) in [
+            ("droid", 175),
+            ("gemini", 35),
+            ("amp", 33),
+            ("codebuff", 35),
+            ("pi-agent", 37),
+            ("openclaw", 39),
+            ("copilot", 50),
+            ("qwen-code", 100),
+            ("kimi", 145),
+        ] {
+            let source = inventory
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| {
+                    sources
+                        .iter()
+                        .find(|source| source.get("tool").and_then(Value::as_str) == Some(tool))
+                })
+                .unwrap_or_else(|| panic!("missing source {tool}"));
+            assert_eq!(
+                source.get("usageStatus").and_then(Value::as_str),
+                Some("exact")
+            );
+            assert_eq!(
+                source
+                    .get("totals")
+                    .and_then(|value| value.get("total"))
+                    .and_then(Value::as_u64),
+                Some(total)
+            );
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tauri_usage_inventory_parses_verified_sqlite_local_usage_sources() {
+        let root = temp_routes_dir("sqlite-local-usage");
+        let hermes_home = root.join("hermes");
+        let goose_root = root.join("goose");
+        let kilo_root = root.join("kilo");
+        fs::create_dir_all(&hermes_home).expect("create hermes home");
+        fs::create_dir_all(goose_root.join("sessions")).expect("create goose sessions");
+        fs::create_dir_all(&kilo_root).expect("create kilo root");
+
+        let hermes_db = hermes_home.join("state.db");
+        Connection::open(&hermes_db)
+            .and_then(|conn| {
+                conn.execute_batch(
+                    r#"
+                    CREATE TABLE sessions (
+                      id TEXT, model TEXT, billing_provider TEXT, started_at TEXT, message_count INTEGER,
+                      input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+                      reasoning_tokens INTEGER, estimated_cost_usd REAL, actual_cost_usd REAL
+                    );
+                    INSERT INTO sessions VALUES (
+                      'hermes-alpha', 'claude-sonnet-4-20250514', 'anthropic', '2026-07-04T14:00:00Z', 3,
+                      100, 40, 20, 10, 5, 0.01, 0.02
+                    );
+                    "#,
+                )
+            })
+            .expect("write hermes fixture");
+
+        let goose_db = goose_root.join("sessions").join("sessions.db");
+        Connection::open(&goose_db)
+            .and_then(|conn| {
+                conn.execute_batch(
+                    r#"
+                    CREATE TABLE sessions (
+                      id TEXT, model_config_json TEXT, provider_name TEXT, created_at TEXT,
+                      total_tokens INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+                      accumulated_total_tokens INTEGER, accumulated_input_tokens INTEGER, accumulated_output_tokens INTEGER
+                    );
+                    INSERT INTO sessions VALUES (
+                      'goose-alpha', '{"model_name":"gpt-5"}', 'openai', '2026-07-04T14:10:00Z',
+                      70, 30, 40, 70, 30, 40
+                    );
+                    "#,
+                )
+            })
+            .expect("write goose fixture");
+
+        let kilo_db = kilo_root.join("kilo.db");
+        Connection::open(&kilo_db)
+            .and_then(|conn| {
+                conn.execute_batch(
+                    r#"
+                    CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+                    INSERT INTO message VALUES (
+                      'kilo-msg-1',
+                      'kilo-alpha',
+                      '{"id":"kilo-msg-1","session_id":"kilo-alpha","role":"assistant","modelID":"qwen3-coder-plus","providerID":"qwen","time":{"created":"2026-07-04T14:20:00Z"},"tokens":{"input":12,"output":23,"reasoning":3,"cache":{"read":5,"write":2},"total":45},"cost":0.01}'
+                    );
+                    "#,
+                )
+            })
+            .expect("write kilo fixture");
+
+        let inventory = usage_inventory(&json!({
+          "tools": "hermes,goose,kilo-code",
+          "hermesHome": path_string(&hermes_home),
+          "goosePathRoot": path_string(&goose_root),
+          "kiloDataDir": path_string(&kilo_root),
+          "limit": 10,
+        }));
+
+        assert_eq!(
+            inventory
+                .get("summary")
+                .and_then(|value| value.get("totalTokens"))
+                .and_then(Value::as_u64),
+            Some(290)
+        );
+        assert_eq!(
+            inventory
+                .get("summary")
+                .and_then(|value| value.get("requests"))
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        for (tool, total) in [("hermes", 175), ("goose", 70), ("kilo-code", 45)] {
+            let source = inventory
+                .get("sources")
+                .and_then(Value::as_array)
+                .and_then(|sources| {
+                    sources
+                        .iter()
+                        .find(|source| source.get("tool").and_then(Value::as_str) == Some(tool))
+                })
+                .unwrap_or_else(|| panic!("missing source {tool}"));
+            assert_eq!(
+                source.get("usageStatus").and_then(Value::as_str),
+                Some("exact")
+            );
+            assert_eq!(
+                source
+                    .get("totals")
+                    .and_then(|value| value.get("total"))
+                    .and_then(Value::as_u64),
+                Some(total)
+            );
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn tauri_asset_import_preview_accepts_ccswitch_v1_query_links() {
         let provider = asset_import_preview(&json!({
           "url": "ccswitch://v1/import?resource=provider&id=openrouter-custom&name=OpenRouter%20Custom&baseUrl=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1&envKey=OPENROUTER_API_KEY&apiKey=sk-from-deeplink&wireApi=chat&protocols=openai-chat%2Cresponses&homepage=https%3A%2F%2Fopenrouter.ai&model=openai%2Fgpt-5&models=openai%2Fgpt-5%2Canthropic%2Fclaude-sonnet-4&config=%7B%22retry%22%3A2%7D&configFormat=json&configUrl=https%3A%2F%2Fexample.com%2Fopenrouter.json&usageScript=openrouter-usage.js&tools=codex%2Copencode",
@@ -4124,22 +5953,22 @@ SECRET_TOKEN = "do-not-expose"
     #[test]
     fn tauri_session_archive_moves_to_trash_and_restores() {
         let root = temp_routes_dir("session-archive");
-        let gemini_home = root.join("gemini");
-        let session_dir = gemini_home.join("sessions");
+        let claude_home = root.join("claude");
+        let session_dir = claude_home.join("projects").join("project-alpha");
         let trash_root = root.join("trash");
-        fs::create_dir_all(&session_dir).expect("create gemini session dir");
-        let session_path = session_dir.join("gemini-restore.jsonl");
+        fs::create_dir_all(&session_dir).expect("create claude session dir");
+        let session_path = session_dir.join("claude-restore.jsonl");
         fs::write(
             &session_path,
-            r#"{"timestamp":"2026-07-05T12:00:00Z","cwd":"/tmp/project","model":"gemini-2.5-pro","role":"user","content":"restore this"}"#,
+            r#"{"timestamp":"2026-07-05T12:00:00Z","cwd":"/tmp/project","message":{"role":"user","content":"restore this"}}"#,
         )
-        .expect("write gemini session");
+        .expect("write claude session");
 
         let preview = archive_session(&json!({
-          "tool": "gemini",
+          "tool": "claudecode",
           "sourcePath": path_string(&session_path),
-          "sessionId": "gemini-restore",
-          "geminiHome": path_string(&gemini_home),
+          "sessionId": "claude-restore",
+          "claudeHome": path_string(&claude_home),
           "trashRoot": path_string(&trash_root),
         }))
         .expect("preview session archive");
@@ -4147,10 +5976,10 @@ SECRET_TOKEN = "do-not-expose"
         assert!(path_exists(&session_path));
 
         let archived = archive_session(&json!({
-          "tool": "gemini",
+          "tool": "claudecode",
           "sourcePath": path_string(&session_path),
-          "sessionId": "gemini-restore",
-          "geminiHome": path_string(&gemini_home),
+          "sessionId": "claude-restore",
+          "claudeHome": path_string(&claude_home),
           "trashRoot": path_string(&trash_root),
           "dryRun": false,
         }))
@@ -4183,7 +6012,7 @@ SECRET_TOKEN = "do-not-expose"
 
         let restored = restore_session(&json!({
           "archiveId": archive_id,
-          "geminiHome": path_string(&gemini_home),
+          "claudeHome": path_string(&claude_home),
           "trashRoot": path_string(&trash_root),
           "dryRun": false,
         }))
@@ -4382,6 +6211,7 @@ async fn dispatch(
         ("/api/sync/push", "POST") => push_sync_snapshot(body),
         ("/api/sync/pull", "POST") => pull_sync_snapshot(body),
         ("/api/sessions/inventory", "GET") => Ok(session_inventory(query)),
+        ("/api/usage/inventory", "GET") => Ok(usage_inventory(query)),
         ("/api/sessions/trash", "GET") => Ok(list_session_trash(query)),
         ("/api/sessions/archive", "POST") => archive_session(body),
         ("/api/sessions/restore", "POST") => restore_session(body),

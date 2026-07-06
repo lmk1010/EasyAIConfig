@@ -227,6 +227,8 @@ const state = {
   dashboardMetrics: { codex: null, opencode: null },
   dashboardMetricsByWindow: {},
   dashboardMetricsActiveKey: { codex: '', opencode: '' },
+  dashboardUsageInventoryByWindow: {},
+  dashboardUsageFetchedAtByWindow: {},
   dashboardLoading: false,
   dashboardRefreshing: false,
   dashboardRefreshingByWindow: {},
@@ -389,14 +391,14 @@ const TOOL_CAPABILITY_MATRIX = [
   {
     id: 'gemini',
     name: 'Gemini CLI',
-    stage: '部分闭环',
+    stage: '已接本地用量',
     stageKind: 'partial',
     config: 'full',
     router: 'full',
-    usage: 'partial',
-    sessions: 'full',
-    assets: 'partial',
-    note: 'Router safe profile、sessions 和会话驱动用量分析已接入',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'full',
+    note: '~/.gemini/tmp 本地用量已接入；配置和 Router 入口保持可编辑',
   },
   {
     id: 'opencode',
@@ -413,26 +415,110 @@ const TOOL_CAPABILITY_MATRIX = [
   {
     id: 'openclaw',
     name: 'OpenClaw',
-    stage: '部分闭环',
+    stage: '已接本地用量',
     stageKind: 'partial',
     config: 'full',
     router: 'full',
-    usage: 'partial',
-    sessions: 'full',
-    assets: 'partial',
-    note: '网关配置和 sessions 可读，用量主要来自 Router 运行日志',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'full',
+    note: '~/.openclaw JSONL 用量已接入；网关请求统计仍走反代日志页',
   },
   {
     id: 'hermes',
     name: 'Hermes Agent',
-    stage: '部分闭环',
+    stage: '已接本地用量',
     stageKind: 'partial',
     config: 'full',
     router: 'full',
-    usage: 'partial',
-    sessions: 'full',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'full',
+    note: '~/.hermes/state.db 用量已接入；配置入口继续保留',
+  },
+  {
+    id: 'amp',
+    name: 'Amp',
+    stage: '本地用量',
+    stageKind: 'catalog',
+    config: 'none',
+    router: 'none',
+    usage: 'full',
+    sessions: 'readonly',
     assets: 'partial',
-    note: 'config.yaml + .env 已支持，工作区数据按文件源读取',
+    note: '~/.local/share/amp/threads 可读取 token 与费用，暂不写配置',
+  },
+  {
+    id: 'droid',
+    name: 'Droid',
+    stage: '本地用量',
+    stageKind: 'catalog',
+    config: 'none',
+    router: 'none',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'partial',
+    note: '~/.factory/sessions/*.settings.json 可读取 token，暂不写配置',
+  },
+  {
+    id: 'codebuff',
+    name: 'Codebuff',
+    stage: '本地用量',
+    stageKind: 'catalog',
+    config: 'none',
+    router: 'none',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'partial',
+    note: '~/.config/manicode/projects 会话用量已接入，暂不写账号配置',
+  },
+  {
+    id: 'pi-agent',
+    name: 'pi-agent',
+    stage: '本地用量',
+    stageKind: 'catalog',
+    config: 'none',
+    router: 'none',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'partial',
+    note: '~/.pi/agent/sessions JSONL 用量已接入，暂不写配置',
+  },
+  {
+    id: 'goose',
+    name: 'Goose',
+    stage: '本地用量',
+    stageKind: 'catalog',
+    config: 'none',
+    router: 'none',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'partial',
+    note: 'Goose sessions.db 用量已接入，暂不写配置',
+  },
+  {
+    id: 'kimi',
+    name: 'Kimi',
+    stage: '本地用量',
+    stageKind: 'catalog',
+    config: 'none',
+    router: 'none',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'partial',
+    note: '~/.kimi/sessions/*/wire.jsonl 可读取本地 token',
+  },
+  {
+    id: 'copilot',
+    name: 'GitHub Copilot CLI',
+    stage: '本地用量',
+    stageKind: 'catalog',
+    config: 'none',
+    router: 'none',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'partial',
+    note: '~/.copilot/otel OpenTelemetry JSONL 用量已接入',
   },
   {
     id: 'cline',
@@ -441,8 +527,8 @@ const TOOL_CAPABILITY_MATRIX = [
     stageKind: 'extension',
     config: 'import',
     router: 'import',
-    usage: 'planned',
-    sessions: 'planned',
+    usage: 'none',
+    sessions: 'none',
     assets: 'readonly',
     note: 'VS Code SecretStorage 不直接读写，先做检测、导入和 Router 接入包',
   },
@@ -453,22 +539,22 @@ const TOOL_CAPABILITY_MATRIX = [
     stageKind: 'extension',
     config: 'import',
     router: 'import',
-    usage: 'planned',
-    sessions: 'planned',
+    usage: 'none',
+    sessions: 'none',
     assets: 'readonly',
     note: '扩展配置与 SecretStorage 分离处理，避免误写账号密钥',
   },
   {
     id: 'kilo-code',
     name: 'Kilo Code',
-    stage: '扩展接入',
+    stage: '已接本地用量',
     stageKind: 'extension',
     config: 'import',
     router: 'import',
-    usage: 'planned',
-    sessions: 'planned',
-    assets: 'readonly',
-    note: '按 Cline/Roo 兼容扩展路线接入，先做配置导入闭环',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'partial',
+    note: '~/.local/share/kilo/kilo.db 用量已接入；配置仍按扩展安全边界处理',
   },
   {
     id: 'continue',
@@ -477,8 +563,8 @@ const TOOL_CAPABILITY_MATRIX = [
     stageKind: 'catalog',
     config: 'partial',
     router: 'import',
-    usage: 'planned',
-    sessions: 'planned',
+    usage: 'none',
+    sessions: 'none',
     assets: 'readonly',
     note: '可检测本地配置文件，写入器和数据分析入口待补',
   },
@@ -489,8 +575,8 @@ const TOOL_CAPABILITY_MATRIX = [
     stageKind: 'catalog',
     config: 'readonly',
     router: 'import',
-    usage: 'planned',
-    sessions: 'planned',
+    usage: 'none',
+    sessions: 'none',
     assets: 'readonly',
     note: '编辑器设置和扩展资产先只读检测，账号密钥不直接读取',
   },
@@ -501,22 +587,22 @@ const TOOL_CAPABILITY_MATRIX = [
     stageKind: 'catalog',
     config: 'readonly',
     router: 'import',
-    usage: 'planned',
-    sessions: 'planned',
+    usage: 'none',
+    sessions: 'none',
     assets: 'readonly',
     note: '先支持配置路径识别与 Router 接入说明，后续补写入器',
   },
   {
     id: 'qwen-code',
     name: 'Qwen Code CLI',
-    stage: 'CLI 安装',
+    stage: '已接本地用量',
     stageKind: 'catalog',
     config: 'planned',
     router: 'planned',
-    usage: 'planned',
-    sessions: 'planned',
-    assets: 'readonly',
-    note: '安装、更新和历史版本已接入；配置路径待官方稳定后再开放写入',
+    usage: 'full',
+    sessions: 'readonly',
+    assets: 'partial',
+    note: '安装、更新和历史版本已接入；~/.qwen/projects/chats 用量可分析',
   },
   {
     id: 'codebuddy-code',
@@ -525,8 +611,8 @@ const TOOL_CAPABILITY_MATRIX = [
     stageKind: 'catalog',
     config: 'planned',
     router: 'planned',
-    usage: 'planned',
-    sessions: 'planned',
+    usage: 'none',
+    sessions: 'none',
     assets: 'readonly',
     note: '安装、更新和历史版本已接入；账号与 IDE 设置不直接读取',
   },
@@ -1056,6 +1142,13 @@ function normalizeToolCatalogId(toolId) {
   if (['open-code', 'opencode'].includes(value)) return 'opencode';
   if (['open-claw', 'openclaw'].includes(value)) return 'openclaw';
   if (['hermes', 'hermes-agent'].includes(value)) return 'hermes';
+  if (['amp', 'amp-code'].includes(value)) return 'amp';
+  if (['droid', 'factory-droid'].includes(value)) return 'droid';
+  if (['codebuff'].includes(value)) return 'codebuff';
+  if (['pi', 'pi-agent', 'piagent'].includes(value)) return 'pi-agent';
+  if (['goose', 'block-goose'].includes(value)) return 'goose';
+  if (['kimi', 'kimi-code', 'moonshot-kimi'].includes(value)) return 'kimi';
+  if (['copilot', 'copilot-cli', 'github-copilot', 'github-copilot-cli'].includes(value)) return 'copilot';
   if (['cline', 'cline-extension'].includes(value)) return 'cline';
   if (['roo', 'roo-code', 'roocode'].includes(value)) return 'roo-code';
   if (['kilo', 'kilo-code', 'kilocode'].includes(value)) return 'kilo-code';
@@ -1084,6 +1177,13 @@ function getToolDisplayName(toolId) {
     opencode: 'OpenCode',
     openclaw: 'OpenClaw',
     hermes: 'Hermes Agent',
+    amp: 'Amp',
+    droid: 'Droid',
+    codebuff: 'Codebuff',
+    'pi-agent': 'pi-agent',
+    goose: 'Goose',
+    kimi: 'Kimi',
+    copilot: 'GitHub Copilot CLI',
     cline: 'Cline',
     'roo-code': 'Roo Code',
     'kilo-code': 'Kilo Code',
@@ -1280,6 +1380,13 @@ const TOOL_CATALOG_REGION_TAGS = {
   'opencode-desktop': ['global'],
   openclaw: ['global'],
   hermes: ['global'],
+  amp: ['global'],
+  droid: ['global'],
+  codebuff: ['global'],
+  'pi-agent': ['global'],
+  goose: ['global'],
+  kimi: ['domestic'],
+  copilot: ['global'],
   cline: ['global'],
   'roo-code': ['global'],
   'kilo-code': ['global'],
@@ -1300,7 +1407,27 @@ const TOOL_CATALOG_REGION_TAGS = {
 };
 const TOOL_CATALOG_BRAND_ICON_PATHS = {
   // Only vendored official assets belong here; unknown brands fall back to text initials.
+  codex: '/tool-icons/openai.png',
+  'codex-app': '/tool-icons/openai.png',
+  claudecode: '/tool-icons/claude-code.png',
+  'claude-desktop': '/tool-icons/claude-code.png',
+  claudedesktop: '/tool-icons/claude-code.png',
   gemini: '/tool-icons/gemini.png',
+  opencode: '/tool-icons/opencode.png',
+  'opencode-desktop': '/tool-icons/opencode.png',
+  'opencode-vscode': '/tool-icons/opencode.png',
+  'opencode-cursor': '/tool-icons/opencode.png',
+  'opencode-windsurf': '/tool-icons/opencode.png',
+  'opencode-vscodium': '/tool-icons/opencode.png',
+  'opencode-zed': '/tool-icons/opencode.png',
+  'opencode-github': '/tool-icons/opencode.png',
+  'opencode-gitlab': '/tool-icons/opencode.png',
+  openclaw: '/tool-icons/openclaw.png',
+  amp: '/tool-icons/amp.svg',
+  droid: '/tool-icons/droid.svg',
+  codebuff: '/tool-icons/codebuff.webp',
+  'pi-agent': '/tool-icons/pi-agent.svg',
+  goose: '/tool-icons/goose.ico',
   cline: '/tool-icons/cline.png',
   'roo-code': '/tool-icons/roo-code.png',
   'kilo-code': '/tool-icons/kilo-code.png',
@@ -1310,6 +1437,8 @@ const TOOL_CATALOG_BRAND_ICON_PATHS = {
   windsurf: '/tool-icons/windsurf.ico',
   'windsurf-ide': '/tool-icons/windsurf.ico',
   'qwen-code': '/tool-icons/qwen-code.ico',
+  kimi: '/tool-icons/kimi.ico',
+  copilot: '/tool-icons/github.svg',
   'codebuddy-code': '/tool-icons/codebuddy.png',
   qoder: '/tool-icons/qoder.png',
   zcode: '/tool-icons/zcode.svg',
@@ -1347,7 +1476,7 @@ function getToolCatalogRegionChips(toolId, fallback = []) {
 function getToolCatalogCapabilityChip({ canManage = false, manualOnly = false, supportStage = '', installed = false } = {}) {
   if (canManage) return installed ? '可更新' : '可安装';
   if (supportStage === 'extension') return '扩展入口';
-  if (supportStage === 'catalog') return '资产读取';
+  if (supportStage === 'catalog') return '目录入口';
   if (supportStage === 'planned') return '规划中';
   return manualOnly ? '手动入口' : '检测';
 }
@@ -2500,7 +2629,7 @@ function renderToolDetailPanel(item) {
   const regionLabels = Array.from(new Set(regions));
   const summaryRows = manualEntry
     ? [
-      { label: '能力范围', value: item.kind === 'ide' ? '官方下载安装' : item.supportStage === 'extension' ? '扩展资产读取' : item.supportStage === 'catalog' ? '配置资产读取' : '状态检测' },
+      { label: '能力范围', value: item.kind === 'ide' ? '官方下载安装' : item.supportStage === 'extension' ? '扩展入口' : item.supportStage === 'catalog' ? '配置入口' : '状态检测' },
       { label: '安装方式', value: item.kind === 'ide' ? '官网/市场' : item.supportStage === 'extension' ? '扩展市场' : '手动入口' },
       { label: '配置支持', value: item.supportStage === 'extension' || item.supportStage === 'catalog' ? '读取/导入' : '不自动写入' },
     ]
@@ -4322,29 +4451,30 @@ async function runOpenCodeDesktopInstallAction(btn, { reinstall = false, update 
 }
 
 function toolIconSvg(toolId) {
+  const normalizedToolId = normalizeToolCatalogId(toolId);
   const images = {
     codex: '/tool-icons/openai.png',
     'codex-app': '/tool-icons/openai.png',
     claudecode: '/tool-icons/claude-code.png',
     'claude-desktop': '/tool-icons/claude-code.png',
-    claudedesktop: '/tool-icons/claude-code.png',
-    gemini: '/icon.png',
-    openclaw: '/tool-icons/openclaw.png',
     opencode: '/tool-icons/opencode.png',
-    hermes: '/icon.png',
-    'opencode-desktop': '/tool-icons/opencode.png',
-    'opencode-vscode': '/tool-icons/opencode.png',
-    'opencode-cursor': '/tool-icons/opencode.png',
-    'opencode-windsurf': '/tool-icons/opencode.png',
-    'opencode-vscodium': '/tool-icons/opencode.png',
-    'opencode-zed': '/tool-icons/opencode.png',
-    'opencode-github': '/tool-icons/opencode.png',
-    'opencode-gitlab': '/tool-icons/opencode.png',
+    openclaw: '/tool-icons/openclaw.png',
     ...TOOL_CATALOG_BRAND_ICON_PATHS,
   };
   const initials = {
+    codex: 'AI',
+    'codex-app': 'AI',
+    claudecode: 'C',
+    'claude-desktop': 'C',
     gemini: 'G',
     hermes: 'H',
+    amp: 'A',
+    droid: 'D',
+    codebuff: 'CB',
+    'pi-agent': 'PI',
+    goose: 'G',
+    kimi: 'K',
+    copilot: 'GH',
     'qwen-code': 'Q',
     'codebuddy-code': 'CB',
     qoder: 'Q',
@@ -4357,9 +4487,46 @@ function toolIconSvg(toolId) {
     'vscode-ide': 'VS',
     'trae-ide': 'T',
   };
-  const src = images[toolId];
+  const src = images[toolId] || images[normalizedToolId];
   if (src) return `<img class="tool-official-icon" src="${src}" alt="" loading="lazy" decoding="async">`;
-  return `<span class="tool-icon-initials">${escapeHtml(initials[toolId] || String(toolId || '?').slice(0, 2).toUpperCase())}</span>`;
+  return `<span class="tool-icon-initials">${escapeHtml(initials[toolId] || initials[normalizedToolId] || String(toolId || '?').slice(0, 2).toUpperCase())}</span>`;
+}
+
+function hasToolBrandIcon(toolId) {
+  const normalizedToolId = normalizeToolCatalogId(toolId);
+  return Boolean(TOOL_CATALOG_BRAND_ICON_PATHS[toolId] || TOOL_CATALOG_BRAND_ICON_PATHS[normalizedToolId]);
+}
+
+function hydrateStaticToolIcons(root = document) {
+  const railTargets = [
+    ['.sec-item[data-sec-tool]', 'secTool'],
+    ['.sec-item[data-cfg-rail-tool]', 'cfgRailTool'],
+    ['.sec-item[data-dashboard-rail-tool]', 'dashboardRailTool'],
+    ['.sec-item[data-console-rail-tool]', 'consoleRailTool'],
+  ];
+  for (const [selector, dataKey] of railTargets) {
+    root.querySelectorAll(selector).forEach((item) => {
+      const tool = item.dataset?.[dataKey];
+      const icon = item.querySelector('.sec-ico');
+      if (!tool || !icon) return;
+      icon.classList.add('sec-ico--image');
+      icon.classList.toggle('sec-ico--official', hasToolBrandIcon(tool));
+      icon.innerHTML = toolIconSvg(tool);
+    });
+  }
+  root.querySelectorAll('.tool-tab[data-tool]').forEach((tab) => {
+    const tool = tab.dataset?.tool;
+    if (!tool) return;
+    let icon = tab.querySelector('.tool-tab-icon');
+    if (!icon) {
+      icon = document.createElement('span');
+      icon.className = 'tool-tab-icon';
+      const inlineSvg = tab.querySelector('svg');
+      if (inlineSvg) inlineSvg.replaceWith(icon);
+      else tab.prepend(icon);
+    }
+    icon.innerHTML = toolIconSvg(tool);
+  });
 }
 
 function updateToolSelector() {
@@ -8685,8 +8852,8 @@ const PAGE_META = {
   providers: { eyebrow: 'Providers', title: 'Provider 与备份', subtitle: '集中查看已发现配置、检测状态与历史备份。' },
   console: { eyebrow: 'Console', title: '运行控制台', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的运行状态、异常检测与快速修复入口。' },
   terminal: { eyebrow: 'Terminal', title: '内置终端', subtitle: '一站启动 codex / claude code，多会话 tab、token 实时监控与命令面板。' },
-  dashboard: { eyebrow: 'Dashboard', title: '数据看板', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的状态、用量与趋势。' },
-  assets: { eyebrow: 'Assets', title: '资产中心', subtitle: '按工具查看 Providers、MCP、Prompts、Skills、Sessions、Usage 与同步目标。' },
+  dashboard: { eyebrow: 'Dashboard', title: '数据看板', subtitle: '只展示已验证本地数据源：Codex、Claude Code、OpenCode。' },
+  assets: { eyebrow: 'Assets', title: '资产中心', subtitle: '把可配置、可迁移、仅安装入口分开；用量只统计已验证本地来源。' },
   providerRouter: { eyebrow: 'Router', title: '自动路由网关', subtitle: '启动本地 OpenAI-compatible 网关，按 provider 池做请求级路由。' },
   tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新或卸载 AI 编程工具。' },
   tasks: { eyebrow: 'Tasks', title: '任务管理', subtitle: '查看当前进行中和历史安装任务。' },
@@ -8701,6 +8868,26 @@ const TOOL_CONSOLE_META = {
   opencode: { label: 'OpenCode', actionLabel: 'OpenCode' },
   openclaw: { label: 'OpenClaw', actionLabel: 'OpenClaw' },
 };
+
+const DASHBOARD_USAGE_TOOL_DEFS = [
+  { key: 'codex', label: 'Codex', subtitle: 'OpenAI Codex 本地用量', accentA: '#ffd0a8', accentB: '#ff8c5a', kind: 'native' },
+  { key: 'claudecode', label: 'Claude Code', subtitle: 'Anthropic 本地用量', accentA: '#ffc69a', accentB: '#e07a3f', kind: 'native' },
+  { key: 'opencode', label: 'OpenCode', subtitle: 'SQLite / 本地用量', accentA: '#cbd7ff', accentB: '#6b86ff', kind: 'native' },
+  { key: 'gemini', label: 'Gemini CLI', subtitle: '~/.gemini/tmp usage', accentA: '#b9f3d0', accentB: '#22a06b', kind: 'local' },
+  { key: 'qwen-code', label: 'Qwen Code', subtitle: '~/.qwen/projects chats', accentA: '#b7e2ff', accentB: '#1677ff', kind: 'local' },
+  { key: 'kimi', label: 'Kimi', subtitle: '~/.kimi wire logs', accentA: '#e5d4ff', accentB: '#8b5cf6', kind: 'local' },
+  { key: 'amp', label: 'Amp', subtitle: '~/.local/share/amp threads', accentA: '#ffd6d2', accentB: '#f34e3f', kind: 'local' },
+  { key: 'droid', label: 'Droid', subtitle: '~/.factory/sessions usage', accentA: '#c7f0ff', accentB: '#0891b2', kind: 'local' },
+  { key: 'codebuff', label: 'Codebuff', subtitle: '~/.config/manicode chats', accentA: '#ffe2b8', accentB: '#f59e0b', kind: 'local' },
+  { key: 'openclaw', label: 'OpenClaw', subtitle: '~/.openclaw JSONL', accentA: '#d7f7c2', accentB: '#65a30d', kind: 'local' },
+  { key: 'hermes', label: 'Hermes Agent', subtitle: '~/.hermes/state.db', accentA: '#d6e4ff', accentB: '#2563eb', kind: 'local' },
+  { key: 'pi-agent', label: 'pi-agent', subtitle: '~/.pi/agent/sessions', accentA: '#e7e5e4', accentB: '#57534e', kind: 'local' },
+  { key: 'goose', label: 'Goose', subtitle: 'sessions.db usage', accentA: '#d9f99d', accentB: '#4d7c0f', kind: 'local' },
+  { key: 'kilo-code', label: 'Kilo Code', subtitle: '~/.local/share/kilo.db', accentA: '#c4b5fd', accentB: '#7c3aed', kind: 'local' },
+  { key: 'copilot', label: 'Copilot CLI', subtitle: '~/.copilot/otel', accentA: '#d1d5db', accentB: '#24292f', kind: 'local' },
+];
+
+const DASHBOARD_USAGE_TOOL_KEYS = new Set(DASHBOARD_USAGE_TOOL_DEFS.map((item) => item.key));
 
 const OPENCLAW_CHANNEL_LABELS = {
   telegram: 'Telegram',
@@ -8783,7 +8970,7 @@ state.dashboardAutoRefreshTimer = setInterval(() => {
       ensureClaudeDashboardData().then(() => renderDashboardPage()).catch((e) => console.warn('[dashboardAutoRefresh] ensureClaudeDashboardData failed:', e));
       return;
     }
-    if (isApiDashboardTool(tool)) {
+    if (isApiDashboardTool(tool) || isGenericUsageDashboardTool(tool)) {
       refreshDashboardData({ silent: true, tool }).catch((e) => console.warn('[dashboardAutoRefresh] refreshDashboardData failed:', e));
     }
   }, Number(state.dashboardAutoRefreshMs));
@@ -8804,6 +8991,40 @@ function isApiDashboardTool(tool = '') {
   return tool === 'codex' || tool === 'opencode';
 }
 
+function getDashboardToolDef(tool = '') {
+  const normalized = normalizeToolCatalogId(tool || 'codex');
+  return DASHBOARD_USAGE_TOOL_DEFS.find((item) => item.key === normalized) || null;
+}
+
+function isDashboardUsageTool(tool = '') {
+  return DASHBOARD_USAGE_TOOL_KEYS.has(normalizeToolCatalogId(tool || ''));
+}
+
+function isGenericUsageDashboardTool(tool = '') {
+  const normalized = normalizeToolCatalogId(tool || '');
+  return isDashboardUsageTool(normalized) && !isApiDashboardTool(normalized) && normalized !== 'claudecode';
+}
+
+function renderDashboardToolRail() {
+  const list = document.getElementById('dashboardToolList');
+  if (!list) return;
+  const activeTool = getDashboardToolDef(state.dashboardTool)?.key || 'codex';
+  list.innerHTML = DASHBOARD_USAGE_TOOL_DEFS.map((tool) => `
+    <button type="button" class="sec-item ${tool.key === activeTool ? 'active' : ''}" data-dashboard-rail-tool="${escapeHtml(tool.key)}" style="--accent-a:${tool.accentA};--accent-b:${tool.accentB}">
+      <span class="sec-ico sec-ico--image ${hasToolBrandIcon(tool.key) ? 'sec-ico--official' : ''}">${toolIconSvg(tool.key)}</span>
+      <span class="sec-text">
+        <span class="sec-name">${escapeHtml(tool.label)}</span>
+        <span class="sec-subtitle">${escapeHtml(tool.subtitle)}</span>
+      </span>
+      <span class="sec-chev" aria-hidden="true">›</span>
+    </button>
+  `).join('');
+  requestAnimationFrame(() => {
+    const active = list.querySelector('.sec-item.active');
+    if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
+}
+
 function normalizeDashboardWindowForCache(win = getDashboardWindow()) {
   const days = Math.min(366, Math.max(1, Number(win?.days) || 30));
   return {
@@ -8812,6 +9033,142 @@ function normalizeDashboardWindowForCache(win = getDashboardWindow()) {
     from: String(win?.from || ''),
     to: String(win?.to || ''),
   };
+}
+
+function getDashboardUsageCacheKey(tool = '', win = getDashboardWindow()) {
+  const normalizedTool = getDashboardToolDef(tool)?.key || 'codex';
+  const normalizedWindow = normalizeDashboardWindowForCache(win);
+  return JSON.stringify({
+    tool: normalizedTool,
+    source: 'usage-inventory',
+    window: normalizedWindow.kind,
+    days: normalizedWindow.days,
+    from: normalizedWindow.from,
+    to: normalizedWindow.to,
+  });
+}
+
+function getDashboardUsageInventoryEntryForTool(tool = '', win = getDashboardWindow()) {
+  if (!isGenericUsageDashboardTool(tool)) return { data: null, fetchedAt: 0, key: '' };
+  const key = getDashboardUsageCacheKey(tool, win);
+  return {
+    data: state.dashboardUsageInventoryByWindow?.[key] || null,
+    fetchedAt: Number(state.dashboardUsageFetchedAtByWindow?.[key] || 0),
+    key,
+  };
+}
+
+function normalizeDashboardUsageTotals(totals = {}) {
+  return {
+    input: Number(totals.input || 0),
+    cachedInput: Number(totals.cachedInput || totals.cacheRead || 0),
+    output: Number(totals.output || 0),
+    reasoning: Number(totals.reasoning || 0),
+    cacheRead: Number(totals.cacheRead || totals.cachedInput || 0),
+    cacheCreation: Number(totals.cacheCreation || 0),
+    total: Number(totals.total || 0),
+    cost: Number(totals.cost || 0),
+    officialCost: Number(totals.officialCost || 0),
+    requests: Number(totals.requests || 0),
+  };
+}
+
+function normalizeDashboardUsageDaily(daily = []) {
+  return (Array.isArray(daily) ? daily : [])
+    .map((item) => {
+      const totals = normalizeDashboardUsageTotals(item.totals || item);
+      return {
+        date: String(item.date || '').slice(0, 10),
+        input: totals.input,
+        cachedInput: totals.cachedInput,
+        output: totals.output,
+        reasoning: totals.reasoning,
+        cacheRead: totals.cacheRead,
+        cacheCreation: totals.cacheCreation,
+        total: totals.total,
+        cost: totals.cost,
+        requests: totals.requests,
+      };
+    })
+    .filter((item) => item.date);
+}
+
+function normalizeDashboardUsageSession(log = {}) {
+  const totals = normalizeDashboardUsageTotals(log.totals || log);
+  const updatedAt = log.updatedAt || log.lastActiveAt || log.startedAt || '';
+  return {
+    ...log,
+    input: totals.input,
+    cachedInput: totals.cachedInput,
+    output: totals.output,
+    reasoning: totals.reasoning,
+    cacheRead: totals.cacheRead,
+    cacheCreation: totals.cacheCreation,
+    total: totals.total,
+    cost: Number(log.cost || totals.cost || 0),
+    requests: totals.requests,
+    provider: String(log.provider || 'unknown'),
+    model: String(log.model || 'unknown'),
+    title: String(log.title || log.sessionId || log.id || ''),
+    projectPath: String(log.projectPath || log.cwd || log.directory || ''),
+    updatedAt,
+    lastActiveAt: updatedAt,
+    startedAt: updatedAt,
+    totals,
+  };
+}
+
+function normalizeDashboardUsageDimension(entries = [], kind = 'model') {
+  return (Array.isArray(entries) ? entries : []).map((entry) => ({
+    ...entry,
+    [kind]: String(entry?.[kind] || entry?.name || 'unknown'),
+    totals: normalizeDashboardUsageTotals(entry?.totals || entry),
+    events: Number(entry?.events || entry?.totals?.requests || 0),
+  }));
+}
+
+function dashboardUsageInventoryToMetrics(tool = '', inventory = null) {
+  const source = (Array.isArray(inventory?.sources) ? inventory.sources : [])
+    .find((item) => normalizeToolCatalogId(item.tool || '') === normalizeToolCatalogId(tool || ''));
+  if (!source) return null;
+  const def = getDashboardToolDef(tool) || { label: tool };
+  const sessions = (Array.isArray(source.requestLogs) ? source.requestLogs : []).map(normalizeDashboardUsageSession);
+  return {
+    ...source,
+    label: source.label || def.label,
+    generatedAt: source.generatedAt || inventory.generatedAt || '',
+    totals: normalizeDashboardUsageTotals(source.totals),
+    daily: normalizeDashboardUsageDaily(source.daily),
+    providers: normalizeDashboardUsageDimension(source.providers, 'provider'),
+    models: normalizeDashboardUsageDimension(source.models, 'model'),
+    sessions,
+    requestLogs: sessions,
+    inventorySummary: inventory.summary || null,
+    customPrices: inventory.customPrices || null,
+  };
+}
+
+function getDashboardUsageMetricsForTool(tool = '', win = getDashboardWindow()) {
+  const entry = getDashboardUsageInventoryEntryForTool(tool, win);
+  return dashboardUsageInventoryToMetrics(tool, entry.data);
+}
+
+function hasDashboardCachedDataForTool(tool = '', win = getDashboardWindow()) {
+  const normalized = getDashboardToolDef(tool)?.key || 'codex';
+  if (normalized === 'claudecode') return hasClaudeDashboardData();
+  if (isGenericUsageDashboardTool(normalized)) return Boolean(getDashboardUsageMetricsForTool(normalized, win));
+  return Boolean(getDashboardMetricsForTool(normalized, win));
+}
+
+function setDashboardUsageInventoryForTool(tool = '', data = null, win = getDashboardWindow()) {
+  if (!isGenericUsageDashboardTool(tool) || !data) return null;
+  if (!state.dashboardUsageInventoryByWindow) state.dashboardUsageInventoryByWindow = {};
+  if (!state.dashboardUsageFetchedAtByWindow) state.dashboardUsageFetchedAtByWindow = {};
+  const key = getDashboardUsageCacheKey(tool, win);
+  const fetchedAt = Date.now();
+  state.dashboardUsageInventoryByWindow[key] = data;
+  state.dashboardUsageFetchedAtByWindow[key] = fetchedAt;
+  return { key, fetchedAt };
 }
 
 function getDashboardMetricsCacheKey(tool = '', win = getDashboardWindow(), codexHome = getDashboardCodexHome()) {
@@ -8882,6 +9239,18 @@ function isDashboardMetricsRefreshingForTool(tool = '', win = getDashboardWindow
   if (!isApiDashboardTool(tool)) return false;
   const key = getDashboardMetricsCacheKey(tool, win, codexHome);
   return Boolean(state.dashboardRefreshingByWindow?.[key]);
+}
+
+function isDashboardUsageRefreshingForTool(tool = '', win = getDashboardWindow()) {
+  if (!isGenericUsageDashboardTool(tool)) return false;
+  const key = getDashboardUsageCacheKey(tool, win);
+  return Boolean(state.dashboardRefreshingByWindow?.[key]);
+}
+
+function isDashboardRefreshingForTool(tool = '', win = getDashboardWindow(), codexHome = getDashboardCodexHome()) {
+  return isApiDashboardTool(tool)
+    ? isDashboardMetricsRefreshingForTool(tool, win, codexHome)
+    : isDashboardUsageRefreshingForTool(tool, win);
 }
 
 function hasClaudeDashboardData() {
@@ -9455,42 +9824,57 @@ function renderModelCostRows(models = [], totalTokens = 0) {
 // 但 totals/daily/sessions/models/providers 已按 filter 重算的对象。
 function applyDashboardFilter(metrics, filter, tool) {
   if (!metrics) return metrics;
-  const wantProvider = filter?.provider || 'all';
-  const wantModel = filter?.model || 'all';
-  if (wantProvider === 'all' && wantModel === 'all') return metrics;
   const sessions = Array.isArray(metrics.sessions) ? metrics.sessions : [];
+  const normProvider = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  let wantProvider = filter?.provider || 'all';
+  let wantModel = filter?.model || 'all';
+  if (wantProvider !== 'all' && !sessions.some((s) => normProvider(s?.provider) === normProvider(wantProvider))) {
+    wantProvider = 'all';
+  }
+  if (wantModel !== 'all' && !sessions.some((s) => String(s?.model || '').toLowerCase() === wantModel.toLowerCase())) {
+    wantModel = 'all';
+  }
+  if (wantProvider === 'all' && wantModel === 'all') return metrics;
   const matchProvider = (p) => {
     if (wantProvider === 'all') return true;
-    const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-    return norm(p) === norm(wantProvider);
+    return normProvider(p) === normProvider(wantProvider);
   };
   const matchModel = (m) => {
     if (wantModel === 'all') return true;
     return String(m || '').toLowerCase() === wantModel.toLowerCase();
   };
   const filteredSessions = sessions.filter((s) => matchProvider(s?.provider) && matchModel(s?.model));
+  const metric = (s, key) => Number((s && s[key] != null ? s[key] : s?.totals?.[key]) || 0);
+  const cachedMetric = (s) => Number(s?.cachedInput ?? s?.cacheRead ?? s?.totals?.cachedInput ?? s?.totals?.cacheRead ?? 0);
+  const sessionDay = (s) => String(s?.lastActiveAt || s?.updatedAt || s?.startedAt || '').slice(0, 10);
   // 重算 totals
-  const totals = { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0 };
+  const totals = { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: 0 };
   for (const s of filteredSessions) {
-    totals.input += Number(s.input || 0);
-    totals.output += Number(s.output || 0);
-    totals.reasoning += Number(s.reasoning || 0);
-    totals.cachedInput += Number(s.cachedInput || s.cacheRead || 0);
-    totals.cacheRead += Number(s.cacheRead || 0);
-    totals.cacheCreation += Number(s.cacheCreation || 0);
-    totals.total += Number(s.total || 0);
+    totals.input += metric(s, 'input');
+    totals.output += metric(s, 'output');
+    totals.reasoning += metric(s, 'reasoning');
+    totals.cachedInput += cachedMetric(s);
+    totals.cacheRead += metric(s, 'cacheRead');
+    totals.cacheCreation += metric(s, 'cacheCreation');
+    totals.total += metric(s, 'total');
+    totals.cost += metric(s, 'cost');
+    totals.requests += Math.max(1, metric(s, 'requests'));
   }
   // 重算 daily：按日期分桶
   const dailyMap = new Map();
   for (const s of filteredSessions) {
-    const day = (s.lastActiveAt || s.startedAt || '').slice(0, 10);
+    const day = sessionDay(s);
     if (!day) continue;
-    const bucket = dailyMap.get(day) || { date: day, input: 0, output: 0, reasoning: 0, cachedInput: 0, total: 0 };
-    bucket.input += Number(s.input || 0);
-    bucket.output += Number(s.output || 0);
-    bucket.reasoning += Number(s.reasoning || 0);
-    bucket.cachedInput += Number(s.cachedInput || s.cacheRead || 0);
-    bucket.total += Number(s.total || 0);
+    const bucket = dailyMap.get(day) || { date: day, input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: 0 };
+    bucket.input += metric(s, 'input');
+    bucket.output += metric(s, 'output');
+    bucket.reasoning += metric(s, 'reasoning');
+    bucket.cachedInput += cachedMetric(s);
+    bucket.cacheRead += metric(s, 'cacheRead');
+    bucket.cacheCreation += metric(s, 'cacheCreation');
+    bucket.total += metric(s, 'total');
+    bucket.cost += metric(s, 'cost');
+    bucket.requests += Math.max(1, metric(s, 'requests'));
     dailyMap.set(day, bucket);
   }
   const daily = [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -9498,13 +9882,17 @@ function applyDashboardFilter(metrics, filter, tool) {
   const provMap = new Map();
   for (const s of filteredSessions) {
     const k = s.provider || 'unknown';
-    const cur = provMap.get(k) || { provider: k, events: 0, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, total: 0 } };
-    cur.events++;
-    cur.totals.input += Number(s.input || 0);
-    cur.totals.output += Number(s.output || 0);
-    cur.totals.reasoning += Number(s.reasoning || 0);
-    cur.totals.cachedInput += Number(s.cachedInput || s.cacheRead || 0);
-    cur.totals.total += Number(s.total || 0);
+    const cur = provMap.get(k) || { provider: k, events: 0, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: 0 } };
+    cur.events += Math.max(1, metric(s, 'requests'));
+    cur.totals.input += metric(s, 'input');
+    cur.totals.output += metric(s, 'output');
+    cur.totals.reasoning += metric(s, 'reasoning');
+    cur.totals.cachedInput += cachedMetric(s);
+    cur.totals.cacheRead += metric(s, 'cacheRead');
+    cur.totals.cacheCreation += metric(s, 'cacheCreation');
+    cur.totals.total += metric(s, 'total');
+    cur.totals.cost += metric(s, 'cost');
+    cur.totals.requests += Math.max(1, metric(s, 'requests'));
     provMap.set(k, cur);
   }
   const providers = [...provMap.values()].sort((a, b) => b.totals.total - a.totals.total);
@@ -9512,13 +9900,17 @@ function applyDashboardFilter(metrics, filter, tool) {
   const modelMap = new Map();
   for (const s of filteredSessions) {
     const k = s.model || 'unknown';
-    const cur = modelMap.get(k) || { model: k, events: 0, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, total: 0 } };
-    cur.events++;
-    cur.totals.input += Number(s.input || 0);
-    cur.totals.output += Number(s.output || 0);
-    cur.totals.reasoning += Number(s.reasoning || 0);
-    cur.totals.cachedInput += Number(s.cachedInput || s.cacheRead || 0);
-    cur.totals.total += Number(s.total || 0);
+    const cur = modelMap.get(k) || { model: k, events: 0, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: 0 } };
+    cur.events += Math.max(1, metric(s, 'requests'));
+    cur.totals.input += metric(s, 'input');
+    cur.totals.output += metric(s, 'output');
+    cur.totals.reasoning += metric(s, 'reasoning');
+    cur.totals.cachedInput += cachedMetric(s);
+    cur.totals.cacheRead += metric(s, 'cacheRead');
+    cur.totals.cacheCreation += metric(s, 'cacheCreation');
+    cur.totals.total += metric(s, 'total');
+    cur.totals.cost += metric(s, 'cost');
+    cur.totals.requests += Math.max(1, metric(s, 'requests'));
     modelMap.set(k, cur);
   }
   const models = [...modelMap.values()].sort((a, b) => b.totals.total - a.totals.total);
@@ -9548,72 +9940,298 @@ function getDashboardFilterOptions(metrics) {
   };
 }
 
+function formatDashboardUsageTimestamp(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString(isEnglishAppLanguage() ? 'en-US' : 'zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getDashboardUsageStatusMeta(metrics = {}) {
+  const level = String(metrics?.usageLevel || metrics?.usageStatus || '').trim() || 'missing';
+  const evidence = metrics?.usageEvidence && typeof metrics.usageEvidence === 'object' ? metrics.usageEvidence : {};
+  const labelMap = {
+    exact: '精准用量',
+    parsed: '已解析 Token',
+    'sessions-only': '仅会话记录',
+    'source-only': '仅发现来源',
+    'connected-empty': '已接入无数据',
+    unsupported: '未支持用量',
+    missing: '未发现数据',
+    error: '读取异常',
+  };
+  const detailMap = {
+    exact: '来自该工具已接入的本地用量数据源。',
+    parsed: '从本机会话文件中提取到 usage/token 字段。',
+    'sessions-only': '已找到会话或活动日志，但没有发现可统计的 token 字段。',
+    'source-only': '发现本地目录或配置入口，但还没有可解析的会话记录。',
+    'connected-empty': '读取入口已接通，但当前窗口内没有 token 记录。',
+    unsupported: '没有确认稳定的本地 JSONL/SQLite 数据源，不进入用量分析。',
+    missing: '本机还没有发现可读取的会话或用量文件。',
+    error: '发现本地来源，但解析或读取时返回异常。',
+  };
+  const sessionCount = Number(evidence.sessionCount || metrics?.sessions?.length || metrics?.requestLogs?.length || 0);
+  const tokenizedCount = Number(evidence.tokenizedSessionCount || 0);
+  const existingSourceCount = Number(evidence.existingSourceCount || 0);
+  const configuredSourceCount = Number(evidence.configuredSourceCount || 0);
+  return {
+    level,
+    label: metrics?.usageStatusLabel || labelMap[level] || labelMap.missing,
+    detail: metrics?.usageStatusDetail || detailMap[level] || detailMap.missing,
+    evidenceLabel: `${existingSourceCount}/${configuredSourceCount || existingSourceCount} 来源 · ${sessionCount} 会话 · ${tokenizedCount} 含 Token`,
+  };
+}
+
+function renderDashboardUsageSourcePanel(tool = '', metrics = {}) {
+  const warnings = Array.isArray(metrics?.warnings) ? metrics.warnings.filter(Boolean) : [];
+  const status = getDashboardUsageStatusMeta(metrics);
+  const sourcePaths = String(metrics?.source || '')
+    .split('|')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const customPrices = metrics?.customPrices?.models
+    ? `${metrics.customPrices.models} 个自定义模型价格`
+    : '未配置自定义价格';
+  const sourceType = metrics?.sourceType || 'session-backed';
+  const showSourcePaths = status.level !== 'missing' && sourcePaths.length;
+  return `
+    <div class="db3-usage-source">
+      <div class="db3-usage-status db3-usage-status--${escapeHtml(status.level)}">
+        <strong>${escapeHtml(appText(status.label))}</strong>
+        <span>${escapeHtml(appText(status.detail))}</span>
+      </div>
+      <div class="db3-usage-source-row">
+        <span>${escapeHtml(appText('证据'))}</span>
+        <strong>${escapeHtml(status.evidenceLabel)}</strong>
+      </div>
+      <div class="db3-usage-source-row">
+        <span>${escapeHtml(appText('读取方式'))}</span>
+        <strong>${escapeHtml(sourceType)}</strong>
+      </div>
+      <div class="db3-usage-source-row">
+        <span>${escapeHtml(appText('价格本'))}</span>
+        <strong>${escapeHtml(appText(customPrices))}</strong>
+      </div>
+      ${showSourcePaths ? `<div class="db3-usage-paths">${sourcePaths.map((item) => `<code title="${escapeHtml(item)}">${escapeHtml(item)}</code>`).join('')}</div>` : `<div class="dashboard-empty-note">${escapeHtml(appText(status.detail))}</div>`}
+      ${warnings.length ? `<div class="db3-usage-warnings">${warnings.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
+      <div class="db3-usage-actions">
+        <button type="button" class="db3-usage-action" data-dashboard-goto-assets="${escapeHtml(tool)}">${escapeHtml(appText('资产中心'))}</button>
+        <button type="button" class="db3-usage-action" data-dashboard-goto-config="${escapeHtml(tool)}">${escapeHtml(appText('配置工具'))}</button>
+      </div>
+    </div>`;
+}
+
+function renderDashboardUsageLogTable(logs = []) {
+  const rows = (Array.isArray(logs) ? logs : []).slice(0, 120);
+  if (!rows.length) return `<div class="dashboard-empty-note">${escapeHtml(appText('暂无请求或会话明细。刷新后仍为空，说明本机尚未留下可读取的日志。'))}</div>`;
+  return `
+    <div class="db3-usage-log-table" role="table" aria-label="${escapeHtml(appText('请求明细'))}">
+      <div class="db3-usage-log-row db3-usage-log-head" role="row">
+        <span>${escapeHtml(appText('时间'))}</span>
+        <span>${escapeHtml(appText('会话 / 项目'))}</span>
+        <span>${escapeHtml(appText('Provider / 模型'))}</span>
+        <span>${escapeHtml(appText('Token'))}</span>
+      </div>
+      <div class="db3-usage-log-body">
+        ${rows.map((log) => {
+          const title = log.title || log.sessionId || log.id || 'session';
+          const project = log.projectPath || log.sourceScope || '';
+          const model = log.model || 'unknown';
+          const provider = log.provider || 'unknown';
+          const total = log.total || log.totals?.total || 0;
+          return `<div class="db3-usage-log-row" role="row">
+            <span>${escapeHtml(formatDashboardUsageTimestamp(log.updatedAt || log.lastActiveAt))}</span>
+            <span>
+              <strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong>
+              ${project ? `<em title="${escapeHtml(project)}">${escapeHtml(project)}</em>` : ''}
+            </span>
+            <span>
+              <strong title="${escapeHtml(provider)}">${escapeHtml(provider)}</strong>
+              <em title="${escapeHtml(model)}">${escapeHtml(model)}</em>
+            </span>
+            <span title="${escapeHtml(formatDashboardMetricFull(total))}">${escapeHtml(formatDashboardMetric(total))}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+function renderGenericUsageDashboard(tool = '', metrics = null, win = getDashboardWindow(), { isLoading = false } = {}) {
+  if (!metrics && isLoading) return renderDashboardLoadingCard();
+  const def = getDashboardToolDef(tool) || { label: tool || 'Tool' };
+  const totals = normalizeDashboardUsageTotals(metrics?.totals || {});
+  const daily = (metrics?.daily || []).filter((item) => {
+    const date = item.date || '';
+    return date >= win.from && date <= win.to;
+  });
+  const sessions = Array.isArray(metrics?.sessions) ? metrics.sessions : [];
+  const models = Array.isArray(metrics?.models) ? metrics.models : [];
+  const providers = Array.isArray(metrics?.providers) ? metrics.providers : [];
+  const dailyTotal = daily.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const totalTokens = dailyTotal || totals.total;
+  const inputTokens = daily.reduce((sum, item) => sum + Number(item.input || 0), 0) || totals.input;
+  const outputTokens = daily.reduce((sum, item) => sum + Number(item.output || 0), 0) || totals.output;
+  const reasoningTokens = daily.reduce((sum, item) => sum + Number(item.reasoning || 0), 0) || totals.reasoning;
+  const cachedTokens = daily.reduce((sum, item) => sum + Number(item.cachedInput || item.cacheRead || 0), 0) || totals.cachedInput || totals.cacheRead;
+  const cost = daily.reduce((sum, item) => sum + Number(item.cost || 0), 0) || totals.cost || totals.officialCost;
+  const requestCount = totals.requests || sessions.length;
+  const cacheHitPct = totalTokens ? Math.round(cachedTokens / totalTokens * 100) : 0;
+  const topModel = models[0]?.model || 'unknown';
+  const modelTotal = models.reduce((sum, entry) => sum + Number(entry.totals?.total || 0), 0);
+  const hasAnyData = totalTokens > 0 || sessions.length > 0 || models.length > 0 || providers.length > 0;
+  const usageStatus = getDashboardUsageStatusMeta(metrics || {});
+  const tokenMix = [
+    { label: '输入', value: totalTokens ? Math.round(inputTokens / totalTokens * 100) : 0, meta: inputTokens },
+    { label: '输出', value: totalTokens ? Math.round(outputTokens / totalTokens * 100) : 0, meta: outputTokens },
+    { label: '缓存', value: cacheHitPct, meta: cachedTokens },
+    { label: '推理', value: totalTokens ? Math.round(reasoningTokens / totalTokens * 100) : 0, meta: reasoningTokens },
+  ];
+  const costSeries = daily.map((item) => ({ label: (item.date || '').slice(5), value: Number(item.cost || 0) }));
+  return `
+    <div class="db2-layout db2-layout--dashboard db3-usage-layout">
+      <section class="db3-hero db3-hero--usage">
+        <div class="db3-hero-stats">
+          <div class="db3-hero-stat db3-hero-stat-emph">
+            <div class="db3-hero-value">${escapeHtml(cost ? formatDashboardUsd(cost, { min: 2, max: 4 }) : '$0.00')}</div>
+            <div class="db3-hero-label">${escapeHtml(appText('本地记录费用'))}</div>
+          </div>
+          <div class="db3-hero-stat">
+            <div class="db3-hero-value">${escapeHtml(formatDashboardMetric(totalTokens))}</div>
+            <div class="db3-hero-label">${escapeHtml(appText('总 Token'))}</div>
+          </div>
+          <div class="db3-hero-stat">
+            <div class="db3-hero-value">${escapeHtml(formatDashboardMetric(requestCount))}</div>
+            <div class="db3-hero-label">${escapeHtml(appText('请求 / 会话'))}</div>
+          </div>
+          <div class="db3-hero-stat">
+            <div class="db3-hero-value">${escapeHtml(topModel === 'unknown' ? '—' : topModel)}</div>
+            <div class="db3-hero-label">${escapeHtml(appText('主模型'))}</div>
+          </div>
+        </div>
+        <div class="db3-hero-chart-wrap">
+          <div class="db3-hero-chart-head">
+            <span class="db3-hero-chart-title">${escapeHtml(appText('Token 用量趋势'))}</span>
+            <span class="db3-hero-chart-meta">${escapeHtml(formatDashboardRecentWindowLabel(win))} · ${escapeHtml(def.label)} · ${escapeHtml(appText(usageStatus.label))}</span>
+          </div>
+          ${hasAnyData
+            ? renderDashboardInteractiveChart(daily.map((item) => ({ label: item.date.slice(5), value: item.total || 0, input: item.input || 0, output: (item.output || 0) + (item.reasoning || 0), cached: item.cachedInput || item.cacheRead || 0 })), { stroke: '#22c55e', showCost: false, models })
+            : `<div class="db3-usage-empty">
+                <strong>${escapeHtml(appText(usageStatus.label))}</strong>
+                <span>${escapeHtml(appText(usageStatus.detail))}</span>
+                <div class="db3-usage-actions">
+                  <button type="button" class="db3-usage-action" data-dashboard-goto-assets="${escapeHtml(tool)}">${escapeHtml(appText('查看资产来源'))}</button>
+                  <button type="button" class="db3-usage-action" data-dashboard-refresh>${escapeHtml(appText('重新读取'))}</button>
+                </div>
+              </div>`}
+        </div>
+      </section>
+
+      <div class="db3-analytics-board db3-analytics-board--generic">
+        <section class="db2-section db3-panel db3-panel--primary">
+          <div class="db2-card-head">
+            <div class="db2-card-title">${escapeHtml(appText('请求明细'))}</div>
+            <div class="db2-card-meta">${escapeHtml(isEnglishAppLanguage() ? `${sessions.length} sessions` : `${sessions.length} 条`)}</div>
+          </div>
+          ${renderDashboardUsageLogTable(sessions)}
+        </section>
+        <section class="db2-section db3-panel db3-panel--mix">
+          <div class="db2-card-head">
+            <div class="db2-card-title">${escapeHtml(appText('Token 构成'))}</div>
+            <div class="db2-card-meta">${escapeHtml(cacheHitPct ? `Cache ${cacheHitPct}%` : 'Input / Output / Cache')}</div>
+          </div>
+          ${renderDashboardTokenMix(tokenMix)}
+        </section>
+        <section class="db2-section db3-panel db3-panel--dist">
+          <div class="db2-card-head">
+            <div class="db2-card-title">${escapeHtml(appText('模型分布'))}</div>
+            <div class="db2-card-meta">${escapeHtml(formatDashboardModelCount(models.length))}</div>
+          </div>
+          ${renderDashboardModelDistChart(models, modelTotal)}
+        </section>
+        <section class="db2-section db3-panel db3-panel--trend">
+          <div class="db2-card-head">
+            <div class="db2-card-title">${escapeHtml(appText('费用趋势'))}</div>
+            <div class="db2-card-meta">${escapeHtml(appText('来自本地日志或自定义价格'))}</div>
+          </div>
+          ${renderCostTrendPanel(costSeries, isEnglishAppLanguage() ? `${formatDashboardRecentWindowLabel(win)} total` : `${formatDashboardRecentWindowLabel(win)}合计`, '#22c55e')}
+        </section>
+        <section class="db2-section db3-panel db3-panel--standards">
+          <div class="db2-card-head">
+            <div class="db2-card-title">${escapeHtml(appText('读取来源'))}</div>
+            <div class="db2-card-meta">${escapeHtml(metrics?.ok === false ? appText('存在解析问题') : appText('本地优先'))}</div>
+          </div>
+          ${renderDashboardUsageSourcePanel(tool, metrics || {})}
+        </section>
+      </div>
+    </div>`;
+}
+
 function renderDashboardPage() {
   const root = el('dashboardPage');
   if (!root) return;
 
-  const routerProfileDashboardTools = new Set(['claude-desktop', 'gemini', 'hermes']);
+  renderDashboardToolRail();
   const codex = state.current || {};
   const claude = state.claudeCodeState || {};
   const openclaw = state.openclawState || {};
   const win = getDashboardWindow();
+  let dashboardTool = getDashboardToolDef(state.dashboardTool)?.key || 'codex';
+  state.dashboardTool = dashboardTool;
+  const dashboardDef = getDashboardToolDef(dashboardTool) || DASHBOARD_USAGE_TOOL_DEFS[0];
+  const toolLabel = dashboardDef.label;
   const codexMetricsRaw = getDashboardMetricsForTool('codex', win) || { totals: { input: 0, cachedInput: 0, output: 0, reasoning: 0, total: 0 }, daily: [], providers: [], sessions: [], models: [] };
   const opencodeMetricsRaw = getDashboardMetricsForTool('opencode', win) || { totals: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0 }, daily: [], providers: [], sessions: [], models: [] };
-  // 过滤后的数据：除 codex / opencode 之外的 tool 不参与过滤
+  const genericMetricsRaw = isGenericUsageDashboardTool(dashboardTool) ? getDashboardUsageMetricsForTool(dashboardTool, win) : null;
+  // 过滤后的数据：Codex / OpenCode / session-backed tools 共享 provider + model 筛选
   const codexMetrics = applyDashboardFilter(codexMetricsRaw, state.dashboardFilter, 'codex');
   const opencodeMetrics = applyDashboardFilter(opencodeMetricsRaw, state.dashboardFilter, 'opencode');
+  const genericMetrics = genericMetricsRaw ? applyDashboardFilter(genericMetricsRaw, state.dashboardFilter, dashboardTool) : null;
   const openclawChannels = getOpenClawConsoleChannels(openclaw.config || {});
   const openclawProviders = getOpenClawConsoleProviders(openclaw.config || {});
-  const dashboardTool = state.dashboardTool || 'codex';
   const hasCodexMetrics = Boolean(getDashboardMetricsForTool('codex', win));
   const hasOpenCodeMetrics = Boolean(getDashboardMetricsForTool('opencode', win));
-  const isRouterProfileDashboard = routerProfileDashboardTools.has(dashboardTool);
+  const hasGenericMetrics = Boolean(genericMetricsRaw);
+  const isRouterProfileDashboard = false;
   const hasCurrentMetrics = dashboardTool === 'codex'
     ? hasCodexMetrics
     : dashboardTool === 'opencode'
       ? hasOpenCodeMetrics
       : dashboardTool === 'claudecode'
         ? hasClaudeDashboardData()
-        : isRouterProfileDashboard
-          ? true
-        : true;
-  const apiDashboardRefreshing = isApiDashboardTool(dashboardTool) ? isDashboardMetricsRefreshingForTool(dashboardTool, win) : false;
-  const dashboardRefreshing = dashboardTool === 'claudecode' ? Boolean(state.dashboardRefreshing) : apiDashboardRefreshing;
+        : isGenericUsageDashboardTool(dashboardTool)
+          ? hasGenericMetrics
+          : isRouterProfileDashboard;
+  const dashboardRefreshing = dashboardTool === 'claudecode' ? Boolean(state.dashboardRefreshing) : isDashboardRefreshingForTool(dashboardTool, win);
   const isLoading = dashboardTool === 'claudecode'
     ? Boolean(state.dashboardLoading)
     : Boolean((state.dashboardLoading && !hasCurrentMetrics) || (state.dashboardLoading && dashboardRefreshing) || (dashboardRefreshing && !hasCurrentMetrics));
   const lastUpdated = formatDashboardUpdatedAt(codexMetrics.generatedAt);
   const opencodeLastUpdated = formatDashboardUpdatedAt(opencodeMetrics.generatedAt);
   const claudeLastUpdated = formatDashboardUpdatedAt(claude.usage?.generatedAt);
-  const showDashboardRefresh = dashboardTool === 'codex' || dashboardTool === 'claudecode' || dashboardTool === 'opencode';
+  const genericLastUpdated = formatDashboardUpdatedAt(genericMetricsRaw?.generatedAt);
+  const showDashboardRefresh = dashboardTool === 'claudecode' || isApiDashboardTool(dashboardTool) || isGenericUsageDashboardTool(dashboardTool);
   const daysWindow = win.days;
   const winFrom = win.from;
   const winTo = win.to;
   const winLabel = formatDashboardWindowLabel(win);
   const winRecentLabel = formatDashboardRecentWindowLabel(win);
+  const genericUsageStatus = getDashboardUsageStatusMeta(genericMetricsRaw || {});
   const dashboardStatusText = dashboardTool === 'claudecode'
     ? (isLoading ? '正在统计本地 Claude Code token…' : (claudeLastUpdated || '统计已完成'))
     : dashboardTool === 'opencode'
       ? (isLoading ? '正在统计本地 OpenCode token…' : (opencodeLastUpdated || '统计已完成'))
-      : isRouterProfileDashboard
-        ? 'Router profile 与资产接入状态'
-      : (isLoading ? '正在统计本地 Codex token…' : (lastUpdated || '统计已完成'));
-
-  const tabs = [
-    { key: 'codex', label: 'Codex', dot: '#4ade80', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M9 9l3 3-3 3M15 15h3"/></svg>' },
-    { key: 'claudecode', label: 'Claude Code', dot: '#4ade80', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>' },
-    { key: 'claude-desktop', label: 'Claude Desktop', dot: '#a78bfa', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>' },
-    { key: 'gemini', label: 'Gemini CLI', dot: '#22c55e', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.6 6.4L20 10l-6.4 1.6L12 18l-1.6-6.4L4 10l6.4-1.6z"/><path d="M19 15l.8 3.2L23 19l-3.2.8L19 23l-.8-3.2L15 19l3.2-.8z"/></svg>' },
-    { key: 'opencode', label: 'OpenCode', dot: '#60a5fa', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M12 3v18M4 7l8 4 8-4"/></svg>' },
-    { key: 'openclaw', label: 'OpenClaw', dot: '#fbbf24', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>' },
-    { key: 'hermes', label: 'Hermes Agent', dot: '#f97316', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>' },
-  ];
-  const toolLabel = (tabs.find((t) => t.key === dashboardTool) || tabs[0]).label;
+      : isGenericUsageDashboardTool(dashboardTool)
+        ? (isLoading ? `正在读取本地 ${toolLabel} 用量…` : `${genericUsageStatus.label}${genericLastUpdated ? ` · ${genericLastUpdated}` : ''}`)
+        : (isLoading ? '正在统计本地 Codex token…' : (lastUpdated || '统计已完成'));
   if (el('pageTitle')) el('pageTitle').textContent = appText('数据看板');
   if (el('pageSubtitle')) {
-    el('pageSubtitle').textContent = dashboardTool === 'openclaw'
-      ? (isEnglishAppLanguage() ? `${toolLabel} · Gateway, channels, and provider status` : `${toolLabel} · Gateway、渠道与 Provider 状态`)
-      : isRouterProfileDashboard
+    el('pageSubtitle').textContent = isRouterProfileDashboard
         ? `${toolLabel} · Router Profile、客户端接入与资产联动`
       : `${toolLabel} · ${appText(dashboardStatusText)} · ${isEnglishAppLanguage() ? winRecentLabel : (win.custom ? winLabel : '最近 ' + winLabel)}`;
   }
@@ -10123,11 +10741,18 @@ function renderDashboardPage() {
       ? claudeHtml
       : dashboardTool === 'opencode'
         ? opencodeHtml
-      : dashboardTool === 'openclaw'
-        ? openclawHtml
-      : isRouterProfileDashboard
-        ? routerProfileHtml
-        : codexHtml;
+        : isGenericUsageDashboardTool(dashboardTool)
+          ? renderGenericUsageDashboard(dashboardTool, genericMetrics, win, { isLoading })
+          : isRouterProfileDashboard
+            ? routerProfileHtml
+            : codexHtml;
+  const filterMetricsRaw = dashboardTool === 'codex'
+    ? codexMetricsRaw
+    : dashboardTool === 'opencode'
+      ? opencodeMetricsRaw
+      : isGenericUsageDashboardTool(dashboardTool)
+        ? genericMetricsRaw
+        : null;
 
   // Sync the left-rail active state with the current dashboardTool.
   document.querySelectorAll('[data-dashboard-rail-tool]').forEach((btn) => {
@@ -10142,8 +10767,8 @@ function renderDashboardPage() {
         </div>
         <div class="db3-toolbar-actions">
           ${dashboardTool === 'claudecode' ? renderClaudeScopeDropdown() : ''}
-          ${(dashboardTool === 'codex' || dashboardTool === 'opencode') ? renderDashboardProviderFilter(dashboardTool === 'codex' ? codexMetricsRaw : opencodeMetricsRaw) : ''}
-          ${(dashboardTool === 'codex' || dashboardTool === 'opencode') ? renderDashboardModelFilter(dashboardTool === 'codex' ? codexMetricsRaw : opencodeMetricsRaw) : ''}
+          ${filterMetricsRaw ? renderDashboardProviderFilter(filterMetricsRaw) : ''}
+          ${filterMetricsRaw ? renderDashboardModelFilter(filterMetricsRaw) : ''}
           <span class="db2-period-wrap">
             <div class="db2-period-dropdown ${state.dashboardPeriodOpen ? 'open' : ''}" data-period-dropdown>
 	              <button type="button" class="db2-period-trigger" data-period-trigger>${escapeHtml(winLabel)} <svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg></button>
@@ -10173,7 +10798,8 @@ function renderDashboardPage() {
 
 function renderDashboardProviderFilter(metrics) {
   const opts = getDashboardFilterOptions(metrics);
-  const current = state.dashboardFilter.provider || 'all';
+  const currentRaw = state.dashboardFilter.provider || 'all';
+  const current = currentRaw === 'all' || opts.providers.includes(currentRaw) ? currentRaw : 'all';
   const open = Boolean(state.dashboardFilter.providerOpen);
   if (!opts.providers.length) return '';
   const label = current === 'all' ? appText('全部 Provider') : current;
@@ -10193,7 +10819,8 @@ function renderDashboardProviderFilter(metrics) {
 
 function renderDashboardModelFilter(metrics) {
   const opts = getDashboardFilterOptions(metrics);
-  const current = state.dashboardFilter.model || 'all';
+  const currentRaw = state.dashboardFilter.model || 'all';
+  const current = currentRaw === 'all' || opts.models.includes(currentRaw) ? currentRaw : 'all';
   const open = Boolean(state.dashboardFilter.modelOpen);
   if (!opts.models.length) return '';
   const label = current === 'all' ? appText('全部模型') : current;
@@ -10773,15 +11400,19 @@ function renderDashboardStackChart(items = []) {
 }
 
 async function refreshDashboardData({ force = false, silent = false, tool = state.dashboardTool || 'codex' } = {}) {
-  if (!isApiDashboardTool(tool)) return;
+  tool = getDashboardToolDef(tool)?.key || 'codex';
+  const isGenericUsage = isGenericUsageDashboardTool(tool);
+  if (!isApiDashboardTool(tool) && !isGenericUsage) return;
   const win = getDashboardWindow();
   const codexHome = tool === 'codex' ? getDashboardCodexHome() : '';
-  const cacheKey = getDashboardMetricsCacheKey(tool, win, codexHome);
+  const cacheKey = isGenericUsage ? getDashboardUsageCacheKey(tool, win) : getDashboardMetricsCacheKey(tool, win, codexHome);
   const isCurrentRequest = () => (
     (state.dashboardTool || 'codex') === tool &&
-    getDashboardMetricsCacheKey(tool) === cacheKey
+    (isGenericUsage ? getDashboardUsageCacheKey(tool) : getDashboardMetricsCacheKey(tool)) === cacheKey
   );
-  const cachedMetrics = getDashboardMetricsForTool(tool, win, codexHome);
+  const cachedMetrics = isGenericUsage
+    ? getDashboardUsageMetricsForTool(tool, win)
+    : getDashboardMetricsForTool(tool, win, codexHome);
 
   if (!state.dashboardRefreshingByWindow) state.dashboardRefreshingByWindow = {};
   if (state.dashboardRefreshingByWindow[cacheKey]) {
@@ -10808,22 +11439,31 @@ async function refreshDashboardData({ force = false, silent = false, tool = stat
       params.set('codexHome', codexHome);
     }
     if (force) params.set('force', '1');
-    const route = tool === 'opencode' ? '/api/dashboard/opencode-usage' : '/api/dashboard/codex-usage';
-    let json = await api(`${route}?${params.toString()}`, { timeoutMs: force ? 120000 : 20000 });
-    if (json?.ok && json.data?.cacheMiss && !force) {
-      params.set('force', '1');
-      json = await api(`${route}?${params.toString()}`, { timeoutMs: 120000 });
-    }
-    if (json?.ok && json.data && !json.data.cacheMiss && json.data.totals && typeof json.data.totals === 'object') {
-      setDashboardMetricsForTool(tool, json.data, win, codexHome);
+    if (isGenericUsage) {
+      params.set('tools', tool);
+      params.set('limit', '240');
+      let json = await api(`/api/usage/inventory?${params.toString()}`, { timeoutMs: force ? 120000 : 30000 });
+      if (json?.ok && json.data) {
+        setDashboardUsageInventoryForTool(tool, json.data, win);
+      }
+    } else {
+      const route = tool === 'opencode' ? '/api/dashboard/opencode-usage' : '/api/dashboard/codex-usage';
+      let json = await api(`${route}?${params.toString()}`, { timeoutMs: force ? 120000 : 20000 });
+      if (json?.ok && json.data?.cacheMiss && !force) {
+        params.set('force', '1');
+        json = await api(`${route}?${params.toString()}`, { timeoutMs: 120000 });
+      }
+      if (json?.ok && json.data && !json.data.cacheMiss && json.data.totals && typeof json.data.totals === 'object') {
+        setDashboardMetricsForTool(tool, json.data, win, codexHome);
+      }
     }
   } catch { /* ignore */ } finally {
     if (state.dashboardRefreshingByWindow) delete state.dashboardRefreshingByWindow[cacheKey];
     if (isCurrentRequest()) {
       state.dashboardLoading = false;
       state.dashboardRefreshing = false;
-    } else if (isApiDashboardTool(state.dashboardTool || '')) {
-      state.dashboardRefreshing = isDashboardMetricsRefreshingForTool(state.dashboardTool);
+    } else if (isApiDashboardTool(state.dashboardTool || '') || isGenericUsageDashboardTool(state.dashboardTool || '')) {
+      state.dashboardRefreshing = isDashboardRefreshingForTool(state.dashboardTool);
       if (!state.dashboardRefreshing) state.dashboardLoading = false;
     }
     if (state.activePage === 'dashboard') renderDashboardPage();
@@ -15203,12 +15843,12 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Gemini CLI',
     lane: 'CLI',
     group: 'cli',
-    anchor: 'MCP / Prompts / Sessions / Usage',
-    boundary: '支持本地 settings、历史会话和用量读取。',
+    anchor: 'MCP / Prompts / 本地用量',
+    boundary: '~/.gemini/tmp 本地用量可分析；配置入口和迁移接入继续可用。',
     configTool: 'gemini',
     importable: true,
     installItemId: 'gemini',
-    primaryTab: 'sessions',
+    primaryTab: 'mcp',
   },
   {
     id: 'opencode',
@@ -15227,13 +15867,63 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Qwen Code CLI',
     lane: 'CLI',
     group: 'cli',
-    anchor: '安装 / 更新 / 历史版本 / MCP / Prompts',
+    anchor: '安装 / 更新 / 本地用量 / MCP',
     support: 'CLI 安装',
-    boundary: '支持 npm 安装、版本历史、MCP 和 Prompt 接入包；配置编辑器暂不直接写。',
+    boundary: '~/.qwen/projects/chats 用量可分析；支持 npm 安装、版本历史和接入包。',
     importable: true,
     importTarget: 'qwen-code',
     installItemId: 'qwen-code',
     primaryTab: 'import',
+  },
+  {
+    id: 'kimi',
+    label: 'Kimi',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: '本地用量 / wire logs',
+    support: '本地用量',
+    boundary: '~/.kimi/sessions/*/wire.jsonl 可分析 token；暂不写账号配置。',
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'amp',
+    label: 'Amp',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: '本地用量 / threads',
+    support: '本地用量',
+    boundary: '~/.local/share/amp/threads 可分析 token 和费用；暂不写配置。',
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'droid',
+    label: 'Droid',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: '本地用量 / sessions',
+    support: '本地用量',
+    boundary: '~/.factory/sessions/*.settings.json 可分析 token；暂不写配置。',
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'codebuff',
+    label: 'Codebuff',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: '本地用量 / chat messages',
+    support: '本地用量',
+    boundary: '~/.config/manicode/projects 会话用量可分析；暂不写账号配置。',
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'copilot',
+    label: 'GitHub Copilot CLI',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: '本地用量 / OpenTelemetry',
+    support: '本地用量',
+    boundary: '~/.copilot/otel JSONL 可分析 token；不读取 GitHub 账号密钥。',
+    primaryTab: 'sessions',
   },
   {
     id: 'codebuddy-code',
@@ -15278,24 +15968,24 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Cursor',
     lane: 'Editor',
     group: 'desktop',
-    anchor: '编辑器设置只读检测',
+    anchor: '官方下载 / 编辑器入口',
     support: '只读检测',
-    boundary: '只读读取本机痕迹和入口，配置建议在官方编辑器里完成。',
+    boundary: '保留官方入口；未确认稳定本地用量结构，不进入数据看板。',
     installItemId: 'cursor-ide',
     manualUrl: CURSOR_DOWNLOAD_URL,
-    primaryTab: 'sessions',
+    primaryTab: 'import',
   },
   {
     id: 'windsurf',
     label: 'Windsurf',
     lane: 'Editor',
     group: 'desktop',
-    anchor: '编辑器设置只读检测',
+    anchor: '官方下载 / 编辑器入口',
     support: '只读检测',
-    boundary: '只读检测和官方下载安装，不自动写编辑器私有配置。',
+    boundary: '保留官方入口；未确认稳定本地用量结构，不进入数据看板。',
     installItemId: 'windsurf-ide',
     manualUrl: WINDSURF_DOWNLOAD_URL,
-    primaryTab: 'sessions',
+    primaryTab: 'import',
   },
   {
     id: 'zed',
@@ -15304,7 +15994,7 @@ const ASSET_CENTER_TOOL_DEFS = [
     group: 'desktop',
     anchor: '官方下载 / OpenCode 扩展宿主',
     support: '官方入口',
-    boundary: '作为编辑器和扩展宿主展示入口；资产读取按已接入扩展能力汇总。',
+    boundary: '作为编辑器和扩展宿主展示入口；不单独读取本地用量。',
     installItemId: 'zed-ide',
     manualUrl: ZED_DOWNLOAD_URL,
     primaryTab: 'import',
@@ -15326,12 +16016,12 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Trae',
     lane: 'IDE',
     group: 'desktop',
-    anchor: '官方下载 / 只读检测',
+    anchor: '官方下载 / IDE 入口',
     support: '官方入口',
-    boundary: '保留官方安装入口和只读检测位，不伪造配置写入。',
+    boundary: '保留官方安装入口；未确认稳定本地用量结构，不进入数据看板。',
     installItemId: 'trae-ide',
     manualUrl: TRAE_HOME_URL,
-    primaryTab: 'sessions',
+    primaryTab: 'import',
   },
   {
     id: 'qoder',
@@ -15340,7 +16030,7 @@ const ASSET_CENTER_TOOL_DEFS = [
     group: 'desktop',
     anchor: '官方下载 / JetBrains / CLI',
     support: '官方入口',
-    boundary: '官方桌面端、JetBrains 插件和 CLI 入口；本页只做安装与资产读取聚合。',
+    boundary: '官方桌面端、JetBrains 插件和 CLI 入口；本页只做安装与入口聚合。',
     installItemId: 'qoder',
     manualUrl: QODER_DOWNLOAD_URL,
     primaryTab: 'import',
@@ -15386,11 +16076,31 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Hermes Agent',
     lane: 'Agent',
     group: 'gateway',
-    anchor: 'Workspace / Sessions',
-    boundary: 'Agent 工作区、会话和 provider 路由可读写。',
+    anchor: 'Workspace / Provider 路由',
+    boundary: '~/.hermes/state.db 用量可分析；Agent 工作区和 provider 路由可配置。',
     configTool: 'hermes',
     importable: true,
     installItemId: 'hermes',
+    primaryTab: 'import',
+  },
+  {
+    id: 'pi-agent',
+    label: 'pi-agent',
+    lane: 'Agent',
+    group: 'gateway',
+    anchor: '本地用量 / JSONL sessions',
+    support: '本地用量',
+    boundary: '~/.pi/agent/sessions JSONL 可分析 token；暂不写配置。',
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'goose',
+    label: 'Goose',
+    lane: 'Agent',
+    group: 'gateway',
+    anchor: '本地用量 / sessions.db',
+    support: '本地用量',
+    boundary: 'Goose sessions.db 可分析 token；暂不写配置。',
     primaryTab: 'sessions',
   },
   {
@@ -15398,9 +16108,9 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Cline',
     lane: 'VS Code',
     group: 'extensions',
-    anchor: '检测 / 导入 / Router 接入包',
+    anchor: '安装 / 导入 / Router 接入包',
     support: '扩展接入',
-    boundary: '读取扩展状态与会话，写配置只给接入包，不接管扩展安全存储。',
+    boundary: '只做安装入口和接入包；未确认扩展本地用量结构，不计入数据分析。',
     importable: true,
     importTarget: 'all',
     installItemId: 'cline',
@@ -15411,9 +16121,9 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Roo Code',
     lane: 'VS Code',
     group: 'extensions',
-    anchor: '检测 / 导入 / Router 接入包',
+    anchor: '安装 / 导入 / Router 接入包',
     support: '扩展接入',
-    boundary: '读取扩展资产和会话，账号密钥仍由扩展自身管理。',
+    boundary: '只做安装入口和接入包；未确认扩展本地用量结构，不计入数据分析。',
     importable: true,
     importTarget: 'all',
     installItemId: 'roo-code',
@@ -15424,9 +16134,9 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Kilo Code',
     lane: 'VS Code',
     group: 'extensions',
-    anchor: 'Cline/Roo 兼容路线',
+    anchor: '本地用量 / Cline/Roo 兼容路线',
     support: '扩展接入',
-    boundary: '按 Cline/Roo 兼容路线做检测和接入包，不直接改私有状态。',
+    boundary: '~/.local/share/kilo/kilo.db 用量可分析；配置仍按扩展安全边界处理。',
     importable: true,
     importTarget: 'all',
     installItemId: 'kilo-code',
@@ -15435,15 +16145,32 @@ const ASSET_CENTER_TOOL_DEFS = [
 ];
 
 const ASSET_CENTER_TOOL_GROUPS = [
-  { id: 'cli', label: 'CLI Workspaces', tools: ['codex', 'claudecode', 'gemini', 'opencode', 'qwen-code', 'codebuddy-code'] },
+  { id: 'cli', label: 'CLI Workspaces', tools: ['codex', 'claudecode', 'gemini', 'opencode', 'qwen-code', 'kimi', 'amp', 'droid', 'codebuff', 'copilot', 'codebuddy-code'] },
   { id: 'desktop', label: 'Desktop / IDE', tools: ['claude-desktop', 'continue', 'cursor', 'windsurf', 'zed', 'vscode', 'trae', 'qoder', 'zcode', 'lingma'] },
-  { id: 'gateway', label: 'Gateway / Agents', tools: ['openclaw', 'hermes'] },
+  { id: 'gateway', label: 'Gateway / Agents', tools: ['openclaw', 'hermes', 'pi-agent', 'goose'] },
   { id: 'extensions', label: 'VS Code Extensions', tools: ['cline', 'roo-code', 'kilo-code'] },
 ];
 
 const ASSET_CENTER_TAB_IDS = ['mcp', 'skills', 'prompts', 'sessions', 'sync', 'import'];
 const ASSET_CONFIG_EDITOR_TOOL_IDS = ['codex', 'claudecode', 'claude-desktop', 'gemini', 'opencode', 'openclaw', 'hermes'];
 const ASSET_IMPORT_DIRECT_TOOL_IDS = ['qwen-code', 'codebuddy-code'];
+const ASSET_VERIFIED_LOCAL_DATA_TOOL_IDS = new Set([
+  'codex',
+  'claudecode',
+  'opencode',
+  'gemini',
+  'amp',
+  'droid',
+  'codebuff',
+  'hermes',
+  'pi-agent',
+  'goose',
+  'openclaw',
+  'kilo-code',
+  'kimi',
+  'qwen-code',
+  'copilot',
+]);
 
 function assetNumber(value) {
   const n = Number(value || 0);
@@ -15530,6 +16257,7 @@ function assetCountByTool(items = [], tool = '', key = 'tool') {
 
 function assetUsageByTool(usage = {}, tool = '') {
   const normalized = normalizeToolCatalogId(tool);
+  if (!ASSET_VERIFIED_LOCAL_DATA_TOOL_IDS.has(normalized)) return { tokens: 0, requests: 0 };
   const fromSummary = (() => {
     const value = assetToolAliases(normalized)
       .map((alias) => usage.summary?.tools?.[alias])
@@ -15713,19 +16441,22 @@ function renderAssetProtocolPanel(ac = {}) {
 }
 
 function assetToolSnapshot(tool, { providerCatalog = {}, mcp = {}, prompts = {}, skills = {}, sessions = {}, usage = {} } = {}) {
+  const verifiedLocalData = ASSET_VERIFIED_LOCAL_DATA_TOOL_IDS.has(normalizeToolCatalogId(tool.id));
   const providers = assetMapCount(providerCatalog.summary?.tools, tool.id);
   const mcpServers = assetMapCount(mcp.summary?.tools, tool.id) || assetCountByTool(mcp.servers, tool.id);
   const promptFiles = assetMapCount(prompts.summary?.tools, tool.id) || assetCountByTool(prompts.files, tool.id);
   const skillCount = assetMapCount(skills.summary?.tools, tool.id) || assetCountByTool(skills.skills, tool.id);
-  const sessionCount = assetMapCount(sessions.summary?.tools, tool.id) || assetCountByTool(sessions.items, tool.id);
+  const sessionCount = verifiedLocalData
+    ? (assetMapCount(sessions.summary?.tools, tool.id) || assetCountByTool(sessions.items, tool.id))
+    : 0;
   const usageStats = assetUsageByTool(usage, tool.id);
   const categories = [
     { key: 'providers', label: 'Providers', value: providers },
     { key: 'mcp', label: 'MCP', value: mcpServers },
     { key: 'prompts', label: 'Prompts', value: promptFiles },
     { key: 'skills', label: 'Skills', value: skillCount },
-    { key: 'sessions', label: 'Sessions', value: sessionCount },
-    { key: 'usage', label: 'Usage', value: usageStats.requests },
+    { key: 'sessions', label: 'Sessions', value: verifiedLocalData ? sessionCount : 0 },
+    { key: 'usage', label: 'Usage', value: verifiedLocalData ? usageStats.requests : 0 },
   ];
   const assetTypes = categories.filter((item) => item.value > 0).map((item) => item.label);
   const totalAssets = providers + mcpServers + promptFiles + skillCount + sessionCount;
@@ -15766,7 +16497,7 @@ function renderAssetToolMatrix({ providerCatalog = {}, mcp = {}, prompts = {}, s
   const renderLane = (item) => `
       <div class="asset-tool-row asset-tool-lane ${item.tone}" data-asset-tool="${escapeHtml(item.tool.id)}">
         <div class="asset-tool-identity">
-          <span class="asset-tool-mark">${escapeHtml(item.tool.label.slice(0, 2))}</span>
+          <span class="asset-tool-mark ${hasToolBrandIcon(item.tool.id) ? 'is-official' : ''}">${toolIconSvg(item.tool.id)}</span>
           <div>
             <strong>${escapeHtml(item.tool.label)}</strong>
             <em>${escapeHtml(item.tool.lane || 'Tool')}</em>
@@ -15910,7 +16641,7 @@ function renderAssetToolCapabilityList({ providerCatalog = {}, mcp = {}, prompts
   const importTools = snapshots.filter((item) => item.tool.importable).length;
   const rows = snapshots.map((item) => {
     const tool = item.tool || {};
-    const boundary = tool.boundary || (tool.support ? `${tool.support}，暂不直接写配置。` : '等待资产读取结果。');
+    const boundary = tool.boundary || (tool.support ? `${tool.support}，暂不直接写配置。` : '等待检测结果。');
     const actionText = assetConfigTool(tool.configTool || tool.id)
       ? '可配置'
       : tool.importable
@@ -15921,7 +16652,7 @@ function renderAssetToolCapabilityList({ providerCatalog = {}, mcp = {}, prompts
     return `
       <div class="asset-capability-row ${item.assetTypes.length ? 'is-ready' : 'is-quiet'}" data-asset-tool="${escapeHtml(tool.id)}">
         <div class="asset-capability-identity">
-          <span class="asset-capability-mark">${escapeHtml(String(tool.label || tool.id || '--').slice(0, 2))}</span>
+          <span class="asset-capability-mark ${hasToolBrandIcon(tool.id) ? 'is-official' : ''}">${toolIconSvg(tool.id)}</span>
           <span>
             <strong>${escapeHtml(tool.label || getToolDisplayName(tool.id))}</strong>
             <em>${escapeHtml(`${tool.lane || 'Tool'} · ${actionText}`)}</em>
@@ -16806,7 +17537,7 @@ function renderAssetCenterPage() {
       <div>
         <div class="asset-center-kicker">Assets</div>
         <h2>资产中心</h2>
-        <p>把 Codex、Claude、Gemini、OpenCode 以及 Cline/Roo 等扩展里的 MCP、Skills、Prompts 做成可迁移资产：能写的直接配置，不能写的只做检测、导入和接入包。</p>
+        <p>只把能闭环的内容放进资产统计：已验证的本地 JSONL / SQLite 用量会进入数据分析；没稳定 token 来源的工具只保留配置、安装或接入包入口。</p>
       </div>
       <div class="asset-center-actions">
         <button type="button" class="secondary tiny-btn" data-asset-refresh ${loading ? 'disabled' : ''}>${loading ? '刷新中' : '刷新'}</button>
@@ -17384,6 +18115,7 @@ function syncSecondaryPanel(page, meta) {
   const fbSub = el('secondaryFallbackSub');
   if (fbTitle) fbTitle.textContent = meta.title || '当前页面';
   if (fbSub) fbSub.textContent = (SECONDARY_META[page] && SECONDARY_META[page].sub) || meta.subtitle || '';
+  hydrateStaticToolIcons(el('secondaryBody') || document);
 }
 
 function setPage(page = 'quick') {
@@ -17442,10 +18174,11 @@ function setPage(page = 'quick') {
   }
   if (page === 'dashboard') {
     const dashboardTool = state.dashboardTool || 'codex';
-    const hasCachedMetrics = Boolean(getDashboardMetricsForTool(dashboardTool));
     const isClaudeDashboard = dashboardTool === 'claudecode';
     const isApiDashboard = isApiDashboardTool(dashboardTool);
-    if ((!hasCachedMetrics && isApiDashboard) || (isClaudeDashboard && !hasClaudeDashboardData())) {
+    const isGenericDashboard = isGenericUsageDashboardTool(dashboardTool);
+    const hasCachedMetrics = hasDashboardCachedDataForTool(dashboardTool);
+    if ((!hasCachedMetrics && (isApiDashboard || isGenericDashboard)) || (isClaudeDashboard && !hasClaudeDashboardData())) {
       state.dashboardLoading = true;
     }
     renderDashboardPage();
@@ -17456,7 +18189,7 @@ function setPage(page = 'quick') {
     });
     if (isClaudeDashboard) {
       void ensureClaudeDashboardData({ force: !hasClaudeDashboardData() });
-    } else if (isApiDashboard) {
+    } else if (isApiDashboard || isGenericDashboard) {
       void refreshDashboardData({ silent: hasCachedMetrics, tool: dashboardTool });
     }
   }
@@ -27164,7 +27897,7 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
         <div class="pd-router-log-head">
           <div>
             <strong>历史请求日志</strong>
-            <span>${esc(routerLogCountText)} · ${esc(routerLogRefreshText)} · 自动保留 ${esc(String(retentionDays))} 天</span>
+            <span>最近日志 · ${esc(routerLogCountText)} · ${esc(routerLogRefreshText)} · 自动保留 ${esc(String(retentionDays))} 天</span>
           </div>
           <div>
             <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${(loading || logLoading) ? 'disabled' : ''}>刷新</button>
@@ -27194,7 +27927,7 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
         <div class="pd-router-log-maintenance">
           <div>
             <strong>清理日志</strong>
-            <span>最多保留一个月；也可以手动清理指定时间点之前的记录。</span>
+            <span>自动保留一个月；也可以手动清理指定时间点之前的记录。</span>
           </div>
           <label>
             <span>早于</span>
@@ -35558,7 +36291,15 @@ function bindEvents() {
           state.dashboardLoading = false;
         }
       } else if (isApiDashboardTool(tool)) {
-        const hasCachedData = Boolean(getDashboardMetricsForTool(tool));
+        const hasCachedData = hasDashboardCachedDataForTool(tool);
+        if (!hasCachedData) {
+          state.dashboardLoading = true;
+          renderDashboardPage();
+          try { await refreshDashboardData({ tool }); } catch (_) {}
+          state.dashboardLoading = false;
+        }
+      } else if (isGenericUsageDashboardTool(tool)) {
+        const hasCachedData = hasDashboardCachedDataForTool(tool);
         if (!hasCachedData) {
           state.dashboardLoading = true;
           renderDashboardPage();
@@ -35762,6 +36503,30 @@ function bindEvents() {
       renderDashboardPage();
       return;
     }
+    const gotoAssetsBtn = e.target.closest('[data-dashboard-goto-assets]');
+    if (gotoAssetsBtn) {
+      const tool = normalizeToolCatalogId(gotoAssetsBtn.getAttribute('data-dashboard-goto-assets') || state.dashboardTool || 'codex');
+      state.assetCenter.activeTab = 'sessions';
+      state.assetCenter.importTargetTool = assetImportTargetTool(tool);
+      setPage('assets');
+      if (!state.assetCenter.index && !state.assetCenter.loading) {
+        void loadAssetCenter({ force: false });
+      }
+      return;
+    }
+    const gotoConfigBtn = e.target.closest('[data-dashboard-goto-config]');
+    if (gotoConfigBtn) {
+      const tool = normalizeToolCatalogId(gotoConfigBtn.getAttribute('data-dashboard-goto-config') || state.dashboardTool || 'codex');
+      const configTool = assetConfigTool(tool);
+      if (configTool) {
+        void setConfigEditorOpen(true, configTool);
+      } else {
+        state.assetCenter.activeTab = 'import';
+        state.assetCenter.importTargetTool = assetImportTargetTool(tool);
+        setPage('assets');
+      }
+      return;
+    }
     // 周期触发器：打开/关闭下拉，open 时初始化 picker 草稿
     const periodTrigger = e.target.closest('[data-period-trigger]');
     if (periodTrigger) {
@@ -35820,7 +36585,7 @@ function bindEvents() {
       if (state.dashboardTool === 'claudecode') {
         ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
       } else {
-        const hasCachedData = Boolean(getDashboardMetricsForTool(state.dashboardTool));
+        const hasCachedData = hasDashboardCachedDataForTool(state.dashboardTool);
         refreshDashboardData({ force: true, silent: hasCachedData, tool: state.dashboardTool });
       }
       renderDashboardPage();
@@ -35885,7 +36650,7 @@ function bindEvents() {
       if (state.dashboardTool === 'claudecode') {
         ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
       } else {
-        const hasCachedData = Boolean(getDashboardMetricsForTool(state.dashboardTool));
+        const hasCachedData = hasDashboardCachedDataForTool(state.dashboardTool);
         refreshDashboardData({ force: true, silent: hasCachedData, tool: state.dashboardTool });
       }
       renderDashboardPage();
@@ -35930,7 +36695,7 @@ function bindEvents() {
       if (state.dashboardTool === 'claudecode') {
         ensureClaudeDashboardData({ force: true }).then(() => renderDashboardPage()).catch(() => {});
       } else {
-        const hasCachedData = Boolean(getDashboardMetricsForTool(state.dashboardTool));
+        const hasCachedData = hasDashboardCachedDataForTool(state.dashboardTool);
         refreshDashboardData({ force: true, silent: hasCachedData, tool: state.dashboardTool });
       }
       renderDashboardPage();

@@ -20,17 +20,14 @@ async function withTempDir(fn) {
   }
 }
 
-test('listSessionInventory reads Codex, Claude Code, and Gemini sessions with provider project groups', async () => {
+test('listSessionInventory reads verified Codex and Claude Code sessions with provider project groups', async () => {
   await withTempDir(async (dir) => {
     const codexHome = path.join(dir, 'codex');
     const claudeHome = path.join(dir, 'claude');
-    const geminiHome = path.join(dir, 'gemini');
     const projectAlpha = path.join(dir, 'project-alpha');
-    const projectBeta = path.join(dir, 'project-beta');
 
     await fs.mkdir(path.join(codexHome, 'sessions', '2026', '07'), { recursive: true });
     await fs.mkdir(path.join(claudeHome, 'projects', 'project-alpha'), { recursive: true });
-    await fs.mkdir(path.join(geminiHome, 'sessions'), { recursive: true });
 
     await fs.writeFile(path.join(codexHome, 'sessions', '2026', '07', 'session-codex.jsonl'), [
       JSON.stringify({ type: 'session_meta', payload: { id: 'codex-alpha', cwd: projectAlpha, model_provider: 'openai', model: 'gpt-5' } }),
@@ -42,30 +39,23 @@ test('listSessionInventory reads Codex, Claude Code, and Gemini sessions with pr
       JSON.stringify({ timestamp: '2026-07-04T10:01:00.000Z', message: { role: 'assistant', model: 'claude-sonnet-4-20250514', content: 'done' } }),
     ].join('\n'));
 
-    await fs.writeFile(path.join(geminiHome, 'sessions', 'gemini-beta.jsonl'), [
-      JSON.stringify({ timestamp: '2026-07-04T11:00:00.000Z', cwd: projectBeta, role: 'user', content: 'Review beta launch', model: 'gemini-2.5-pro' }),
-    ].join('\n'));
-
     const inventory = await listSessionInventory({
       codexHome,
       claudeHome,
-      geminiHome,
-      includeTools: ['codex', 'claudecode', 'gemini'],
+      includeTools: ['codex', 'claudecode'],
       limit: 10,
     });
 
     assert.equal(inventory.schema, 'easyaiconfig.session-inventory.v1');
-    assert.equal(inventory.summary.sources, 3);
-    assert.equal(inventory.summary.existingSources, 3);
-    assert.equal(inventory.summary.sessions, 3);
+    assert.equal(inventory.summary.sources, 2);
+    assert.equal(inventory.summary.existingSources, 2);
+    assert.equal(inventory.summary.sessions, 2);
     assert.equal(inventory.summary.tools.codex, 1);
     assert.equal(inventory.summary.tools.claudecode, 1);
-    assert.equal(inventory.summary.tools.gemini, 1);
 
     const providers = new Set(inventory.groups.map((group) => group.provider));
     assert.ok(providers.has('openai'));
     assert.ok(providers.has('anthropic'));
-    assert.ok(providers.has('google-gemini'));
 
     const codex = inventory.items.find((item) => item.tool === 'codex');
     assert.equal(codex.actions.resume, true);
@@ -97,39 +87,74 @@ test('listSessionInventory filters sessions by search query', async () => {
   });
 });
 
+test('listSessionInventory exposes verified local usage sources as read-only sessions', async () => {
+  await withTempDir(async (dir) => {
+    const droidDir = path.join(dir, 'factory-sessions');
+    await fs.mkdir(droidDir, { recursive: true });
+    await fs.writeFile(path.join(droidDir, 'droid-alpha.settings.json'), JSON.stringify({
+      providerLock: 'anthropic',
+      providerLockTimestamp: '2026-07-04T12:00:00.000Z',
+      model: 'custom:claude-sonnet-4-20250514[anthropic]-1',
+      tokenUsage: {
+        inputTokens: 100,
+        outputTokens: 40,
+        cacheCreationTokens: 10,
+        cacheReadTokens: 20,
+        thinkingTokens: 5,
+        totalTokens: 175,
+      },
+    }));
+
+    const inventory = await listSessionInventory({
+      includeTools: ['droid'],
+      droidSessionsDir: droidDir,
+      limit: 10,
+    });
+
+    assert.equal(inventory.summary.sources, 1);
+    assert.equal(inventory.summary.existingSources, 1);
+    assert.equal(inventory.summary.sessions, 1);
+    assert.equal(inventory.summary.tools.droid, 1);
+    assert.equal(inventory.items[0].tool, 'droid');
+    assert.equal(inventory.items[0].totals.total, 175);
+    assert.equal(inventory.items[0].actions.delete, false);
+    assert.equal(inventory.items[0].actions.resume, false);
+  });
+});
+
 test('archiveSession moves file sessions to restorable trash and restoreSession copies them back', async () => {
   await withTempDir(async (dir) => {
-    const geminiHome = path.join(dir, 'gemini');
+    const claudeHome = path.join(dir, 'claude');
     const trashRoot = path.join(dir, 'trash');
-    const sessionDir = path.join(geminiHome, 'sessions');
-    const sessionPath = path.join(sessionDir, 'gemini-restore.jsonl');
+    const sessionDir = path.join(claudeHome, 'projects', 'project-alpha');
+    const sessionPath = path.join(sessionDir, 'claude-restore.jsonl');
     await fs.mkdir(sessionDir, { recursive: true });
     await fs.writeFile(sessionPath, [
-      JSON.stringify({ timestamp: '2026-07-05T12:00:00.000Z', cwd: dir, role: 'user', content: 'Restore this', model: 'gemini-2.5-pro' }),
+      JSON.stringify({ timestamp: '2026-07-05T12:00:00.000Z', cwd: dir, message: { role: 'user', content: 'Restore this' } }),
     ].join('\n'));
 
     const inventory = await listSessionInventory({
-      geminiHome,
-      includeTools: ['gemini'],
+      claudeHome,
+      includeTools: ['claudecode'],
       limit: 10,
     });
     assert.equal(inventory.items[0].actions.delete, true);
 
     const preview = await archiveSession({
-      tool: 'gemini',
+      tool: 'claudecode',
       sourcePath: sessionPath,
-      sessionId: 'gemini-restore',
-    }, { geminiHome, trashRoot });
+      sessionId: 'claude-restore',
+    }, { claudeHome, trashRoot });
     assert.equal(preview.dryRun, true);
     assert.equal(preview.summary.previewed, 1);
     assert.ok(await fs.access(sessionPath).then(() => true, () => false));
 
     const archived = await archiveSession({
-      tool: 'gemini',
+      tool: 'claudecode',
       sourcePath: sessionPath,
-      sessionId: 'gemini-restore',
+      sessionId: 'claude-restore',
       dryRun: false,
-    }, { geminiHome, trashRoot });
+    }, { claudeHome, trashRoot });
     assert.equal(archived.changed, true);
     assert.equal(archived.summary.archived, 1);
     assert.equal(await fs.access(sessionPath).then(() => true, () => false), false);
@@ -143,7 +168,7 @@ test('archiveSession moves file sessions to restorable trash and restoreSession 
 
     const restorePreview = await restoreSession({
       archiveId: archived.entry.id,
-    }, { geminiHome, trashRoot });
+    }, { claudeHome, trashRoot });
     assert.equal(restorePreview.dryRun, true);
     assert.equal(restorePreview.summary.previewed, 1);
     assert.equal(await fs.access(sessionPath).then(() => true, () => false), false);
@@ -151,7 +176,7 @@ test('archiveSession moves file sessions to restorable trash and restoreSession 
     const restored = await restoreSession({
       archiveId: archived.entry.id,
       dryRun: false,
-    }, { geminiHome, trashRoot });
+    }, { claudeHome, trashRoot });
     assert.equal(restored.changed, true);
     assert.equal(restored.summary.restored, 1);
     assert.ok(await fs.access(sessionPath).then(() => true, () => false));
@@ -163,17 +188,17 @@ test('archiveSession moves file sessions to restorable trash and restoreSession 
 
 test('archiveSession refuses files outside known session roots', async () => {
   await withTempDir(async (dir) => {
-    const geminiHome = path.join(dir, 'gemini');
+    const claudeHome = path.join(dir, 'claude');
     const outside = path.join(dir, 'outside.jsonl');
-    await fs.mkdir(path.join(geminiHome, 'sessions'), { recursive: true });
+    await fs.mkdir(path.join(claudeHome, 'projects'), { recursive: true });
     await fs.writeFile(outside, '{}\n');
 
     await assert.rejects(
       archiveSession({
-        tool: 'gemini',
+        tool: 'claudecode',
         sourcePath: outside,
         dryRun: false,
-      }, { geminiHome, trashRoot: path.join(dir, 'trash') }),
+      }, { claudeHome, trashRoot: path.join(dir, 'trash') }),
       /outside known session roots/,
     );
   });
