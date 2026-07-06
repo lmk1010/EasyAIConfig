@@ -1431,18 +1431,56 @@ test('Codex launch terminal picker uses detected profiles and remembers selectio
   for (const id of ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'tilix', 'xfce4-terminal', 'lxterminal', 'xterm']) {
     assert.match(profilesBody, new RegExp(`id: '${id}'`));
   }
+  for (const id of ['windows-terminal', 'powershell-7', 'powershell', 'cmd']) {
+    assert.match(profilesBody, new RegExp(`id: '${id}'`));
+  }
+  assert.match(appJs, /id: 'embedded'/);
+  assert.match(appJs, /应用内终端（推荐）/);
+  assert.match(appJs, /自动选择外部终端/);
   assert.match(appJs, /easyaiconfig_codex_terminal_profile/);
   assert.match(appJs, /data-codex-terminal-launch/);
-  assert.match(appJs, /openCodexTerminalMenu\(\)/);
-  assert.match(appJs, /检测到 \$\{escapeHtml\(String\(availableCount\)\)\} 个可用终端/);
+  assert.match(appJs, /openCodexTerminalMenu\(triggerEl = null\)/);
+  assert.match(appJs, /getCodexTerminalMenuElement/);
+  assert.match(appJs, /document\.body\.appendChild\(menu\)/);
+  assert.match(appJs, /getBrowserPlatformGuess/);
+  assert.match(appJs, /codexTerminalMenuTriggerId/);
+  assert.match(appJs, /启动方式/);
+  assert.match(appJs, /launchActiveTool\(selectedProfile, launchButtonId\)/);
   assert.match(stylesCss, /\.codex-terminal-menu-head/);
   assert.match(stylesCss, /\.codex-terminal-selected/);
+});
+
+test('Connection hub hero keeps one primary launch action and moves maintenance actions into menu', () => {
+  const heroBody = sliceAnyFunction(appJs, 'renderHeroHTML', 'renderChRowBalance');
+  assert.match(heroBody, /id="chHeroLaunchBtn"/);
+  assert.match(heroBody, /renderChHeroMoreMenu\(active, tool, isOauth\)/);
+  assert.doesNotMatch(heroBody, /class="ch-hero-ghost" data-ch-detect/);
+  assert.doesNotMatch(heroBody, /class="ch-hero-ghost" data-ch-edit/);
+  assert.doesNotMatch(heroBody, /class="ch-hero-ghost [^"]*" data-ch-cmd-toggle/);
+  const moreMenuBody = sliceAnyFunction(appJs, 'renderChHeroMoreMenu', 'renderHeroHTML');
+  assert.match(moreMenuBody, /data-ch-detect/);
+  assert.match(moreMenuBody, /data-ch-edit/);
+  assert.match(moreMenuBody, /data-ch-launch-menu/);
+  assert.match(moreMenuBody, /data-ch-cmd-toggle/);
+  assert.match(moreMenuBody, /data-ch-hero-balance-query/);
+  const heroClickBody = sliceAnyFunction(appJs, 'wire', 'initialLoad');
+  assert.match(heroClickBody, /target\.closest\('\[data-ch-launch\]'\)/);
+  assert.match(heroClickBody, /openCodexLaunchPicker\(launch, \{ tool \}\)/);
+  assert.match(heroClickBody, /target\.closest\('\[data-ch-launch-menu\]'\)/);
+  assert.match(heroClickBody, /openCodexLaunchPicker\(document\.getElementById\('chHeroLaunchBtn'\) \|\| launchMenu, \{ tool: hubState\(\)\?\.activeTool \|\| 'codex' \}\)/);
+  assert.match(stylesCss, /\.shell-v2 \.ch-hero-metrics/);
+  assert.match(stylesCss, /\.shell-v2 \.ch-hero-menu-panel/);
 });
 
 test('Node Codex launcher detects and launches macOS and Linux terminal profiles', () => {
   assert.match(configStoreJs, /function findDarwinApplication/);
   assert.match(configStoreJs, /function launchDarwinAppAndTypeCommand/);
   assert.match(configStoreJs, /System Events/);
+  assert.match(configStoreJs, /set the clipboard to/);
+  assert.match(configStoreJs, /appName\.toLowerCase\(\) === 'termius'/);
+  assert.match(configStoreJs, /keystroke "l" using command down/);
+  assert.match(configStoreJs, /keystroke "v" using command down/);
+  assert.match(configStoreJs, /自动输入失败/);
   const darwinBody = sliceAnyFunction(configStoreJs, 'listDarwinTerminalProfiles', 'escapeAppleScriptText');
   for (const id of ['termius', 'terminus', 'tabby', 'warp', 'hyper']) {
     assert.match(darwinBody, new RegExp(`id: '${id}'`));
@@ -1461,10 +1499,26 @@ test('Node Codex launcher detects and launches macOS and Linux terminal profiles
   assert.match(linuxLaunchBody, /resolveLinuxTerminalProfile\(terminalProfile\)/);
   assert.match(linuxLaunchBody, /linuxTerminalArgs\(profile\.id/);
   assert.match(configStoreJs, /process\.platform === 'linux'\s*\?\s*listLinuxTerminalProfiles\(\)/);
+
+  const windowsListBody = sliceAnyFunction(configStoreJs, 'listWindowsTerminalProfiles', 'resolveWindowsTerminalProfile');
+  for (const id of ['windows-terminal', 'powershell-7', 'powershell', 'cmd', 'wezterm']) {
+    assert.match(windowsListBody, new RegExp(`id: '${id}'`));
+  }
+  const windowsLaunchBody = sliceAnyFunction(configStoreJs, 'launchWindowsTerminal', 'listLinuxTerminalProfiles');
+  assert.match(windowsLaunchBody, /resolveWindowsTerminalProfile\(terminalProfile\)/);
+  assert.match(windowsLaunchBody, /writeWindowsPowerShellLauncher\(cwd, commandText, launcherCmdPath\)/);
+  assert.match(windowsLaunchBody, /profile\.id === 'windows-terminal'/);
 });
 
 test('Tauri Codex launcher mirrors terminal profile detection and routing', () => {
   assert.match(tauriConfigRs, /fn launch_terminal_profiles/);
+  assert.match(tauriConfigRs, /fn windows_terminal_profiles/);
+  assert.match(tauriConfigRs, /"id": "embedded"/);
+  assert.match(tauriConfigRs, /"label": "应用内终端（推荐）"/);
+  assert.match(tauriConfigRs, /"label": "自动选择外部终端"/);
+  for (const id of ['windows-terminal', 'powershell-7', 'powershell', 'cmd', 'wezterm']) {
+    assert.match(tauriConfigRs, new RegExp(`"id": "${id}"`));
+  }
   assert.match(tauriConfigRs, /macos_app_profile\("terminus", "Terminus"/);
   assert.match(tauriConfigRs, /\("x-terminal-emulator", "系统默认终端", "x-terminal-emulator"\)/);
   assert.match(tauriConfigRs, /\("xfce4-terminal", "Xfce Terminal", "xfce4-terminal"\)/);
@@ -1474,9 +1528,21 @@ test('Tauri Codex launcher mirrors terminal profile detection and routing', () =
   assert.match(tauriCodexRs, /fn launch_macos_app_and_type_command/);
   assert.match(tauriCodexRs, /fn resolve_linux_terminal_profile/);
   assert.match(tauriCodexRs, /fn launch_linux_terminal_with_profile/);
+  assert.match(tauriCodexRs, /fn resolve_windows_terminal_profile/);
+  assert.match(tauriCodexRs, /fn launch_windows_terminal_with_profile/);
+  assert.match(tauriCodexRs, /fn embedded_terminal_requested/);
+  assert.match(tauriCodexRs, /embedded_terminal_requested\(&terminal_profile\)/);
+  assert.match(tauriCodexRs, /set the clipboard to/);
+  assert.match(tauriCodexRs, /app_key == "termius"/);
+  assert.match(tauriCodexRs, /keystroke \\"l\\" using command down/);
+  assert.match(tauriCodexRs, /keystroke \\"v\\" using command down/);
+  assert.match(tauriCodexRs, /自动输入失败/);
   assert.match(tauriCodexRs, /launch_linux_terminal_with_profile\(cwd, &command_text, "Codex", terminal_profile\)/);
   assert.match(tauriCodexRs, /launch_linux_terminal_with_profile\(&cwd, &command, "Codex 登录", &terminal_profile\)/);
   assert.match(tauriCodexRs, /launch_linux_terminal_with_profile\(&cwd, &command, tool_label, &terminal_profile\)/);
+  assert.match(tauriCodexRs, /launch_windows_terminal_with_profile\(cwd, &command_text, "Codex", terminal_profile\)/);
+  assert.match(tauriCodexRs, /launch_windows_terminal_with_profile\(&cwd, &command, "Codex 登录", &terminal_profile\)/);
+  assert.match(tauriCodexRs, /launch_windows_terminal_with_profile\(&cwd, &command, tool_label, &terminal_profile\)/);
 });
 
 test('Hermes launcher is wired through Web, Node, and Tauri with router env injection', () => {

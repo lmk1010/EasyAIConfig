@@ -3684,16 +3684,17 @@ ${commandText}
   return launcherPath;
 }
 
-function writeWindowsPowerShellLauncher(cwd, commandText) {
+function writeWindowsPowerShellLauncher(cwd, commandText, cmdLauncherPath = '') {
   const launcherDir = path.join(os.tmpdir(), 'easy-ai-config', 'launchers');
   mkdirSync(launcherDir, { recursive: true });
   const launcherPath = path.join(launcherDir, `launch-${crypto.randomUUID()}.ps1`);
   const escapedCwd = String(normalizeWindowsCmdPath(cwd)).replace(/'/g, "''");
-  const escapedCommand = String(commandText || '').replace(/'/g, "''");
+  const cmdLauncher = cmdLauncherPath || writeWindowsTerminalLauncher(cwd, commandText);
+  const escapedCmdLauncher = String(normalizeWindowsCmdPath(cmdLauncher)).replace(/'/g, "''");
   const script = [
     `$ErrorActionPreference = 'Continue'`,
     `Set-Location -LiteralPath '${escapedCwd}'`,
-    `Invoke-Expression '${escapedCommand}'`,
+    `& cmd.exe /d /k '${escapedCmdLauncher}'`,
   ].join('\r\n');
   const bom = Buffer.from([0xFF, 0xFE]);
   const content = Buffer.from(script, 'utf16le');
@@ -3780,7 +3781,7 @@ function listDarwinTerminalProfiles() {
   const kitty = findDarwinCommandOrBundle(['kitty'], kittyApp, ['kitty']);
 
   const profiles = [
-    { id: 'auto', label: '自动选择（推荐）', available: true, command: '' },
+    { id: 'auto', label: '自动选择外部终端', available: true, command: '' },
     {
       id: 'terminal',
       label: 'Terminal.app',
@@ -3853,17 +3854,32 @@ function launchDarwinAppAndTypeCommand(profile, shellCommand, toolLabel) {
   if (opened.status !== 0) {
     throw new Error((opened.stderr || opened.stdout || `Failed to open ${appName}`).trim());
   }
-  const appleScript = [
+  const scriptLines = [
     `tell application "${escapeAppleScriptText(appName)}" to activate`,
-    'delay 0.35',
+    'delay 0.45',
+  ];
+  if (appName.toLowerCase() === 'termius') {
+    scriptLines.push(
+      'tell application "System Events"',
+      'keystroke "l" using command down',
+      'end tell',
+      'delay 0.55',
+    );
+  }
+  scriptLines.push(
+    `set the clipboard to "${escapeAppleScriptText(shellCommand)}"`,
     'tell application "System Events"',
-    `keystroke "${escapeAppleScriptText(shellCommand)}"`,
+    'keystroke "v" using command down',
     'key code 36',
     'end tell',
-  ].join('\n');
+  );
+  const appleScript = scriptLines.join('\n');
   const typed = spawnSync('osascript', ['-e', appleScript], { encoding: 'utf8' });
   if (typed.status === 0) return `${toolLabel} 已在 ${profile.label} 中启动`;
-  return `${toolLabel} 已打开 ${profile.label}，请在其中执行：${shellCommand}`;
+  const message = (typed.stderr || typed.stdout || '').trim();
+  throw new Error(message
+    ? `${profile.label} 自动输入失败：${message}`
+    : `${toolLabel} 已打开 ${profile.label}，但自动输入失败。请在 macOS 系统设置里允许本应用控制辅助功能后重试。`);
 }
 
 function launchDarwinTerminal(cwd, commandText, { toolLabel = 'Codex', terminalProfile = 'auto' } = {}) {
@@ -3955,7 +3971,7 @@ export function listWindowsTerminalProfiles({ passive = false } = {}) {
     ]);
 
   const profiles = [
-    { id: 'auto', label: '自动选择（推荐）', command: '', available: true },
+    { id: 'auto', label: '自动选择外部终端', command: '', available: true },
     { id: 'windows-terminal', label: 'Windows Terminal', command: windowsTerminalCommand, available: false },
     { id: 'powershell-7', label: 'PowerShell 7', command: powerShell7Command, available: false },
     { id: 'powershell', label: 'Windows PowerShell', command: windowsPowerShellCommand, available: false },
@@ -3994,7 +4010,7 @@ function launchWindowsTerminal(cwd, commandText, { toolLabel = 'Codex', terminal
     command = profile.command || 'wt.exe';
     args = ['-d', normalizedCwd, 'cmd.exe', '/d', '/k', normalizedCmdLauncher];
   } else if (profile.id === 'powershell-7' || profile.id === 'powershell') {
-    const psLauncherPath = writeWindowsPowerShellLauncher(cwd, commandText);
+    const psLauncherPath = writeWindowsPowerShellLauncher(cwd, commandText, launcherCmdPath);
     command = profile.command || (profile.id === 'powershell-7' ? 'pwsh.exe' : 'powershell.exe');
     args = ['-NoExit', '-ExecutionPolicy', 'Bypass', '-File', normalizeWindowsCmdPath(psLauncherPath)];
   } else if (profile.id === 'wezterm') {
@@ -4029,7 +4045,7 @@ function listLinuxTerminalProfiles() {
     .map((profile) => ({ ...profile, command: commandExists(profile.command) || '' }))
     .filter((profile) => Boolean(profile.command));
   return [
-    { id: 'auto', label: '自动选择（推荐）', command: '', available: true },
+    { id: 'auto', label: '自动选择外部终端', command: '', available: true },
     ...profiles.map((profile) => ({
       id: profile.id,
       label: profile.label,

@@ -619,7 +619,11 @@ pub(crate) fn spawn_embedded_terminal(
     command.cwd(cwd);
     command.args(args);
     for (key, value) in envs {
-        command.env(key, value);
+        if value.is_empty() {
+            command.env_remove(key);
+        } else {
+            command.env(key, value);
+        }
     }
 
     let master = pair.master;
@@ -878,7 +882,7 @@ pub(crate) fn terminal_list(_query: &Value) -> Result<Value, String> {
         .map_err(|error| error.to_string())?;
     let rows = sessions.values().map(session_info).collect::<Vec<_>>();
     Ok(json!({
-      "supported": cfg!(target_os = "windows"),
+      "supported": true,
       "rows": rows,
     }))
 }

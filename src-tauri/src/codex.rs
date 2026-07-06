@@ -3270,18 +3270,33 @@ fn launch_macos_app_and_type_command(
         return Err(String::from_utf8_lossy(&opened.stderr).trim().to_string());
     }
 
-    let script = [
-        &format!(
+    let app_key = app_name.trim().to_lowercase();
+    let mut lines = vec![
+        format!(
             "tell application \"{}\" to activate",
             escape_applescript(app_name)
         ),
-        "delay 0.35",
-        "tell application \"System Events\"",
-        &format!("keystroke \"{}\"", escape_applescript(shell_command)),
-        "key code 36",
-        "end tell",
-    ]
-    .join("\n");
+        "delay 0.45".to_string(),
+    ];
+    if app_key == "termius" {
+        lines.extend([
+            "tell application \"System Events\"".to_string(),
+            "keystroke \"l\" using command down".to_string(),
+            "end tell".to_string(),
+            "delay 0.55".to_string(),
+        ]);
+    }
+    lines.extend([
+        format!(
+            "set the clipboard to \"{}\"",
+            escape_applescript(shell_command)
+        ),
+        "tell application \"System Events\"".to_string(),
+        "keystroke \"v\" using command down".to_string(),
+        "key code 36".to_string(),
+        "end tell".to_string(),
+    ]);
+    let script = lines.join("\n");
     let typed = create_command("osascript")
         .arg("-e")
         .arg(script)
@@ -3291,10 +3306,15 @@ fn launch_macos_app_and_type_command(
         return Ok(format!("{} 已在 {} 中启动", tool_label, app_label));
     }
 
-    Ok(format!(
-        "{} 已打开 {}，请在其中执行：{}",
-        tool_label, app_label, shell_command
-    ))
+    let message = String::from_utf8_lossy(&typed.stderr).trim().to_string();
+    Err(if message.is_empty() {
+        format!(
+            "{} 已打开 {}，但自动输入失败。请在 macOS 系统设置里允许本应用控制辅助功能后重试。",
+            tool_label, app_label
+        )
+    } else {
+        format!("{} 自动输入失败：{}", app_label, message)
+    })
 }
 
 fn launch_macos_terminal_with_profile(
@@ -3537,6 +3557,305 @@ fn launch_linux_terminal_with_profile(
     Ok(format!("{} 已在 {} 中启动", tool_label, label))
 }
 
+#[derive(Clone)]
+struct WindowsTerminalProfile {
+    id: &'static str,
+    label: &'static str,
+    command: String,
+}
+
+fn first_windows_existing_path(paths: &[PathBuf]) -> Option<String> {
+    paths
+        .iter()
+        .find(|path| path.exists())
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+fn windows_env_path(name: &str, fallback: &str) -> PathBuf {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(fallback))
+}
+
+fn first_windows_terminal_command(commands: &[&str], fallback_paths: &[PathBuf]) -> Option<String> {
+    for command in commands {
+        if let Some(found) = command_exists(command) {
+            return Some(found);
+        }
+    }
+    first_windows_existing_path(fallback_paths)
+}
+
+fn windows_terminal_profiles() -> Vec<WindowsTerminalProfile> {
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join("AppData").join("Local")))
+        .unwrap_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Local"));
+    let program_files = windows_env_path("ProgramFiles", r"C:\Program Files");
+    let program_files_x86 = windows_env_path("ProgramFiles(x86)", r"C:\Program Files (x86)");
+    let system_root = windows_env_path("SystemRoot", r"C:\Windows");
+
+    let mut profiles = Vec::new();
+    if let Some(command) = first_windows_terminal_command(
+        &["wt.exe", "wt"],
+        &[local_app_data
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("wt.exe")],
+    ) {
+        profiles.push(WindowsTerminalProfile {
+            id: "windows-terminal",
+            label: "Windows Terminal",
+            command,
+        });
+    }
+    if let Some(command) = first_windows_terminal_command(
+        &["pwsh.exe", "pwsh"],
+        &[
+            program_files.join("PowerShell").join("7").join("pwsh.exe"),
+            program_files_x86
+                .join("PowerShell")
+                .join("7")
+                .join("pwsh.exe"),
+            program_files
+                .join("PowerShell")
+                .join("7-preview")
+                .join("pwsh.exe"),
+            program_files_x86
+                .join("PowerShell")
+                .join("7-preview")
+                .join("pwsh.exe"),
+        ],
+    ) {
+        profiles.push(WindowsTerminalProfile {
+            id: "powershell-7",
+            label: "PowerShell 7",
+            command,
+        });
+    }
+    if let Some(command) = first_windows_terminal_command(
+        &["powershell.exe", "powershell"],
+        &[system_root
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe")],
+    ) {
+        profiles.push(WindowsTerminalProfile {
+            id: "powershell",
+            label: "Windows PowerShell",
+            command,
+        });
+    }
+    let cmd = first_windows_terminal_command(
+        &["cmd.exe", "cmd"],
+        &[system_root.join("System32").join("cmd.exe")],
+    )
+    .unwrap_or_else(|| "cmd.exe".to_string());
+    profiles.push(WindowsTerminalProfile {
+        id: "cmd",
+        label: "命令提示符 CMD",
+        command: cmd,
+    });
+    if let Some(command) = first_windows_terminal_command(
+        &["wezterm.exe", "wezterm"],
+        &[
+            local_app_data
+                .join("Programs")
+                .join("WezTerm")
+                .join("wezterm-gui.exe"),
+            local_app_data
+                .join("Programs")
+                .join("WezTerm")
+                .join("wezterm.exe"),
+            program_files.join("WezTerm").join("wezterm-gui.exe"),
+            program_files.join("WezTerm").join("wezterm.exe"),
+            program_files_x86.join("WezTerm").join("wezterm-gui.exe"),
+            program_files_x86.join("WezTerm").join("wezterm.exe"),
+        ],
+    ) {
+        profiles.push(WindowsTerminalProfile {
+            id: "wezterm",
+            label: "WezTerm",
+            command,
+        });
+    }
+    profiles
+}
+
+fn resolve_windows_terminal_profile(profile: &str) -> WindowsTerminalProfile {
+    let normalized = profile.trim().to_lowercase();
+    let profiles = windows_terminal_profiles();
+    if normalized != "auto" {
+        if let Some(found) = profiles.iter().find(|item| item.id == normalized).cloned() {
+            return found;
+        }
+    }
+    for preferred in [
+        "windows-terminal",
+        "powershell-7",
+        "powershell",
+        "cmd",
+        "wezterm",
+    ] {
+        if let Some(found) = profiles.iter().find(|item| item.id == preferred).cloned() {
+            return found;
+        }
+    }
+    WindowsTerminalProfile {
+        id: "cmd",
+        label: "命令提示符 CMD",
+        command: "cmd.exe".to_string(),
+    }
+}
+
+fn embedded_terminal_requested(profile: &str) -> bool {
+    profile.trim().is_empty() || profile.trim().eq_ignore_ascii_case("embedded")
+}
+
+fn write_utf16le_file(path: &Path, text: &str) -> Result<(), String> {
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        bytes.push((unit & 0xFF) as u8);
+        bytes.push((unit >> 8) as u8);
+    }
+    fs::write(path, bytes).map_err(|error| error.to_string())
+}
+
+fn windows_launcher_dir() -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir()
+        .join("easy-ai-config")
+        .join("launchers");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
+fn write_windows_terminal_launcher(cwd: &Path, command_text: &str) -> Result<PathBuf, String> {
+    let launcher_path = windows_launcher_dir()?.join(format!("launch-{}.cmd", Uuid::new_v4()));
+    let script = format!(
+        "@echo off\r\ncd /d {}\r\n{}\r\n",
+        quote_windows_cmd_arg(&normalize_windows_cmd_path(&cwd.to_string_lossy())),
+        command_text
+    );
+    write_utf16le_file(&launcher_path, &script)?;
+    Ok(launcher_path)
+}
+
+fn write_windows_powershell_launcher(
+    cwd: &Path,
+    cmd_launcher_path: &Path,
+) -> Result<PathBuf, String> {
+    let launcher_path = windows_launcher_dir()?.join(format!("launch-{}.ps1", Uuid::new_v4()));
+    let escaped_cwd = normalize_windows_cmd_path(&cwd.to_string_lossy()).replace('\'', "''");
+    let escaped_cmd_launcher =
+        normalize_windows_cmd_path(&cmd_launcher_path.to_string_lossy()).replace('\'', "''");
+    let script = [
+        "$ErrorActionPreference = 'Continue'".to_string(),
+        format!("Set-Location -LiteralPath '{}'", escaped_cwd),
+        format!("& cmd.exe /d /k '{}'", escaped_cmd_launcher),
+    ]
+    .join("\r\n");
+    write_utf16le_file(&launcher_path, &script)?;
+    Ok(launcher_path)
+}
+
+fn launch_windows_terminal_with_profile(
+    cwd: &Path,
+    command_text: &str,
+    tool_label: &str,
+    terminal_profile: &str,
+) -> Result<String, String> {
+    let profile = resolve_windows_terminal_profile(terminal_profile);
+    let launcher_cmd_path = write_windows_terminal_launcher(cwd, command_text)?;
+    let normalized_cwd = normalize_windows_cmd_path(&cwd.to_string_lossy());
+    let normalized_cmd_launcher = normalize_windows_cmd_path(&launcher_cmd_path.to_string_lossy());
+
+    let (command, args) = match profile.id {
+        "windows-terminal" => (
+            if profile.command.is_empty() {
+                "wt.exe".to_string()
+            } else {
+                profile.command.clone()
+            },
+            vec![
+                "-d".to_string(),
+                normalized_cwd,
+                "cmd.exe".to_string(),
+                "/d".to_string(),
+                "/k".to_string(),
+                normalized_cmd_launcher,
+            ],
+        ),
+        "powershell-7" | "powershell" => {
+            let ps_launcher = write_windows_powershell_launcher(cwd, &launcher_cmd_path)?;
+            (
+                if profile.command.is_empty() {
+                    if profile.id == "powershell-7" {
+                        "pwsh.exe".to_string()
+                    } else {
+                        "powershell.exe".to_string()
+                    }
+                } else {
+                    profile.command.clone()
+                },
+                vec![
+                    "-NoExit".to_string(),
+                    "-ExecutionPolicy".to_string(),
+                    "Bypass".to_string(),
+                    "-File".to_string(),
+                    normalize_windows_cmd_path(&ps_launcher.to_string_lossy()),
+                ],
+            )
+        }
+        "wezterm" => (
+            if profile.command.is_empty() {
+                "wezterm.exe".to_string()
+            } else {
+                profile.command.clone()
+            },
+            vec![
+                "start".to_string(),
+                "--cwd".to_string(),
+                normalized_cwd,
+                "cmd.exe".to_string(),
+                "/d".to_string(),
+                "/k".to_string(),
+                normalized_cmd_launcher,
+            ],
+        ),
+        _ => (
+            if profile.command.is_empty() {
+                "cmd.exe".to_string()
+            } else {
+                profile.command.clone()
+            },
+            vec![
+                "/c".to_string(),
+                "start".to_string(),
+                String::new(),
+                "cmd.exe".to_string(),
+                "/d".to_string(),
+                "/k".to_string(),
+                quote_windows_cmd_arg(&normalized_cmd_launcher),
+            ],
+        ),
+    };
+
+    let mut child = Command::new(command);
+    child
+        .args(args)
+        .env("PATH", full_path_env())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    child.spawn().map_err(|error| error.to_string())?;
+    Ok(format!("{} 已在 {} 中启动", tool_label, profile.label))
+}
+
 fn collect_codex_provider_env_keys_from_config(config_path: &Path, keys: &mut Vec<String>) {
     let config_raw = read_text(config_path).unwrap_or_default();
     if let Ok(config) = parse_toml_config(&config_raw) {
@@ -3664,6 +3983,13 @@ fn codex_launch_extra_env(codex_home: &Path, cwd: Option<&Path>) -> Vec<(String,
         "CODEX_HOME".to_string(),
         codex_home.to_string_lossy().to_string(),
     )];
+    if crate::oauth_profiles::is_oauth_profile_home(codex_home) {
+        env.extend(
+            collect_codex_provider_env_keys(codex_home, cwd)
+                .into_iter()
+                .map(|key| (key, String::new())),
+        );
+    }
     if codex_launch_uses_local_router(codex_home, cwd) {
         env.push((
             "NO_PROXY".to_string(),
@@ -3755,7 +4081,7 @@ fn windows_embedded_terminal_env(extra_env: &[(String, String)]) -> Vec<(String,
         ("COLORTERM".to_string(), "truecolor".to_string()),
     ];
     for (key, value) in extra_env {
-        if key.trim().is_empty() || value.trim().is_empty() {
+        if key.trim().is_empty() {
             continue;
         }
         envs.push((key.clone(), value.clone()));
@@ -3962,6 +4288,57 @@ fn spawn_windows_embedded_session(
         .unwrap_or(Value::Null))
 }
 
+fn spawn_codex_embedded_session(
+    cwd: &Path,
+    title: &str,
+    program: &str,
+    args: &[String],
+    fallback_binary: &str,
+    extra_env: &[(String, String)],
+    command_preview: Option<String>,
+) -> Result<Value, String> {
+    if cfg!(target_os = "windows") {
+        return spawn_windows_embedded_session(
+            cwd,
+            title,
+            "codex",
+            program,
+            args,
+            fallback_binary,
+            extra_env,
+            command_preview,
+        );
+    }
+
+    let mut envs = vec![
+        ("PATH".to_string(), full_path_env()),
+        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("COLORTERM".to_string(), "truecolor".to_string()),
+    ];
+    envs.extend(extra_env.iter().cloned());
+    let payload = spawn_embedded_terminal(
+        cwd,
+        title,
+        "codex",
+        program,
+        args,
+        &envs,
+        32,
+        120,
+        command_preview.or_else(|| {
+            if cfg!(target_os = "windows") {
+                Some(build_windows_binary_command(program, args, fallback_binary))
+            } else {
+                Some(build_codex_session_command(program, args))
+            }
+        }),
+    )?;
+    Ok(payload
+        .get("terminalSession")
+        .cloned()
+        .unwrap_or(Value::Null))
+}
+
 fn launch_codex_terminal_command(
     cwd: &Path,
     terminal_profile: &str,
@@ -3989,6 +4366,9 @@ fn launch_codex_terminal_command(
     }
     if cfg!(target_os = "linux") {
         return launch_linux_terminal_with_profile(cwd, &command_text, "Codex", terminal_profile);
+    }
+    if cfg!(target_os = "windows") {
+        return launch_windows_terminal_with_profile(cwd, &command_text, "Codex", terminal_profile);
     }
 
     launch_terminal_command(cwd, &command_text, "Codex")
@@ -4069,12 +4449,11 @@ pub(crate) fn launch_codex(body: &Value) -> Result<Value, String> {
         .and_then(Value::as_str)
         .filter(|text| !text.trim().is_empty())
         .unwrap_or("codex");
-    if cfg!(target_os = "windows") {
+    if embedded_terminal_requested(&terminal_profile) {
         let extra_env = codex_launch_extra_env(&codex_home, Some(&cwd));
-        let terminal_session = spawn_windows_embedded_session(
+        let terminal_session = spawn_codex_embedded_session(
             &cwd,
             "Codex",
-            "codex",
             codex_path,
             &[],
             "codex",
@@ -4126,13 +4505,12 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
         .and_then(Value::as_str)
         .filter(|text| !text.trim().is_empty())
         .unwrap_or("codex");
-    if cfg!(target_os = "windows") {
+    if embedded_terminal_requested(&terminal_profile) {
         let args = vec!["login".to_string()];
         let extra_env = codex_launch_extra_env(&codex_home, Some(&cwd));
-        let terminal_session = spawn_windows_embedded_session(
+        let terminal_session = spawn_codex_embedded_session(
             &cwd,
             "Codex 登录",
-            "codex",
             binary_path,
             &args,
             "codex",
@@ -4158,6 +4536,8 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
         launch_macos_terminal_with_profile(&cwd, &command, "Codex 登录", &terminal_profile)?
     } else if cfg!(target_os = "linux") {
         launch_linux_terminal_with_profile(&cwd, &command, "Codex 登录", &terminal_profile)?
+    } else if cfg!(target_os = "windows") {
+        launch_windows_terminal_with_profile(&cwd, &command, "Codex 登录", &terminal_profile)?
     } else {
         launch_terminal_command(&cwd, &command, "Codex 登录")?
     };
@@ -4717,12 +5097,11 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
     } else {
         "Codex 会话恢复"
     };
-    if cfg!(target_os = "windows") {
+    if embedded_terminal_requested(&terminal_profile) {
         let extra_env = codex_launch_extra_env(&codex_home, Some(&cwd));
-        let terminal_session = spawn_windows_embedded_session(
+        let terminal_session = spawn_codex_embedded_session(
             &cwd,
             tool_label,
-            "codex",
             binary_path,
             &args,
             "codex",
@@ -4748,6 +5127,8 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
         launch_macos_terminal_with_profile(&cwd, &command, tool_label, &terminal_profile)?
     } else if cfg!(target_os = "linux") {
         launch_linux_terminal_with_profile(&cwd, &command, tool_label, &terminal_profile)?
+    } else if cfg!(target_os = "windows") {
+        launch_windows_terminal_with_profile(&cwd, &command, tool_label, &terminal_profile)?
     } else {
         launch_terminal_command(&cwd, &command, tool_label)?
     };

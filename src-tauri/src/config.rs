@@ -301,7 +301,7 @@ fn command_exists_for_launch(command: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    if trimmed.contains('/') {
+    if trimmed.contains('/') || trimmed.contains('\\') || Path::new(trimmed).is_absolute() {
         let path = Path::new(trimmed);
         return path.exists().then(|| trimmed.to_string());
     }
@@ -321,6 +321,122 @@ fn command_exists_for_launch(command: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn first_launch_existing_path(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .find(|path| path.exists())
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+fn first_windows_launch_command(commands: &[&str], fallback_paths: &[PathBuf]) -> String {
+    for command in commands {
+        if let Some(found) = command_exists_for_launch(command) {
+            return found;
+        }
+    }
+    first_launch_existing_path(fallback_paths)
+}
+
+fn windows_env_path(name: &str, fallback: &str) -> PathBuf {
+    env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(fallback))
+}
+
+fn windows_terminal_profiles() -> Value {
+    let local_app_data = env::var("LOCALAPPDATA")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home_dir()
+                .ok()
+                .map(|home| home.join("AppData").join("Local"))
+        })
+        .unwrap_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Local"));
+    let program_files = windows_env_path("ProgramFiles", r"C:\Program Files");
+    let program_files_x86 = windows_env_path("ProgramFiles(x86)", r"C:\Program Files (x86)");
+    let system_root = windows_env_path("SystemRoot", r"C:\Windows");
+
+    let windows_terminal = first_windows_launch_command(
+        &["wt.exe", "wt"],
+        &[local_app_data
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("wt.exe")],
+    );
+    let powershell_7 = first_windows_launch_command(
+        &["pwsh.exe", "pwsh"],
+        &[
+            program_files.join("PowerShell").join("7").join("pwsh.exe"),
+            program_files_x86
+                .join("PowerShell")
+                .join("7")
+                .join("pwsh.exe"),
+            program_files
+                .join("PowerShell")
+                .join("7-preview")
+                .join("pwsh.exe"),
+            program_files_x86
+                .join("PowerShell")
+                .join("7-preview")
+                .join("pwsh.exe"),
+        ],
+    );
+    let windows_powershell = first_windows_launch_command(
+        &["powershell.exe", "powershell"],
+        &[system_root
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe")],
+    );
+    let cmd = first_windows_launch_command(
+        &["cmd.exe", "cmd"],
+        &[system_root.join("System32").join("cmd.exe")],
+    );
+    let wezterm = first_windows_launch_command(
+        &["wezterm.exe", "wezterm"],
+        &[
+            local_app_data
+                .join("Programs")
+                .join("WezTerm")
+                .join("wezterm-gui.exe"),
+            local_app_data
+                .join("Programs")
+                .join("WezTerm")
+                .join("wezterm.exe"),
+            program_files.join("WezTerm").join("wezterm-gui.exe"),
+            program_files.join("WezTerm").join("wezterm.exe"),
+            program_files_x86.join("WezTerm").join("wezterm-gui.exe"),
+            program_files_x86.join("WezTerm").join("wezterm.exe"),
+        ],
+    );
+
+    let mut profiles = vec![
+        json!({ "id": "embedded", "label": "应用内终端（推荐）", "available": true, "command": "", "launchMode": "embedded" }),
+        json!({ "id": "auto", "label": "自动选择外部终端", "available": true, "command": "", "launchMode": "auto" }),
+        json!({ "id": "windows-terminal", "label": "Windows Terminal", "available": !windows_terminal.is_empty(), "command": windows_terminal, "launchMode": "cli" }),
+        json!({ "id": "powershell-7", "label": "PowerShell 7", "available": !powershell_7.is_empty(), "command": powershell_7, "launchMode": "cli" }),
+        json!({ "id": "powershell", "label": "Windows PowerShell", "available": !windows_powershell.is_empty(), "command": windows_powershell, "launchMode": "cli" }),
+        json!({ "id": "cmd", "label": "命令提示符 CMD", "available": true, "command": if cmd.is_empty() { "cmd.exe".to_string() } else { cmd }, "launchMode": "cli" }),
+        json!({ "id": "wezterm", "label": "WezTerm", "available": !wezterm.is_empty(), "command": wezterm, "launchMode": "cli" }),
+    ];
+    profiles.retain(|profile| {
+        matches!(
+            profile.get("id").and_then(Value::as_str),
+            Some("embedded") | Some("auto")
+        ) || profile
+            .get("available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    });
+    Value::Array(profiles)
 }
 
 #[cfg(target_os = "macos")]
@@ -370,9 +486,7 @@ fn macos_app_profile(id: &str, label: &str, app_names: &[&str]) -> Value {
 
 fn launch_terminal_profiles() -> Value {
     if cfg!(target_os = "windows") {
-        return json!([
-          { "id": "auto", "label": "应用内终端（推荐）" }
-        ]);
+        return windows_terminal_profiles();
     }
     if cfg!(target_os = "macos") {
         #[cfg(target_os = "macos")]
@@ -389,7 +503,8 @@ fn launch_terminal_profiles() -> Value {
                 first_macos_command_or_bundle(&["alacritty"], &alacritty_app, &["alacritty"]);
             let kitty = first_macos_command_or_bundle(&["kitty"], &kitty_app, &["kitty"]);
             let mut profiles = vec![
-                json!({ "id": "auto", "label": "自动选择（推荐）", "available": true }),
+                json!({ "id": "embedded", "label": "应用内终端（推荐）", "available": true, "command": "", "launchMode": "embedded" }),
+                json!({ "id": "auto", "label": "自动选择外部终端", "available": true, "command": "", "launchMode": "auto" }),
                 json!({
                   "id": "terminal",
                   "label": "Terminal.app",
@@ -419,11 +534,13 @@ fn launch_terminal_profiles() -> Value {
                 json!({ "id": "kitty", "label": "kitty", "available": !kitty.is_empty(), "command": kitty, "appName": "kitty", "appPath": kitty_app.as_ref().map(|(_, p)| p.clone()).unwrap_or_default(), "launchMode": "cli" }),
             ];
             profiles.retain(|profile| {
-                profile.get("id").and_then(Value::as_str) == Some("auto")
-                    || profile
-                        .get("available")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
+                matches!(
+                    profile.get("id").and_then(Value::as_str),
+                    Some("embedded") | Some("auto")
+                ) || profile
+                    .get("available")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
             });
             return Value::Array(profiles);
         }
@@ -441,8 +558,10 @@ fn launch_terminal_profiles() -> Value {
             ("lxterminal", "LXTerminal", "lxterminal"),
             ("xterm", "xterm", "xterm"),
         ];
-        let mut profiles =
-            vec![json!({ "id": "auto", "label": "自动选择（推荐）", "available": true })];
+        let mut profiles = vec![
+            json!({ "id": "embedded", "label": "应用内终端（推荐）", "available": true, "command": "", "launchMode": "embedded" }),
+            json!({ "id": "auto", "label": "自动选择外部终端", "available": true, "command": "", "launchMode": "auto" }),
+        ];
         for (id, label, command) in specs {
             if let Some(found) = command_exists_for_launch(command) {
                 profiles.push(json!({

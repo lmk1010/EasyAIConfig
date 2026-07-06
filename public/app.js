@@ -12,6 +12,31 @@ import {
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 
+const CODEX_TERMINAL_PROFILE_STORAGE_KEY = 'easyaiconfig_codex_terminal_profile';
+const CODEX_TERMINAL_PROFILE_SCHEMA_KEY = 'easyaiconfig_codex_terminal_profile_schema';
+const CODEX_TERMINAL_PROFILE_SCHEMA_VERSION = 'v2';
+
+function getInitialCodexTerminalProfile() {
+  try {
+    const raw = String(localStorage.getItem(CODEX_TERMINAL_PROFILE_STORAGE_KEY) || '').trim();
+    const schema = String(localStorage.getItem(CODEX_TERMINAL_PROFILE_SCHEMA_KEY) || '').trim();
+    if (!raw) return 'embedded';
+    if (raw === 'auto' && schema !== CODEX_TERMINAL_PROFILE_SCHEMA_VERSION) return 'embedded';
+    return raw;
+  } catch (_) {
+    return 'embedded';
+  }
+}
+
+function persistCodexTerminalProfile(profile) {
+  const normalized = String(profile || '').trim() || 'embedded';
+  try {
+    localStorage.setItem(CODEX_TERMINAL_PROFILE_STORAGE_KEY, normalized);
+    localStorage.setItem(CODEX_TERMINAL_PROFILE_SCHEMA_KEY, CODEX_TERMINAL_PROFILE_SCHEMA_VERSION);
+  } catch (_) {}
+  return normalized;
+}
+
 const state = {
   current: null,
   backups: [],
@@ -284,9 +309,10 @@ const state = {
   openClawLastRepair: null,
   openClawConfigView: localStorage.getItem('easyaiconfig_oc_config_view') === 'minimal' ? 'minimal' : 'full',
   codexAuthView: localStorage.getItem('easyaiconfig_codex_auth_view') === 'api_key' ? 'api_key' : 'official',
-  codexTerminalProfile: localStorage.getItem('easyaiconfig_codex_terminal_profile') || 'auto',
+  codexTerminalProfile: getInitialCodexTerminalProfile(),
   codexTerminalProfiles: [],
   codexTerminalMenuOpen: false,
+  codexTerminalMenuTriggerId: '',
   codexResumeSessions: [],
   codexResumeLoading: false,
   codexResumeShowAll: false,
@@ -6669,7 +6695,7 @@ async function launchGeminiOnly() {
   return true;
 }
 
-async function launchActiveTool(terminalProfile = '') {
+async function launchActiveTool(terminalProfile = '', buttonId = 'launchBtn') {
   const tool = state.activeTool || 'codex';
   if (tool === 'opencode') return launchOpenCodeOnly();
   if (tool === 'claudecode') return launchClaudeCodeOnly();
@@ -6677,7 +6703,7 @@ async function launchActiveTool(terminalProfile = '') {
   if (tool === 'gemini') return launchGeminiOnly();
   if (tool === 'hermes') return launchHermesOnly();
   if (tool === 'claude-desktop') return launchClaudeDesktopOnly();
-  return launchCodex('launchBtn', 'Codex 已启动', terminalProfile || 'auto');
+  return launchCodex(buttonId || 'launchBtn', 'Codex 已启动', terminalProfile || 'auto');
 }
 
 
@@ -12517,7 +12543,7 @@ function invalidateConsoleV3Tool(tool, { usage = true, procs = true } = {}) {
 }
 
 function hasEmbeddedTerminalSupport() {
-  return String(state.current?.launch?.platform || '').toLowerCase() === 'win32';
+  return Boolean(tauriInvoke) && isCodexLaunchPlatformSupported(state.current?.launch?.platform || '');
 }
 
 function getEmbeddedTerminalToolLabel(tool) {
@@ -15641,12 +15667,19 @@ function setBusy(id, busy, text) {
   const button = el(id);
   if (!button) return;
   if (busy) {
-    button.dataset.label = button.textContent;
+    if (!button.dataset.labelHtml) button.dataset.labelHtml = button.innerHTML;
+    if (!button.dataset.label) button.dataset.label = button.textContent;
     button.textContent = text;
     button.disabled = true;
     return;
   }
-  button.textContent = button.dataset.label || button.textContent;
+  if (button.dataset.labelHtml) {
+    button.innerHTML = button.dataset.labelHtml;
+  } else {
+    button.textContent = button.dataset.label || button.textContent;
+  }
+  delete button.dataset.labelHtml;
+  delete button.dataset.label;
   button.disabled = false;
 }
 
@@ -24044,30 +24077,88 @@ function renderBackups() {
 }
 
 function getSelectedCodexTerminalProfile() {
-  return String(state.codexTerminalProfile || 'auto').trim() || 'auto';
+  return String(state.codexTerminalProfile || 'embedded').trim() || 'embedded';
+}
+
+function getBrowserPlatformGuess() {
+  const platform = String(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '').toLowerCase();
+  if (platform.includes('mac')) return 'darwin';
+  if (platform.includes('win')) return 'win32';
+  if (platform.includes('linux') || platform.includes('x11')) return 'linux';
+  return '';
+}
+
+function getCodexLaunchPlatform() {
+  const reported = String(state.current?.launch?.platform || '').toLowerCase();
+  if (['win32', 'darwin', 'linux'].includes(reported)) return reported;
+  return getBrowserPlatformGuess();
+}
+
+function isCodexLaunchPlatformSupported(platform = getCodexLaunchPlatform()) {
+  return ['win32', 'darwin', 'linux'].includes(String(platform || '').toLowerCase());
+}
+
+function shouldOfferEmbeddedCodexTerminal(platform = getCodexLaunchPlatform()) {
+  return Boolean(tauriInvoke) && isCodexLaunchPlatformSupported(platform);
+}
+
+function makeEmbeddedCodexTerminalProfile() {
+  return { id: 'embedded', label: '应用内终端（推荐）', available: true, command: '', launchMode: 'embedded' };
+}
+
+function makeAutoCodexTerminalProfile() {
+  return { id: 'auto', label: '自动选择外部终端', available: true, command: '', launchMode: 'auto' };
+}
+
+function normalizeCodexTerminalProfile(item) {
+  const id = String(item?.id || '').trim();
+  if (!id) return null;
+  const rawLabel = String(item?.label || id).trim();
+  const legacyEmbeddedAuto = id === 'auto' && /应用内|内置/.test(rawLabel);
+  const normalizedId = legacyEmbeddedAuto ? 'embedded' : id;
+  const label = legacyEmbeddedAuto ? '应用内终端（推荐）' : rawLabel;
+  const available = item?.available !== false;
+  const command = String(item?.command || item?.appName || item?.appPath || '').trim();
+  return { ...item, id: normalizedId, label, available, command };
+}
+
+function dedupeCodexTerminalProfiles(profiles = []) {
+  const seen = new Set();
+  const rows = [];
+  for (const profile of profiles) {
+    const normalized = normalizeCodexTerminalProfile(profile);
+    if (!normalized || seen.has(normalized.id)) continue;
+    seen.add(normalized.id);
+    rows.push(normalized);
+  }
+  return rows;
 }
 
 function getCodexTerminalProfiles() {
   const fromState = Array.isArray(state.current?.launch?.terminalProfiles)
     ? state.current.launch.terminalProfiles
     : (Array.isArray(state.codexTerminalProfiles) ? state.codexTerminalProfiles : []);
-  const platform = state.current?.launch?.platform || '';
+  const platform = getCodexLaunchPlatform();
   if (fromState.length) {
-    return fromState
-      .map((item) => {
-        const id = String(item?.id || '').trim();
-        if (!id) return null;
-        const label = String(item?.label || id).trim();
-        const available = item?.available !== false;
-        const command = String(item?.command || item?.appName || item?.appPath || '').trim();
-        return { ...item, id, label, available, command };
-      })
-      .filter(Boolean);
+    const profiles = dedupeCodexTerminalProfiles(fromState);
+    const hasEmbedded = profiles.some((profile) => profile.id === 'embedded');
+    const hasAuto = profiles.some((profile) => profile.id === 'auto');
+    if (shouldOfferEmbeddedCodexTerminal(platform) && !hasEmbedded) {
+      profiles.unshift(makeEmbeddedCodexTerminalProfile());
+    }
+    if (!hasAuto) {
+      profiles.splice(shouldOfferEmbeddedCodexTerminal(platform) ? 1 : 0, 0, makeAutoCodexTerminalProfile());
+    }
+    return profiles;
   }
+
+  const defaults = [];
+  if (shouldOfferEmbeddedCodexTerminal(platform)) defaults.push(makeEmbeddedCodexTerminalProfile());
+  defaults.push(makeAutoCodexTerminalProfile());
 
   if (platform === 'darwin') {
     return [
-      { id: 'auto', label: '自动选择（推荐）' },
+      ...defaults,
       { id: 'terminal', label: '系统终端' },
       { id: 'iterm', label: 'iTerm' },
       { id: 'termius', label: 'Termius' },
@@ -24083,7 +24174,7 @@ function getCodexTerminalProfiles() {
   }
   if (platform === 'linux') {
     return [
-      { id: 'auto', label: '自动选择（推荐）' },
+      ...defaults,
       { id: 'x-terminal-emulator', label: '系统默认终端' },
       { id: 'gnome-terminal', label: 'GNOME Terminal' },
       { id: 'konsole', label: 'Konsole' },
@@ -24098,7 +24189,12 @@ function getCodexTerminalProfiles() {
   }
   if (platform === 'win32') {
     return [
-      { id: 'auto', label: '应用内终端（推荐）' },
+      ...defaults,
+      { id: 'windows-terminal', label: 'Windows Terminal' },
+      { id: 'powershell-7', label: 'PowerShell 7' },
+      { id: 'powershell', label: 'Windows PowerShell' },
+      { id: 'cmd', label: '命令提示符 CMD' },
+      { id: 'wezterm', label: 'WezTerm' },
     ];
   }
   return [];
@@ -24106,7 +24202,8 @@ function getCodexTerminalProfiles() {
 
 function describeCodexTerminalProfile(profile = {}) {
   const id = String(profile.id || '').trim();
-  if (id === 'auto') return '自动选择已检测到的最佳终端并启动 Codex';
+  if (id === 'embedded') return '在 EasyAIConfig 控制台内启动 Codex，不再弹外部终端窗口';
+  if (id === 'auto') return '自动选择已检测到的外部终端并启动 Codex';
   const parts = [];
   if (profile.command) parts.push(profile.command);
   if (profile.appName && profile.appName !== profile.label) parts.push(`${profile.appName}.app`);
@@ -24123,34 +24220,41 @@ function describeCodexTerminalProfile(profile = {}) {
 
 function closeCodexTerminalMenu() {
   state.codexTerminalMenuOpen = false;
+  state.codexTerminalMenuTriggerId = '';
   el('codexTerminalMenu')?.classList.add('hide');
 }
 
-function openCodexTerminalMenu() {
+function getCodexTerminalMenuElement() {
   const menu = el('codexTerminalMenu');
-  const button = el('launchBtn');
+  if (menu && menu.parentElement !== document.body) {
+    document.body.appendChild(menu);
+  }
+  return menu;
+}
+
+function openCodexTerminalMenu(triggerEl = null) {
+  const menu = getCodexTerminalMenuElement();
+  const button = triggerEl || el('launchBtn');
   const profiles = getCodexTerminalProfiles();
   if (!menu || !button || !profiles.length) return false;
 
   const selected = getSelectedCodexTerminalProfile();
-  const availableCount = profiles.filter((profile) => profile.id !== 'auto').length;
+  const menuProfiles = profiles.filter((profile) => profile.id === 'auto' || profile.available !== false);
+  if (!menuProfiles.length) return false;
+  state.codexTerminalMenuTriggerId = button.id || 'launchBtn';
+  menu.classList.add('codex-terminal-menu');
   menu.innerHTML = `
-    <div class="codex-terminal-menu-head">
-      <strong>选择启动终端</strong>
-      <span>检测到 ${escapeHtml(String(availableCount))} 个可用终端</span>
-    </div>
-    ${profiles.map((profile) => `
-    <button type="button" class="provider-option codex-terminal-option ${profile.id === selected ? 'active' : ''}" data-codex-terminal-launch="${escapeHtml(profile.id)}">
-      <div class="provider-main">
+    <div class="codex-terminal-menu-head">启动方式</div>
+    ${menuProfiles.map((profile) => `
+    <button type="button" class="codex-terminal-option ${profile.id === selected ? 'active' : ''}" data-codex-terminal-launch="${escapeHtml(profile.id)}">
+      <div class="codex-terminal-option-main">
         <strong>${escapeHtml(profile.label)}</strong>
-        <div class="provider-meta">${escapeHtml(describeCodexTerminalProfile(profile))}</div>
       </div>
-      ${profile.id === selected ? '<span class="codex-terminal-selected">当前</span>' : ''}
     </button>
   `).join('')}`;
 
   const rect = button.getBoundingClientRect();
-  const width = Math.min(360, Math.max(260, rect.width + 80));
+  const width = Math.min(320, Math.max(248, rect.width + 56));
   let left = rect.right - width;
   if (left < 12) left = 12;
   if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12;
@@ -24168,13 +24272,38 @@ function openCodexTerminalMenu() {
   return true;
 }
 
+async function openCodexLaunchPicker(triggerEl = null, options = {}) {
+  const tool = String(options?.tool || state.activeTool || 'codex').trim() || 'codex';
+  if (tool !== 'codex') return false;
+  let platform = getCodexLaunchPlatform();
+  let profiles = getCodexTerminalProfiles();
+  const supportedPlatform = () => isCodexLaunchPlatformSupported(platform);
+  if (!supportedPlatform() || !profiles.length) {
+    await loadState({ preserveForm: true }).catch((error) => {
+      console.warn('[codex-launch-picker] loadState failed', error);
+    });
+    platform = getCodexLaunchPlatform();
+    profiles = getCodexTerminalProfiles();
+  }
+  if (!supportedPlatform() || !profiles.length) {
+    flash('当前系统没有可用的 Codex 启动入口，请先检查终端环境或重新检测状态。', 'error');
+    return true;
+  }
+  if (state.codexTerminalMenuOpen) closeCodexTerminalMenu();
+  if (!openCodexTerminalMenu(triggerEl)) {
+    flash('启动方式菜单打开失败，请刷新页面后重试。', 'error');
+    return true;
+  }
+  return true;
+}
+
 function renderCodexTerminalPicker() {
   const row = el('codexTerminalRow');
   const hint = el('codexTerminalHint');
   if (!row || !hint) return;
 
-  const platform = state.current?.launch?.platform || '';
-  const isSupported = platform === 'win32' || platform === 'darwin' || platform === 'linux';
+  const platform = getCodexLaunchPlatform();
+  const isSupported = isCodexLaunchPlatformSupported(platform);
   const profiles = getCodexTerminalProfiles();
 
   state.codexTerminalProfiles = profiles;
@@ -24187,9 +24316,9 @@ function renderCodexTerminalPicker() {
 
   const profileIds = new Set(profiles.map((item) => String(item.id || '').trim()).filter(Boolean));
   if (!profileIds.has(state.codexTerminalProfile)) {
-    state.codexTerminalProfile = 'auto';
+    state.codexTerminalProfile = profileIds.has('embedded') ? 'embedded' : 'auto';
   }
-  try { localStorage.setItem('easyaiconfig_codex_terminal_profile', state.codexTerminalProfile); } catch (_) {}
+  persistCodexTerminalProfile(state.codexTerminalProfile);
 
   hint.textContent = '';
   row.classList.add('hide');
@@ -35137,21 +35266,8 @@ function bindEvents() {
   el('launchBtn').addEventListener('click', async (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (state.activeTool === 'codex') {
-      let platform = state.current?.launch?.platform || '';
-      let profiles = getCodexTerminalProfiles();
-      if ((platform === 'win32' || platform === 'darwin' || platform === 'linux') && !profiles.length) {
-        await loadState({ preserveForm: true });
-        platform = state.current?.launch?.platform || platform;
-        profiles = getCodexTerminalProfiles();
-      }
-      if ((platform === 'win32' || platform === 'darwin' || platform === 'linux') && profiles.length) {
-        if (state.codexTerminalMenuOpen) closeCodexTerminalMenu();
-        else openCodexTerminalMenu();
-        return false;
-      }
-    }
-    await launchActiveTool();
+    if (await openCodexLaunchPicker(event.currentTarget, { tool: state.activeTool || 'codex' })) return false;
+    await launchActiveTool('', 'launchBtn');
     return false;
   });
   // OpenClaw dashboard quick button
@@ -35442,12 +35558,12 @@ function bindEvents() {
   el('codexTerminalMenu')?.addEventListener('click', async (event) => {
     const option = event.target.closest('[data-codex-terminal-launch]');
     if (!option) return;
-    const selectedProfile = String(option.dataset.codexTerminalLaunch || 'auto').trim() || 'auto';
-    state.codexTerminalProfile = selectedProfile;
-    try { localStorage.setItem('easyaiconfig_codex_terminal_profile', selectedProfile); } catch (_) {}
+    const selectedProfile = String(option.dataset.codexTerminalLaunch || 'embedded').trim() || 'embedded';
+    state.codexTerminalProfile = persistCodexTerminalProfile(selectedProfile);
     renderCodexTerminalPicker();
+    const launchButtonId = state.codexTerminalMenuTriggerId || 'launchBtn';
     closeCodexTerminalMenu();
-    await launchActiveTool(selectedProfile);
+    await launchActiveTool(selectedProfile, launchButtonId);
   });
 
   el('codexResumeSessions')?.addEventListener('click', async (event) => {
@@ -37056,6 +37172,7 @@ function bindEvents() {
     if (state.wizardSelectedTool && state.wizardSelectedTool !== state.activeTool) {
       if (!setActiveTool(state.wizardSelectedTool)) return;
     }
+    if (await openCodexLaunchPicker(el('wizardLaunchBtn'), { tool: state.activeTool || state.wizardSelectedTool || 'codex' })) return;
     await launchActiveTool();
   });
   el('setupWizard').querySelector('.wizard-backdrop').addEventListener('click', closeSetupWizard);
@@ -37070,7 +37187,7 @@ window.addEventListener('click', (e) => {
   if (!e.target.closest('[data-period-dropdown]')) {
     document.querySelectorAll('[data-period-dropdown].open').forEach(el => el.classList.remove('open'));
   }
-  if (state.codexTerminalMenuOpen && !e.target.closest('#launchBtn') && !e.target.closest('#codexTerminalMenu')) {
+  if (state.codexTerminalMenuOpen && !e.target.closest('#launchBtn, [data-ch-launch], [data-ch-launch-menu]') && !e.target.closest('#codexTerminalMenu')) {
     closeCodexTerminalMenu();
   }
 });
@@ -37835,6 +37952,143 @@ startToolUpdatesTimer();
       </div>`;
   }
 
+  function formatChHeroLatency(ms) {
+    const num = Number(ms);
+    if (!Number.isFinite(num) || num <= 0) return '—';
+    if (num >= 1000) return `${(num / 1000).toFixed(2)}s`;
+    return `${Math.round(num)}ms`;
+  }
+
+  function getChHeroBalanceMeta(row) {
+    if (!row || row.tool !== 'codex') return null;
+    const key = chRowCacheKey(row);
+    const loading = Boolean(state.providerRemoteUsageLoadingByKey?.[key]);
+    if (row.mode === 'oauth') {
+      if (loading) return { labelKind: '额度', valueLabel: '查询中', percent: null, cls: 'is-loading', title: '正在查询官方额度。' };
+      if (!row.hasCredential) return { labelKind: '额度', valueLabel: '--%', percent: null, cls: 'is-muted', title: '当前 OAuth 账号未完成登录授权。' };
+      return getChOauthAllowanceMeta(row, state.providerRemoteUsageByKey?.[key] || null);
+    }
+    if (loading) return { labelKind: '余额', valueLabel: '查询中', percent: null, cls: 'is-loading', title: '正在查询远程余额。' };
+    if ((!row.hasCredential && !chRowHasRemotePanelCredential(row)) || row.historyOnly) {
+      return { labelKind: '余额', valueLabel: '--', percent: null, cls: 'is-muted', title: '当前 Provider 没有可用 API Key 或面板认证。' };
+    }
+    const cached = state.providerRemoteUsageByKey?.[key] || null;
+    if (cached?.error) return { labelKind: '余额', valueLabel: '失败', percent: null, cls: 'is-warn', title: cached.error };
+    return getChRemoteBalanceMeta(cached?.result || null);
+  }
+
+  function getChHeroSlaMetric(active) {
+    if (!active) return null;
+    const h = active.health || {};
+    const cached = state.providerUptime?.[active.key] || {};
+    const uptimePct = chFiniteNumber(cached.uptimePct);
+    if (uptimePct != null) {
+      return {
+        label: 'SLA 24h',
+        value: formatChRowPercent(uptimePct),
+        cls: uptimePct >= 99 ? 'is-ok' : uptimePct >= 90 ? 'is-warn' : 'is-bad',
+        title: `最近 24 小时探测可用率 ${formatChRowPercent(uptimePct)}`,
+      };
+    }
+    if (active.mode === 'oauth') {
+      return {
+        label: '授权',
+        value: active.hasCredential ? '已登录' : '待登录',
+        cls: active.hasCredential ? 'is-ok' : 'is-warn',
+        title: active.hasCredential ? 'OAuth token 已存在。' : '这个 OAuth 账号还没完成授权。',
+      };
+    }
+    if (h.ok && h.latencyMs) {
+      return { label: '延迟', value: formatChHeroLatency(h.latencyMs), cls: 'is-ok', title: '最近一次连通性探测延迟。' };
+    }
+    if (h.checked && !h.ok) {
+      return { label: 'SLA 24h', value: '失败', cls: 'is-bad', title: h.hint || h.errorMessage || '最近一次探测失败。' };
+    }
+    if (!active.hasCredential) {
+      return { label: '凭证', value: '缺 Key', cls: 'is-warn', title: '尚未保存 API Key。' };
+    }
+    return { label: 'SLA 24h', value: '待采样', cls: 'is-muted', title: '等待自动探测或点击菜单里的重检。' };
+  }
+
+  function renderChHeroMetric(metric) {
+    if (!metric) return '';
+    return `
+      <span class="ch-hero-metric ${safeEscape(metric.cls || 'is-muted')}" title="${safeEscape(metric.title || '')}">
+        <span>${safeEscape(metric.label || '')}</span>
+        <strong>${safeEscape(metric.value || '—')}</strong>
+      </span>`;
+  }
+
+  function renderChHeroQuickMetrics(active) {
+    if (!active) return '';
+    const metrics = [];
+    metrics.push(getChHeroSlaMetric(active));
+    const balance = getChHeroBalanceMeta(active);
+    if (balance) {
+      metrics.push({
+        label: balance.labelKind || '余额',
+        value: balance.valueLabel || '--',
+        cls: balance.cls || 'is-muted',
+        title: balance.title || '',
+      });
+    }
+    if (active.mode === 'apikey') {
+      metrics.push({
+        label: '凭证',
+        value: active.hasCredential ? '已保存' : '缺 Key',
+        cls: active.hasCredential ? 'is-ok' : 'is-warn',
+        title: active.hasCredential ? 'API Key 已保存，可直接启动使用。' : '启动后大概率无法请求模型。',
+      });
+    } else if (active.plan || active.email) {
+      metrics.push({
+        label: active.plan ? '计划' : '账号',
+        value: active.plan || active.email,
+        cls: 'is-oauth',
+        title: active.email || active.plan || '',
+      });
+    }
+    if (isConnectionHubLocalRouterRow(active)) {
+      metrics.push({ label: '入口', value: '本地 Router', cls: 'is-router', title: '当前 Provider 走本机 Router。' });
+    }
+    const html = metrics.filter(Boolean).slice(0, 4).map(renderChHeroMetric).join('');
+    return html ? `<div class="ch-hero-metrics">${html}</div>` : '';
+  }
+
+  function renderChHeroMoreMenu(active, tool, isOauth) {
+    if (!active) return '';
+    const items = [];
+    if (tool === 'codex') {
+      items.push({ label: active.mode === 'oauth' ? '刷新额度' : '刷新余额', icon: 'refresh', attrs: `data-ch-hero-balance-query="${safeEscape(active.key)}"` });
+    }
+    if (!isOauth) {
+      items.push(
+        { label: '重检连接', icon: 'refresh', attrs: 'data-ch-detect' },
+        { label: '编辑配置', icon: 'edit', attrs: 'data-ch-edit' },
+      );
+      if (canOpenChRowRecharge(active)) {
+        items.push({ label: '打开充值页', icon: 'recharge', attrs: `data-ch-hero-recharge="${safeEscape(active.key)}"` });
+      }
+    }
+    if (tool === 'codex') {
+      items.push({ label: '启动方式', icon: 'terminal', attrs: 'data-ch-launch-menu' });
+      items.push({ label: '复制启动命令', icon: 'copy', attrs: 'data-ch-cmd-toggle' });
+    }
+    if (!items.length) return '';
+    return `
+      <span class="ch-hero-more">
+        <button type="button" class="ch-hero-icon" data-ch-hero-menu-trigger title="更多操作" aria-label="更多操作" aria-haspopup="menu">
+          ${chRowMenuIcon('more')}
+        </button>
+        <span class="ch-hero-menu-panel" role="menu">
+          ${items.map((item) => `
+            <button type="button" class="ch-hero-menu-item" role="menuitem" ${item.attrs}>
+              ${chRowMenuIcon(item.icon)}
+              <span>${safeEscape(item.label)}</span>
+            </button>`).join('')}
+        </span>
+      </span>`;
+  }
+
   // ── Hero HTML ─────────────────────────────────────────────────────
   function renderHeroHTML(active, tool) {
     if (!active) {
@@ -37864,6 +38118,8 @@ startToolUpdatesTimer();
       : (h.loading ? '检测中' : h.ok ? '已通' : h.checked ? '失败' : '未检测');
     const launchLabel = LAUNCH_LABELS[tool] || '启动';
     const modeTxt = isOauth ? 'OAUTH' : 'API KEY';
+    const boundKey = currentBoundProviderKey();
+    const isBound = boundKey && active.key === boundKey && active.mode === 'apikey';
 
     return `
       <div class="ch-hero-info">
@@ -37875,26 +38131,17 @@ startToolUpdatesTimer();
         <div class="ch-hero-badges">
           <span class="ch-mode ${active.mode}">${modeTxt}</span>
           ${active.model ? `<span class="ch-hero-model">${safeEscape(active.model)}</span>` : ''}
+          ${isBound ? '<span class="ch-hero-bound">本项目</span>' : ''}
         </div>
+        ${renderChHeroQuickMetrics(active)}
         ${active.baseUrl ? `<div class="ch-hero-url">${safeEscape(active.baseUrl)}</div>` : ''}
       </div>
       <div class="ch-hero-actions">
-        ${isOauth ? '' : `<button type="button" class="ch-hero-ghost" data-ch-detect title="重新检测连接">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>
-          重检
-        </button>`}
-        ${isOauth ? '' : `<button type="button" class="ch-hero-ghost" data-ch-edit title="编辑当前 provider">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>
-          编辑
-        </button>`}
-        ${tool === 'codex' ? `<button type="button" class="ch-hero-ghost ${state.codexCmdPaletteOpen ? 'active' : ''}" data-ch-cmd-toggle title="复制启动命令到剪贴板">
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="9" height="9" rx="1.5"/><path d="M11 4V2.5A1 1 0 0 0 10 1.5H3.5A1 1 0 0 0 2.5 2.5V10A1 1 0 0 0 3.5 11h1.5"/></svg>
-          复制命令
-        </button>` : ''}
-        <button type="button" class="ch-hero-launch" data-ch-launch>
+        <button id="chHeroLaunchBtn" type="button" class="ch-hero-launch" data-ch-launch title="${tool === 'codex' ? '选择应用内终端或外部终端后启动 Codex。' : safeEscape(launchLabel)}">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>
           ${safeEscape(launchLabel)}
         </button>
+        ${renderChHeroMoreMenu(active, tool, isOauth)}
       </div>
       ${renderCodexCmdPalette(active, tool)}`;
   }
@@ -38219,6 +38466,7 @@ startToolUpdatesTimer();
   function chRowMenuIcon(kind) {
     const icons = {
       more: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>',
+      terminal: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/></svg>',
       edit: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z"/></svg>',
       refresh: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3"/></svg>',
       delete: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
@@ -38650,7 +38898,7 @@ startToolUpdatesTimer();
     }
 
     // 懒加载每条 API key 行的 24h uptime（5 分钟缓存）
-    fetchRowUptimeSummaries(filtered.filter((r) => r.tool === 'codex' && r.mode === 'apikey' && !r.historyOnly));
+    fetchRowUptimeSummaries(allRows.filter((r) => r.tool === 'codex' && r.mode === 'apikey' && !r.historyOnly));
 
     // 同步托盘菜单（每次 hub 重渲染时 push 最新 provider 列表）
     try { if (typeof trayHookOnHubRender === 'function') trayHookOnHubRender(); } catch (_) {}
@@ -38685,12 +38933,13 @@ startToolUpdatesTimer();
         state.providerUptime[r.key] = { uptimePct: null, total: 0, fetchedAt: now };
       }
     }));
-    // 数据回来后只重渲染列表，不闪 hero
+    // 数据回来后同步列表和顶部当前会话卡片，让 SLA 标签保持最新。
     const listEl = document.getElementById('chList');
+    const search = (hubState()?.chSearch || '').trim().toLowerCase();
+    const filter = hubState()?.chFilter || 'all';
+    const tool = hubState()?.activeTool || 'codex';
+    const all = buildProviderRows(tool);
     if (listEl) {
-      const search = (hubState()?.chSearch || '').trim().toLowerCase();
-      const filter = hubState()?.chFilter || 'all';
-      const all = buildProviderRows(hubState()?.activeTool || 'codex');
       const filteredAgain = all.filter((r) => {
         if (filter === 'oauth' && r.mode !== 'oauth') return false;
         if (filter === 'apikey' && r.mode !== 'apikey') return false;
@@ -38699,6 +38948,12 @@ startToolUpdatesTimer();
         return hay.includes(search);
       });
       listEl.innerHTML = renderListHTML(filteredAgain);
+    }
+    const heroEl = document.getElementById('chHero');
+    if (heroEl) {
+      const active = all.find((r) => r.isActive) || null;
+      heroEl.innerHTML = renderHeroHTML(active, tool);
+      heroEl.classList.toggle('empty', !active);
     }
   }
 
@@ -39965,21 +40220,28 @@ startToolUpdatesTimer();
         }
       }
     });
-    hero?.addEventListener('click', (e) => {
+    hero?.addEventListener('click', async (e) => {
       const target = e.target instanceof Element ? e.target : null;
       if (!target) return;
       const launch = target.closest('[data-ch-launch]');
       if (launch) {
+        e.preventDefault();
+        e.stopPropagation();
         const s = hubState();
         const tool = s?.activeTool || 'codex';
-        // Call the underlying launch function directly — the real #launchBtn lives
-        // inside the slide-over (display:none) so simulating its click would make
-        // the terminal picker menu position at (0,0).
         if (tool === 'codex' && typeof launchCodex === 'function') {
-          launchCodex('launchBtn', 'Codex 已启动', 'auto').catch(console.warn);
+          if (await openCodexLaunchPicker(launch, { tool })) return;
+          launchCodex('chHeroLaunchBtn', 'Codex 已启动', getSelectedCodexTerminalProfile()).catch(console.warn);
         } else {
-          document.getElementById('launchBtn')?.click();
+          launchActiveTool('', 'chHeroLaunchBtn').catch(console.warn);
         }
+        return;
+      }
+      const launchMenu = target.closest('[data-ch-launch-menu]');
+      if (launchMenu) {
+        e.preventDefault();
+        e.stopPropagation();
+        await openCodexLaunchPicker(document.getElementById('chHeroLaunchBtn') || launchMenu, { tool: hubState()?.activeTool || 'codex' });
         return;
       }
       const edit = target.closest('[data-ch-edit]');
@@ -39996,6 +40258,20 @@ startToolUpdatesTimer();
       const add = target.closest('[data-ch-add]');
       if (add) {
         handlePrimaryAdd().catch((err) => console.warn('[ch] primary add failed', err));
+        return;
+      }
+      const heroBalanceQuery = target.closest('[data-ch-hero-balance-query]');
+      if (heroBalanceQuery) {
+        const key = heroBalanceQuery.getAttribute('data-ch-hero-balance-query') || '';
+        const row = buildProviderRows(hubState()?.activeTool || 'codex').find((item) => item.key === key);
+        if (row) queryChRowRemoteUsage(row).catch((err) => console.warn('[ch] hero balance query failed', err));
+        return;
+      }
+      const heroRecharge = target.closest('[data-ch-hero-recharge]');
+      if (heroRecharge) {
+        const key = heroRecharge.getAttribute('data-ch-hero-recharge') || '';
+        const row = buildProviderRows(hubState()?.activeTool || 'codex').find((item) => item.key === key);
+        if (row) openChRowRecharge(row).catch((err) => console.warn('[ch] hero recharge failed', err));
         return;
       }
       // Codex 启动命令面板开/关（"安全前缀"无论 OAuth/API 默认都关，
