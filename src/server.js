@@ -38,6 +38,56 @@ import {
   getAdapterForBaseUrl,
 } from './lib/cn-provider-adapters.js';
 import {
+  buildAssetImportDeepLink,
+  exportAssetBundle,
+  exportProviderCatalog,
+  getProviderPreset,
+  listProviderPresets,
+  previewAssetImport,
+  providerCatalogSummary,
+} from './lib/provider-catalog.js';
+import {
+  applyMcpImport,
+  listMcpInventory,
+  planMcpSync,
+  previewMcpImport,
+} from './lib/mcp-manager.js';
+import {
+  applyPromptImport,
+  listPromptInventory,
+  previewPromptImport,
+} from './lib/prompt-manager.js';
+import {
+  applySkillImport,
+  listSkillInventory,
+  previewSkillImport,
+} from './lib/skill-manager.js';
+import {
+  archiveSession,
+  listSessionInventory,
+  listSessionTrash,
+  restoreSession,
+} from './lib/session-manager.js';
+import {
+  listUsageInventory,
+  readCustomPriceBook,
+  saveCustomPriceBook,
+} from './lib/usage-manager.js';
+import {
+  listSyncTargets,
+  listSyncSnapshots,
+  pushSyncSnapshot,
+  readSyncSnapshot,
+  saveSyncTargets,
+} from './lib/sync-manager.js';
+import {
+  buildLocalRoutingPlan,
+  localRoutingCapabilities,
+  previewRequestRectifier,
+  previewResponseRectifier,
+  redactLocalRoutingLogEntry,
+} from './lib/local-routing-manager.js';
+import {
   checkSetupEnvironment,
   getProviderSecret,
   getProviderExtras,
@@ -52,13 +102,19 @@ import {
   getToolUpdatesInfo,
   installClaudeCode,
   installClaudeCodeVersion,
+  installCodeBuddyCode,
+  installCodeBuddyCodeVersion,
   installOpenCode,
   installOpenCodeVersion,
   installCodex,
   installCodexVersion,
+  installGemini,
+  installGeminiVersion,
   installOpenClaw,
   installOpenClawVersion,
   installOpenClawRemote,
+  installQwenCode,
+  installQwenCodeVersion,
   killOpenClawPortOccupants,
   cancelOpenClawInstallTask,
   cancelOpenCodeInstallTask,
@@ -68,7 +124,12 @@ import {
   onboardOpenClaw,
   repairOpenClawDashboardAuth,
   launchClaudeCode,
+  launchClaudeDesktop,
+  launchGemini,
+  launchHermes,
+  loadGeminiState,
   launchOpenCode,
+  loadHermesState,
   loadOpenCodeState,
   loginClaudeCode,
   loginOpenCode,
@@ -84,15 +145,20 @@ import {
   loadOpenClawState,
   loadState,
   reinstallClaudeCode,
+  reinstallCodeBuddyCode,
   reinstallOpenCode,
   reinstallCodex,
+  reinstallGemini,
   reinstallOpenClaw,
+  reinstallQwenCode,
   restoreBackup,
   saveClaudeCodeConfig,
   saveClaudeCodeRawConfig,
   saveOpenCodeConfig,
   saveOpenCodeRawConfig,
   saveConfig,
+  applyProviderRouterClientConfig,
+  applyProviderCatalogImport,
   deleteProviderConfig,
   useOauthConfig,
   saveOpenClawConfig,
@@ -105,16 +171,25 @@ import {
   setOpenClawDaemonEnabled,
   testSavedProvider,
   uninstallClaudeCode,
+  uninstallCodeBuddyCode,
   uninstallOpenCode,
   uninstallCodex,
+  uninstallGemini,
   uninstallOpenClaw,
+  uninstallQwenCode,
   updateClaudeCode,
   updateClaudeCodeDomestic,
+  updateCodeBuddyCode,
+  updateCodeBuddyCodeDomestic,
   updateOpenCode,
   updateCodex,
   updateCodexDomestic,
+  updateGemini,
+  updateGeminiDomestic,
   updateOpenClaw,
   updateOpenClawDomestic,
+  updateQwenCode,
+  updateQwenCodeDomestic,
 } from './lib/config-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -161,6 +236,174 @@ function validatePathOrThrow(userPath, paramName = 'path') {
     throw new Error(`Invalid ${paramName}: path traversal detected`);
   }
   return userPath;
+}
+
+function emptyAssetImportResult({
+  schema,
+  dryRun,
+  targetTool,
+  summaryKey,
+  total = 0,
+} = {}) {
+  return {
+    schema,
+    dryRun: dryRun !== false,
+    targetTool,
+    summary: {
+      [summaryKey]: total,
+      created: 0,
+      updated: 0,
+      appended: 0,
+      unchanged: 0,
+      conflicts: 0,
+      stale: 0,
+      skipped: 0,
+      changed: false,
+      written: false,
+    },
+    operations: [],
+    backupPath: null,
+  };
+}
+
+function sumImportSummary(results = {}) {
+  const summaries = Object.values(results).map((result) => result?.summary || {});
+  const sum = (key) => summaries.reduce((total, summary) => total + Number(summary?.[key] || 0), 0);
+  return {
+    totalProviders: sum('totalProviders'),
+    totalMcpServers: sum('totalServers'),
+    totalPrompts: sum('totalPrompts'),
+    totalSkills: sum('totalSkills'),
+    created: sum('created'),
+    updated: sum('updated'),
+    appended: sum('appended'),
+    unchanged: sum('unchanged'),
+    conflicts: sum('conflicts'),
+    stale: sum('stale'),
+    skipped: sum('skipped'),
+    changed: summaries.some((summary) => Boolean(summary?.changed)),
+    written: summaries.some((summary) => Boolean(summary?.written)),
+  };
+}
+
+function categorizedOperations(category, result = {}) {
+  return (Array.isArray(result.operations) ? result.operations : [])
+    .map((operation) => ({ category, ...operation }));
+}
+
+async function applyUnifiedAssetImport(input = {}, options = {}) {
+  const dryRun = options.dryRun ?? input.dryRun ?? true;
+  const targetTool = String(options.targetTool || input.targetTool || 'all').trim() || 'all';
+  const preview = previewAssetImport(input);
+  const counts = preview.counts || {};
+  const providerResult = (Number(counts.providers || 0) > 0 || Boolean(options.includeCatalogPresets || input.includeCatalogPresets))
+    ? await applyProviderCatalogImport(input, {
+        ...options,
+        dryRun,
+        targetTool,
+      })
+    : emptyAssetImportResult({
+        schema: 'easyaiconfig.provider-import-apply.v1',
+        dryRun,
+        targetTool,
+        summaryKey: 'totalProviders',
+      });
+  const mcpResult = Number(counts.mcpServers || 0) > 0
+    ? await applyMcpImport(input, {
+        ...options,
+        dryRun,
+        targetTool,
+      })
+    : emptyAssetImportResult({
+        schema: 'easyaiconfig.mcp-import-apply.v1',
+        dryRun,
+        targetTool,
+        summaryKey: 'totalServers',
+      });
+  const promptResult = Number(counts.prompts || 0) > 0
+    ? await applyPromptImport(input, {
+        ...options,
+        dryRun,
+        targetTool,
+      })
+    : emptyAssetImportResult({
+        schema: 'easyaiconfig.prompt-import-apply.v1',
+        dryRun,
+        targetTool,
+        summaryKey: 'totalPrompts',
+      });
+  const skillResult = Number(counts.skills || 0) > 0
+    ? await applySkillImport(input, {
+        ...options,
+        dryRun,
+        targetTool,
+      })
+    : emptyAssetImportResult({
+        schema: 'easyaiconfig.skill-import-apply.v1',
+        dryRun,
+        targetTool,
+        summaryKey: 'totalSkills',
+      });
+  const results = {
+    providers: providerResult,
+    mcp: mcpResult,
+    prompts: promptResult,
+    skills: skillResult,
+  };
+  const summary = sumImportSummary(results);
+  return {
+    schema: 'easyaiconfig.asset-import-apply.v2',
+    dryRun: dryRun !== false,
+    targetTool,
+    source: {
+      schema: preview.schema,
+      app: preview.app,
+      version: preview.version,
+    },
+    counts,
+    summary,
+    results,
+    operations: [
+      ...categorizedOperations('providers', providerResult),
+      ...categorizedOperations('mcp', mcpResult),
+      ...categorizedOperations('prompts', promptResult),
+      ...categorizedOperations('skills', skillResult),
+    ],
+    backupPaths: {
+      providers: providerResult.backupPath || null,
+      mcp: mcpResult.backupPath || null,
+      prompts: promptResult.backupPath || null,
+      skills: skillResult.backupPath || null,
+    },
+    backupPath: providerResult.backupPath || null,
+    paths: providerResult.paths || {},
+  };
+}
+
+async function buildAssetExportBundle({
+  includeLocal = false,
+  projectPath = '',
+  cwd = '',
+  codexHome = '',
+  limit = 100,
+} = {}) {
+  const bundle = exportAssetBundle();
+  if (!includeLocal) return bundle;
+  const [mcpInventory, promptInventory, skillInventory, sessionInventory] = await Promise.all([
+    listMcpInventory({ codexHome: codexHome || undefined }),
+    listPromptInventory({ projectPath: projectPath || '' }),
+    listSkillInventory(),
+    listSessionInventory({
+      codexHome: codexHome || undefined,
+      cwd: cwd || '',
+      limit,
+    }),
+  ]);
+  bundle.assets.mcpInventory = mcpInventory;
+  bundle.assets.promptInventory = promptInventory;
+  bundle.assets.skillInventory = skillInventory;
+  bundle.assets.sessionInventory = sessionInventory;
+  return bundle;
 }
 
 
@@ -1402,7 +1645,7 @@ async function installOpenCodeEcosystemTarget({ target = '', cwd = '' } = {}) {
   throw new Error('暂不支持这个 OpenCode 生态目标');
 }
 
-export async function startServer() {
+export async function startServer(options = {}) {
   const app = express();
   const localApiToken = createLocalApiToken();
   app.use(express.json({ limit: '1mb' }));
@@ -1579,6 +1822,839 @@ export async function startServer() {
     try {
       const providerKey = String(req.query.providerKey || '').trim();
       ok(res, { data: { snapshot: await getProviderHealth(providerKey) } });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/local-routing/capabilities', async (_req, res) => {
+    try {
+      ok(res, { data: localRoutingCapabilities() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/local-routing/plan', async (req, res) => {
+    try {
+      ok(res, { data: buildLocalRoutingPlan(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/local-routing/rectifier/preview', async (req, res) => {
+    try {
+      ok(res, { data: previewRequestRectifier(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/local-routing/response-rectifier/preview', async (req, res) => {
+    try {
+      ok(res, { data: previewResponseRectifier(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/local-routing/log/redact', async (req, res) => {
+    try {
+      ok(res, { data: redactLocalRoutingLogEntry(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/provider/catalog', async (req, res) => {
+    try {
+      ok(res, {
+        data: {
+          summary: providerCatalogSummary(),
+          presets: listProviderPresets({
+            query: req.query.query,
+            tool: req.query.tool,
+            region: req.query.region,
+            protocol: req.query.protocol,
+            tag: req.query.tag,
+          }),
+        },
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/provider/catalog/export', async (req, res) => {
+    try {
+      ok(res, {
+        data: exportProviderCatalog({
+          query: req.query.query,
+          tool: req.query.tool,
+          region: req.query.region,
+          protocol: req.query.protocol,
+          tag: req.query.tag,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/provider/catalog/:id', async (req, res) => {
+    try {
+      const preset = getProviderPreset(req.params.id);
+      if (!preset) throw new Error('Provider preset not found');
+      ok(res, { data: { preset } });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/provider-router/apply-client', async (req, res) => {
+    try {
+      ok(res, { data: await applyProviderRouterClientConfig(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/assets/export', async (req, res) => {
+    try {
+      const includeLocal = req.query.local === '1' || req.query.local === 'true';
+      const projectPath = validatePathOrThrow(req.query.projectPath, 'projectPath');
+      const cwd = validatePathOrThrow(req.query.cwd, 'cwd');
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const bundle = await buildAssetExportBundle({
+        includeLocal,
+        projectPath: projectPath || '',
+        cwd: cwd || '',
+        codexHome: codexHome || '',
+        limit: req.query.limit || 100,
+      });
+      ok(res, { data: bundle });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/assets/index', async (req, res) => {
+    try {
+      const projectPath = validatePathOrThrow(req.query.projectPath, 'projectPath');
+      const cwd = validatePathOrThrow(req.query.cwd, 'cwd');
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const qwenHome = validatePathOrThrow(req.query.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(req.query.codeBuddyHome, 'codeBuddyHome');
+      const geminiSettingsPath = validatePathOrThrow(req.query.geminiSettingsPath, 'geminiSettingsPath');
+      const qwenSettingsPath = validatePathOrThrow(req.query.qwenSettingsPath, 'qwenSettingsPath');
+      const codeBuddyMcpPath = validatePathOrThrow(req.query.codeBuddyMcpPath, 'codeBuddyMcpPath');
+      const codeBuddySkillsRoot = validatePathOrThrow(req.query.codeBuddySkillsRoot, 'codeBuddySkillsRoot');
+      const includeUsage = req.query.usage === '1' || req.query.usage === 'true';
+      const [providerCatalog, mcpInventory, promptInventory, skillInventory, sessionInventory, usageInventory] = await Promise.all([
+        Promise.resolve(exportProviderCatalog()),
+        listMcpInventory({
+          codexHome: codexHome || undefined,
+          geminiSettingsPath: geminiSettingsPath || undefined,
+          qwenSettingsPath: qwenSettingsPath || undefined,
+          codeBuddyMcpPath: codeBuddyMcpPath || undefined,
+        }),
+        listPromptInventory({
+          projectPath: projectPath || '',
+          codexHome: codexHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+        }),
+        listSkillInventory({
+          codeBuddySkillsRoot: codeBuddySkillsRoot || undefined,
+        }),
+        listSessionInventory({
+          codexHome: codexHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          cwd: cwd || '',
+          limit: req.query.limit || 100,
+        }),
+        includeUsage
+          ? listUsageInventory({
+            codexHome: codexHome || undefined,
+            qwenHome: qwenHome || undefined,
+            codeBuddyHome: codeBuddyHome || undefined,
+            days: req.query.days || undefined,
+            cacheOnly: req.query.cacheOnly === '1' || req.query.cacheOnly === 'true',
+          })
+          : Promise.resolve(null),
+      ]);
+      ok(res, {
+        data: {
+          schema: 'easyaiconfig.asset-index.v1',
+          generatedAt: new Date().toISOString(),
+          providerCatalog,
+          mcpInventory,
+          promptInventory,
+          skillInventory,
+          sessionInventory,
+          usageInventory,
+        },
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/assets/import/preview', async (req, res) => {
+    try {
+      ok(res, { data: previewAssetImport(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/assets/import/preview', async (req, res) => {
+    try {
+      if (req.query.payload) {
+        ok(res, { data: previewAssetImport({ url: `easyai://import?payload=${req.query.payload}` }) });
+        return;
+      }
+      ok(res, { data: previewAssetImport({ url: req.query.url || req.query.text || '' }) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/assets/import/apply', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.body?.codexHome, 'codexHome');
+      const projectPath = validatePathOrThrow(req.body?.projectPath, 'projectPath');
+      const claudeSettingsPath = validatePathOrThrow(req.body?.claudeSettingsPath, 'claudeSettingsPath');
+      const claudeDesktopConfigPath = validatePathOrThrow(req.body?.claudeDesktopConfigPath, 'claudeDesktopConfigPath');
+      const openCodeConfigPath = validatePathOrThrow(req.body?.openCodeConfigPath, 'openCodeConfigPath');
+      const geminiSettingsPath = validatePathOrThrow(req.body?.geminiSettingsPath, 'geminiSettingsPath');
+      const qwenSettingsPath = validatePathOrThrow(req.body?.qwenSettingsPath, 'qwenSettingsPath');
+      const codeBuddyMcpPath = validatePathOrThrow(req.body?.codeBuddyMcpPath, 'codeBuddyMcpPath');
+      const qwenHome = validatePathOrThrow(req.body?.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(req.body?.codeBuddyHome, 'codeBuddyHome');
+      const codexSkillsRoot = validatePathOrThrow(req.body?.codexSkillsRoot, 'codexSkillsRoot');
+      const claudeSkillsRoot = validatePathOrThrow(req.body?.claudeSkillsRoot, 'claudeSkillsRoot');
+      const codeBuddySkillsRoot = validatePathOrThrow(req.body?.codeBuddySkillsRoot, 'codeBuddySkillsRoot');
+      const easyaiSkillsRoot = validatePathOrThrow(req.body?.easyaiSkillsRoot, 'easyaiSkillsRoot');
+      ok(res, {
+        data: await applyUnifiedAssetImport(req.body || {}, {
+          codexHome: codexHome || undefined,
+          projectPath: projectPath || '',
+          claudeSettingsPath: claudeSettingsPath || undefined,
+          claudeDesktopConfigPath: claudeDesktopConfigPath || undefined,
+          openCodeConfigPath: openCodeConfigPath || undefined,
+          geminiSettingsPath: geminiSettingsPath || undefined,
+          qwenSettingsPath: qwenSettingsPath || undefined,
+          codeBuddyMcpPath: codeBuddyMcpPath || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          codexSkillsRoot: codexSkillsRoot || undefined,
+          claudeSkillsRoot: claudeSkillsRoot || undefined,
+          codeBuddySkillsRoot: codeBuddySkillsRoot || undefined,
+          easyaiSkillsRoot: easyaiSkillsRoot || undefined,
+          scope: req.body?.scope || 'global',
+          dryRun: req.body?.dryRun !== false,
+          overwrite: Boolean(req.body?.overwrite),
+          append: Boolean(req.body?.append),
+          installMode: req.body?.installMode || req.body?.mode || 'copy',
+          includeCatalogPresets: Boolean(req.body?.includeCatalogPresets),
+          targetTool: req.body?.targetTool || 'all',
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/assets/deep-link/build', async (req, res) => {
+    try {
+      const payload = req.body?.payload || exportAssetBundle();
+      ok(res, { data: { url: buildAssetImportDeepLink(payload) } });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/mcp/inventory', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const geminiSettingsPath = validatePathOrThrow(req.query.geminiSettingsPath, 'geminiSettingsPath');
+      const qwenSettingsPath = validatePathOrThrow(req.query.qwenSettingsPath, 'qwenSettingsPath');
+      const codeBuddyMcpPath = validatePathOrThrow(req.query.codeBuddyMcpPath, 'codeBuddyMcpPath');
+      ok(res, {
+        data: await listMcpInventory({
+          codexHome: codexHome || undefined,
+          geminiSettingsPath: geminiSettingsPath || undefined,
+          qwenSettingsPath: qwenSettingsPath || undefined,
+          codeBuddyMcpPath: codeBuddyMcpPath || undefined,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/mcp/sync-plan', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const geminiSettingsPath = validatePathOrThrow(req.query.geminiSettingsPath, 'geminiSettingsPath');
+      const qwenSettingsPath = validatePathOrThrow(req.query.qwenSettingsPath, 'qwenSettingsPath');
+      const codeBuddyMcpPath = validatePathOrThrow(req.query.codeBuddyMcpPath, 'codeBuddyMcpPath');
+      ok(res, {
+        data: await planMcpSync({
+          codexHome: codexHome || undefined,
+          geminiSettingsPath: geminiSettingsPath || undefined,
+          qwenSettingsPath: qwenSettingsPath || undefined,
+          codeBuddyMcpPath: codeBuddyMcpPath || undefined,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/mcp/import/preview', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.body?.codexHome, 'codexHome');
+      const claudeSettingsPath = validatePathOrThrow(req.body?.claudeSettingsPath, 'claudeSettingsPath');
+      const claudeDesktopConfigPath = validatePathOrThrow(req.body?.claudeDesktopConfigPath, 'claudeDesktopConfigPath');
+      const openCodeConfigPath = validatePathOrThrow(req.body?.openCodeConfigPath, 'openCodeConfigPath');
+      const geminiSettingsPath = validatePathOrThrow(req.body?.geminiSettingsPath, 'geminiSettingsPath');
+      const qwenSettingsPath = validatePathOrThrow(req.body?.qwenSettingsPath, 'qwenSettingsPath');
+      const codeBuddyMcpPath = validatePathOrThrow(req.body?.codeBuddyMcpPath, 'codeBuddyMcpPath');
+      ok(res, {
+        data: await previewMcpImport(req.body || {}, {
+          codexHome: codexHome || undefined,
+          claudeSettingsPath: claudeSettingsPath || undefined,
+          claudeDesktopConfigPath: claudeDesktopConfigPath || undefined,
+          openCodeConfigPath: openCodeConfigPath || undefined,
+          geminiSettingsPath: geminiSettingsPath || undefined,
+          qwenSettingsPath: qwenSettingsPath || undefined,
+          codeBuddyMcpPath: codeBuddyMcpPath || undefined,
+          targetTool: req.body?.targetTool || 'codex',
+          overwrite: Boolean(req.body?.overwrite),
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/mcp/import/preview', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const claudeSettingsPath = validatePathOrThrow(req.query.claudeSettingsPath, 'claudeSettingsPath');
+      const claudeDesktopConfigPath = validatePathOrThrow(req.query.claudeDesktopConfigPath, 'claudeDesktopConfigPath');
+      const openCodeConfigPath = validatePathOrThrow(req.query.openCodeConfigPath, 'openCodeConfigPath');
+      const geminiSettingsPath = validatePathOrThrow(req.query.geminiSettingsPath, 'geminiSettingsPath');
+      const qwenSettingsPath = validatePathOrThrow(req.query.qwenSettingsPath, 'qwenSettingsPath');
+      const codeBuddyMcpPath = validatePathOrThrow(req.query.codeBuddyMcpPath, 'codeBuddyMcpPath');
+      const input = req.query.payload
+        ? { url: `easyai://import?payload=${req.query.payload}` }
+        : { url: req.query.url || req.query.text || '' };
+      ok(res, {
+        data: await previewMcpImport(input, {
+          codexHome: codexHome || undefined,
+          claudeSettingsPath: claudeSettingsPath || undefined,
+          claudeDesktopConfigPath: claudeDesktopConfigPath || undefined,
+          openCodeConfigPath: openCodeConfigPath || undefined,
+          geminiSettingsPath: geminiSettingsPath || undefined,
+          qwenSettingsPath: qwenSettingsPath || undefined,
+          codeBuddyMcpPath: codeBuddyMcpPath || undefined,
+          targetTool: req.query.targetTool || 'codex',
+          overwrite: req.query.overwrite === '1' || req.query.overwrite === 'true',
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/mcp/import/apply', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.body?.codexHome, 'codexHome');
+      const claudeSettingsPath = validatePathOrThrow(req.body?.claudeSettingsPath, 'claudeSettingsPath');
+      const claudeDesktopConfigPath = validatePathOrThrow(req.body?.claudeDesktopConfigPath, 'claudeDesktopConfigPath');
+      const openCodeConfigPath = validatePathOrThrow(req.body?.openCodeConfigPath, 'openCodeConfigPath');
+      const geminiSettingsPath = validatePathOrThrow(req.body?.geminiSettingsPath, 'geminiSettingsPath');
+      const qwenSettingsPath = validatePathOrThrow(req.body?.qwenSettingsPath, 'qwenSettingsPath');
+      const codeBuddyMcpPath = validatePathOrThrow(req.body?.codeBuddyMcpPath, 'codeBuddyMcpPath');
+      ok(res, {
+        data: await applyMcpImport(req.body || {}, {
+          codexHome: codexHome || undefined,
+          claudeSettingsPath: claudeSettingsPath || undefined,
+          claudeDesktopConfigPath: claudeDesktopConfigPath || undefined,
+          openCodeConfigPath: openCodeConfigPath || undefined,
+          geminiSettingsPath: geminiSettingsPath || undefined,
+          qwenSettingsPath: qwenSettingsPath || undefined,
+          codeBuddyMcpPath: codeBuddyMcpPath || undefined,
+          targetTool: req.body?.targetTool || 'codex',
+          dryRun: req.body?.dryRun !== false,
+          overwrite: Boolean(req.body?.overwrite),
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/prompts/inventory', async (req, res) => {
+    try {
+      const projectPath = validatePathOrThrow(req.query.projectPath, 'projectPath');
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const qwenHome = validatePathOrThrow(req.query.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(req.query.codeBuddyHome, 'codeBuddyHome');
+      ok(res, {
+        data: await listPromptInventory({
+          projectPath: projectPath || '',
+          codexHome: codexHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/prompts/import/preview', async (req, res) => {
+    try {
+      const projectPath = validatePathOrThrow(req.body?.projectPath, 'projectPath');
+      const codexHome = validatePathOrThrow(req.body?.codexHome, 'codexHome');
+      const qwenHome = validatePathOrThrow(req.body?.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(req.body?.codeBuddyHome, 'codeBuddyHome');
+      ok(res, {
+        data: await previewPromptImport(req.body || {}, {
+          projectPath: projectPath || '',
+          codexHome: codexHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          scope: req.body?.scope || undefined,
+          targetTool: req.body?.targetTool || undefined,
+          overwrite: Boolean(req.body?.overwrite),
+          append: Boolean(req.body?.append),
+          expectedSha256ByPath: req.body?.expectedSha256ByPath,
+          expectedSha256ById: req.body?.expectedSha256ById,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/prompts/import/preview', async (req, res) => {
+    try {
+      const projectPath = validatePathOrThrow(req.query.projectPath, 'projectPath');
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const qwenHome = validatePathOrThrow(req.query.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(req.query.codeBuddyHome, 'codeBuddyHome');
+      const input = req.query.payload
+        ? { url: `easyai://import?payload=${req.query.payload}` }
+        : { url: req.query.url || req.query.text || '' };
+      ok(res, {
+        data: await previewPromptImport(input, {
+          projectPath: projectPath || '',
+          codexHome: codexHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          scope: req.query.scope || undefined,
+          targetTool: req.query.targetTool || undefined,
+          overwrite: req.query.overwrite === '1' || req.query.overwrite === 'true',
+          append: req.query.append === '1' || req.query.append === 'true',
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/prompts/import/apply', async (req, res) => {
+    try {
+      const projectPath = validatePathOrThrow(req.body?.projectPath, 'projectPath');
+      const codexHome = validatePathOrThrow(req.body?.codexHome, 'codexHome');
+      const qwenHome = validatePathOrThrow(req.body?.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(req.body?.codeBuddyHome, 'codeBuddyHome');
+      ok(res, {
+        data: await applyPromptImport(req.body || {}, {
+          projectPath: projectPath || '',
+          codexHome: codexHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          scope: req.body?.scope || undefined,
+          targetTool: req.body?.targetTool || undefined,
+          dryRun: req.body?.dryRun !== false,
+          overwrite: Boolean(req.body?.overwrite),
+          append: Boolean(req.body?.append),
+          expectedSha256: req.body?.expectedSha256,
+          expectedSha256ByPath: req.body?.expectedSha256ByPath,
+          expectedSha256ById: req.body?.expectedSha256ById,
+          requireExpectedSha256: Boolean(req.body?.requireExpectedSha256),
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/skills/inventory', async (req, res) => {
+    try {
+      const codeBuddySkillsRoot = validatePathOrThrow(req.query.codeBuddySkillsRoot, 'codeBuddySkillsRoot');
+      ok(res, {
+        data: await listSkillInventory({
+          codeBuddySkillsRoot: codeBuddySkillsRoot || undefined,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/skills/import/preview', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.body?.codexHome, 'codexHome');
+      const codexSkillsRoot = validatePathOrThrow(req.body?.codexSkillsRoot, 'codexSkillsRoot');
+      const claudeSkillsRoot = validatePathOrThrow(req.body?.claudeSkillsRoot, 'claudeSkillsRoot');
+      const codeBuddySkillsRoot = validatePathOrThrow(req.body?.codeBuddySkillsRoot, 'codeBuddySkillsRoot');
+      const easyaiSkillsRoot = validatePathOrThrow(req.body?.easyaiSkillsRoot, 'easyaiSkillsRoot');
+      ok(res, {
+        data: await previewSkillImport(req.body || {}, {
+          codexHome: codexHome || undefined,
+          codexSkillsRoot: codexSkillsRoot || undefined,
+          claudeSkillsRoot: claudeSkillsRoot || undefined,
+          codeBuddySkillsRoot: codeBuddySkillsRoot || undefined,
+          easyaiSkillsRoot: easyaiSkillsRoot || undefined,
+          targetTool: req.body?.targetTool || 'codex',
+          installMode: req.body?.installMode || req.body?.mode || 'copy',
+          overwrite: Boolean(req.body?.overwrite),
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/skills/import/preview', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const codexSkillsRoot = validatePathOrThrow(req.query.codexSkillsRoot, 'codexSkillsRoot');
+      const claudeSkillsRoot = validatePathOrThrow(req.query.claudeSkillsRoot, 'claudeSkillsRoot');
+      const codeBuddySkillsRoot = validatePathOrThrow(req.query.codeBuddySkillsRoot, 'codeBuddySkillsRoot');
+      const easyaiSkillsRoot = validatePathOrThrow(req.query.easyaiSkillsRoot, 'easyaiSkillsRoot');
+      const input = req.query.payload
+        ? { url: `easyai://import?payload=${req.query.payload}` }
+        : { url: req.query.url || req.query.text || '' };
+      ok(res, {
+        data: await previewSkillImport(input, {
+          codexHome: codexHome || undefined,
+          codexSkillsRoot: codexSkillsRoot || undefined,
+          claudeSkillsRoot: claudeSkillsRoot || undefined,
+          codeBuddySkillsRoot: codeBuddySkillsRoot || undefined,
+          easyaiSkillsRoot: easyaiSkillsRoot || undefined,
+          targetTool: req.query.targetTool || 'codex',
+          installMode: req.query.installMode || req.query.mode || 'copy',
+          overwrite: req.query.overwrite === '1' || req.query.overwrite === 'true',
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/skills/import/apply', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.body?.codexHome, 'codexHome');
+      const codexSkillsRoot = validatePathOrThrow(req.body?.codexSkillsRoot, 'codexSkillsRoot');
+      const claudeSkillsRoot = validatePathOrThrow(req.body?.claudeSkillsRoot, 'claudeSkillsRoot');
+      const codeBuddySkillsRoot = validatePathOrThrow(req.body?.codeBuddySkillsRoot, 'codeBuddySkillsRoot');
+      const easyaiSkillsRoot = validatePathOrThrow(req.body?.easyaiSkillsRoot, 'easyaiSkillsRoot');
+      ok(res, {
+        data: await applySkillImport(req.body || {}, {
+          codexHome: codexHome || undefined,
+          codexSkillsRoot: codexSkillsRoot || undefined,
+          claudeSkillsRoot: claudeSkillsRoot || undefined,
+          codeBuddySkillsRoot: codeBuddySkillsRoot || undefined,
+          easyaiSkillsRoot: easyaiSkillsRoot || undefined,
+          targetTool: req.body?.targetTool || 'codex',
+          installMode: req.body?.installMode || req.body?.mode || 'copy',
+          dryRun: req.body?.dryRun !== false,
+          overwrite: Boolean(req.body?.overwrite),
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/sessions/inventory', async (req, res) => {
+    try {
+      const cwd = validatePathOrThrow(req.query.cwd, 'cwd');
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const claudeHome = validatePathOrThrow(req.query.claudeHome, 'claudeHome');
+      const geminiHome = validatePathOrThrow(req.query.geminiHome, 'geminiHome');
+      const qwenHome = validatePathOrThrow(req.query.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(req.query.codeBuddyHome, 'codeBuddyHome');
+      const openClawHome = validatePathOrThrow(req.query.openClawHome, 'openClawHome');
+      const hermesHome = validatePathOrThrow(req.query.hermesHome, 'hermesHome');
+      const includeTools = req.query.tools
+        ? String(req.query.tools).split(',').map((item) => item.trim()).filter(Boolean)
+        : undefined;
+      ok(res, {
+        data: await listSessionInventory({
+          codexHome: codexHome || undefined,
+          claudeHome: claudeHome || undefined,
+          geminiHome: geminiHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          openClawHome: openClawHome || undefined,
+          hermesHome: hermesHome || undefined,
+          cwd: cwd || '',
+          query: req.query.query || '',
+          tool: req.query.tool || '',
+          provider: req.query.provider || '',
+          project: req.query.project || '',
+          limit: req.query.limit || undefined,
+          includeTools,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/sessions/trash', async (req, res) => {
+    try {
+      const trashRoot = validatePathOrThrow(req.query.trashRoot, 'trashRoot');
+      ok(res, {
+        data: await listSessionTrash({
+          trashRoot: trashRoot || undefined,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/sessions/archive', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const sourcePath = validatePathOrThrow(body.sourcePath || body.filePath, 'sourcePath');
+      const codexHome = validatePathOrThrow(body.codexHome, 'codexHome');
+      const claudeHome = validatePathOrThrow(body.claudeHome, 'claudeHome');
+      const geminiHome = validatePathOrThrow(body.geminiHome, 'geminiHome');
+      const qwenHome = validatePathOrThrow(body.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(body.codeBuddyHome, 'codeBuddyHome');
+      const openClawHome = validatePathOrThrow(body.openClawHome, 'openClawHome');
+      const hermesHome = validatePathOrThrow(body.hermesHome, 'hermesHome');
+      const trashRoot = validatePathOrThrow(body.trashRoot, 'trashRoot');
+      ok(res, {
+        data: await archiveSession({
+          ...body,
+          sourcePath,
+        }, {
+          codexHome: codexHome || undefined,
+          claudeHome: claudeHome || undefined,
+          geminiHome: geminiHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          openClawHome: openClawHome || undefined,
+          hermesHome: hermesHome || undefined,
+          trashRoot: trashRoot || undefined,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/sessions/restore', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const codexHome = validatePathOrThrow(body.codexHome, 'codexHome');
+      const claudeHome = validatePathOrThrow(body.claudeHome, 'claudeHome');
+      const geminiHome = validatePathOrThrow(body.geminiHome, 'geminiHome');
+      const qwenHome = validatePathOrThrow(body.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(body.codeBuddyHome, 'codeBuddyHome');
+      const openClawHome = validatePathOrThrow(body.openClawHome, 'openClawHome');
+      const hermesHome = validatePathOrThrow(body.hermesHome, 'hermesHome');
+      const targetPath = validatePathOrThrow(body.targetPath, 'targetPath');
+      const trashRoot = validatePathOrThrow(body.trashRoot, 'trashRoot');
+      ok(res, {
+        data: await restoreSession({
+          ...body,
+          targetPath: targetPath || undefined,
+        }, {
+          codexHome: codexHome || undefined,
+          claudeHome: claudeHome || undefined,
+          geminiHome: geminiHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          openClawHome: openClawHome || undefined,
+          hermesHome: hermesHome || undefined,
+          trashRoot: trashRoot || undefined,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/usage/inventory', async (req, res) => {
+    try {
+      const codexHome = validatePathOrThrow(req.query.codexHome, 'codexHome');
+      const qwenHome = validatePathOrThrow(req.query.qwenHome, 'qwenHome');
+      const codeBuddyHome = validatePathOrThrow(req.query.codeBuddyHome, 'codeBuddyHome');
+      const includeTools = req.query.tools
+        ? String(req.query.tools).split(',').map((item) => item.trim()).filter(Boolean)
+        : undefined;
+      ok(res, {
+        data: await listUsageInventory({
+          codexHome: codexHome || undefined,
+          qwenHome: qwenHome || undefined,
+          codeBuddyHome: codeBuddyHome || undefined,
+          days: req.query.days || undefined,
+          force: req.query.force === '1' || req.query.force === 'true',
+          cacheOnly: req.query.cacheOnly === '1' || req.query.cacheOnly === 'true',
+          claudeUsageScope: req.query.claudeUsageScope || req.query.usageScope || 'active',
+          limit: req.query.limit || undefined,
+          includeTools,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/usage/custom-prices', async (_req, res) => {
+    try {
+      ok(res, { data: await readCustomPriceBook() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/usage/custom-prices', async (req, res) => {
+    try {
+      ok(res, { data: await saveCustomPriceBook(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/sync/targets', async (_req, res) => {
+    try {
+      ok(res, { data: await listSyncTargets() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/sync/targets', async (req, res) => {
+    try {
+      ok(res, { data: await saveSyncTargets(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/sync/snapshots', async (req, res) => {
+    try {
+      const targetPath = validatePathOrThrow(req.query.targetPath || req.query.path, 'targetPath');
+      ok(res, {
+        data: await listSyncSnapshots({
+          ...req.query,
+          targetPath: targetPath || undefined,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/sync/push', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const targetPath = validatePathOrThrow(body.targetPath || body.path, 'targetPath');
+      const projectPath = validatePathOrThrow(body.projectPath, 'projectPath');
+      const cwd = validatePathOrThrow(body.cwd, 'cwd');
+      const codexHome = validatePathOrThrow(body.codexHome, 'codexHome');
+      const bundle = body.bundle && typeof body.bundle === 'object'
+        ? body.bundle
+        : await buildAssetExportBundle({
+            includeLocal: Boolean(body.includeLocal || body.local),
+            projectPath: projectPath || '',
+            cwd: cwd || '',
+            codexHome: codexHome || '',
+            limit: body.limit || 100,
+          });
+      ok(res, {
+        data: await pushSyncSnapshot({
+          ...body,
+          targetPath: targetPath || undefined,
+          bundle,
+          dryRun: body.dryRun !== false,
+        }),
+      });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/sync/pull', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const targetPath = validatePathOrThrow(body.targetPath || body.path, 'targetPath');
+      const codexHome = validatePathOrThrow(body.codexHome, 'codexHome');
+      const projectPath = validatePathOrThrow(body.projectPath, 'projectPath');
+      const claudeSettingsPath = validatePathOrThrow(body.claudeSettingsPath, 'claudeSettingsPath');
+      const claudeDesktopConfigPath = validatePathOrThrow(body.claudeDesktopConfigPath, 'claudeDesktopConfigPath');
+      const openCodeConfigPath = validatePathOrThrow(body.openCodeConfigPath, 'openCodeConfigPath');
+      const codexSkillsRoot = validatePathOrThrow(body.codexSkillsRoot, 'codexSkillsRoot');
+      const claudeSkillsRoot = validatePathOrThrow(body.claudeSkillsRoot, 'claudeSkillsRoot');
+      const easyaiSkillsRoot = validatePathOrThrow(body.easyaiSkillsRoot, 'easyaiSkillsRoot');
+      const snapshot = await readSyncSnapshot({
+        ...body,
+        targetPath: targetPath || undefined,
+      });
+      const importResult = await applyUnifiedAssetImport({
+        ...body,
+        payload: snapshot.bundle,
+        dryRun: body.dryRun !== false,
+      }, {
+        codexHome: codexHome || undefined,
+        projectPath: projectPath || '',
+        claudeSettingsPath: claudeSettingsPath || undefined,
+        claudeDesktopConfigPath: claudeDesktopConfigPath || undefined,
+        openCodeConfigPath: openCodeConfigPath || undefined,
+        codexSkillsRoot: codexSkillsRoot || undefined,
+        claudeSkillsRoot: claudeSkillsRoot || undefined,
+        easyaiSkillsRoot: easyaiSkillsRoot || undefined,
+        scope: body.scope || 'global',
+        dryRun: body.dryRun !== false,
+        overwrite: Boolean(body.overwrite),
+        append: Boolean(body.append),
+        installMode: body.installMode || body.mode || 'copy',
+        includeCatalogPresets: body.includeCatalogPresets !== false,
+        targetTool: body.targetTool || 'all',
+      });
+      ok(res, {
+        data: {
+          schema: 'easyaiconfig.sync-pull-apply.v1',
+          dryRun: body.dryRun !== false,
+          changed: Boolean(importResult.summary?.written),
+          target: snapshot.target,
+          entry: snapshot.entry,
+          importResult,
+          summary: {
+            pulled: 1,
+            bytes: snapshot.summary?.bytes || snapshot.entry?.bytes || 0,
+            changed: Boolean(importResult.summary?.changed),
+            written: Boolean(importResult.summary?.written),
+            conflicts: Number(importResult.summary?.conflicts || 0),
+          },
+        },
+      });
     } catch (error) {
       fail(res, error);
     }
@@ -1981,6 +3057,14 @@ app.get('/api/dashboard/opencode-usage', async (req, res) => {
     }
   });
 
+  app.post('/api/claude-desktop/launch', async (req, res) => {
+    try {
+      ok(res, { data: await launchClaudeDesktop(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
   app.post('/api/claudecode/login', async (req, res) => {
     try {
       ok(res, { data: await loginClaudeCode(req.body || {}) });
@@ -2199,6 +3283,207 @@ app.get('/api/opencode/ecosystem/state', async (req, res) => {
     }
   });
 
+  // ─── Hermes Agent endpoints ───
+  app.get('/api/hermes/state', async (_req, res) => {
+    try {
+      ok(res, { data: await loadHermesState() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/gemini/state', async (_req, res) => {
+    try {
+      ok(res, { data: await loadGeminiState() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/gemini/install', async (_req, res) => {
+    try {
+      ok(res, { data: await installGemini() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/gemini/reinstall', async (_req, res) => {
+    try {
+      ok(res, { data: await reinstallGemini() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/gemini/update', async (_req, res) => {
+    try {
+      ok(res, { data: await updateGemini() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/gemini/update-domestic', async (_req, res) => {
+    try {
+      ok(res, { data: await updateGeminiDomestic() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/gemini/install-version', async (req, res) => {
+    try {
+      ok(res, { data: await installGeminiVersion(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/gemini/install-version-domestic', async (req, res) => {
+    try {
+      ok(res, { data: await installGeminiVersion({ ...(req.body || {}), domestic: true }) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/gemini/uninstall', async (_req, res) => {
+    try {
+      ok(res, { data: await uninstallGemini() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/qwen-code/install', async (_req, res) => {
+    try {
+      ok(res, { data: await installQwenCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/qwen-code/reinstall', async (_req, res) => {
+    try {
+      ok(res, { data: await reinstallQwenCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/qwen-code/update', async (_req, res) => {
+    try {
+      ok(res, { data: await updateQwenCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/qwen-code/update-domestic', async (_req, res) => {
+    try {
+      ok(res, { data: await updateQwenCodeDomestic() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/qwen-code/install-version', async (req, res) => {
+    try {
+      ok(res, { data: await installQwenCodeVersion(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/qwen-code/install-version-domestic', async (req, res) => {
+    try {
+      ok(res, { data: await installQwenCodeVersion({ ...(req.body || {}), domestic: true }) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/qwen-code/uninstall', async (_req, res) => {
+    try {
+      ok(res, { data: await uninstallQwenCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codebuddy-code/install', async (_req, res) => {
+    try {
+      ok(res, { data: await installCodeBuddyCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codebuddy-code/reinstall', async (_req, res) => {
+    try {
+      ok(res, { data: await reinstallCodeBuddyCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codebuddy-code/update', async (_req, res) => {
+    try {
+      ok(res, { data: await updateCodeBuddyCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codebuddy-code/update-domestic', async (_req, res) => {
+    try {
+      ok(res, { data: await updateCodeBuddyCodeDomestic() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codebuddy-code/install-version', async (req, res) => {
+    try {
+      ok(res, { data: await installCodeBuddyCodeVersion(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codebuddy-code/install-version-domestic', async (req, res) => {
+    try {
+      ok(res, { data: await installCodeBuddyCodeVersion({ ...(req.body || {}), domestic: true }) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/codebuddy-code/uninstall', async (_req, res) => {
+    try {
+      ok(res, { data: await uninstallCodeBuddyCode() });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/hermes/launch', async (req, res) => {
+    try {
+      ok(res, { data: await launchHermes(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.post('/api/gemini/launch', async (req, res) => {
+    try {
+      ok(res, { data: await launchGemini(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
   app.post('/api/openclaw/config-save', async (req, res) => {
     try {
       ok(res, { data: await saveOpenClawConfig(req.body || {}) });
@@ -2412,7 +3697,9 @@ app.get('/api/opencode/ecosystem/state', async (req, res) => {
   const url = `http://127.0.0.1:${port}`;
 
   console.log(`[easyaiconfig] running at ${url}`);
-  open(url).catch(() => { });
+  if (options.openBrowser !== false) {
+    open(url).catch(() => { });
+  }
 
   return { app, server, url, localApiToken };
 }

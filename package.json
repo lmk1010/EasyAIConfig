@@ -1,6 +1,6 @@
 {
   "name": "easyaiconfig",
-  "version": "1.0.61",
+  "version": "1.0.62",
   "description": "EasyAIConfig desktop and local UI for configuring Codex providers, models, and common settings.",
   "type": "module",
   "bin": {
@@ -16,7 +16,7 @@
   "scripts": {
     "start": "node ./bin/easyaiconfig.js",
     "test": "node --test tests/*.test.js",
-    "check": "node --check ./src/server.js && node --check ./src/lib/config-store.js && node --check ./src/lib/provider-check.js && node --check ./public/config-store-guides-codex.js && node --check ./public/config-store-guides-openclaw.js && node --check ./public/config-store-guides.js && node --check ./public/config-store-engine.js && node --check ./public/config-store-recipes-codex.js && node --check ./public/config-store-recipes-openclaw-channels.js && node --check ./public/config-store-recipes-openclaw-providers.js && node --check ./public/config-store-recipes-openclaw-runtime.js && node --check ./public/config-store-recipes-openclaw-system.js && node --check ./public/config-store-recipes-openclaw.js && node --check ./public/config-store-recipes.js && node --check ./public/app.js",
+    "check": "node -e \"const { spawnSync } = require('node:child_process'); const fs = require('node:fs'); const files = ['./src/server.js', ...fs.readdirSync('./src/lib').filter((name) => name.endsWith('.js')).map((name) => './src/lib/' + name), ...fs.readdirSync('./public').filter((name) => name.endsWith('.js')).map((name) => './public/' + name)]; for (const file of files) { const result = spawnSync(process.execPath, ['--check', file], { stdio: 'inherit' }); if (result.status) process.exit(result.status); }\"",
     "pack:dry": "npm pack --dry-run",
     "desktop:dev": "node ./bin/desktop-dev.js",
     "desktop:build": "tauri build",

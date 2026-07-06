@@ -23,17 +23,17 @@ use std::path::PathBuf;
 use crate::{app_home, ensure_dir, parse_json_object, provider::get_string};
 
 fn db_path() -> Result<PathBuf, String> {
-  let dir = app_home()?.join("cache");
-  ensure_dir(&dir)?;
-  Ok(dir.join("terminals.db"))
+    let dir = app_home()?.join("cache");
+    ensure_dir(&dir)?;
+    Ok(dir.join("terminals.db"))
 }
 
 fn open_db() -> Result<Connection, String> {
-  let path = db_path()?;
-  let connection = Connection::open(&path).map_err(|error| error.to_string())?;
-  connection
-    .execute(
-      "CREATE TABLE IF NOT EXISTS terminal_sessions_meta (
+    let path = db_path()?;
+    let connection = Connection::open(&path).map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "CREATE TABLE IF NOT EXISTS terminal_sessions_meta (
         session_id TEXT PRIMARY KEY,
         tool TEXT NOT NULL,
         title TEXT,
@@ -46,40 +46,48 @@ fn open_db() -> Result<Connection, String> {
         created_at_ms INTEGER NOT NULL,
         updated_at_ms INTEGER NOT NULL
       )",
-      [],
-    )
-    .map_err(|error| error.to_string())?;
-  // 老库迁移：缺 codex_session_id 列就加上（ALTER TABLE 失败说明已存在，忽略）
-  let _ = connection.execute(
-    "ALTER TABLE terminal_sessions_meta ADD COLUMN codex_session_id TEXT",
-    [],
-  );
-  Ok(connection)
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    // 老库迁移：缺 codex_session_id 列就加上（ALTER TABLE 失败说明已存在，忽略）
+    let _ = connection.execute(
+        "ALTER TABLE terminal_sessions_meta ADD COLUMN codex_session_id TEXT",
+        [],
+    );
+    Ok(connection)
 }
 
 fn now_ms() -> i64 {
-  chrono::Utc::now().timestamp_millis()
+    chrono::Utc::now().timestamp_millis()
 }
 
 /// POST /api/terminal/persist
 /// body: { sessionId, tool, title, command, cwd, program, args:[], env:{} }
 pub(crate) fn persist_session(body: &Value) -> Result<Value, String> {
-  let object = parse_json_object(body);
-  let session_id = get_string(&object, "sessionId");
-  if session_id.trim().is_empty() { return Err("sessionId 不能为空".to_string()); }
-  let tool = get_string(&object, "tool");
-  let title = get_string(&object, "title");
-  let command = get_string(&object, "command");
-  let cwd = get_string(&object, "cwd");
-  let program = get_string(&object, "program");
-  let args_json = body.get("args").map(|v| v.to_string()).unwrap_or_else(|| "[]".to_string());
-  let env_json = body.get("env").map(|v| v.to_string()).unwrap_or_else(|| "{}".to_string());
-  let codex_session_id = get_string(&object, "codexSessionId");
+    let object = parse_json_object(body);
+    let session_id = get_string(&object, "sessionId");
+    if session_id.trim().is_empty() {
+        return Err("sessionId 不能为空".to_string());
+    }
+    let tool = get_string(&object, "tool");
+    let title = get_string(&object, "title");
+    let command = get_string(&object, "command");
+    let cwd = get_string(&object, "cwd");
+    let program = get_string(&object, "program");
+    let args_json = body
+        .get("args")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "[]".to_string());
+    let env_json = body
+        .get("env")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "{}".to_string());
+    let codex_session_id = get_string(&object, "codexSessionId");
 
-  let connection = open_db()?;
-  let now = now_ms();
-  // UPSERT
-  connection
+    let connection = open_db()?;
+    let now = now_ms();
+    // UPSERT
+    connection
     .execute(
       "INSERT INTO terminal_sessions_meta
          (session_id, tool, title, command, cwd, program, args_json, env_json, codex_session_id, created_at_ms, updated_at_ms)
@@ -97,14 +105,14 @@ pub(crate) fn persist_session(body: &Value) -> Result<Value, String> {
       params![session_id, tool, title, command, cwd, program, args_json, env_json, codex_session_id, now],
     )
     .map_err(|error| error.to_string())?;
-  Ok(json!({ "ok": true }))
+    Ok(json!({ "ok": true }))
 }
 
 /// GET /api/terminal/persisted
 /// 返回所有持久化的 session 元数据（按 updated_at desc）
 pub(crate) fn list_persisted(_query: &Value) -> Result<Value, String> {
-  let connection = open_db()?;
-  let mut stmt = connection
+    let connection = open_db()?;
+    let mut stmt = connection
     .prepare(
       "SELECT session_id, tool, title, command, cwd, program, args_json, env_json, codex_session_id, created_at_ms, updated_at_ms
        FROM terminal_sessions_meta
@@ -112,42 +120,49 @@ pub(crate) fn list_persisted(_query: &Value) -> Result<Value, String> {
        LIMIT 50",
     )
     .map_err(|error| error.to_string())?;
-  let rows = stmt
-    .query_map([], |row| {
-      let args_str: String = row.get(6).unwrap_or_default();
-      let env_str: String = row.get(7).unwrap_or_default();
-      let args: Value = serde_json::from_str(&args_str).unwrap_or(json!([]));
-      let env: Value = serde_json::from_str(&env_str).unwrap_or(json!({}));
-      Ok(json!({
-        "sessionId": row.get::<_, String>(0).unwrap_or_default(),
-        "tool": row.get::<_, String>(1).unwrap_or_default(),
-        "title": row.get::<_, String>(2).unwrap_or_default(),
-        "command": row.get::<_, String>(3).unwrap_or_default(),
-        "cwd": row.get::<_, String>(4).unwrap_or_default(),
-        "program": row.get::<_, String>(5).unwrap_or_default(),
-        "args": args,
-        "env": env,
-        "codexSessionId": row.get::<_, String>(8).unwrap_or_default(),
-        "createdAtMs": row.get::<_, i64>(9).unwrap_or(0),
-        "updatedAtMs": row.get::<_, i64>(10).unwrap_or(0),
-      }))
-    })
-    .map_err(|error| error.to_string())?;
-  let mut list = Vec::new();
-  for row in rows {
-    if let Ok(value) = row { list.push(value); }
-  }
-  Ok(json!({ "ok": true, "rows": list }))
+    let rows = stmt
+        .query_map([], |row| {
+            let args_str: String = row.get(6).unwrap_or_default();
+            let env_str: String = row.get(7).unwrap_or_default();
+            let args: Value = serde_json::from_str(&args_str).unwrap_or(json!([]));
+            let env: Value = serde_json::from_str(&env_str).unwrap_or(json!({}));
+            Ok(json!({
+              "sessionId": row.get::<_, String>(0).unwrap_or_default(),
+              "tool": row.get::<_, String>(1).unwrap_or_default(),
+              "title": row.get::<_, String>(2).unwrap_or_default(),
+              "command": row.get::<_, String>(3).unwrap_or_default(),
+              "cwd": row.get::<_, String>(4).unwrap_or_default(),
+              "program": row.get::<_, String>(5).unwrap_or_default(),
+              "args": args,
+              "env": env,
+              "codexSessionId": row.get::<_, String>(8).unwrap_or_default(),
+              "createdAtMs": row.get::<_, i64>(9).unwrap_or(0),
+              "updatedAtMs": row.get::<_, i64>(10).unwrap_or(0),
+            }))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut list = Vec::new();
+    for row in rows {
+        if let Ok(value) = row {
+            list.push(value);
+        }
+    }
+    Ok(json!({ "ok": true, "rows": list }))
 }
 
 /// POST /api/terminal/forget   body: { sessionId }
 pub(crate) fn forget_session(body: &Value) -> Result<Value, String> {
-  let object = parse_json_object(body);
-  let session_id = get_string(&object, "sessionId");
-  if session_id.trim().is_empty() { return Err("sessionId 不能为空".to_string()); }
-  let connection = open_db()?;
-  connection
-    .execute("DELETE FROM terminal_sessions_meta WHERE session_id = ?1", params![session_id])
-    .map_err(|error| error.to_string())?;
-  Ok(json!({ "ok": true }))
+    let object = parse_json_object(body);
+    let session_id = get_string(&object, "sessionId");
+    if session_id.trim().is_empty() {
+        return Err("sessionId 不能为空".to_string());
+    }
+    let connection = open_db()?;
+    connection
+        .execute(
+            "DELETE FROM terminal_sessions_meta WHERE session_id = ?1",
+            params![session_id],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(json!({ "ok": true }))
 }

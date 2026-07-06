@@ -58,6 +58,13 @@
               <path d="M4 17h4a4 4 0 0 0 4-4v-2a4 4 0 0 1 4-4h4" opacity="0.55" />
             </svg>
           </button>
+          <button type="button" class="rail-btn" data-page-target="assets" data-tip="资产中心" aria-label="资产中心">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 7l8-4 8 4-8 4-8-4z" opacity="0.55" />
+              <path d="M4 12l8 4 8-4" />
+              <path d="M4 17l8 4 8-4" />
+            </svg>
+          </button>
           <button type="button" class="rail-btn" data-page-target="configEditor" data-tip="配置编辑" aria-label="配置编辑">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
               <path d="M14.5 3.5l6 6-11 11H3.5v-6l11-11z" />
@@ -138,7 +145,7 @@
           <div class="sec-group" data-sec-for="quick">
             <div class="sec-group-head">
               <span class="sec-group-label">工具</span>
-              <span class="sec-group-meta" id="secondaryToolCount">4 款</span>
+              <span class="sec-group-meta" id="secondaryToolCount">7 已接入 + 扩展</span>
             </div>
             <div class="sec-list" id="secondaryToolList">
               <button type="button" class="sec-item active" data-sec-tool="codex" style="--accent-a:#ffd0a8;--accent-b:#ff8c5a">
@@ -167,6 +174,32 @@
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
+              <button type="button" class="sec-item" data-sec-tool="claude-desktop" style="--accent-a:#ffe1c2;--accent-b:#c97335">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="5" width="16" height="11" rx="2" opacity="0.5" />
+                    <path d="M8 20h8M12 16v4M9 10h6" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Claude Desktop</span>
+                  <span class="sec-subtitle">桌面 MCP 与配置</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-sec-tool="gemini" style="--accent-a:#c8ecff;--accent-b:#4f9dff">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" opacity="0.55" />
+                    <path d="M18 15l.7 2.3L21 18l-2.3.7L18 21l-.7-2.3L15 18l2.3-.7L18 15z" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Gemini CLI</span>
+                  <span class="sec-subtitle">Google Gemini 命令行</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
               <button type="button" class="sec-item" data-sec-tool="opencode" style="--accent-a:#cbd7ff;--accent-b:#6b86ff">
                 <span class="sec-ico">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -192,6 +225,19 @@
                 <span class="sec-text">
                   <span class="sec-name">OpenClaw</span>
                   <span class="sec-subtitle">协议网关与中转</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-sec-tool="hermes" style="--accent-a:#bff3dd;--accent-b:#35a978">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 18l7-14 7 14" opacity="0.5" />
+                    <path d="M8 13h8M9 18h6M10 8h4" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Hermes Agent</span>
+                  <span class="sec-subtitle">多 Agent 执行器</span>
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
@@ -234,6 +280,32 @@
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
+              <button type="button" class="sec-item" data-cfg-rail-tool="claude-desktop" style="--accent-a:#ffd7b8;--accent-b:#c76b42">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="5" width="16" height="11" rx="2" opacity="0.5" />
+                    <path d="M8 20h8M12 16v4M9 10h6" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Claude Desktop</span>
+                  <span class="sec-subtitle">claude_desktop_config.json</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-cfg-rail-tool="gemini" style="--accent-a:#b9e8ff;--accent-b:#4b9ee8">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3l2.4 6.2L21 12l-6.6 2.8L12 21l-2.4-6.2L3 12l6.6-2.8L12 3z" opacity="0.5" />
+                    <path d="M12 7v10M7 12h10" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Gemini CLI</span>
+                  <span class="sec-subtitle">~/.gemini/settings.json</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
               <button type="button" class="sec-item" data-cfg-rail-tool="opencode" style="--accent-a:#cbd7ff;--accent-b:#6b86ff">
                 <span class="sec-ico">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -259,6 +331,19 @@
                 <span class="sec-text">
                   <span class="sec-name">OpenClaw</span>
                   <span class="sec-subtitle">~/.openclaw/config.json</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-cfg-rail-tool="hermes" style="--accent-a:#bff3dd;--accent-b:#35a978">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 18l7-14 7 14" opacity="0.5" />
+                    <path d="M8 13h8M9 18h6M10 8h4" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Hermes Agent</span>
+                  <span class="sec-subtitle">~/.hermes/config.yaml</span>
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
@@ -296,6 +381,32 @@
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
+              <button type="button" class="sec-item" data-dashboard-rail-tool="claude-desktop" style="--accent-a:#ffd7b8;--accent-b:#c76b42">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="5" width="16" height="11" rx="2" opacity="0.5" />
+                    <path d="M8 20h8M12 16v4M9 10h6" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Claude Desktop</span>
+                  <span class="sec-subtitle">MCP 与资产同步</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-dashboard-rail-tool="gemini" style="--accent-a:#b9e8ff;--accent-b:#4b9ee8">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3l2.4 6.2L21 12l-6.6 2.8L12 21l-2.4-6.2L3 12l6.6-2.8L12 3z" opacity="0.5" />
+                    <path d="M12 7v10M7 12h10" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Gemini CLI</span>
+                  <span class="sec-subtitle">Prompts 与使用趋势</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
               <button type="button" class="sec-item" data-dashboard-rail-tool="opencode" style="--accent-a:#cbd7ff;--accent-b:#6b86ff">
                 <span class="sec-ico">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -321,6 +432,19 @@
                 <span class="sec-text">
                   <span class="sec-name">OpenClaw</span>
                   <span class="sec-subtitle">网关与通道</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-dashboard-rail-tool="hermes" style="--accent-a:#bff3dd;--accent-b:#35a978">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 18l7-14 7 14" opacity="0.5" />
+                    <path d="M8 13h8M9 18h6M10 8h4" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Hermes Agent</span>
+                  <span class="sec-subtitle">Sessions 与 Agent 资产</span>
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
@@ -358,6 +482,32 @@
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
+              <button type="button" class="sec-item" data-console-rail-tool="claude-desktop" style="--accent-a:#ffd7b8;--accent-b:#c76b42">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="5" width="16" height="11" rx="2" opacity="0.5" />
+                    <path d="M8 20h8M12 16v4M9 10h6" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Claude Desktop</span>
+                  <span class="sec-subtitle">MCP 桌面客户端</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-console-rail-tool="gemini" style="--accent-a:#b9e8ff;--accent-b:#4b9ee8">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3l2.4 6.2L21 12l-6.6 2.8L12 21l-2.4-6.2L3 12l6.6-2.8L12 3z" opacity="0.5" />
+                    <path d="M12 7v10M7 12h10" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Gemini CLI</span>
+                  <span class="sec-subtitle">Google Gemini CLI</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
               <button type="button" class="sec-item" data-console-rail-tool="opencode" style="--accent-a:#cbd7ff;--accent-b:#6b86ff">
                 <span class="sec-ico">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -383,6 +533,19 @@
                 <span class="sec-text">
                   <span class="sec-name">OpenClaw</span>
                   <span class="sec-subtitle">协议网关与中转</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="sec-item" data-console-rail-tool="hermes" style="--accent-a:#bff3dd;--accent-b:#35a978">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 18l7-14 7 14" opacity="0.5" />
+                    <path d="M8 13h8M9 18h6M10 8h4" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Hermes Agent</span>
+                  <span class="sec-subtitle">多 Agent 执行器</span>
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
@@ -499,6 +662,22 @@
                     </svg>
                     <span>Claude Code</span>
                   </button>
+                  <button class="tool-tab" data-tool="claude-desktop">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                      stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="4" y="5" width="16" height="11" rx="2" opacity="0.5" />
+                      <path d="M8 20h8M12 16v4M9 10h6" />
+                    </svg>
+                    <span>Claude Desktop</span>
+                  </button>
+                  <button class="tool-tab" data-tool="gemini">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                      stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" opacity="0.55" />
+                      <path d="M18 15l.7 2.3L21 18l-2.3.7L18 21l-.7-2.3L15 18l2.3-.7L18 15z" />
+                    </svg>
+                    <span>Gemini CLI</span>
+                  </button>
                   <button class="tool-tab" data-tool="opencode">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
                       stroke-linecap="round" stroke-linejoin="round">
@@ -518,6 +697,14 @@
                       <circle cx="15" cy="10" r="1" fill="currentColor" stroke="none" />
                     </svg>
                     <span>OpenClaw</span>
+                  </button>
+                  <button class="tool-tab" data-tool="hermes">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                      stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 18l7-14 7 14" opacity="0.5" />
+                      <path d="M8 13h8M9 18h6M10 8h4" />
+                    </svg>
+                    <span>Hermes Agent</span>
                   </button>
                 </div>
 
@@ -898,6 +1085,10 @@
             <div class="provider-router-page" id="providerRouterPage"></div>
           </section>
 
+          <section class="page-view" data-page="assets">
+            <div class="asset-center-page" id="assetCenterPage"></div>
+          </section>
+
           <!-- ─── Tools / Install Page ─── -->
           <section class="page-view" data-page="tools">
             <div class="tools-page">
@@ -909,6 +1100,7 @@
                 <div class="tools-tags" id="toolsCatalogTags">
                   <button class="tools-tag active" data-tools-tag="all">全部</button>
                   <button class="tools-tag" data-tools-tag="cli">CLI</button>
+                  <button class="tools-tag" data-tools-tag="ide">IDE</button>
                   <button class="tools-tag" data-tools-tag="desktop">桌面版</button>
                   <button class="tools-tag" data-tools-tag="extension">扩展</button>
                   <button class="tools-tag" data-tools-tag="integration">集成</button>
@@ -3304,6 +3496,69 @@
 
                 </section>
 
+                <section class="config-editor-main hide" data-tool-editor="claude-desktop">
+                  <details class="cfg-section" open>
+                    <summary class="cfg-section-header">Router 接入 · Claude Desktop</summary>
+                    <div class="cfg-section-body">
+                      <aside class="cfg-tip-block">
+                        <div class="cfg-tip-head">EasyAIConfig Router Profile</div>
+                        <p class="cfg-tip-intro">保存会写入 Claude Desktop 配置的 <code>easyaiconfig.router</code> 命名空间，不覆盖现有 MCP servers。</p>
+                        <ul class="cfg-tip-list">
+                          <li>客户端 Base URL 使用 Provider Router 的 Claude Desktop / Anthropic 入口。</li>
+                          <li>API Key 使用本机网关固定 key：<code>easyai-router</code>。</li>
+                          <li>完整原生字段映射会继续补齐；当前先保证资产同步和本地网关接入可用。</li>
+                        </ul>
+                      </aside>
+                      <div class="editor-actions-inline">
+                        <button type="button" class="primary" data-cfg-router-apply="claude-desktop">写入 Router 配置</button>
+                        <button type="button" class="secondary" data-cfg-router-open="claude-desktop">打开 Router 面板</button>
+                      </div>
+                    </div>
+                  </details>
+                </section>
+
+                <section class="config-editor-main hide" data-tool-editor="gemini">
+                  <details class="cfg-section" open>
+                    <summary class="cfg-section-header">Router 接入 · Gemini CLI</summary>
+                    <div class="cfg-section-body">
+                      <aside class="cfg-tip-block">
+                        <div class="cfg-tip-head">EasyAIConfig Router Profile</div>
+                        <p class="cfg-tip-intro">保存会写入 Gemini CLI settings 的 <code>easyaiconfig.router</code> 命名空间，供本地网关和资产层统一识别。</p>
+                        <ul class="cfg-tip-list">
+                          <li>Router 会把 Gemini CLI 作为独立客户端目标管理。</li>
+                          <li>Prompts/AGENTS/GEMINI 资产同步后续会在此页继续展开。</li>
+                          <li>完整 Gemini 原生 provider 字段会继续接入。</li>
+                        </ul>
+                      </aside>
+                      <div class="editor-actions-inline">
+                        <button type="button" class="primary" data-cfg-router-apply="gemini">写入 Router 配置</button>
+                        <button type="button" class="secondary" data-cfg-router-open="gemini">打开 Router 面板</button>
+                      </div>
+                    </div>
+                  </details>
+                </section>
+
+                <section class="config-editor-main hide" data-tool-editor="hermes">
+                  <details class="cfg-section" open>
+                    <summary class="cfg-section-header">Router 接入 · Hermes Agent</summary>
+                    <div class="cfg-section-body">
+                      <aside class="cfg-tip-block">
+                        <div class="cfg-tip-head">EasyAIConfig Router Profile</div>
+                        <p class="cfg-tip-intro">保存会写入 Hermes Agent 的 <code>config.yaml</code> 和 <code>.env</code>，并保留 EasyAIConfig Router profile 用于 Sessions 与 Agent 资产层联动。</p>
+                        <ul class="cfg-tip-list">
+                          <li>默认走 OpenAI-compatible Router endpoint。</li>
+                          <li>只替换顶层 <code>model</code> 配置，保留其他 Hermes 原生字段。</li>
+                          <li>后续继续补 Hermes 原生启动器、会话恢复与仓库能力。</li>
+                        </ul>
+                      </aside>
+                      <div class="editor-actions-inline">
+                        <button type="button" class="primary" data-cfg-router-apply="hermes">写入 Router 配置</button>
+                        <button type="button" class="secondary" data-cfg-router-open="hermes">打开 Router 面板</button>
+                      </div>
+                    </div>
+                  </details>
+                </section>
+
                 <!-- ═══ Right Sidebar — lives inside a drawer on form mode,
                      full-width panel on code mode ═══ -->
                 <div class="cfg3-drawer-scrim hide" id="cfg3DrawerScrim" aria-hidden="true"></div>
@@ -3620,6 +3875,36 @@
                       <path d="M20 6L9 17l-5-5" />
                     </svg></div>
                 </button>
+                <button class="wizard-tool-card" data-wizard-tool="claude-desktop">
+                  <div class="wtc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="4" y="5" width="16" height="11" rx="2" opacity="0.4" />
+                      <path d="M8 20h8M12 16v4M9 10h6" />
+                    </svg></div>
+                  <div class="wtc-content">
+                    <div class="wtc-name">Claude Desktop</div>
+                    <div class="wtc-desc">Claude 桌面端 MCP 与配置入口</div>
+                  </div>
+                  <div class="wtc-check"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2.5">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg></div>
+                </button>
+                <button class="wizard-tool-card" data-wizard-tool="gemini">
+                  <div class="wtc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" opacity="0.45" />
+                      <path d="M18 15l.7 2.3L21 18l-2.3.7L18 21l-.7-2.3L15 18l2.3-.7L18 15z" />
+                    </svg></div>
+                  <div class="wtc-content">
+                    <div class="wtc-name">Gemini CLI</div>
+                    <div class="wtc-desc">Google Gemini 命令行 AI 助手</div>
+                  </div>
+                  <div class="wtc-check"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2.5">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg></div>
+                </button>
                 <button class="wizard-tool-card" data-wizard-tool="opencode">
                   <div class="wtc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"
                       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -3648,6 +3933,21 @@
                   <div class="wtc-content">
                     <div class="wtc-name">OpenClaw</div>
                     <div class="wtc-desc">开源多渠道 AI 助手平台</div>
+                  </div>
+                  <div class="wtc-check"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="2.5">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg></div>
+                </button>
+                <button class="wizard-tool-card" data-wizard-tool="hermes">
+                  <div class="wtc-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 18l7-14 7 14" opacity="0.4" />
+                      <path d="M8 13h8M9 18h6M10 8h4" />
+                    </svg></div>
+                  <div class="wtc-content">
+                    <div class="wtc-name">Hermes Agent</div>
+                    <div class="wtc-desc">多 Agent 执行与配置入口</div>
                   </div>
                   <div class="wtc-check"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"
                       stroke="currentColor" stroke-width="2.5">

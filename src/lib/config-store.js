@@ -11,11 +11,15 @@ import { spawn, spawnSync } from 'node:child_process';
 import TOML from '@iarna/toml';
 import { detectProvider, readDiag } from './provider-check.js';
 import { applyAdapterToProvider } from './cn-provider-adapters.js';
+import { extractProviderImportItems } from './provider-catalog.js';
 
 const APP_HOME_DIRNAME = '.codex-config-ui';
 const BACKUPS_DIRNAME = 'backups';
 const OPENAI_CODEX_PACKAGE = '@openai/codex';
 const CLAUDE_CODE_PACKAGE = '@anthropic-ai/claude-code';
+const GEMINI_CLI_PACKAGE = '@google/gemini-cli';
+const QWEN_CODE_PACKAGE = '@qwen-code/qwen-code';
+const CODEBUDDY_CODE_PACKAGE = '@tencent-ai/codebuddy-code';
 const OPENCODE_PACKAGE = 'opencode-ai';
 const OPENCLAW_PACKAGE = 'openclaw';
 const OPENCODE_INSTALL_SCRIPT_UNIX = 'curl -fsSL https://opencode.ai/install | bash';
@@ -66,6 +70,27 @@ const TOOL_REGISTRY = {
     providerKeyField: null,
     projectConfigDir: '.claude',
     supported: true,
+    supportStage: 'active',
+  },
+  'claude-desktop': {
+    id: 'claude-desktop',
+    name: 'Claude Desktop',
+    description: 'Anthropic 桌面端，重点接入 MCP 与本地配置同步',
+    configHome: () => {
+      if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Claude');
+      if (process.platform === 'win32') return path.join(process.env.APPDATA?.trim() || path.join(os.homedir(), 'AppData', 'Roaming'), 'Claude');
+      return path.join(process.env.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), '.config'), 'Claude');
+    },
+    configFormat: 'json',
+    configFileName: 'claude_desktop_config.json',
+    envFileName: null,
+    binaryName: 'Claude',
+    npmPackage: '',
+    installMethod: 'manual',
+    providerKeyField: null,
+    projectConfigDir: '.claude',
+    supported: true,
+    supportStage: 'active',
   },
   opencode: {
     id: 'opencode',
@@ -83,6 +108,7 @@ const TOOL_REGISTRY = {
     providerKeyField: null,
     projectConfigDir: '.opencode',
     supported: true,
+    supportStage: 'active',
     installMethods: process.platform === 'win32' ? ['auto', 'domestic', 'npm', 'scoop', 'choco'] : ['auto', 'domestic', 'script', 'brew', 'npm'],
   },
   openclaw: {
@@ -99,12 +125,96 @@ const TOOL_REGISTRY = {
     providerKeyField: 'provider',
     projectConfigDir: '.openclaw',
     supported: true,
+    supportStage: 'active',
     installMethods: process.platform === 'win32' ? ['domestic', 'wsl', 'script'] : ['script', 'npm', 'source', 'docker'],
+  },
+  gemini: {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    description: 'Google Gemini 命令行编程助手，后续接入 provider / prompts / sessions',
+    configHome: () => path.join(os.homedir(), '.gemini'),
+    configFormat: 'json',
+    configFileName: 'settings.json',
+    envFileName: null,
+    binaryName: 'gemini',
+    npmPackage: GEMINI_CLI_PACKAGE,
+    installMethod: 'npm',
+    providerKeyField: null,
+    projectConfigDir: '.gemini',
+    supported: true,
+    supportStage: 'active',
+  },
+  'qwen-code': {
+    id: 'qwen-code',
+    name: 'Qwen Code CLI',
+    description: '阿里 Qwen Code 命令行工具，安装、更新与版本回滚已接入',
+    configHome: () => path.join(os.homedir(), '.qwen'),
+    configFormat: 'unknown',
+    configFileName: '',
+    envFileName: null,
+    binaryName: 'qwen',
+    npmPackage: QWEN_CODE_PACKAGE,
+    installMethod: 'npm',
+    providerKeyField: null,
+    projectConfigDir: '.qwen',
+    supported: true,
+    supportStage: 'active',
+  },
+  'codebuddy-code': {
+    id: 'codebuddy-code',
+    name: 'CodeBuddy Code CLI',
+    description: '腾讯 CodeBuddy CLI，安装、更新与版本回滚已接入',
+    configHome: () => path.join(os.homedir(), '.codebuddy'),
+    configFormat: 'unknown',
+    configFileName: '',
+    envFileName: null,
+    binaryName: 'codebuddy',
+    npmPackage: CODEBUDDY_CODE_PACKAGE,
+    installMethod: 'npm',
+    providerKeyField: null,
+    projectConfigDir: '.codebuddy',
+    supported: true,
+    supportStage: 'active',
+  },
+  hermes: {
+    id: 'hermes',
+    name: 'Hermes Agent',
+    description: 'Hermes Agent 工作区、Router Provider 与会话能力',
+    configHome: () => path.join(os.homedir(), '.hermes'),
+    configFormat: 'yaml',
+    configFileName: 'config.yaml',
+    envFileName: '.env',
+    binaryName: 'hermes',
+    npmPackage: '',
+    installMethod: 'manual',
+    providerKeyField: null,
+    projectConfigDir: '.hermes',
+    supported: true,
+    supportStage: 'active',
   },
 };
 
+const ROUTER_CLIENT_PROVIDER_KEY = 'easyai-router';
+const ROUTER_CLIENT_API_KEY = 'easyai-router';
+const ROUTER_CLIENT_PROVIDER_NAME = 'EasyAIConfig Router';
+const ROUTER_CLIENT_ENV_KEY = 'EASYAI_ROUTER_API_KEY';
+const LOCAL_ROUTER_NO_PROXY_ITEMS = ['127.0.0.1', 'localhost', '::1'];
+
+function normalizeToolRegistryId(toolId) {
+  const value = String(toolId || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (['claude-desktop', 'claudedesktop'].includes(value)) return 'claude-desktop';
+  if (['claude-code', 'claudecode'].includes(value)) return 'claudecode';
+  if (['gemini', 'gemini-cli', 'google-gemini'].includes(value)) return 'gemini';
+  if (['qwen', 'qwen-code', 'qwen-code-cli', 'qwen-cli'].includes(value)) return 'qwen-code';
+  if (['codebuddy', 'codebuddy-code', 'codebuddy-cli', 'tencent-codebuddy'].includes(value)) return 'codebuddy-code';
+  if (['open-code', 'opencode'].includes(value)) return 'opencode';
+  if (['open-claw', 'openclaw'].includes(value)) return 'openclaw';
+  if (['hermes', 'hermes-agent'].includes(value)) return 'hermes';
+  return value || 'codex';
+}
+
 function getToolDef(toolId) {
-  return TOOL_REGISTRY[toolId] || TOOL_REGISTRY.codex;
+  return TOOL_REGISTRY[normalizeToolRegistryId(toolId)] || TOOL_REGISTRY.codex;
 }
 
 function withWindowsHide(options = {}) {
@@ -476,9 +586,12 @@ export function listTools(options = {}) {
     name: tool.name,
     description: tool.description,
     supported: tool.supported,
+    supportStage: tool.supportStage || (tool.supported ? 'active' : 'planned'),
     configFormat: tool.configFormat,
     installMethod: tool.installMethod,
     npmPackage: tool.npmPackage,
+    configFileName: tool.configFileName,
+    projectConfigDir: tool.projectConfigDir,
     binary: findToolBinary(tool.id, options),
   }));
 }
@@ -486,6 +599,9 @@ export function listTools(options = {}) {
 const TOOL_UPDATE_SPECS = [
   { id: 'codex', name: 'Codex CLI', packageName: OPENAI_CODEX_PACKAGE, repositoryUrl: 'https://github.com/openai/codex' },
   { id: 'claudecode', name: 'Claude Code', packageName: CLAUDE_CODE_PACKAGE, repositoryUrl: 'https://github.com/anthropics/claude-code' },
+  { id: 'gemini', name: 'Gemini CLI', packageName: GEMINI_CLI_PACKAGE, repositoryUrl: 'https://github.com/google-gemini/gemini-cli' },
+  { id: 'qwen-code', name: 'Qwen Code CLI', packageName: QWEN_CODE_PACKAGE, repositoryUrl: 'https://github.com/QwenLM/qwen-code' },
+  { id: 'codebuddy-code', name: 'CodeBuddy Code CLI', packageName: CODEBUDDY_CODE_PACKAGE, repositoryUrl: 'https://cnb.cool/codebuddy/codebuddy-code' },
   { id: 'opencode', name: 'OpenCode', packageName: OPENCODE_PACKAGE, repositoryUrl: 'https://github.com/opencode-ai/opencode' },
   { id: 'openclaw', name: 'OpenClaw', packageName: OPENCLAW_PACKAGE, repositoryUrl: 'https://github.com/openclaw/openclaw' },
 ];
@@ -627,7 +743,7 @@ async function fetchNpmMetadata(registry, packageName) {
   } catch (latestError) {
     try {
       return await requestJson(npmPackageMetadataUrl(registry, packageName), {
-        timeoutMs: 2500,
+        timeoutMs: 4500,
         maxBytes: 2 * 1024 * 1024,
         accept: 'application/vnd.npm.install-v1+json',
       });
@@ -639,7 +755,7 @@ async function fetchNpmMetadata(registry, packageName) {
   const fallback = latestNpmMetadataFallback(packageName, latest);
   try {
     const metadata = await requestJson(npmPackageMetadataUrl(registry, packageName), {
-      timeoutMs: 1200,
+      timeoutMs: 4500,
       maxBytes: 2 * 1024 * 1024,
       accept: 'application/vnd.npm.install-v1+json',
     });
@@ -4567,6 +4683,129 @@ export async function testSavedProvider({
   }
 }
 
+function providerImportBlock(item) {
+  const block = {
+    name: item.name || item.key,
+    base_url: item.baseUrl,
+    env_key: item.envKey || inferEnvKey(item.key),
+    wire_api: item.wireApi || 'responses',
+  };
+  const adapterResult = applyAdapterToProvider(block, item.baseUrl);
+  if (adapterResult.applied && adapterResult.providerBlock) {
+    Object.assign(block, adapterResult.providerBlock);
+  }
+  if (!block.wire_api) block.wire_api = 'responses';
+  return block;
+}
+
+function sameProviderImportBlock(left = {}, right = {}) {
+  return ['name', 'base_url', 'env_key', 'wire_api']
+    .every((key) => String(left?.[key] || '').trim() === String(right?.[key] || '').trim());
+}
+
+export async function applyProviderCatalogImport(input = {}, options = {}) {
+  const dryRun = options.dryRun ?? input.dryRun ?? true;
+  const overwrite = Boolean(options.overwrite ?? input.overwrite);
+  const includeCatalogPresets = Boolean(options.includeCatalogPresets ?? input.includeCatalogPresets);
+  const targetTool = String(options.targetTool || input.targetTool || 'codex').trim().toLowerCase() || 'codex';
+  const codexHome = assertAllowedPath(options.codexHome || input.codexHome || defaultCodexHome(), 'codexHome');
+  const scope = String(options.scope || input.scope || 'global').trim() || 'global';
+  if (scope !== 'global') {
+    throw new Error('Provider import currently writes only global Codex config');
+  }
+
+  const extracted = extractProviderImportItems(input, { includeCatalogPresets, targetTool });
+  const paths = scopePaths({ scope: 'global', codexHome });
+  const configContent = await readText(paths.configPath);
+  const config = parseToml(configContent);
+  const originalConfig = structuredClone(config);
+  if (!config.model_providers || typeof config.model_providers !== 'object') {
+    config.model_providers = {};
+  }
+
+  const operations = [];
+  for (const item of extracted.providers) {
+    const providerKey = slugifyProviderKey(item.key);
+    if (!providerKey) {
+      operations.push({ action: 'skipped', reason: 'invalid_key', sourceId: item.sourceId || '' });
+      continue;
+    }
+    let baseUrl = '';
+    try {
+      baseUrl = normalizeBaseUrl(item.baseUrl);
+    } catch (error) {
+      operations.push({
+        action: 'skipped',
+        reason: 'invalid_base_url',
+        key: providerKey,
+        name: item.name || providerKey,
+        baseUrl: item.baseUrl || '',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    const nextBlock = providerImportBlock({ ...item, key: providerKey, baseUrl });
+    const existing = config.model_providers[providerKey];
+    if (existing && !overwrite) {
+      const same = sameProviderImportBlock(existing, nextBlock);
+      operations.push({
+        action: same ? 'unchanged' : 'conflict',
+        key: providerKey,
+        name: nextBlock.name,
+        baseUrl,
+        reason: same ? 'same_provider' : 'provider_exists',
+      });
+      continue;
+    }
+
+    if (existing && overwrite) {
+      config.model_providers[providerKey] = { ...existing, ...nextBlock };
+      operations.push({ action: 'updated', key: providerKey, name: nextBlock.name, baseUrl });
+      continue;
+    }
+
+    config.model_providers[providerKey] = nextBlock;
+    operations.push({ action: 'created', key: providerKey, name: nextBlock.name, baseUrl });
+  }
+
+  const configChanged = JSON.stringify(config) !== JSON.stringify(originalConfig);
+  const shouldWrite = configChanged && dryRun === false;
+  const backupPath = shouldWrite ? await createBackup(paths) : null;
+  if (shouldWrite) {
+    await writeText(paths.configPath, TOML.stringify(config));
+  }
+
+  const countAction = (action) => operations.filter((item) => item.action === action).length;
+  return {
+    schema: 'easyaiconfig.asset-import-apply.v1',
+    dryRun: dryRun !== false,
+    targetTool,
+    includeCatalogPresets,
+    overwrite,
+    source: {
+      schema: extracted.schema,
+      app: extracted.app,
+      version: extracted.version,
+    },
+    summary: {
+      totalProviders: extracted.providers.length,
+      created: countAction('created'),
+      updated: countAction('updated'),
+      unchanged: countAction('unchanged'),
+      conflicts: countAction('conflict'),
+      skipped: countAction('skipped'),
+      changed: configChanged,
+      written: shouldWrite,
+    },
+    operations,
+    backupPath,
+    paths: {
+      configPath: paths.configPath,
+    },
+  };
+}
+
 export async function saveConfig(payload) {
   const codexHome = assertAllowedPath(payload.codexHome || defaultCodexHome(), 'codexHome');
   const paths = scopePaths({
@@ -4723,6 +4962,669 @@ export async function saveConfig(payload) {
       env: envChanged,
     },
   };
+}
+
+function normalizeProviderRouterClientTool(toolId = '') {
+  const tool = normalizeToolRegistryId(toolId || 'codex');
+  if (!Object.prototype.hasOwnProperty.call(TOOL_REGISTRY, tool)) {
+    throw new Error(`Unsupported router client tool: ${toolId || ''}`);
+  }
+  return tool;
+}
+
+function appendRouterNoProxyItems(current = '') {
+  const items = String(current || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  for (const item of LOCAL_ROUTER_NO_PROXY_ITEMS) {
+    if (!items.some((existing) => existing.toLowerCase() === item.toLowerCase())) {
+      items.push(item);
+    }
+  }
+  return items.join(',');
+}
+
+function routerClientModel(payload = {}) {
+  return String(payload.model || '').trim();
+}
+
+function routerClientEndpoint(payload = {}) {
+  return normalizeBaseUrl(payload.endpoint || payload.baseUrl || `http://127.0.0.1:18791/v1`);
+}
+
+function readJsonObjectFile(filePath) {
+  return readJsonFile(filePath).then((value) => (
+    value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  ));
+}
+
+function routerClientProfile({ tool, endpoint, apiKey, noProxy, model }) {
+  const openAiEnv = {
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
+    OPENAI_BASE_URL: endpoint,
+    OPENAI_API_KEY: apiKey,
+  };
+  const anthropicEnv = {
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
+    ANTHROPIC_BASE_URL: endpoint,
+    ANTHROPIC_API_KEY: apiKey,
+  };
+  const env = ['claudecode', 'claude-desktop'].includes(tool) ? anthropicEnv : openAiEnv;
+  return {
+    providerKey: ROUTER_CLIENT_PROVIDER_KEY,
+    name: ROUTER_CLIENT_PROVIDER_NAME,
+    tool,
+    baseUrl: endpoint,
+    apiKey,
+    model,
+    env,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function mergeRouterClientNamespace(config, profile) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) config = {};
+  if (!config.easyaiconfig || typeof config.easyaiconfig !== 'object' || Array.isArray(config.easyaiconfig)) {
+    config.easyaiconfig = {};
+  }
+  config.easyaiconfig.router = {
+    ...(config.easyaiconfig.router && typeof config.easyaiconfig.router === 'object' ? config.easyaiconfig.router : {}),
+    ...profile,
+  };
+  config.easyaiconfig.activeProvider = ROUTER_CLIENT_PROVIDER_KEY;
+  return config;
+}
+
+function canOverrideToolConfigHome() {
+  return process.env.NODE_ENV === 'test' || process.env.EASYAICONFIG_ALLOW_CONFIG_HOME_OVERRIDE === '1';
+}
+
+function resolveToolConfigHome(tool, configHome) {
+  if (configHome && canOverrideToolConfigHome()) return path.resolve(String(configHome));
+  return getToolDef(tool).configHome();
+}
+
+async function applyClaudeCodeRouterClient({ endpoint, apiKey, noProxy, model }) {
+  const home = claudeCodeHome();
+  const settingsPath = path.join(home, 'settings.json');
+  const settings = await readJsonObjectFile(settingsPath);
+  settings.env = settings.env && typeof settings.env === 'object' && !Array.isArray(settings.env) ? settings.env : {};
+  settings.easyaiconfig = settings.easyaiconfig && typeof settings.easyaiconfig === 'object' && !Array.isArray(settings.easyaiconfig) ? settings.easyaiconfig : {};
+  settings.easyaiconfig.providers = settings.easyaiconfig.providers && typeof settings.easyaiconfig.providers === 'object' && !Array.isArray(settings.easyaiconfig.providers) ? settings.easyaiconfig.providers : {};
+  settings.env.NO_PROXY = noProxy;
+  settings.env.no_proxy = noProxy;
+  settings.env.ANTHROPIC_BASE_URL = endpoint;
+  settings.env.ANTHROPIC_API_KEY = apiKey;
+  delete settings.env.ANTHROPIC_AUTH_TOKEN;
+  if (model) settings.model = model;
+  settings.easyaiconfig.providers[ROUTER_CLIENT_PROVIDER_KEY] = {
+    ...(settings.easyaiconfig.providers[ROUTER_CLIENT_PROVIDER_KEY] || {}),
+    name: ROUTER_CLIENT_PROVIDER_NAME,
+    baseUrl: endpoint,
+    apiKey,
+    authToken: '',
+    model,
+    updatedAt: new Date().toISOString(),
+  };
+  settings.easyaiconfig.activeProvider = ROUTER_CLIENT_PROVIDER_KEY;
+  await writeJsonFile(settingsPath, settings);
+  return { saved: true, tool: 'claudecode', settingsPath, configPath: settingsPath };
+}
+
+async function applyNamespacedJsonRouterClient({ tool, endpoint, apiKey, noProxy, model, configHome }) {
+  const def = getToolDef(tool);
+  const home = resolveToolConfigHome(tool, configHome);
+  const configPath = path.join(home, def.configFileName);
+  const config = await readJsonObjectFile(configPath);
+  const profile = routerClientProfile({ tool, endpoint, apiKey, noProxy, model });
+  mergeRouterClientNamespace(config, profile);
+  await writeJsonFile(configPath, config);
+  return { saved: true, tool, configPath };
+}
+
+function yamlQuotedScalar(value = '') {
+  return JSON.stringify(String(value ?? ''));
+}
+
+function hermesRouterModelId(model = '') {
+  return routerProviderModelId(model) || 'gpt-5.5';
+}
+
+function renderHermesRouterModelBlock({ endpoint, apiKey, model }) {
+  const modelId = hermesRouterModelId(model);
+  return [
+    'model:',
+    '  provider: "custom"',
+    `  default: ${yamlQuotedScalar(modelId)}`,
+    `  base_url: ${yamlQuotedScalar(endpoint)}`,
+    `  api_key: ${yamlQuotedScalar(apiKey)}`,
+    '',
+  ].join('\n');
+}
+
+function unquoteYamlScalar(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    try {
+      return text.startsWith('"') ? JSON.parse(text) : text.slice(1, -1);
+    } catch {
+      return text.slice(1, -1);
+    }
+  }
+  return text;
+}
+
+function readTopLevelYamlObjectBlock(raw = '', key = '') {
+  const normalized = String(raw || '').replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  const keyPattern = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`);
+  const start = lines.findIndex((line) => keyPattern.test(line.trimEnd()) && line.trimStart() === line);
+  if (start < 0) return {};
+  const out = {};
+  const inlineValue = lines[start].replace(keyPattern, '').trim();
+  if (inlineValue) out.value = unquoteYamlScalar(inlineValue);
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    if (line.trimStart() === line) break;
+    const match = line.match(/^\s+([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$/);
+    if (!match) continue;
+    out[match[1]] = unquoteYamlScalar(match[2]);
+  }
+  return out;
+}
+
+function upsertTopLevelYamlBlock(raw = '', key = '', block = '') {
+  const normalized = String(raw || '').replace(/\r\n/g, '\n');
+  const cleanBlock = String(block || '').replace(/\n*$/, '').split('\n');
+  if (!normalized.trim()) return `${cleanBlock.join('\n')}\n`;
+  const lines = normalized.split('\n');
+  const keyPattern = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`);
+  const start = lines.findIndex((line) => keyPattern.test(line.trimEnd()) && line.trimStart() === line);
+  if (start < 0) {
+    const prefix = normalized.replace(/\n*$/, '');
+    return `${prefix}\n\n${cleanBlock.join('\n')}\n`;
+  }
+  let end = start + 1;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (!line.trim() || /^\s/.test(line) || line.trimStart().startsWith('#')) {
+      end += 1;
+      continue;
+    }
+    break;
+  }
+  return [
+    ...lines.slice(0, start),
+    ...cleanBlock,
+    ...lines.slice(end),
+  ].join('\n').replace(/\n*$/, '\n');
+}
+
+async function applyHermesRouterClient({ endpoint, apiKey, noProxy, model, configHome }) {
+  const home = resolveToolConfigHome('hermes', configHome);
+  const configPath = path.join(home, 'config.yaml');
+  const envPath = path.join(home, '.env');
+  const indexPath = path.join(home, 'config.json');
+  const modelId = hermesRouterModelId(model);
+
+  const rawYaml = await readText(configPath);
+  const nextYaml = upsertTopLevelYamlBlock(
+    rawYaml,
+    'model',
+    renderHermesRouterModelBlock({ endpoint, apiKey, model: modelId }),
+  );
+  await writeText(configPath, nextYaml);
+
+  const env = parseEnv(await readText(envPath));
+  env.EASYAI_ROUTER_API_KEY = apiKey;
+  env.OPENAI_API_KEY = apiKey;
+  env.OPENAI_BASE_URL = endpoint;
+  env.NO_PROXY = noProxy;
+  env.no_proxy = noProxy;
+  await writeText(envPath, stringifyEnv(env));
+
+  const index = await readJsonObjectFile(indexPath);
+  const profile = routerClientProfile({ tool: 'hermes', endpoint, apiKey, noProxy, model: modelId });
+  profile.nativeProvider = {
+    configPath,
+    envPath,
+    provider: 'custom',
+    model: modelId,
+  };
+  mergeRouterClientNamespace(index, profile);
+  await writeJsonFile(indexPath, index);
+
+  return {
+    saved: true,
+    tool: 'hermes',
+    configPath,
+    envPath,
+    indexPath,
+    nativeProvider: true,
+  };
+}
+
+export async function loadHermesState(options = {}) {
+  const home = resolveToolConfigHome('hermes', options?.configHome);
+  const configPath = path.join(home, 'config.yaml');
+  const envPath = path.join(home, '.env');
+  const indexPath = path.join(home, 'config.json');
+  const [rawYaml, rawEnv, index] = await Promise.all([
+    readText(configPath),
+    readText(envPath),
+    readJsonObjectFile(indexPath),
+  ]);
+  const env = parseEnv(rawEnv);
+  const modelBlock = readTopLevelYamlObjectBlock(rawYaml, 'model');
+  const nativeApiKey = String(modelBlock.api_key || '').trim();
+  const envApiKey = String(env.EASYAI_ROUTER_API_KEY || env.OPENAI_API_KEY || '').trim();
+  const routerProfile = index?.easyaiconfig?.router && typeof index.easyaiconfig.router === 'object'
+    ? index.easyaiconfig.router
+    : null;
+  const model = String(modelBlock.default || routerProfile?.model || '').trim();
+  const baseUrl = String(modelBlock.base_url || env.OPENAI_BASE_URL || routerProfile?.baseUrl || '').trim();
+  const hasApiKey = Boolean(nativeApiKey || envApiKey || routerProfile?.apiKey);
+  const noProxy = String(env.NO_PROXY || env.no_proxy || routerProfile?.env?.NO_PROXY || '').trim();
+
+  return {
+    toolId: 'hermes',
+    configHome: home,
+    configPath,
+    envPath,
+    indexPath,
+    binary: findToolBinary('hermes', { passive: true }),
+    configExists: Boolean(rawYaml.trim()),
+    envExists: Boolean(rawEnv.trim()),
+    indexExists: Boolean(Object.keys(index || {}).length),
+    configYaml: rawYaml,
+    model,
+    baseUrl,
+    activeProviderKey: routerProfile?.providerKey || (modelBlock.provider ? 'custom' : ''),
+    nativeProvider: {
+      provider: String(modelBlock.provider || '').trim(),
+      model,
+      baseUrl,
+      hasApiKey,
+      maskedApiKey: maskSecret(nativeApiKey || envApiKey || routerProfile?.apiKey || ''),
+      configPath,
+      envPath,
+    },
+    env: {
+      hasEasyAiRouterKey: Boolean(env.EASYAI_ROUTER_API_KEY),
+      hasOpenAiKey: Boolean(env.OPENAI_API_KEY),
+      openAiBaseUrl: env.OPENAI_BASE_URL || '',
+      noProxy,
+    },
+    routerProfile,
+  };
+}
+
+export async function loadGeminiState(options = {}) {
+  const home = resolveToolConfigHome('gemini', options?.configHome);
+  const configPath = path.join(home, 'settings.json');
+  const raw = await readText(configPath);
+  let settings = {};
+  if (raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      settings = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      settings = {};
+    }
+  }
+  const routerProfile = settings?.easyaiconfig?.router && typeof settings.easyaiconfig.router === 'object'
+    ? settings.easyaiconfig.router
+    : null;
+  const model = String(routerProfile?.model || settings?.model || '').trim();
+  const baseUrl = String(routerProfile?.baseUrl || '').trim();
+  const apiKey = String(routerProfile?.apiKey || '').trim();
+  return {
+    toolId: 'gemini',
+    configHome: home,
+    configPath,
+    binary: findToolBinary('gemini', { passive: true }),
+    configExists: Boolean(raw.trim()),
+    settings,
+    model,
+    baseUrl,
+    activeProviderKey: routerProfile?.providerKey || '',
+    routerProfile,
+    safeProfile: {
+      provider: routerProfile?.providerKey || '',
+      model,
+      baseUrl,
+      hasApiKey: Boolean(apiKey),
+      maskedApiKey: maskSecret(apiKey),
+      configPath,
+    },
+  };
+}
+
+export async function launchGemini({ cwd } = {}) {
+  const targetCwd = resolveLaunchCwd(cwd);
+  const binary = findToolBinary('gemini');
+  if (!binary.installed) {
+    throw new Error('Gemini CLI 尚未安装，请先安装 @google/gemini-cli 并确保 gemini 命令在 PATH 中');
+  }
+  const message = launchTerminalCommand(targetCwd, {
+    binaryPath: binary.path,
+    binaryName: 'gemini',
+    toolLabel: 'Gemini CLI',
+  });
+  return { ok: true, cwd: targetCwd, message };
+}
+
+async function npmCliToolAction(packageName, args) {
+  const result = await runCommand(npmCommand(), args);
+  return { ...result, command: `${npmCommand()} ${args.join(' ')}`, packageName };
+}
+
+function npmCliInstallArgs(packageName, { version = 'latest', domestic = false, force = false } = {}) {
+  const packageSpec = version === 'latest' ? `${packageName}@latest` : npmPackageVersionSpec(packageName, version);
+  const args = ['install', '-g', packageSpec];
+  if (force) args.push('--force');
+  if (domestic) args.push('--registry', NPM_REGISTRY_CN);
+  return args;
+}
+
+function npmCliUninstallArgs(packageName) {
+  return ['uninstall', '-g', packageName];
+}
+
+export async function installGemini() {
+  return npmCliToolAction(GEMINI_CLI_PACKAGE, npmCliInstallArgs(GEMINI_CLI_PACKAGE, { version: 'latest' }));
+}
+
+export async function reinstallGemini() {
+  return npmCliToolAction(GEMINI_CLI_PACKAGE, npmCliInstallArgs(GEMINI_CLI_PACKAGE, { version: 'latest', force: true }));
+}
+
+export async function updateGemini() {
+  return installGemini();
+}
+
+export async function updateGeminiDomestic() {
+  return npmCliToolAction(GEMINI_CLI_PACKAGE, npmCliInstallArgs(GEMINI_CLI_PACKAGE, { version: 'latest', domestic: true }));
+}
+
+export async function installGeminiVersion({ version, domestic = false } = {}) {
+  return npmCliToolAction(GEMINI_CLI_PACKAGE, npmCliInstallArgs(GEMINI_CLI_PACKAGE, { version, domestic }));
+}
+
+export async function uninstallGemini() {
+  return npmCliToolAction(GEMINI_CLI_PACKAGE, npmCliUninstallArgs(GEMINI_CLI_PACKAGE));
+}
+
+export async function installQwenCode() {
+  return npmCliToolAction(QWEN_CODE_PACKAGE, npmCliInstallArgs(QWEN_CODE_PACKAGE, { version: 'latest' }));
+}
+
+export async function reinstallQwenCode() {
+  return npmCliToolAction(QWEN_CODE_PACKAGE, npmCliInstallArgs(QWEN_CODE_PACKAGE, { version: 'latest', force: true }));
+}
+
+export async function updateQwenCode() {
+  return installQwenCode();
+}
+
+export async function updateQwenCodeDomestic() {
+  return npmCliToolAction(QWEN_CODE_PACKAGE, npmCliInstallArgs(QWEN_CODE_PACKAGE, { version: 'latest', domestic: true }));
+}
+
+export async function installQwenCodeVersion({ version, domestic = false } = {}) {
+  return npmCliToolAction(QWEN_CODE_PACKAGE, npmCliInstallArgs(QWEN_CODE_PACKAGE, { version, domestic }));
+}
+
+export async function uninstallQwenCode() {
+  return npmCliToolAction(QWEN_CODE_PACKAGE, npmCliUninstallArgs(QWEN_CODE_PACKAGE));
+}
+
+export async function installCodeBuddyCode() {
+  return npmCliToolAction(CODEBUDDY_CODE_PACKAGE, npmCliInstallArgs(CODEBUDDY_CODE_PACKAGE, { version: 'latest' }));
+}
+
+export async function reinstallCodeBuddyCode() {
+  return npmCliToolAction(CODEBUDDY_CODE_PACKAGE, npmCliInstallArgs(CODEBUDDY_CODE_PACKAGE, { version: 'latest', force: true }));
+}
+
+export async function updateCodeBuddyCode() {
+  return installCodeBuddyCode();
+}
+
+export async function updateCodeBuddyCodeDomestic() {
+  return npmCliToolAction(CODEBUDDY_CODE_PACKAGE, npmCliInstallArgs(CODEBUDDY_CODE_PACKAGE, { version: 'latest', domestic: true }));
+}
+
+export async function installCodeBuddyCodeVersion({ version, domestic = false } = {}) {
+  return npmCliToolAction(CODEBUDDY_CODE_PACKAGE, npmCliInstallArgs(CODEBUDDY_CODE_PACKAGE, { version, domestic }));
+}
+
+export async function uninstallCodeBuddyCode() {
+  return npmCliToolAction(CODEBUDDY_CODE_PACKAGE, npmCliUninstallArgs(CODEBUDDY_CODE_PACKAGE));
+}
+
+async function readHermesLaunchEnv() {
+  const home = getToolDef('hermes').configHome();
+  const env = parseEnv(await readText(path.join(home, '.env')));
+  return Object.fromEntries(
+    ['EASYAI_ROUTER_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'NO_PROXY', 'no_proxy']
+      .map((key) => [key, env[key]])
+      .filter(([_, value]) => value != null && String(value).trim() !== '')
+  );
+}
+
+export async function launchHermes({ cwd } = {}) {
+  const targetCwd = resolveLaunchCwd(cwd);
+  const binary = findToolBinary('hermes');
+  if (!binary.installed) {
+    throw new Error('Hermes Agent 尚未安装，请先按官方方式安装并确保 hermes 命令在 PATH 中');
+  }
+  const extraEnv = await readHermesLaunchEnv();
+  const message = launchTerminalCommand(targetCwd, {
+    binaryPath: binary.path,
+    binaryName: 'hermes',
+    toolLabel: 'Hermes Agent',
+    extraEnv,
+  });
+  return { ok: true, cwd: targetCwd, message, envInjected: Object.keys(extraEnv).sort() };
+}
+
+function launchDetachedApp(command, args = [], { cwd = process.cwd() } = {}) {
+  const child = runSpawn(command, args, {
+    cwd,
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+}
+
+function claudeDesktopWindowsCandidates() {
+  const home = os.homedir();
+  return [
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Claude', 'Claude.exe') : '',
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Claude', 'Claude.exe') : '',
+    process.env['ProgramFiles(x86)'] ? path.join(process.env['ProgramFiles(x86)'], 'Claude', 'Claude.exe') : '',
+    path.join(home, 'AppData', 'Local', 'Programs', 'Claude', 'Claude.exe'),
+  ].filter(Boolean);
+}
+
+export async function launchClaudeDesktop({ cwd } = {}) {
+  const targetCwd = resolveLaunchCwd(cwd);
+
+  if (process.platform === 'darwin') {
+    const opened = runSpawnSync('open', ['-a', 'Claude'], { encoding: 'utf8' });
+    if (opened.status !== 0) {
+      const detail = String(opened.stderr || opened.stdout || '').trim();
+      throw new Error(detail || 'Claude Desktop 尚未安装，或 macOS 无法通过 open -a Claude 打开');
+    }
+    return { ok: true, cwd: targetCwd, message: 'Claude Desktop 已打开', method: 'open -a Claude' };
+  }
+
+  if (process.platform === 'win32') {
+    const binary = findToolBinary('claude-desktop', { passive: true });
+    const binaryPath = binary.installed && binary.path
+      ? binary.path
+      : claudeDesktopWindowsCandidates().find((candidate) => existsSync(candidate));
+    if (!binaryPath) {
+      throw new Error('Claude Desktop 尚未安装，或未在常见安装路径中检测到 Claude.exe');
+    }
+    launchDetachedApp(binaryPath, [], { cwd: targetCwd });
+    return { ok: true, cwd: targetCwd, message: 'Claude Desktop 已打开', method: 'Claude.exe' };
+  }
+
+  const linuxBinary = commandExists('claude-desktop');
+  if (!linuxBinary) {
+    throw new Error('当前平台未检测到 Claude Desktop 启动入口；请手动打开 Claude Desktop');
+  }
+  launchDetachedApp(linuxBinary, [], { cwd: targetCwd });
+  return { ok: true, cwd: targetCwd, message: 'Claude Desktop 已打开', method: 'claude-desktop' };
+}
+
+async function applyOpenCodeRouterClient({ endpoint, apiKey, model, scope, projectPath }) {
+  const paths = resolveOpenCodePaths({ scope, projectPath });
+  const raw = await readText(paths.configPath);
+  let config = {};
+  if (raw.trim()) {
+    try {
+      config = parseJsonc(raw);
+    } catch (error) {
+      throw new Error(`OpenCode 配置解析失败：${error.message}`);
+    }
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) config = {};
+  config.$schema = config.$schema || 'https://opencode.ai/config.json';
+  config.provider = config.provider && typeof config.provider === 'object' && !Array.isArray(config.provider) ? config.provider : {};
+  const provider = config.provider[ROUTER_CLIENT_PROVIDER_KEY] && typeof config.provider[ROUTER_CLIENT_PROVIDER_KEY] === 'object'
+    ? config.provider[ROUTER_CLIENT_PROVIDER_KEY]
+    : {};
+  provider.name = ROUTER_CLIENT_PROVIDER_NAME;
+  provider.options = provider.options && typeof provider.options === 'object' && !Array.isArray(provider.options) ? provider.options : {};
+  provider.options.baseURL = endpoint;
+  provider.options.apiKey = apiKey;
+  const modelId = routerProviderModelId(model);
+  if (modelId) {
+    provider.models = provider.models && typeof provider.models === 'object' && !Array.isArray(provider.models) ? provider.models : {};
+    provider.models[modelId] = provider.models[modelId] || {};
+    config.model = `${ROUTER_CLIENT_PROVIDER_KEY}/${modelId}`;
+  }
+  config.provider[ROUTER_CLIENT_PROVIDER_KEY] = provider;
+  config.easyaiconfig = config.easyaiconfig && typeof config.easyaiconfig === 'object' && !Array.isArray(config.easyaiconfig) ? config.easyaiconfig : {};
+  config.easyaiconfig.router = routerClientProfile({ tool: 'opencode', endpoint, apiKey, noProxy, model: modelId });
+  await writeText(paths.configPath, `${JSON.stringify(config, null, 2)}\n`);
+  return { saved: true, tool: 'opencode', scope: paths.scope, configPath: paths.configPath };
+}
+
+function routerProviderModelId(model = '') {
+  const parts = String(model || '').split('/').filter(Boolean);
+  if (parts.length <= 1) return String(model || '').trim();
+  return parts.slice(1).join('/') || parts[0] || '';
+}
+
+function routerOpenClawModelId(model = '') {
+  return routerProviderModelId(model) || 'gpt-5.5';
+}
+
+async function applyOpenClawRouterClient({ endpoint, apiKey, model, noProxy }) {
+  const home = openclawHome();
+  const configPath = path.join(home, 'openclaw.json');
+  let config = {};
+  const raw = await readText(configPath);
+  if (raw.trim()) {
+    try {
+      config = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`OpenClaw JSON 解析失败：${error.message}`);
+    }
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) config = {};
+  config.env = config.env && typeof config.env === 'object' && !Array.isArray(config.env) ? config.env : {};
+  config.env[ROUTER_CLIENT_ENV_KEY] = apiKey;
+  config.agents = config.agents && typeof config.agents === 'object' && !Array.isArray(config.agents) ? config.agents : {};
+  config.agents.defaults = config.agents.defaults && typeof config.agents.defaults === 'object' && !Array.isArray(config.agents.defaults) ? config.agents.defaults : {};
+  config.agents.defaults.model = config.agents.defaults.model && typeof config.agents.defaults.model === 'object' && !Array.isArray(config.agents.defaults.model) ? config.agents.defaults.model : {};
+  const modelId = routerOpenClawModelId(model);
+  config.agents.defaults.model.primary = `${ROUTER_CLIENT_PROVIDER_KEY}/${modelId}`;
+  config.models = config.models && typeof config.models === 'object' && !Array.isArray(config.models) ? config.models : {};
+  config.models.mode = config.models.mode || 'merge';
+  config.models.providers = config.models.providers && typeof config.models.providers === 'object' && !Array.isArray(config.models.providers) ? config.models.providers : {};
+  config.models.providers[ROUTER_CLIENT_PROVIDER_KEY] = {
+    ...(config.models.providers[ROUTER_CLIENT_PROVIDER_KEY] || {}),
+    baseUrl: endpoint,
+    api: 'openai-completions',
+    apiKey: `$${ROUTER_CLIENT_ENV_KEY}`,
+    models: [
+      {
+        id: modelId,
+        name: modelId,
+        api: 'openai-completions',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      },
+    ],
+  };
+  config.easyaiconfig = config.easyaiconfig && typeof config.easyaiconfig === 'object' && !Array.isArray(config.easyaiconfig) ? config.easyaiconfig : {};
+  config.easyaiconfig.router = routerClientProfile({ tool: 'openclaw', endpoint, apiKey, noProxy, model: modelId });
+  applyOpenClawGatewayDefaults(config);
+  await writeText(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  return { saved: true, tool: 'openclaw', configPath };
+}
+
+export async function applyProviderRouterClientConfig(payload = {}) {
+  const tool = normalizeProviderRouterClientTool(payload.tool || 'codex');
+  const endpoint = routerClientEndpoint(payload);
+  const apiKey = String(payload.apiKey || ROUTER_CLIENT_API_KEY).trim() || ROUTER_CLIENT_API_KEY;
+  const noProxy = appendRouterNoProxyItems(payload.noProxy || '');
+  const model = routerClientModel(payload);
+
+  if (tool === 'codex') {
+    const codexHome = assertAllowedPath(payload.codexHome || defaultCodexHome(), 'codexHome');
+    const saved = await saveConfig({
+      scope: payload.scope || 'global',
+      projectPath: payload.projectPath || '',
+      codexHome,
+      providerKey: ROUTER_CLIENT_PROVIDER_KEY,
+      providerLabel: ROUTER_CLIENT_PROVIDER_NAME,
+      baseUrl: endpoint,
+      apiKey,
+      envKey: ROUTER_CLIENT_ENV_KEY,
+      model,
+      activate: true,
+    });
+    return { ...saved, tool, configPath: saved.paths?.configPath, envPath: saved.paths?.envPath };
+  }
+
+  if (tool === 'claudecode') {
+    return applyClaudeCodeRouterClient({ endpoint, apiKey, noProxy, model });
+  }
+
+  if (tool === 'opencode') {
+    return applyOpenCodeRouterClient({
+      endpoint,
+      apiKey,
+      noProxy,
+      model,
+      scope: payload.scope || 'global',
+      projectPath: payload.projectPath || '',
+    });
+  }
+
+  if (tool === 'openclaw') {
+    return applyOpenClawRouterClient({ endpoint, apiKey, noProxy, model });
+  }
+
+  if (tool === 'hermes') {
+    return applyHermesRouterClient({ endpoint, apiKey, noProxy, model, configHome: payload.configHome });
+  }
+
+  return applyNamespacedJsonRouterClient({ tool, endpoint, apiKey, noProxy, model, configHome: payload.configHome });
 }
 
 

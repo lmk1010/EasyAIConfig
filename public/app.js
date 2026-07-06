@@ -19,6 +19,8 @@ const state = {
   metaDirty: false,
   claudeCodeState: null,
   opencodeState: null,
+  geminiState: null,
+  hermesState: null,
   codexAppState: null,
   openCodeDesktopState: null,
   openCodeEcosystemState: null,
@@ -31,7 +33,7 @@ const state = {
   toolsCatalogQuery: '',
   toolsCatalogTag: 'all',
   toolsCatalogPage: 1,
-  toolsCatalogPageSize: 9,
+  toolsCatalogPageSize: 999,
   toolsCatalogDetailId: '',
   toolsVersionExpandedKey: '',
   providerHealth: {},
@@ -186,8 +188,16 @@ const state = {
     error: '',
     lastFetchedAt: 0,
     activeTool: 'codex',
-    activeTab: 'pool',
+    activeTab: 'clients',
     logFilter: { query: '', provider: 'all', status: 'all', tool: 'all' },
+    logData: null,
+    logPage: 1,
+    logPageSize: 50,
+    logsLoading: false,
+    logsError: '',
+    logFetchTimer: null,
+    logClearBefore: '',
+    logClearing: false,
     probeLoading: false,
     primaryProviderKey: '',
     primaryProviderKeysByTool: {},
@@ -198,6 +208,16 @@ const state = {
     balanceGuardEnabled: true,
     balanceMinPercent: 5,
     balanceMinAmount: 0,
+    circuitBreakerEnabled: true,
+    circuitFailureThreshold: 3,
+    circuitRecoveryWaitMs: 30000,
+    circuitSuccessThreshold: 2,
+    circuitErrorRateThreshold: 0.6,
+    circuitMinRequests: 5,
+    responsePreviewDraft: null,
+    responsePreviewLoading: false,
+    responsePreviewResult: null,
+    responsePreviewError: '',
     codexPreviousProviderKey: localStorage.getItem('easyaiconfig_provider_router_prev_codex_provider') || '',
     wired: false,
   },
@@ -268,6 +288,39 @@ const state = {
   codexResumeSessions: [],
   codexResumeLoading: false,
   codexResumeShowAll: false,
+  assetCenter: {
+    activeTab: 'mcp',
+    loading: false,
+    error: '',
+    index: null,
+    mcpPlan: null,
+    syncTargets: null,
+    syncSnapshots: null,
+    sessionTrash: null,
+    fetchedAt: 0,
+    copyingLink: false,
+    importText: '',
+    importCodexHome: '',
+    importProjectPath: '',
+    importTargetTool: 'all',
+    importInstallMode: 'copy',
+    importIncludeCatalogPresets: false,
+    importOverwrite: false,
+    importAppendPrompts: false,
+    importConfirmApply: false,
+    importLoading: false,
+    importApplying: false,
+    importPreview: null,
+    importResult: null,
+    importError: '',
+    deepLinkListenerReady: false,
+    deepLinkLastUrl: '',
+    deepLinkLastSource: '',
+    deepLinkLastAt: 0,
+    sessionArchiving: '',
+    sessionRestoring: '',
+    syncBusy: '',
+  },
   systemStorage: null,
   systemStorageLoading: false,
   configStoreGuide: { recipeId: '', values: {} },
@@ -277,16 +330,207 @@ const state = {
 const el = (id) => document.getElementById(id);
 const tauriInvoke = window.__TAURI__?.core?.invoke || null;
 const rawCodeEditors = new Map();
-const TEMPORARILY_DISABLED_TOOLS = {
-  opencode: {
-    name: 'OpenCode',
-    message: 'OpenCode 还在适配中，当前先保留展示，入口暂不开放。',
-  },
-  openclaw: {
-    name: 'OpenClaw',
-    message: 'OpenClaw 还在适配中，当前先保留展示，入口暂不开放。',
-  },
+const TEMPORARILY_DISABLED_TOOLS = {};
+
+const TOOL_CAPABILITY_COLUMNS = [
+  { key: 'config', label: '配置' },
+  { key: 'router', label: 'Router' },
+  { key: 'usage', label: '用量' },
+  { key: 'sessions', label: '会话' },
+  { key: 'assets', label: '资产' },
+];
+
+const TOOL_CAPABILITY_CELL_LABELS = {
+  full: '可用',
+  partial: '部分',
+  import: '导入',
+  readonly: '只读',
+  planned: '待接',
+  none: '-',
 };
+
+const TOOL_CAPABILITY_MATRIX = [
+  {
+    id: 'codex',
+    name: 'Codex',
+    stage: '已闭环',
+    stageKind: 'ready',
+    config: 'full',
+    router: 'full',
+    usage: 'full',
+    sessions: 'full',
+    assets: 'full',
+    note: 'config.toml、Provider、sessions、MCP/Skill/Prompt 均可读写',
+  },
+  {
+    id: 'claudecode',
+    name: 'Claude Code',
+    stage: '已闭环',
+    stageKind: 'ready',
+    config: 'full',
+    router: 'full',
+    usage: 'full',
+    sessions: 'full',
+    assets: 'full',
+    note: 'settings.json、用量缓存、项目会话和 MCP/Prompt 已接入',
+  },
+  {
+    id: 'claude-desktop',
+    name: 'Claude Desktop',
+    stage: '已支持',
+    stageKind: 'ready',
+    config: 'full',
+    router: 'full',
+    usage: 'none',
+    sessions: 'none',
+    assets: 'full',
+    note: '重点是 Desktop MCP 与本地 Router 配置，不读取桌面聊天数据',
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    stage: '部分闭环',
+    stageKind: 'partial',
+    config: 'full',
+    router: 'full',
+    usage: 'partial',
+    sessions: 'full',
+    assets: 'partial',
+    note: 'Router safe profile、sessions 和会话驱动用量分析已接入',
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    stage: '已闭环',
+    stageKind: 'ready',
+    config: 'full',
+    router: 'full',
+    usage: 'full',
+    sessions: 'full',
+    assets: 'full',
+    note: 'opencode.json、SQLite sessions、用量与扩展生态已接入',
+  },
+  {
+    id: 'openclaw',
+    name: 'OpenClaw',
+    stage: '部分闭环',
+    stageKind: 'partial',
+    config: 'full',
+    router: 'full',
+    usage: 'partial',
+    sessions: 'full',
+    assets: 'partial',
+    note: '网关配置和 sessions 可读，用量主要来自 Router 运行日志',
+  },
+  {
+    id: 'hermes',
+    name: 'Hermes Agent',
+    stage: '部分闭环',
+    stageKind: 'partial',
+    config: 'full',
+    router: 'full',
+    usage: 'partial',
+    sessions: 'full',
+    assets: 'partial',
+    note: 'config.yaml + .env 已支持，工作区数据按文件源读取',
+  },
+  {
+    id: 'cline',
+    name: 'Cline',
+    stage: '扩展接入',
+    stageKind: 'extension',
+    config: 'import',
+    router: 'import',
+    usage: 'planned',
+    sessions: 'planned',
+    assets: 'readonly',
+    note: 'VS Code SecretStorage 不直接读写，先做检测、导入和 Router 接入包',
+  },
+  {
+    id: 'roo-code',
+    name: 'Roo Code',
+    stage: '扩展接入',
+    stageKind: 'extension',
+    config: 'import',
+    router: 'import',
+    usage: 'planned',
+    sessions: 'planned',
+    assets: 'readonly',
+    note: '扩展配置与 SecretStorage 分离处理，避免误写账号密钥',
+  },
+  {
+    id: 'kilo-code',
+    name: 'Kilo Code',
+    stage: '扩展接入',
+    stageKind: 'extension',
+    config: 'import',
+    router: 'import',
+    usage: 'planned',
+    sessions: 'planned',
+    assets: 'readonly',
+    note: '按 Cline/Roo 兼容扩展路线接入，先做配置导入闭环',
+  },
+  {
+    id: 'continue',
+    name: 'Continue',
+    stage: '目录接入',
+    stageKind: 'catalog',
+    config: 'partial',
+    router: 'import',
+    usage: 'planned',
+    sessions: 'planned',
+    assets: 'readonly',
+    note: '可检测本地配置文件，写入器和数据分析入口待补',
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    stage: '目录接入',
+    stageKind: 'catalog',
+    config: 'readonly',
+    router: 'import',
+    usage: 'planned',
+    sessions: 'planned',
+    assets: 'readonly',
+    note: '编辑器设置和扩展资产先只读检测，账号密钥不直接读取',
+  },
+  {
+    id: 'windsurf',
+    name: 'Windsurf',
+    stage: '目录接入',
+    stageKind: 'catalog',
+    config: 'readonly',
+    router: 'import',
+    usage: 'planned',
+    sessions: 'planned',
+    assets: 'readonly',
+    note: '先支持配置路径识别与 Router 接入说明，后续补写入器',
+  },
+  {
+    id: 'qwen-code',
+    name: 'Qwen Code CLI',
+    stage: 'CLI 安装',
+    stageKind: 'catalog',
+    config: 'planned',
+    router: 'planned',
+    usage: 'planned',
+    sessions: 'planned',
+    assets: 'readonly',
+    note: '安装、更新和历史版本已接入；配置路径待官方稳定后再开放写入',
+  },
+  {
+    id: 'codebuddy-code',
+    name: 'CodeBuddy Code CLI',
+    stage: 'CLI 安装',
+    stageKind: 'catalog',
+    config: 'planned',
+    router: 'planned',
+    usage: 'planned',
+    sessions: 'planned',
+    assets: 'readonly',
+    note: '安装、更新和历史版本已接入；账号与 IDE 设置不直接读取',
+  },
+];
 
 function getTemporarilyDisabledToolMeta(toolId) {
   return TEMPORARILY_DISABLED_TOOLS[String(toolId || '').trim()] || null;
@@ -308,10 +552,40 @@ function renderQuickRailSupportPanel() {
   const bodyEl = el('configTipsList');
   if (!titleEl || !bodyEl) return;
 
-  const tips = Array.isArray(state.quickTips) ? state.quickTips : [];
-  titleEl.textContent = '配置提示';
-  bodyEl.className = 'feature-list';
-  bodyEl.innerHTML = tips.map((text, index) => `<div class="feature-row"><span>${index + 1}</span><strong>${escapeHtml(text)}</strong></div>`).join('');
+  const readyCount = TOOL_CAPABILITY_MATRIX.filter((item) => item.stageKind === 'ready').length;
+  const partialCount = TOOL_CAPABILITY_MATRIX.filter((item) => item.stageKind === 'partial').length;
+  const extensionCount = TOOL_CAPABILITY_MATRIX.filter((item) => ['extension', 'catalog', 'planned'].includes(item.stageKind)).length;
+  const cell = (item, column) => {
+    const value = item[column.key] || 'none';
+    const label = TOOL_CAPABILITY_CELL_LABELS[value] || TOOL_CAPABILITY_CELL_LABELS.none;
+    return `<span class="qcap-cell qcap-cell-${escapeHtml(value)}" title="${escapeHtml(column.label)}：${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+  };
+  const rows = TOOL_CAPABILITY_MATRIX.map((item) => `
+    <div class="qcap-row qcap-row-${escapeHtml(item.stageKind)}">
+      <div class="qcap-head">
+        <strong>${escapeHtml(item.name)}</strong>
+        <span>${escapeHtml(item.stage)}</span>
+      </div>
+      <div class="qcap-cells">
+        ${TOOL_CAPABILITY_COLUMNS.map((column) => cell(item, column)).join('')}
+      </div>
+      <em>${escapeHtml(item.note)}</em>
+    </div>
+  `).join('');
+
+  titleEl.textContent = '支持范围';
+  bodyEl.className = 'quick-capability-panel';
+  bodyEl.innerHTML = `
+    <div class="qcap-summary">
+      <span><strong>${escapeHtml(String(readyCount))}</strong><em>完整闭环</em></span>
+      <span><strong>${escapeHtml(String(partialCount))}</strong><em>部分闭环</em></span>
+      <span><strong>${escapeHtml(String(extensionCount))}</strong><em>扩展/计划</em></span>
+    </div>
+    <div class="qcap-legend">
+      ${TOOL_CAPABILITY_COLUMNS.map((column) => `<span>${escapeHtml(column.label)}</span>`).join('')}
+    </div>
+    <div class="qcap-list">${rows}</div>
+  `;
 }
 
 function buildOpenClawDashboardFallbackUrl(baseUrl) {
@@ -774,22 +1048,93 @@ window.addEventListener('easyaiconfig:languagechange', refreshLanguageSensitiveV
 initTheme();
 
 /* ── Multi-tool Support ── */
+function normalizeToolCatalogId(toolId) {
+  const value = String(toolId || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (['claude-desktop', 'claudedesktop'].includes(value)) return 'claude-desktop';
+  if (['claude-code', 'claudecode'].includes(value)) return 'claudecode';
+  if (['gemini', 'gemini-cli', 'google-gemini'].includes(value)) return 'gemini';
+  if (['open-code', 'opencode'].includes(value)) return 'opencode';
+  if (['open-claw', 'openclaw'].includes(value)) return 'openclaw';
+  if (['hermes', 'hermes-agent'].includes(value)) return 'hermes';
+  if (['cline', 'cline-extension'].includes(value)) return 'cline';
+  if (['roo', 'roo-code', 'roocode'].includes(value)) return 'roo-code';
+  if (['kilo', 'kilo-code', 'kilocode'].includes(value)) return 'kilo-code';
+  if (['continue', 'continue-dev'].includes(value)) return 'continue';
+  if (['cursor', 'cursor-editor'].includes(value)) return 'cursor';
+  if (['windsurf', 'codeium-windsurf'].includes(value)) return 'windsurf';
+  if (['qwen', 'qwen-code', 'qwen-code-cli', 'qwen-cli'].includes(value)) return 'qwen-code';
+  if (['codebuddy', 'codebuddy-code', 'codebuddy-cli', 'tencent-codebuddy'].includes(value)) return 'codebuddy-code';
+  if (['qoder', 'qoder-ide'].includes(value)) return 'qoder';
+  if (['zcode', 'z-code', 'z-ai-code'].includes(value)) return 'zcode';
+  if (['lingma', 'tongyi-lingma', 'qoder-cn'].includes(value)) return 'lingma';
+  if (['zed', 'zed-ide', 'zed-editor'].includes(value)) return 'zed';
+  if (['trae', 'trae-ide'].includes(value)) return 'trae';
+  if (['vscode', 'vs-code', 'visual-studio-code', 'vscode-ide'].includes(value)) return 'vscode';
+  return value || 'codex';
+}
+
+function getToolDisplayName(toolId) {
+  const normalized = normalizeToolCatalogId(toolId);
+  const tool = state.tools?.find?.((item) => normalizeToolCatalogId(item.id) === normalized);
+  return tool?.name || {
+    codex: 'Codex',
+    claudecode: 'Claude Code',
+    'claude-desktop': 'Claude Desktop',
+    gemini: 'Gemini CLI',
+    opencode: 'OpenCode',
+    openclaw: 'OpenClaw',
+    hermes: 'Hermes Agent',
+    cline: 'Cline',
+    'roo-code': 'Roo Code',
+    'kilo-code': 'Kilo Code',
+    continue: 'Continue',
+    cursor: 'Cursor',
+    windsurf: 'Windsurf',
+    'qwen-code': 'Qwen Code CLI',
+    'codebuddy-code': 'CodeBuddy Code CLI',
+    qoder: 'Qoder',
+    zcode: 'ZCode',
+    lingma: '通义灵码 / Qoder CN',
+    zed: 'Zed',
+    trae: 'Trae',
+    vscode: 'VS Code',
+  }[normalized] || normalized;
+}
+
 function ensureKnownTools(tools = []) {
   const known = [
-    { id: 'codex', name: 'Codex CLI', description: 'OpenAI 官方 AI 编程助手' },
-    { id: 'claudecode', name: 'Claude Code', description: 'Anthropic 终端原生 AI 编程助手' },
-    { id: 'opencode', name: 'OpenCode', description: '开放式 AI 编程助手 CLI' },
-    { id: 'openclaw', name: 'OpenClaw', description: '开源多渠道 AI 助手平台' },
+    { id: 'codex', name: 'Codex CLI', description: 'OpenAI 官方 AI 编程助手', supportStage: 'active' },
+    { id: 'claudecode', name: 'Claude Code', description: 'Anthropic 终端原生 AI 编程助手', supportStage: 'active' },
+    { id: 'claude-desktop', name: 'Claude Desktop', description: 'Anthropic 桌面端，重点接入 MCP 与本地配置同步', supportStage: 'active' },
+    { id: 'gemini', name: 'Gemini CLI', description: 'Google Gemini 命令行编程助手', supportStage: 'active' },
+    { id: 'opencode', name: 'OpenCode', description: '开放式 AI 编程助手 CLI', supportStage: 'active' },
+    { id: 'openclaw', name: 'OpenClaw', description: '开源多渠道 AI 助手平台', supportStage: 'active' },
+    { id: 'hermes', name: 'Hermes Agent', description: 'Hermes Agent 工作区与会话能力', supportStage: 'active' },
+    { id: 'cline', name: 'Cline', description: 'VS Code AI 编程扩展，先支持检测、导入与 Router 接入包', supportStage: 'extension', supported: false, configFormat: 'extension', installMethod: 'manual' },
+    { id: 'roo-code', name: 'Roo Code', description: 'VS Code 代理扩展，账号密钥需走扩展安全存储', supportStage: 'extension', supported: false, configFormat: 'extension', installMethod: 'manual' },
+    { id: 'kilo-code', name: 'Kilo Code', description: 'Cline/Roo 兼容扩展路线，优先补配置导入闭环', supportStage: 'extension', supported: false, configFormat: 'extension', installMethod: 'manual' },
+    { id: 'continue', name: 'Continue', description: 'Continue IDE 助手配置与模型入口，写入器待接入', supportStage: 'catalog', supported: false, configFormat: 'yaml', installMethod: 'manual' },
+    { id: 'cursor', name: 'Cursor', description: 'Cursor 编辑器设置、扩展资产与 Router 接入说明', supportStage: 'catalog', supported: false, configFormat: 'editor', installMethod: 'manual' },
+    { id: 'windsurf', name: 'Windsurf', description: 'Windsurf 编辑器设置、扩展资产与 Router 接入说明', supportStage: 'catalog', supported: false, configFormat: 'editor', installMethod: 'manual' },
+    { id: 'qwen-code', name: 'Qwen Code CLI', description: '阿里 Qwen Code 命令行工具，支持安装、更新和历史版本', supportStage: 'active', supported: true, configFormat: 'unknown', installMethod: 'npm', npmPackage: '@qwen-code/qwen-code' },
+    { id: 'codebuddy-code', name: 'CodeBuddy Code CLI', description: '腾讯 CodeBuddy CLI，支持安装、更新和历史版本', supportStage: 'active', supported: true, configFormat: 'unknown', installMethod: 'npm', npmPackage: '@tencent-ai/codebuddy-code' },
   ];
-  const map = new Map((tools || []).map((tool) => [tool.id, tool]));
-  return known.map((tool) => map.get(tool.id) || {
+  const normalizedTools = (tools || [])
+    .filter(Boolean)
+    .map((tool) => ({ ...tool, id: normalizeToolCatalogId(tool.id) }));
+  const map = new Map(normalizedTools.map((tool) => [tool.id, tool]));
+  const ordered = known.map((tool) => map.get(tool.id) || {
     ...tool,
-    supported: true,
-    configFormat: 'json',
-    installMethod: tool.id === 'opencode' ? 'auto' : 'npm',
-    npmPackage: tool.id === 'codex' ? '@openai/codex' : tool.id === 'claudecode' ? '@anthropic-ai/claude-code' : tool.id === 'opencode' ? 'opencode-ai' : 'openclaw',
+    supported: tool.supportStage === 'active',
+    configFormat: tool.configFormat || (tool.id === 'codex' ? 'toml' : tool.id === 'opencode' ? 'jsonc' : tool.id === 'hermes' ? 'yaml' : 'json'),
+    installMethod: tool.installMethod || (tool.id === 'opencode' ? 'auto' : tool.id === 'openclaw' ? 'multi' : tool.id === 'claude-desktop' || tool.id === 'hermes' ? 'manual' : 'npm'),
+    npmPackage: tool.npmPackage || (tool.id === 'codex' ? '@openai/codex' : tool.id === 'claudecode' ? '@anthropic-ai/claude-code' : tool.id === 'opencode' ? 'opencode-ai' : tool.id === 'openclaw' ? 'openclaw' : tool.id === 'gemini' ? '@google/gemini-cli' : tool.id === 'qwen-code' ? '@qwen-code/qwen-code' : tool.id === 'codebuddy-code' ? '@tencent-ai/codebuddy-code' : ''),
     binary: { installed: false, version: null, path: null },
   });
+  for (const tool of normalizedTools) {
+    if (tool?.id && !known.some((item) => item.id === tool.id)) ordered.push(tool);
+  }
+  return ordered;
 }
 
 async function loadOpenCodeDesktopState({ render = true } = {}) {
@@ -867,6 +1212,12 @@ async function refreshToolRuntimeAfterMutation(toolId = '') {
   if (!toolId || toolId === 'openclaw') {
     await loadOpenClawQuickState().catch((e) => console.warn('[refreshToolRuntimeAfterMutation] loadOpenClawQuickState failed:', e));
   }
+  if (!toolId || toolId === 'gemini') {
+    await loadGeminiQuickState().catch((e) => console.warn('[refreshToolRuntimeAfterMutation] loadGeminiQuickState failed:', e));
+  }
+  if (!toolId || toolId === 'hermes') {
+    await loadHermesQuickState().catch((e) => console.warn('[refreshToolRuntimeAfterMutation] loadHermesQuickState failed:', e));
+  }
   renderCurrentConfig();
   renderToolConsole();
 }
@@ -896,7 +1247,22 @@ const OPENCODE_GITLAB_DOCS_URL = 'https://opencode.ai/docs/gitlab';
 const CODEX_APP_DOCS_URL = 'https://developers.openai.com/codex/app';
 const CODEX_APP_MAC_DOWNLOAD_URL = 'https://persistent.oaistatic.com/codex-app-prod/Codex.dmg';
 const CODEX_APP_WIN_STORE_URL = 'https://apps.microsoft.com/detail/9plm9xgg6vks';
+const QODER_DOWNLOAD_URL = 'https://qoder.com/download';
+const ZCODE_HOME_URL = 'https://zcode.z.ai/';
+const LINGMA_HOME_URL = 'https://lingma.aliyun.com/';
+const LINGMA_JETBRAINS_URL = 'https://plugins.jetbrains.com/plugin/17809-tongyi-lingma';
+const CODEBUDDY_HOME_URL = 'https://www.codebuddy.cn/';
+const ZED_DOWNLOAD_URL = 'https://zed.dev/download';
+const CURSOR_DOWNLOAD_URL = 'https://www.cursor.com/downloads';
+const WINDSURF_DOWNLOAD_URL = 'https://windsurf.com/download';
+const VSCODE_DOWNLOAD_URL = 'https://code.visualstudio.com/download';
+const TRAE_HOME_URL = 'https://www.trae.ai/';
+const CLINE_HOME_URL = 'https://cline.bot/';
+const ROO_CODE_MARKETPLACE_URL = 'https://marketplace.visualstudio.com/items?itemName=RooVeterinaryInc.roo-cline';
+const KILO_CODE_MARKETPLACE_URL = 'https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code';
+const CONTINUE_HOME_URL = 'https://www.continue.dev/';
 const TOOLS_UPDATE_CACHE_KEY = 'easyaiconfig_tools_updates_cache_v2';
+const TOOLS_VERSION_HISTORY_CACHE_KEY = 'easyaiconfig_tools_version_history_cache_v1';
 const TOOLS_UPDATE_AUTO_CHECK_KEY = 'easyaiconfig_tools_auto_update_check';
 const TOOLS_UPDATE_FALLBACK_TTL_MS = 12 * 60 * 60 * 1000;
 const TOOLS_UPDATE_REQUEST_TIMEOUT_MS = 30000;
@@ -904,8 +1270,87 @@ const TOOL_UPDATE_REGION_LABELS = {
   global: '海外',
   domestic: '国内',
 };
+const TOOL_CATALOG_REGION_TAGS = {
+  codex: ['global'],
+  'codex-app': ['global'],
+  claudecode: ['global'],
+  'claude-desktop': ['global'],
+  gemini: ['global'],
+  opencode: ['global'],
+  'opencode-desktop': ['global'],
+  openclaw: ['global'],
+  hermes: ['global'],
+  cline: ['global'],
+  'roo-code': ['global'],
+  'kilo-code': ['global'],
+  continue: ['global'],
+  cursor: ['global'],
+  windsurf: ['global'],
+  'qwen-code': ['domestic'],
+  'codebuddy-code': ['domestic'],
+  qoder: ['domestic', 'global'],
+  zcode: ['domestic', 'global'],
+  lingma: ['domestic'],
+  'codebuddy-home': ['domestic'],
+  'cursor-ide': ['global'],
+  'windsurf-ide': ['global'],
+  'zed-ide': ['global'],
+  'vscode-ide': ['global'],
+  'trae-ide': ['domestic', 'global'],
+};
+const TOOL_CATALOG_BRAND_ICON_PATHS = {
+  // Only vendored official assets belong here; unknown brands fall back to text initials.
+  gemini: '/tool-icons/gemini.png',
+  cline: '/tool-icons/cline.png',
+  'roo-code': '/tool-icons/roo-code.png',
+  'kilo-code': '/tool-icons/kilo-code.png',
+  continue: '/tool-icons/continue.png',
+  cursor: '/tool-icons/cursor.png',
+  'cursor-ide': '/tool-icons/cursor.png',
+  windsurf: '/tool-icons/windsurf.ico',
+  'windsurf-ide': '/tool-icons/windsurf.ico',
+  'qwen-code': '/tool-icons/qwen-code.ico',
+  'codebuddy-code': '/tool-icons/codebuddy.png',
+  qoder: '/tool-icons/qoder.png',
+  zcode: '/tool-icons/zcode.svg',
+  lingma: '/tool-icons/lingma.png',
+  'codebuddy-home': '/tool-icons/codebuddy.png',
+  'zed-ide': '/tool-icons/zed.png',
+  zed: '/tool-icons/zed.png',
+  'vscode-ide': '/tool-icons/vscode.png',
+  vscode: '/tool-icons/vscode.png',
+  'trae-ide': '/tool-icons/trae.png',
+  trae: '/tool-icons/trae.png',
+};
+const TOOL_CATALOG_MANUAL_ENTRIES = {
+  cline: { url: CLINE_HOME_URL, label: '官网' },
+  'roo-code': { url: ROO_CODE_MARKETPLACE_URL, label: '插件市场' },
+  'kilo-code': { url: KILO_CODE_MARKETPLACE_URL, label: '插件市场' },
+  continue: { url: CONTINUE_HOME_URL, label: '官网' },
+  cursor: { url: CURSOR_DOWNLOAD_URL, label: '下载页' },
+  windsurf: { url: WINDSURF_DOWNLOAD_URL, label: '下载页' },
+};
 
 state.toolUpdatesAutoCheck = readToolUpdatesAutoCheck();
+
+function getToolCatalogRegionTags(toolId, fallback = []) {
+  const normalized = normalizeToolCatalogId(toolId);
+  const explicit = TOOL_CATALOG_REGION_TAGS[toolId] || TOOL_CATALOG_REGION_TAGS[normalized];
+  const values = explicit || fallback || [];
+  return Array.from(new Set(values.filter((tag) => tag === 'domestic' || tag === 'global')));
+}
+
+function getToolCatalogRegionChips(toolId, fallback = []) {
+  return getToolCatalogRegionTags(toolId, fallback).map((tag) => TOOL_UPDATE_REGION_LABELS[tag] || tag);
+}
+
+function getToolCatalogCapabilityChip({ canManage = false, manualOnly = false, supportStage = '', installed = false } = {}) {
+  if (canManage) return installed ? '可更新' : '可安装';
+  if (supportStage === 'extension') return '扩展入口';
+  if (supportStage === 'catalog') return '资产读取';
+  if (supportStage === 'planned') return '规划中';
+  return manualOnly ? '手动入口' : '检测';
+}
 
 function readToolUpdatesAutoCheck() {
   try {
@@ -988,9 +1433,104 @@ function writeCachedToolUpdates(data) {
   } catch {}
 }
 
+function readToolVersionHistoryCache() {
+  try {
+    const raw = localStorage.getItem(TOOLS_VERSION_HISTORY_CACHE_KEY);
+    if (!raw) return { items: {}, updatedAt: 0 };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return { items: {}, updatedAt: 0 };
+    return {
+      items: parsed.items && typeof parsed.items === 'object' ? parsed.items : {},
+      updatedAt: Number(parsed.updatedAt || 0),
+    };
+  } catch {
+    return { items: {}, updatedAt: 0 };
+  }
+}
+
+function normalizeToolVersionHistoryEntries(entries = []) {
+  const seen = new Set();
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => ({
+      ...entry,
+      version: normalizeToolVersionText(entry?.version || ''),
+    }))
+    .filter((entry) => {
+      if (!entry.version || seen.has(entry.version)) return false;
+      seen.add(entry.version);
+      return true;
+    })
+    .slice(0, 30);
+}
+
+function writeToolVersionHistoryCacheFromUpdates(data) {
+  const items = data?.items && typeof data.items === 'object' ? data.items : {};
+  const previous = readToolVersionHistoryCache();
+  const nextItems = { ...(previous.items || {}) };
+  let changed = false;
+  Object.entries(items).forEach(([toolId, info]) => {
+    const id = normalizeToolCatalogId(toolId);
+    const recentVersions = normalizeToolVersionHistoryEntries(info?.recentVersions || []);
+    if (!id || !recentVersions.length) return;
+    const previousCount = Array.isArray(nextItems[id]?.recentVersions) ? nextItems[id].recentVersions.length : 0;
+    if (recentVersions.length < Math.min(previousCount, 2)) return;
+    nextItems[id] = {
+      toolId: id,
+      packageName: info?.packageName || '',
+      latestVersion: info?.latestVersion || '',
+      description: info?.description || '',
+      packageUrl: info?.packageUrl || '',
+      repositoryUrl: info?.repositoryUrl || '',
+      homepage: info?.homepage || '',
+      sourceLabel: getToolUpdateSourceLabel(info) || info?.source?.label || '',
+      recentVersions,
+      cachedAt: Date.now(),
+    };
+    changed = true;
+  });
+  if (!changed) return;
+  try {
+    localStorage.setItem(TOOLS_VERSION_HISTORY_CACHE_KEY, JSON.stringify({ items: nextItems, updatedAt: Date.now() }));
+  } catch {}
+}
+
+function getCachedToolVersionHistory(toolId = '') {
+  const id = normalizeToolCatalogId(toolId);
+  const cache = readToolVersionHistoryCache();
+  const cached = cache.items?.[id];
+  if (!cached || typeof cached !== 'object') return null;
+  const recentVersions = normalizeToolVersionHistoryEntries(cached.recentVersions || []);
+  if (!recentVersions.length) return null;
+  return { ...cached, recentVersions };
+}
+
+function mergeCachedToolVersionHistory(data) {
+  if (!data || typeof data !== 'object') return data;
+  const cache = readToolVersionHistoryCache();
+  const cachedItems = cache.items || {};
+  if (!Object.keys(cachedItems).length) return data;
+  const items = { ...(data.items || {}) };
+  Object.entries(cachedItems).forEach(([toolId, cached]) => {
+    const id = normalizeToolCatalogId(toolId);
+    const cachedVersions = normalizeToolVersionHistoryEntries(cached?.recentVersions || []);
+    if (!id || !cachedVersions.length || !items[id]) return;
+    const currentVersions = normalizeToolVersionHistoryEntries(items[id]?.recentVersions || []);
+    if (currentVersions.length >= cachedVersions.length && currentVersions.length > 1) return;
+    items[id] = {
+      ...cached,
+      ...items[id],
+      recentVersions: cachedVersions,
+      historyFromCache: true,
+      historyCachedAt: Number(cached.cachedAt || cache.updatedAt || 0),
+      historySourceLabel: cached.sourceLabel || '',
+    };
+  });
+  return { ...data, items };
+}
+
 function applyToolUpdates(data, fetchedAt = Date.now()) {
   if (!data || typeof data !== 'object') return;
-  state.toolUpdates = data;
+  state.toolUpdates = mergeCachedToolVersionHistory(data);
   state.toolUpdatesFetchedAt = fetchedAt || Date.now();
   state.toolUpdatesError = '';
 }
@@ -1027,12 +1567,14 @@ async function loadToolUpdates({ force = false, render = true } = {}) {
   try {
     const json = await api('/api/tools/updates', { timeoutMs: TOOLS_UPDATE_REQUEST_TIMEOUT_MS });
     if (!json.ok) throw new Error(json.error || '检查更新失败');
-    applyToolUpdates(json.data, Date.now());
     writeCachedToolUpdates(json.data);
+    writeToolVersionHistoryCacheFromUpdates(json.data);
+    applyToolUpdates(json.data, Date.now());
     if (render && state.activePage === 'tools') renderToolsPage();
     return state.toolUpdates;
   } catch (error) {
     state.toolUpdatesError = error instanceof Error ? error.message : String(error);
+    if (state.toolUpdates) state.toolUpdates = mergeCachedToolVersionHistory(state.toolUpdates);
     if (render && state.activePage === 'tools') renderToolsUpdateStrip();
     return state.toolUpdates;
   } finally {
@@ -1222,10 +1764,146 @@ function getOpenCodeEcosystemCatalogItems() {
       updateState,
       version: statusValue,
       badge: updateState.hasUpdate ? '有更新' : installed ? '已就绪' : available ? '可自动化' : '待检测',
-      tags: [spec.typeLabel === '扩展' ? 'extension' : 'integration', 'automation'].concat(installed ? ['installed'] : []),
-      chips: [spec.typeLabel, installed ? '已配置' : '未配置', installed && updateState.label ? updateState.label : available ? '一键处理' : '待环境就绪'],
+      tags: [spec.typeLabel === '扩展' ? 'extension' : 'integration', 'automation', 'global'].concat(installed ? ['installed'] : []),
+      chips: [spec.typeLabel, '海外', installed ? '已配置' : '未配置', installed && updateState.label ? updateState.label : available ? '一键处理' : '待环境就绪'],
       primaryAction: { toolId: spec.id, action: 'ecosystem-install', label: target.actionLabel || (installed ? '重新处理' : '立即安装'), disabled: !available, ecosystemTarget: spec.key },
       secondaryAction: { externalUrl: spec.docsUrl, label: '官方文档' },
+    };
+  });
+}
+
+function getManualIdeCatalogItems() {
+  const specs = [
+    {
+      id: 'qoder',
+      iconId: 'qoder',
+      typeLabel: 'IDE',
+      name: 'Qoder',
+      description: 'Qoder 官方桌面端、JetBrains 插件和 CLI 下载入口。',
+      tags: ['ide', 'extension', 'domestic', 'global'],
+      chips: ['IDE', '官方入口', '手动安装'],
+      url: QODER_DOWNLOAD_URL,
+      secondaryUrl: QODER_DOWNLOAD_URL,
+      secondaryLabel: '下载页',
+    },
+    {
+      id: 'zcode',
+      iconId: 'zcode',
+      typeLabel: 'IDE',
+      name: 'ZCode',
+      description: '智谱 Z.ai 官方 AI 编程 IDE 入口。',
+      tags: ['ide', 'domestic'],
+      chips: ['IDE', '国内', '官方入口'],
+      url: ZCODE_HOME_URL,
+      secondaryUrl: ZCODE_HOME_URL,
+      secondaryLabel: '官网',
+    },
+    {
+      id: 'lingma',
+      iconId: 'lingma',
+      typeLabel: '扩展',
+      name: '通义灵码 / Qoder CN',
+      description: '阿里 AI 编程扩展入口，JetBrains 插件已迁移为 Qoder CN。',
+      tags: ['ide', 'extension', 'domestic'],
+      chips: ['扩展', '国内', '插件市场'],
+      url: LINGMA_HOME_URL,
+      secondaryUrl: LINGMA_JETBRAINS_URL,
+      secondaryLabel: 'JetBrains 插件',
+    },
+    {
+      id: 'codebuddy-home',
+      iconId: 'codebuddy-home',
+      typeLabel: 'IDE/扩展',
+      name: '腾讯 CodeBuddy',
+      description: '腾讯 CodeBuddy 官方下载与产品入口；CLI 版本在 CodeBuddy Code CLI 中管理。',
+      tags: ['ide', 'extension', 'domestic'],
+      chips: ['IDE/扩展', '国内', '官方入口'],
+      url: CODEBUDDY_HOME_URL,
+      secondaryUrl: CODEBUDDY_HOME_URL,
+      secondaryLabel: '官网',
+    },
+    {
+      id: 'cursor-ide',
+      iconId: 'cursor-ide',
+      typeLabel: 'IDE',
+      name: 'Cursor',
+      description: 'Cursor 官方编辑器下载入口。',
+      tags: ['ide', 'global'],
+      chips: ['IDE', '海外', '官方下载'],
+      url: CURSOR_DOWNLOAD_URL,
+      secondaryUrl: CURSOR_DOWNLOAD_URL,
+      secondaryLabel: '下载页',
+    },
+    {
+      id: 'windsurf-ide',
+      iconId: 'windsurf-ide',
+      typeLabel: 'IDE',
+      name: 'Windsurf',
+      description: 'Windsurf 官方编辑器下载入口。',
+      tags: ['ide', 'global'],
+      chips: ['IDE', '海外', '官方下载'],
+      url: WINDSURF_DOWNLOAD_URL,
+      secondaryUrl: WINDSURF_DOWNLOAD_URL,
+      secondaryLabel: '下载页',
+    },
+    {
+      id: 'zed-ide',
+      iconId: 'zed-ide',
+      typeLabel: 'IDE',
+      name: 'Zed',
+      description: 'Zed 官方编辑器下载入口。',
+      tags: ['ide', 'global'],
+      chips: ['IDE', '海外', '官方下载'],
+      url: ZED_DOWNLOAD_URL,
+      secondaryUrl: ZED_DOWNLOAD_URL,
+      secondaryLabel: '下载页',
+    },
+    {
+      id: 'vscode-ide',
+      iconId: 'vscode-ide',
+      typeLabel: 'IDE',
+      name: 'Visual Studio Code',
+      description: 'VS Code 官方下载入口，适合 Cline、Roo Code、OpenCode 等扩展。',
+      tags: ['ide', 'extension', 'global'],
+      chips: ['IDE', '扩展宿主', '官方下载'],
+      url: VSCODE_DOWNLOAD_URL,
+      secondaryUrl: VSCODE_DOWNLOAD_URL,
+      secondaryLabel: '下载页',
+    },
+    {
+      id: 'trae-ide',
+      iconId: 'trae-ide',
+      typeLabel: 'IDE',
+      name: 'Trae',
+      description: 'Trae AI 编程 IDE 官方入口。',
+      tags: ['ide', 'domestic', 'global'],
+      chips: ['IDE', '官方入口', '手动安装'],
+      url: TRAE_HOME_URL,
+      secondaryUrl: TRAE_HOME_URL,
+      secondaryLabel: '官网',
+    },
+  ];
+  return specs.map((spec) => {
+    const regionTags = getToolCatalogRegionTags(spec.id, spec.tags);
+    const regionChips = getToolCatalogRegionChips(spec.id, spec.tags);
+    return {
+      id: spec.id,
+      kind: 'ide',
+      manualOnly: true,
+      iconId: spec.iconId,
+      typeLabel: spec.typeLabel,
+      name: spec.name,
+      description: spec.description,
+      supported: true,
+      installed: false,
+      updateState: { hasUpdate: false, latestVersion: '', currentVersion: '', label: '官方入口' },
+      version: '官方入口',
+      badge: '下载入口',
+      tags: Array.from(new Set([...spec.tags, ...regionTags])),
+      aliases: [spec.name, spec.typeLabel, 'IDE', '下载', '安装'],
+      chips: Array.from(new Set([spec.typeLabel, ...regionChips, ...(spec.chips || []).filter((chip) => !['国内', '海外'].includes(chip)), '手动安装'])),
+      primaryAction: { externalUrl: spec.url, label: '官网' },
+      secondaryAction: spec.secondaryUrl ? { externalUrl: spec.secondaryUrl, label: spec.secondaryLabel || '下载页' } : null,
     };
   });
 }
@@ -1233,6 +1911,7 @@ function getOpenCodeEcosystemCatalogItems() {
 function getToolCatalogItems() {
   const baseItems = (state.tools || []).map((tool) => {
     const isSoon = !tool.supported;
+    const canManage = Boolean(tool.supported && ['npm', 'auto', 'multi'].includes(String(tool.installMethod || '')));
     const installed = Boolean(tool.binary?.installed);
     const updateInfo = getToolUpdateInfo(tool.id);
     const updateState = getCatalogUpdateState(tool, {
@@ -1240,25 +1919,52 @@ function getToolCatalogItems() {
       currentVersion: tool.binary?.version || '',
     });
     const autoChip = installed ? '可更新' : '可安装';
+    const stage = tool.supportStage || (isSoon ? 'planned' : 'active');
+    const typeLabel = stage === 'extension' ? '扩展' : stage === 'catalog' ? '目录' : 'CLI';
+    const categoryTag = stage === 'extension'
+      ? 'extension'
+      : stage === 'catalog'
+        ? (['cursor', 'windsurf'].includes(tool.id) ? 'ide' : 'extension')
+        : 'cli';
+    const stageLabel = stage === 'extension'
+      ? '扩展接入'
+      : stage === 'catalog'
+        ? '目录接入'
+        : stage === 'planned'
+          ? '待接入'
+          : '';
+    const regionTags = getToolCatalogRegionTags(tool.id);
+    const regionChips = getToolCatalogRegionChips(tool.id);
+    const capabilityChip = getToolCatalogCapabilityChip({
+      canManage,
+      manualOnly: !canManage,
+      supportStage: stage,
+      installed,
+    });
+    const manualEntry = TOOL_CATALOG_MANUAL_ENTRIES[tool.id] || TOOL_CATALOG_MANUAL_ENTRIES[normalizeToolCatalogId(tool.id)] || null;
     return {
       id: tool.id,
       kind: 'tool',
       iconId: tool.id,
-      typeLabel: 'CLI',
+      typeLabel,
       name: tool.name,
       description: tool.description,
       supported: !isSoon,
+      canManage,
+      manualOnly: !canManage,
+      supportStage: stage,
       installed,
       updateState,
-      version: installed ? (tool.binary?.version || '已安装') : (isSoon ? '暂未支持' : '未安装'),
-      badge: updateState.hasUpdate ? '有更新' : installed ? '已安装' : isSoon ? '即将支持' : '可安装',
-      tags: ['cli', 'global', 'domestic', 'automation'].concat(installed ? ['installed'] : []),
-      chips: ['CLI', '海外', '国内', autoChip].concat(updateState.hasUpdate ? [updateState.label] : []),
+      version: installed ? (tool.binary?.version || '已安装') : (isSoon ? (stageLabel || '暂未支持') : canManage ? '未安装' : '手动入口'),
+      badge: updateState.hasUpdate ? '有更新' : installed ? '已安装' : isSoon ? (stageLabel || '目录') : canManage ? '可安装' : '入口',
+      tags: [categoryTag, ...regionTags].concat(canManage ? ['automation'] : []).concat(installed ? ['installed'] : []),
+      chips: [typeLabel, ...regionChips, stageLabel, canManage ? autoChip : capabilityChip].concat(updateState.hasUpdate ? [updateState.label] : []),
+      primaryAction: !canManage && manualEntry?.url ? { externalUrl: manualEntry.url, label: manualEntry.label || '官方入口' } : null,
       updateInfo,
       tool,
     };
   });
-  return [...baseItems, getCodexAppCatalogItem(), getOpenCodeDesktopCatalogItem(), ...getOpenCodeEcosystemCatalogItems()];
+  return [...baseItems, getCodexAppCatalogItem(), getOpenCodeDesktopCatalogItem(), ...getManualIdeCatalogItems(), ...getOpenCodeEcosystemCatalogItems()];
 }
 
 function filterToolCatalogItems(items = []) {
@@ -1281,7 +1987,7 @@ function filterToolCatalogItems(items = []) {
 }
 
 function compareToolCatalogSidebarItems(a, b) {
-  const kindOrder = { tool: 0, desktop: 1, ecosystem: 2 };
+  const kindOrder = { tool: 0, desktop: 1, ide: 2, ecosystem: 3 };
   const aOrder = kindOrder[a.kind] ?? 9;
   const bOrder = kindOrder[b.kind] ?? 9;
   if (aOrder !== bOrder) return aOrder - bOrder;
@@ -1291,6 +1997,8 @@ function compareToolCatalogSidebarItems(a, b) {
 function getToolsSidebarBadge(item) {
   if (item.updateState?.hasUpdate) return '有更新';
   if (item.installed) return item.kind === 'ecosystem' ? '已就绪' : '已安装';
+  if (item.kind === 'ide') return '官方入口';
+  if (item.manualOnly) return '手动';
   return item.kind === 'ecosystem' ? '待配置' : '待安装';
 }
 
@@ -1354,12 +2062,24 @@ function renderToolsSecondaryPanel() {
   const pendingCount = el('toolsSidePendingCount');
   const installedMeta = el('toolsInstalledMeta');
   const pendingMeta = el('toolsPendingMeta');
+  const summary = installedCount?.closest?.('.tools-sec-summary') || null;
+  const installedHead = installedList.previousElementSibling;
+  const pendingHead = pendingList.previousElementSibling;
+  const setSidebarNodeVisible = (node, visible, display = '') => {
+    if (!node) return;
+    node.style.display = visible ? display : 'none';
+  };
 
   if (!state.tools.length) {
     if (installedCount) installedCount.textContent = '0';
     if (pendingCount) pendingCount.textContent = '0';
     if (installedMeta) installedMeta.textContent = '读取中';
     if (pendingMeta) pendingMeta.textContent = '读取中';
+    setSidebarNodeVisible(summary, false);
+    setSidebarNodeVisible(installedHead, false);
+    setSidebarNodeVisible(pendingHead, false);
+    setSidebarNodeVisible(installedList, true);
+    setSidebarNodeVisible(pendingList, false);
     installedList.innerHTML = renderToolsSidebarEmpty('正在读取工具状态', '安装状态和扩展集成会显示在这里');
     pendingList.innerHTML = '';
     return;
@@ -1367,19 +2087,30 @@ function renderToolsSecondaryPanel() {
 
   const items = getToolCatalogItems().sort(compareToolCatalogSidebarItems);
   const installedItems = items.filter((item) => item.installed);
-  const pendingItems = items.filter((item) => item.supported && !item.installed);
+  const pendingItems = items.filter((item) => item.supported && !item.installed && !item.manualOnly);
 
   if (installedCount) installedCount.textContent = String(installedItems.length);
   if (pendingCount) pendingCount.textContent = String(pendingItems.length);
   if (installedMeta) installedMeta.textContent = `${installedItems.length} 项`;
   if (pendingMeta) pendingMeta.textContent = `${pendingItems.length} 项`;
 
-  installedList.innerHTML = installedItems.length
+  const hasInstalled = Boolean(installedItems.length);
+  const hasPending = Boolean(pendingItems.length);
+  const hasAny = hasInstalled || hasPending;
+  setSidebarNodeVisible(summary, hasAny);
+  setSidebarNodeVisible(installedHead, hasInstalled, 'flex');
+  setSidebarNodeVisible(installedList, hasInstalled || !hasAny);
+  setSidebarNodeVisible(pendingHead, hasPending, 'flex');
+  setSidebarNodeVisible(pendingList, hasPending);
+
+  installedList.innerHTML = hasInstalled
     ? installedItems.map((item) => renderToolsSidebarItem(item)).join('')
-    : renderToolsSidebarEmpty('还没有已安装项', '先从右侧列表安装 CLI、桌面版或扩展');
-  pendingList.innerHTML = pendingItems.length
+    : hasAny
+      ? ''
+      : renderToolsSidebarEmpty('从右侧目录选择工具', 'CLI 安装、IDE 下载和扩展入口都在目录里');
+  pendingList.innerHTML = hasPending
     ? pendingItems.map((item) => renderToolsSidebarItem(item)).join('')
-    : renderToolsSidebarEmpty('当前已补齐', '没有待处理的安装或配置项');
+    : '';
 }
 
 function renderToolCardActions(item, actionSvgs) {
@@ -1390,10 +2121,32 @@ function renderToolCardActions(item, actionSvgs) {
       <span>详情</span>
     </button>
   `;
+  const externalToolButtons = [item.primaryAction, item.secondaryAction, item.tertiaryAction]
+    .filter((action) => action?.externalUrl)
+    .map((action) => `
+      <button class="secondary tool-action-btn" data-external-url="${escapeHtml(action.externalUrl)}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+        <span>${escapeHtml(action.label || '官方入口')}</span>
+      </button>
+    `).join('');
 	  if (item.kind === 'tool') {
-	    const tool = item.tool;
-	    const isInstalled = item.installed;
-	    if (!item.supported) return '<button class="secondary tool-action-btn" disabled>暂未支持</button>';
+    const tool = item.tool;
+    const isInstalled = item.installed;
+    if (!item.supported) {
+        const label = item.supportStage === 'extension'
+          ? '扩展接入'
+          : item.supportStage === 'catalog'
+            ? '已入目录'
+            : item.supportStage === 'planned'
+              ? '待接入'
+              : '暂未支持';
+        return `
+          ${detailButton}
+          ${externalToolButtons}
+          <button class="secondary tool-action-btn" disabled>${escapeHtml(label)}</button>
+        `;
+      }
+      if (!item.canManage) return `${detailButton}${externalToolButtons}`;
 	    return `
 	      ${detailButton}
 	      <button class="secondary tool-action-btn tool-action-primary" data-tool-action="update" data-tool-id="${tool.id}" ${operationActive ? 'disabled' : ''}>
@@ -1447,10 +2200,20 @@ function getToolCatalogStatusText(item) {
     if (item.installed) return current ? `当前 ${current}` : '已安装';
     return item.supported ? '可下载' : '待环境就绪';
   }
+  if (item.kind === 'ide') return '官方入口';
+  if (item.manualOnly) {
+    if (item.supportStage === 'extension') return '扩展资产入口';
+    if (item.supportStage === 'catalog') return '配置读取入口';
+    return item.installed ? '已检测' : '手动入口';
+  }
   if (item.kind === 'tool') {
     const current = normalizeToolVersionText(item.updateState?.currentVersion || '');
     if (item.installed) return current ? `当前 ${current}` : '已安装';
-    return item.supported ? '未安装' : '暂未支持';
+    if (item.supported) return '未安装';
+    if (item.supportStage === 'extension') return '扩展接入中';
+    if (item.supportStage === 'catalog') return '已纳入目录';
+    if (item.supportStage === 'planned') return '待接入';
+    return '暂未支持';
   }
   if (item.updateState?.latestVersion) return `最新 ${item.updateState.latestVersion}`;
   if (item.installed) return item.kind === 'ecosystem' ? '已配置' : '已安装';
@@ -1466,7 +2229,7 @@ function renderToolCatalogCard(item, actionSvgs) {
   const latestVersion = normalizeToolVersionText(item.updateState?.latestVersion || '');
   const showCurrentOnlyVersion = !latestVersion && item.kind === 'desktop' && item.installed && currentVersion && currentVersion !== '未知';
   return `
-    <div class="tool-card ${selected ? 'is-selected' : ''} ${!item.supported ? 'tool-card-soon' : ''} ${hasUpdate ? 'tool-card-has-update' : ''}" data-tool-id="${item.id}">
+    <div class="tool-card ${selected ? 'is-selected' : ''} ${item.supportStage === 'planned' ? 'tool-card-soon' : ''} ${hasUpdate ? 'tool-card-has-update' : ''}" data-tool-id="${item.id}">
       <div class="tool-card-head">
         <div class="tool-icon tool-icon-${item.iconId}">
           ${toolIconSvg(item.iconId)}
@@ -1555,12 +2318,67 @@ function getToolVersionNotes(entry, info) {
   };
 }
 
+function getToolVersionHistoryInfo(item, info) {
+  const toolId = normalizeToolCatalogId(item?.id || info?.toolId || '');
+  const liveInfo = info || getToolUpdateInfo(toolId) || {};
+  const liveVersions = normalizeToolVersionHistoryEntries(liveInfo?.recentVersions || []);
+  if (liveVersions.length) {
+    return {
+      info: { ...liveInfo, recentVersions: liveVersions },
+      versions: liveVersions,
+      cached: Boolean(liveInfo.historyFromCache),
+      cachedAt: Number(liveInfo.historyCachedAt || 0),
+      sourceLabel: liveInfo.historyFromCache
+        ? (liveInfo.historySourceLabel || getToolUpdateSourceLabel(liveInfo) || '缓存')
+        : (getToolUpdateSourceLabel(liveInfo) || 'npm'),
+    };
+  }
+  const cached = getCachedToolVersionHistory(toolId);
+  if (cached?.recentVersions?.length) {
+    return {
+      info: { ...cached, ...liveInfo, recentVersions: cached.recentVersions },
+      versions: cached.recentVersions,
+      cached: true,
+      cachedAt: Number(cached.cachedAt || 0),
+      sourceLabel: cached.sourceLabel || '缓存',
+    };
+  }
+  return {
+    info: liveInfo,
+    versions: [],
+    cached: false,
+    cachedAt: 0,
+    sourceLabel: getToolUpdateSourceLabel(liveInfo),
+  };
+}
+
+function getToolVersionHistoryEmptyText(item, info) {
+  if (!item || item.kind === 'ide') {
+    return '这是官方入口，不读取本地账号配置，也不提供可回滚的 npm 历史版本。';
+  }
+  if (item.manualOnly) return '此项当前不走 npm 安装链路，因此不提供可回滚的历史版本。';
+  if (state.toolUpdatesLoading) return '正在读取 npm 版本历史，稍后会自动刷新。';
+  if (state.toolUpdatesError || info?.error) return '版本源暂不可用；一旦成功读取，会自动保留历史版本用于回滚。';
+  if (info?.latestVersion) return '当前只读取到最新版本，完整历史会在 metadata 返回后自动补齐。';
+  return '还没有可用的版本历史。';
+}
+
 function renderToolVersionHistory(item, info) {
-  const versions = Array.isArray(info?.recentVersions) ? info.recentVersions : [];
-  if (!versions.length) return '<div class="tool-detail-empty">暂无版本历史</div>';
+  const history = getToolVersionHistoryInfo(item, info);
+  const versions = history.versions;
+  if (!versions.length) {
+    return `<div class="tool-detail-empty">${escapeHtml(getToolVersionHistoryEmptyText(item, history.info))}</div>`;
+  }
   const operationActive = isToolOperationActive(getToolOperation(item?.id));
+  const sourceCopy = history.cached
+    ? `使用上次缓存${history.cachedAt ? ` · ${formatRelativeTime(new Date(history.cachedAt).toISOString())}` : ''}`
+    : `${history.sourceLabel || 'npm'} 版本源`;
   return `
     <div class="tool-version-history">
+      <div class="tool-version-history-source">
+        <span>${escapeHtml(sourceCopy)}</span>
+        <em>${escapeHtml(`${versions.length} 个历史版本`)}</em>
+      </div>
       ${versions.map((entry) => {
         const version = String(entry.version || '').trim();
         if (!version) return '';
@@ -1570,7 +2388,7 @@ function renderToolVersionHistory(item, info) {
         const actionLabel = getToolVersionActionLabel(item, version);
         const isCurrent = actionLabel === '当前已安装';
         const publishedAt = formatToolVersionPublishedAt(entry.publishedAt);
-        const notes = getToolVersionNotes(entry, info);
+        const notes = getToolVersionNotes(entry, history.info);
         const releaseUrl = String(entry.releaseUrl || '').trim();
         const npmUrl = String(entry.npmUrl || '').trim();
         return `
@@ -1622,6 +2440,7 @@ function renderToolDetailActionButtons(item) {
   if (!item) return '';
   const operationActive = isToolOperationActive(getToolOperation(item.id));
   if (item.kind === 'tool') {
+    if (!item.canManage) return '';
     const primaryLabel = item.installed ? '更新' : '安装';
     const domesticLabel = item.installed ? '国内镜像更新' : '国内镜像安装';
     const uninstall = item.installed ? `
@@ -1667,16 +2486,25 @@ function renderToolDetailPanel(item) {
     `;
   }
   const info = item.updateInfo || getToolUpdateInfo(item.id);
+  const manualEntry = Boolean(item.manualOnly || item.kind === 'ide');
   const currentVersion = normalizeToolVersionText(item.updateState?.currentVersion || item.tool?.binary?.version || '');
   const latestVersion = item.updateState?.latestVersion || info?.latestVersion || '';
   const sourceLabel = item.id === 'codex-app'
     ? '官方安装源'
+    : manualEntry
+      ? '官方入口'
     : getToolUpdateSourceLabel(info) || (state.toolUpdatesLoading ? '检查中' : state.toolUpdatesError ? '版本源暂不可用' : '版本源');
   const regions = (info?.regions || item.tags || [])
     .filter((tag) => tag === 'global' || tag === 'domestic')
     .map((tag) => tag === 'global' ? '海外源' : tag === 'domestic' ? '国内镜像' : (TOOL_UPDATE_REGION_LABELS[tag] || tag));
   const regionLabels = Array.from(new Set(regions));
-  const summaryRows = item.id === 'codex-app'
+  const summaryRows = manualEntry
+    ? [
+      { label: '能力范围', value: item.kind === 'ide' ? '官方下载安装' : item.supportStage === 'extension' ? '扩展资产读取' : item.supportStage === 'catalog' ? '配置资产读取' : '状态检测' },
+      { label: '安装方式', value: item.kind === 'ide' ? '官网/市场' : item.supportStage === 'extension' ? '扩展市场' : '手动入口' },
+      { label: '配置支持', value: item.supportStage === 'extension' || item.supportStage === 'catalog' ? '读取/导入' : '不自动写入' },
+    ]
+    : item.id === 'codex-app'
     ? [
       { label: '当前版本', value: currentVersion || (item.installed ? '已安装' : '未安装') },
       { label: '安装源', value: sourceLabel },
@@ -1687,6 +2515,30 @@ function renderToolDetailPanel(item) {
       { label: '最新版本', value: latestVersion || (state.toolUpdatesLoading ? '检查中' : state.toolUpdatesError ? '可重试' : '暂无') },
       { label: '更新来源', value: sourceLabel },
     ];
+  const manualDetailText = item.kind === 'ide'
+    ? '此项打开官方下载页或插件市场；安装后的账号、密钥和 IDE 内部设置仍由对应工具自己管理。'
+    : item.supportStage === 'extension' || item.supportStage === 'catalog'
+      ? '此项用于识别扩展/IDE 相关资产并提供导入入口；账号密钥仍走对应工具自己的安全存储。'
+      : '此项当前不提供自动安装按钮；页面只展示检测状态，账号、密钥和内部设置仍由对应工具自己管理。';
+  const detailSection = manualEntry
+    ? `
+      <div class="tool-detail-section">
+        <div class="tool-detail-section-head">
+          <h4>${escapeHtml(item.kind === 'ide' ? '安装入口' : '管理方式')}</h4>
+          <span>手动</span>
+        </div>
+        <div class="tool-detail-empty">${escapeHtml(manualDetailText)}</div>
+      </div>
+    `
+    : `
+      <div class="tool-detail-section">
+        <div class="tool-detail-section-head">
+          <h4>版本历史</h4>
+          <span>${escapeHtml(info?.packageName || item.tool?.npmPackage || '')}</span>
+        </div>
+        ${renderToolVersionHistory(item, info)}
+      </div>
+    `;
   return `
     <div class="tool-detail-page">
       <div class="tool-detail-head">
@@ -1704,11 +2556,8 @@ function renderToolDetailPanel(item) {
       </div>
       ${renderToolOperationProgress(item, { detail: true })}
       ${renderToolDetailActionButtons(item)}
-      <div class="tool-detail-section">
-        <h4>版本历史</h4>
-        ${renderToolVersionHistory(item, info)}
-      </div>
-      ${info?.error ? `<div class="tool-detail-empty is-error">版本源暂不可用</div>` : ''}
+      ${detailSection}
+      ${!manualEntry && info?.error ? `<div class="tool-detail-empty is-error">版本源暂不可用</div>` : ''}
     </div>
   `;
 }
@@ -1893,23 +2742,18 @@ function renderToolsPage() {
     node.classList.toggle('active', node.dataset.toolsTag === getToolsCatalogTag());
   });
 
-  const pageSize = Math.max(1, Number(state.toolsCatalogPageSize || 9));
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
-  state.toolsCatalogPage = Math.min(Math.max(1, Number(state.toolsCatalogPage || 1)), totalPages);
-  const start = (state.toolsCatalogPage - 1) * pageSize;
-  const pageItems = items.slice(start, start + pageSize);
-
-  grid.innerHTML = pageItems.map((item) => renderToolCatalogCard(item, actionSvgs)).join('');
+  state.toolsCatalogPage = 1;
+  grid.innerHTML = items.map((item) => renderToolCatalogCard(item, actionSvgs)).join('');
   renderToolsDetailPanel(allItems);
   el('toolsCatalogEmpty')?.classList.toggle('hide', items.length > 0);
   const pagination = el('toolsCatalogPagination');
   const prevBtn = el('toolsCatalogPrevBtn');
   const nextBtn = el('toolsCatalogNextBtn');
   const pageMeta = el('toolsCatalogPageMeta');
-  if (pagination) pagination.classList.toggle('hide', items.length <= pageSize);
-  if (prevBtn) prevBtn.disabled = state.toolsCatalogPage <= 1;
-  if (nextBtn) nextBtn.disabled = state.toolsCatalogPage >= totalPages;
-  if (pageMeta) pageMeta.textContent = `第 ${state.toolsCatalogPage} / ${totalPages} 页 · 共 ${items.length} 项`;
+  if (pagination) pagination.classList.add('hide');
+  if (prevBtn) prevBtn.disabled = true;
+  if (nextBtn) nextBtn.disabled = true;
+  if (pageMeta) pageMeta.textContent = `共 ${items.length} 项`;
 
   if (pagination && !pagination._bound) {
     pagination._bound = true;
@@ -2057,10 +2901,10 @@ function getToolVersionActionConfig({ toolId, action, btn, toolName, apiPrefix }
 
 // Generic tool action handler
 async function handleToolAction(toolId, action, btn) {
-  const toolNames = { codex: 'Codex', claudecode: 'Claude Code', opencode: 'OpenCode', 'codex-app': 'Codex App', 'opencode-desktop': 'OpenCode Desktop', openclaw: 'OpenClaw' };
+  const toolNames = { codex: 'Codex', claudecode: 'Claude Code', gemini: 'Gemini CLI', 'qwen-code': 'Qwen Code CLI', 'codebuddy-code': 'CodeBuddy Code CLI', opencode: 'OpenCode', 'codex-app': 'Codex App', 'opencode-desktop': 'OpenCode Desktop', openclaw: 'OpenClaw' };
   const toolName = toolNames[toolId] || toolId;
 
-  const apiPrefixMap = { codex: 'codex', claudecode: 'claudecode', opencode: 'opencode', openclaw: 'openclaw' };
+  const apiPrefixMap = { codex: 'codex', claudecode: 'claudecode', gemini: 'gemini', 'qwen-code': 'qwen-code', 'codebuddy-code': 'codebuddy-code', opencode: 'opencode', openclaw: 'openclaw' };
   const apiPrefix = apiPrefixMap[toolId] || toolId;
 
   const versionConfig = getToolVersionActionConfig({ toolId, action, btn, toolName, apiPrefix });
@@ -3482,8 +4326,12 @@ function toolIconSvg(toolId) {
     codex: '/tool-icons/openai.png',
     'codex-app': '/tool-icons/openai.png',
     claudecode: '/tool-icons/claude-code.png',
+    'claude-desktop': '/tool-icons/claude-code.png',
+    claudedesktop: '/tool-icons/claude-code.png',
+    gemini: '/icon.png',
     openclaw: '/tool-icons/openclaw.png',
     opencode: '/tool-icons/opencode.png',
+    hermes: '/icon.png',
     'opencode-desktop': '/tool-icons/opencode.png',
     'opencode-vscode': '/tool-icons/opencode.png',
     'opencode-cursor': '/tool-icons/opencode.png',
@@ -3492,29 +4340,46 @@ function toolIconSvg(toolId) {
     'opencode-zed': '/tool-icons/opencode.png',
     'opencode-github': '/tool-icons/opencode.png',
     'opencode-gitlab': '/tool-icons/opencode.png',
+    ...TOOL_CATALOG_BRAND_ICON_PATHS,
   };
-  const src = images[toolId] || images.codex;
-  return `<img class="tool-official-icon" src="${src}" alt="" loading="lazy" decoding="async">`;
+  const initials = {
+    gemini: 'G',
+    hermes: 'H',
+    'qwen-code': 'Q',
+    'codebuddy-code': 'CB',
+    qoder: 'Q',
+    zcode: 'Z',
+    lingma: 'LM',
+    'codebuddy-home': 'CB',
+    'cursor-ide': 'C',
+    'windsurf-ide': 'W',
+    'zed-ide': 'Z',
+    'vscode-ide': 'VS',
+    'trae-ide': 'T',
+  };
+  const src = images[toolId];
+  if (src) return `<img class="tool-official-icon" src="${src}" alt="" loading="lazy" decoding="async">`;
+  return `<span class="tool-icon-initials">${escapeHtml(initials[toolId] || String(toolId || '?').slice(0, 2).toUpperCase())}</span>`;
 }
 
 function updateToolSelector() {
   document.querySelectorAll('.tool-tab').forEach(tab => {
-    const tid = tab.dataset.tool;
+    const tid = normalizeToolCatalogId(tab.dataset.tool);
     const temporarilyDisabled = getTemporarilyDisabledToolMeta(tid);
     // Always toggle active class based on activeTool
     tab.classList.toggle('active', tid === state.activeTool);
     // Update disabled state from tools data if available
-    const tool = state.tools.find(t => t.id === tid);
+    const tool = state.tools.find(t => normalizeToolCatalogId(t.id) === tid);
     if (tool) {
       tab.disabled = !tool.supported && !temporarilyDisabled;
     }
     tab.title = temporarilyDisabled?.message || '';
   });
   document.querySelectorAll('.sec-item[data-sec-tool]').forEach(item => {
-    const tid = item.dataset.secTool;
+    const tid = normalizeToolCatalogId(item.dataset.secTool);
     const temporarilyDisabled = getTemporarilyDisabledToolMeta(tid);
     item.classList.toggle('active', tid === state.activeTool);
-    const tool = state.tools.find(t => t.id === tid);
+    const tool = state.tools.find(t => normalizeToolCatalogId(t.id) === tid);
     if (tool) item.disabled = !tool.supported && !temporarilyDisabled;
     item.title = temporarilyDisabled?.message || '';
   });
@@ -3575,11 +4440,12 @@ function _restoreToolForm(toolId) {
 }
 
 function setActiveTool(toolId) {
+  toolId = normalizeToolCatalogId(toolId);
   if (isTemporarilyDisabledTool(toolId)) {
     flashTemporarilyDisabledTool(toolId);
     return false;
   }
-  const tool = state.tools.find(t => t.id === toolId);
+  const tool = state.tools.find(t => normalizeToolCatalogId(t.id) === toolId);
   if (tool && !tool.supported) return false;
   if (toolId === state.activeTool) return true;
 
@@ -3592,7 +4458,7 @@ function setActiveTool(toolId) {
   if (rememberedPage !== state.activePage) {
     setPage(rememberedPage);
   }
-  const toolDisplayName = tool?.name || { codex: 'Codex', claudecode: 'Claude Code', openclaw: 'OpenClaw' }[toolId] || toolId;
+  const toolDisplayName = getToolDisplayName(toolId);
   const launchBtn = el('launchBtn');
   if (launchBtn) launchBtn.textContent = `启动 ${toolDisplayName}`;
   const claudeOauthLoginBtn = el('claudeOauthLoginBtn');
@@ -3628,8 +4494,8 @@ function setActiveTool(toolId) {
   if (ocDashRow) ocDashRow.classList.add('hide');
   if (syncActions) syncActions.style.display = 'none';
 
-  if (toolId === 'claudecode') {
-    if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.remove('hide');
+  if (toolId === 'claudecode' || toolId === 'claude-desktop') {
+    if (claudeOauthLoginBtn) claudeOauthLoginBtn.classList.toggle('hide', toolId !== 'claudecode');
     if (baseUrlField) baseUrlField.style.display = '';
     if (claudeProviderKeyField) claudeProviderKeyField.classList.remove('hide');
     if (modelField) modelField.style.display = '';
@@ -3644,12 +4510,20 @@ function setActiveTool(toolId) {
     }
     syncApiKeyToggle();
     if (detectField) detectField.style.display = 'none';
-    if (sectionTitle) sectionTitle.textContent = 'Claude Code 设置';
+    if (sectionTitle) sectionTitle.textContent = toolId === 'claude-desktop' ? 'Claude Desktop 快速配置' : 'Claude Code 设置';
     if (modelLabel) modelLabel.textContent = '默认模型';
-    if (detectionMeta) detectionMeta.textContent = '支持 OAuth 与 API Key；已完成 OAuth 时 API Key 可以留空。';
+    if (detectionMeta) {
+      detectionMeta.textContent = toolId === 'claude-desktop'
+        ? 'Claude Desktop 已接入 Router profile、MCP/资产管理与桌面打开；改动后重启 Claude Desktop 生效。'
+        : '支持 OAuth 与 API Key；已完成 OAuth 时 API Key 可以留空。';
+    }
     if (modelSelect) modelSelect.innerHTML = '<option value="">加载中...</option>';
-    applyClaudeCodeQuickInstallState(state.claudeCodeState || {});
-    loadClaudeCodeQuickState();
+    if (toolId === 'claudecode') {
+      applyClaudeCodeQuickInstallState(state.claudeCodeState || {});
+      loadClaudeCodeQuickState();
+    } else if (modelSelect) {
+      renderClaudeModelSelect('modelSelect', { selected: '' });
+    }
     renderCurrentConfig();
     return true;
   }
@@ -3686,22 +4560,42 @@ function setActiveTool(toolId) {
     if (baseUrlField) baseUrlField.style.display = '';
     if (detectField) detectField.style.display = '';
     if (modelField) modelField.style.display = '';
-    if (sectionTitle) sectionTitle.textContent = '连接配置';
-    if (detectionMeta) detectionMeta.textContent = '只需要 URL 和 API Key；缺少 http/https 会自动补全。';
+    if (sectionTitle) {
+      sectionTitle.textContent = toolId === 'gemini'
+        ? 'Gemini CLI 快速配置'
+        : toolId === 'hermes'
+          ? 'Hermes Agent 快速配置'
+          : '连接配置';
+    }
+    if (detectionMeta) {
+      detectionMeta.textContent = toolId === 'gemini'
+        ? 'Gemini CLI 已接入 Router safe profile、Provider 预设、状态读回与 CLI 启动。'
+        : toolId === 'hermes'
+          ? 'Hermes Agent 会写入 config.yaml + .env，并保留 EasyAIConfig Router profile。'
+          : '只需要 URL 和 API Key；缺少 http/https 会自动补全。';
+    }
     if (baseUrlInput) baseUrlInput.placeholder = 'https://your-provider.com/v1';
     if (apiKeyInput) {
       apiKeyInput.type = 'password';
       apiKeyInput.placeholder = state.apiKeyField?.maskedValue || 'sk-...';
     }
     syncApiKeyToggle();
-    applyCodexQuickInstallState();
+    if (toolId === 'codex') applyCodexQuickInstallState();
+    if (toolId === 'gemini') loadGeminiQuickState();
+    if (toolId === 'hermes') loadHermesQuickState();
 
-    if (!_restoreToolForm('codex')) {
+    if (!_restoreToolForm(toolId)) {
       if (baseUrlInput && state.current?.config?.base_url) baseUrlInput.value = state.current.config.base_url;
       if (apiKeyInput) apiKeyInput.value = '';
-      if (modelSelect) renderDefaultCodexModels(modelSelect, state.current?.summary?.model || '');
+      if (modelSelect) {
+        if (toolId === 'gemini') {
+          renderGeminiModelOptions(modelSelect, state.geminiState?.model || '');
+        } else {
+          renderDefaultCodexModels(modelSelect, toolId === 'codex' ? (state.current?.summary?.model || '') : '');
+        }
+      }
     }
-    syncCodexAuthView();
+    if (toolId === 'codex') syncCodexAuthView();
     renderCurrentConfig();
     return true;
   }
@@ -4917,6 +5811,14 @@ function isOpenClawInstalled(data = state.openclawState || {}) {
   return Boolean(data.binary?.installed || state.tools.find((tool) => tool.id === 'openclaw')?.binary?.installed);
 }
 
+function isGeminiInstalled() {
+  return Boolean(state.geminiState?.binary?.installed || state.tools.find((tool) => tool.id === 'gemini')?.binary?.installed);
+}
+
+function isHermesInstalled(data = state.hermesState || {}) {
+  return Boolean(data.binary?.installed || state.tools.find((tool) => tool.id === 'hermes')?.binary?.installed);
+}
+
 
 function applyQuickInstallState({
   toolId,
@@ -5095,6 +5997,107 @@ async function loadOpenCodeQuickState() {
     }
     renderOpenCodeModelOptions('modelSelect', { data, currentModel: data.model || '' });
     applyOpenCodeQuickInstallState(data);
+    renderCurrentConfig();
+    renderToolConsole();
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: error?.message || '读取失败' };
+  }
+}
+
+function renderGeminiModelOptions(modelSelect, currentModel = '') {
+  if (!modelSelect) return;
+  const current = String(currentModel || '').trim();
+  const models = [
+    'gemini-3-pro',
+    'gemini-3-pro-thinking',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+  ];
+  let html = models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('');
+  if (current && !models.includes(current)) {
+    html += `<option value="${escapeHtml(current)}">${escapeHtml(current)} (当前)</option>`;
+  }
+  modelSelect.innerHTML = html;
+  if (current) modelSelect.value = current;
+}
+
+async function loadGeminiQuickState() {
+  try {
+    const json = await api('/api/gemini/state');
+    if (!json.ok || !json.data) return { ok: false, error: json.error || '读取失败' };
+    const data = json.data;
+    state.geminiState = data;
+    if (state.activeTool !== 'gemini') {
+      renderToolConsole();
+      return { ok: true, data };
+    }
+    const baseUrlInput = el('baseUrlInput');
+    const apiKeyInput = el('apiKeyInput');
+    const modelSelect = el('modelSelect');
+    const cache = _getToolFormCache('gemini', true);
+    if (baseUrlInput && !_shouldPreserveToolField('gemini', 'baseUrl')) {
+      const nextBaseUrl = data.baseUrl || data.safeProfile?.baseUrl || '';
+      baseUrlInput.value = nextBaseUrl;
+      cache.baseUrl = nextBaseUrl;
+    }
+    if (apiKeyInput) {
+      apiKeyInput.type = 'password';
+      apiKeyInput.placeholder = data.safeProfile?.maskedApiKey || 'API Key（留空表示使用 Router 默认 Key）';
+      if (!_shouldPreserveToolField('gemini', 'apiKey')) {
+        apiKeyInput.value = '';
+        cache.apiKey = '';
+      }
+    }
+    if (modelSelect && !_shouldPreserveToolField('gemini', 'modelValue')) {
+      renderGeminiModelOptions(modelSelect, data.model || '');
+      cache.modelHtml = modelSelect.innerHTML;
+      cache.modelValue = modelSelect.value || data.model || '';
+    }
+    renderCurrentConfig();
+    renderToolConsole();
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: error?.message || '读取失败' };
+  }
+}
+
+async function loadHermesQuickState() {
+  try {
+    const json = await api('/api/hermes/state');
+    if (!json.ok || !json.data) return { ok: false, error: json.error || '读取失败' };
+    const data = json.data;
+    state.hermesState = data;
+    if (state.activeTool !== 'hermes') {
+      renderToolConsole();
+      return { ok: true, data };
+    }
+    const baseUrlInput = el('baseUrlInput');
+    const apiKeyInput = el('apiKeyInput');
+    const modelSelect = el('modelSelect');
+    const cache = _getToolFormCache('hermes', true);
+    if (baseUrlInput && !_shouldPreserveToolField('hermes', 'baseUrl')) {
+      const nextBaseUrl = data.baseUrl || data.nativeProvider?.baseUrl || '';
+      baseUrlInput.value = nextBaseUrl;
+      cache.baseUrl = nextBaseUrl;
+    }
+    if (apiKeyInput) {
+      apiKeyInput.type = 'password';
+      apiKeyInput.placeholder = data.nativeProvider?.maskedApiKey || 'API Key（留空表示使用 Router 默认 Key）';
+      if (!_shouldPreserveToolField('hermes', 'apiKey')) {
+        apiKeyInput.value = '';
+        cache.apiKey = '';
+      }
+    }
+    if (modelSelect && !_shouldPreserveToolField('hermes', 'modelValue')) {
+      renderDefaultCodexModels(modelSelect, data.model || '');
+      if (data.model && ![...modelSelect.options].some((option) => option.value === data.model)) {
+        modelSelect.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(data.model)}">${escapeHtml(data.model)} (当前)</option>`);
+        modelSelect.value = data.model;
+      }
+      cache.modelHtml = modelSelect.innerHTML;
+      cache.modelValue = modelSelect.value || data.model || '';
+    }
     renderCurrentConfig();
     renderToolConsole();
     return { ok: true, data };
@@ -5449,11 +6452,64 @@ async function launchOpenCodeOnly() {
   return true;
 }
 
+async function launchHermesOnly() {
+  if (!isHermesInstalled(state.hermesState || {})) {
+    await loadTools().catch(() => {});
+    await loadHermesQuickState().catch(() => {});
+    flash('Hermes Agent 尚未安装，请先按官方方式安装并确保 hermes 命令在 PATH 中', 'error');
+    return false;
+  }
+  setBusy('launchBtn', true, '启动中...');
+  const launched = await api('/api/hermes/launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cwd: el('launchCwdInput')?.value?.trim() || '' }),
+  });
+  setBusy('launchBtn', false);
+  if (!launched.ok) return flash(launched.error || '启动失败', 'error');
+  flash('Hermes Agent 已启动', 'success');
+  return true;
+}
+
+async function launchClaudeDesktopOnly() {
+  setBusy('launchBtn', true, '打开中...');
+  const launched = await api('/api/claude-desktop/launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cwd: el('launchCwdInput')?.value?.trim() || '' }),
+  });
+  setBusy('launchBtn', false);
+  if (!launched.ok) return flash(launched.error || '打开 Claude Desktop 失败', 'error');
+  flash(launched.data?.message || 'Claude Desktop 已打开', 'success');
+  return true;
+}
+
+async function launchGeminiOnly() {
+  if (!isGeminiInstalled()) {
+    await loadTools().catch(() => {});
+    flash('Gemini CLI 尚未安装，请先安装 @google/gemini-cli 并确保 gemini 命令在 PATH 中', 'error');
+    return false;
+  }
+  setBusy('launchBtn', true, '启动中...');
+  const launched = await api('/api/gemini/launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cwd: el('launchCwdInput')?.value?.trim() || '' }),
+  });
+  setBusy('launchBtn', false);
+  if (!launched.ok) return flash(launched.error || '启动失败', 'error');
+  flash('Gemini CLI 已启动', 'success');
+  return true;
+}
+
 async function launchActiveTool(terminalProfile = '') {
   const tool = state.activeTool || 'codex';
   if (tool === 'opencode') return launchOpenCodeOnly();
   if (tool === 'claudecode') return launchClaudeCodeOnly();
   if (tool === 'openclaw') return launchOpenClawOnly();
+  if (tool === 'gemini') return launchGeminiOnly();
+  if (tool === 'hermes') return launchHermesOnly();
+  if (tool === 'claude-desktop') return launchClaudeDesktopOnly();
   return launchCodex('launchBtn', 'Codex 已启动', terminalProfile || 'auto');
 }
 
@@ -7630,6 +8686,7 @@ const PAGE_META = {
   console: { eyebrow: 'Console', title: '运行控制台', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的运行状态、异常检测与快速修复入口。' },
   terminal: { eyebrow: 'Terminal', title: '内置终端', subtitle: '一站启动 codex / claude code，多会话 tab、token 实时监控与命令面板。' },
   dashboard: { eyebrow: 'Dashboard', title: '数据看板', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的状态、用量与趋势。' },
+  assets: { eyebrow: 'Assets', title: '资产中心', subtitle: '按工具查看 Providers、MCP、Prompts、Skills、Sessions、Usage 与同步目标。' },
   providerRouter: { eyebrow: 'Router', title: '自动路由网关', subtitle: '启动本地 OpenAI-compatible 网关，按 provider 池做请求级路由。' },
   tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新或卸载 AI 编程工具。' },
   tasks: { eyebrow: 'Tasks', title: '任务管理', subtitle: '查看当前进行中和历史安装任务。' },
@@ -8495,6 +9552,7 @@ function renderDashboardPage() {
   const root = el('dashboardPage');
   if (!root) return;
 
+  const routerProfileDashboardTools = new Set(['claude-desktop', 'gemini', 'hermes']);
   const codex = state.current || {};
   const claude = state.claudeCodeState || {};
   const openclaw = state.openclawState || {};
@@ -8509,12 +9567,15 @@ function renderDashboardPage() {
   const dashboardTool = state.dashboardTool || 'codex';
   const hasCodexMetrics = Boolean(getDashboardMetricsForTool('codex', win));
   const hasOpenCodeMetrics = Boolean(getDashboardMetricsForTool('opencode', win));
+  const isRouterProfileDashboard = routerProfileDashboardTools.has(dashboardTool);
   const hasCurrentMetrics = dashboardTool === 'codex'
     ? hasCodexMetrics
     : dashboardTool === 'opencode'
       ? hasOpenCodeMetrics
       : dashboardTool === 'claudecode'
         ? hasClaudeDashboardData()
+        : isRouterProfileDashboard
+          ? true
         : true;
   const apiDashboardRefreshing = isApiDashboardTool(dashboardTool) ? isDashboardMetricsRefreshingForTool(dashboardTool, win) : false;
   const dashboardRefreshing = dashboardTool === 'claudecode' ? Boolean(state.dashboardRefreshing) : apiDashboardRefreshing;
@@ -8534,19 +9595,26 @@ function renderDashboardPage() {
     ? (isLoading ? '正在统计本地 Claude Code token…' : (claudeLastUpdated || '统计已完成'))
     : dashboardTool === 'opencode'
       ? (isLoading ? '正在统计本地 OpenCode token…' : (opencodeLastUpdated || '统计已完成'))
+      : isRouterProfileDashboard
+        ? 'Router profile 与资产接入状态'
       : (isLoading ? '正在统计本地 Codex token…' : (lastUpdated || '统计已完成'));
 
   const tabs = [
     { key: 'codex', label: 'Codex', dot: '#4ade80', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M9 9l3 3-3 3M15 15h3"/></svg>' },
     { key: 'claudecode', label: 'Claude Code', dot: '#4ade80', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 3"/></svg>' },
+    { key: 'claude-desktop', label: 'Claude Desktop', dot: '#a78bfa', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>' },
+    { key: 'gemini', label: 'Gemini CLI', dot: '#22c55e', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l1.6 6.4L20 10l-6.4 1.6L12 18l-1.6-6.4L4 10l6.4-1.6z"/><path d="M19 15l.8 3.2L23 19l-3.2.8L19 23l-.8-3.2L15 19l3.2-.8z"/></svg>' },
     { key: 'opencode', label: 'OpenCode', dot: '#60a5fa', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M12 3v18M4 7l8 4 8-4"/></svg>' },
     { key: 'openclaw', label: 'OpenClaw', dot: '#fbbf24', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg>' },
+    { key: 'hermes', label: 'Hermes Agent', dot: '#f97316', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>' },
   ];
   const toolLabel = (tabs.find((t) => t.key === dashboardTool) || tabs[0]).label;
   if (el('pageTitle')) el('pageTitle').textContent = appText('数据看板');
   if (el('pageSubtitle')) {
     el('pageSubtitle').textContent = dashboardTool === 'openclaw'
       ? (isEnglishAppLanguage() ? `${toolLabel} · Gateway, channels, and provider status` : `${toolLabel} · Gateway、渠道与 Provider 状态`)
+      : isRouterProfileDashboard
+        ? `${toolLabel} · Router Profile、客户端接入与资产联动`
       : `${toolLabel} · ${appText(dashboardStatusText)} · ${isEnglishAppLanguage() ? winRecentLabel : (win.custom ? winLabel : '最近 ' + winLabel)}`;
   }
 
@@ -8998,6 +10066,57 @@ function renderDashboardPage() {
       </div>
     </div>`;
 
+  const routerProfileHtml = (() => {
+    const endpoint = getProviderRouterEndpoint(dashboardTool);
+    const protocol = isProviderRouterAnthropicTool(dashboardTool) ? 'Anthropic' : 'OpenAI-compatible';
+    const nativeFile = getConfigEditorShellMeta(dashboardTool).files;
+    const writeMode = dashboardTool === 'hermes' ? 'config.yaml + .env + easyaiconfig.router' : 'easyaiconfig.router';
+    const nativeProviderStatus = dashboardTool === 'hermes' ? '已接入 Hermes custom provider' : '安全 profile，等待官方原生字段确认';
+    return `
+    <div class="db2-layout">
+      ${statStrip([
+        { label: '接入模式', value: 'Router Profile', sub: protocol, accent: true },
+        { label: 'Base URL', value: endpoint, sub: '本地网关客户端入口' },
+        { label: 'API Key', value: PROVIDER_ROUTER_CLIENT_KEY, sub: '本机固定 key' },
+        { label: '配置文件', value: nativeFile, sub: dashboardTool === 'hermes' ? '原生 Provider 写入' : '命名空间写入' },
+      ])}
+      <div class="db2-main-grid">
+        <div class="db2-col">
+          <div class="db2-section">
+            <div class="db2-card-head">
+              <div class="db2-card-title">${escapeHtml(appText('Router 客户端'))}</div>
+              <div class="db2-card-meta">${escapeHtml(protocol)}</div>
+            </div>
+            ${kvList([
+              { label: '客户端', value: toolLabel },
+              { label: 'Base URL', value: endpoint },
+              { label: 'API Key', value: PROVIDER_ROUTER_CLIENT_KEY },
+              { label: '写入方式', value: writeMode },
+            ])}
+            <div class="editor-actions-inline">
+              <button type="button" class="primary" data-cfg-router-apply="${escapeHtml(dashboardTool)}">写入 Router 配置</button>
+              <button type="button" class="secondary" data-cfg-router-open="${escapeHtml(dashboardTool)}">打开 Router 面板</button>
+            </div>
+          </div>
+        </div>
+        <div class="db2-col">
+          <div class="db2-section">
+            <div class="db2-card-head">
+              <div class="db2-card-title">${escapeHtml(appText('覆盖边界'))}</div>
+              <div class="db2-card-meta">${escapeHtml(nativeFile)}</div>
+            </div>
+            ${kvList([
+              { label: '现有配置', value: '保留' },
+              { label: 'MCP / 原生字段', value: '不覆盖未知字段' },
+              { label: '资产联动', value: 'Prompts / Sessions / Skills 层继续展开' },
+              { label: '原生 provider 写入', value: nativeProviderStatus },
+            ])}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  })();
+
   const content = dashboardTool === 'codex'
     ? codexHtml
     : dashboardTool === 'claudecode'
@@ -9006,6 +10125,8 @@ function renderDashboardPage() {
         ? opencodeHtml
       : dashboardTool === 'openclaw'
         ? openclawHtml
+      : isRouterProfileDashboard
+        ? routerProfileHtml
         : codexHtml;
 
   // Sync the left-rail active state with the current dashboardTool.
@@ -14039,10 +15160,2202 @@ function updateLines(items = []) {
   return items.filter(Boolean).map((item) => `<div class="update-line">${escapeHtml(item)}</div>`).join('');
 }
 
+function assetFmt(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return '-';
+  if (typeof formatDashboardMetric === 'function') return formatDashboardMetric(n);
+  return Math.round(n).toLocaleString('en-US');
+}
+
+function assetDate(value) {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+const ASSET_CENTER_TOOL_DEFS = [
+  {
+    id: 'codex',
+    label: 'Codex',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: 'Providers / MCP / Prompts / Skills / Sessions',
+    boundary: '可读取并写入配置，适合做主资产仓库。',
+    configTool: 'codex',
+    importable: true,
+    installItemId: 'codex',
+    primaryTab: 'mcp',
+  },
+  {
+    id: 'claudecode',
+    label: 'Claude Code',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: 'Providers / MCP / Prompts / Sessions',
+    boundary: '可读取命令行配置；API Key 仍按工具安全边界处理。',
+    configTool: 'claudecode',
+    importable: true,
+    installItemId: 'claudecode',
+    primaryTab: 'mcp',
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini CLI',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: 'MCP / Prompts / Sessions / Usage',
+    boundary: '支持本地 settings、历史会话和用量读取。',
+    configTool: 'gemini',
+    importable: true,
+    installItemId: 'gemini',
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'opencode',
+    label: 'OpenCode',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: 'Providers / MCP / Sessions',
+    boundary: '可读写本地配置，并能继续接 IDE/桌面生态。',
+    configTool: 'opencode',
+    importable: true,
+    installItemId: 'opencode',
+    primaryTab: 'mcp',
+  },
+  {
+    id: 'qwen-code',
+    label: 'Qwen Code CLI',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: '安装 / 更新 / 历史版本 / MCP / Prompts',
+    support: 'CLI 安装',
+    boundary: '支持 npm 安装、版本历史、MCP 和 Prompt 接入包；配置编辑器暂不直接写。',
+    importable: true,
+    importTarget: 'qwen-code',
+    installItemId: 'qwen-code',
+    primaryTab: 'import',
+  },
+  {
+    id: 'codebuddy-code',
+    label: 'CodeBuddy Code CLI',
+    lane: 'CLI',
+    group: 'cli',
+    anchor: '安装 / 更新 / 历史版本 / MCP / Skills',
+    support: 'CLI 安装',
+    boundary: '支持 npm 安装、版本历史、MCP、Prompt 和 Skill 接入包；桌面版走官方入口。',
+    importable: true,
+    importTarget: 'codebuddy-code',
+    installItemId: 'codebuddy-code',
+    manualUrl: CODEBUDDY_HOME_URL,
+    primaryTab: 'import',
+  },
+  {
+    id: 'claude-desktop',
+    label: 'Claude Desktop',
+    lane: 'Desktop',
+    group: 'desktop',
+    anchor: 'MCP / Desktop config',
+    boundary: '重点管理桌面端 MCP 配置，其他账号状态不接管。',
+    configTool: 'claude-desktop',
+    importable: true,
+    installItemId: 'claude-desktop',
+    primaryTab: 'mcp',
+  },
+  {
+    id: 'continue',
+    label: 'Continue',
+    lane: 'IDE',
+    group: 'desktop',
+    anchor: 'config.yaml / Router 接入包',
+    support: '目录接入',
+    boundary: '先做目录检测和接入包导入，不伪装成可直接改密钥。',
+    importable: true,
+    importTarget: 'all',
+    primaryTab: 'import',
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    lane: 'Editor',
+    group: 'desktop',
+    anchor: '编辑器设置只读检测',
+    support: '只读检测',
+    boundary: '只读读取本机痕迹和入口，配置建议在官方编辑器里完成。',
+    installItemId: 'cursor-ide',
+    manualUrl: CURSOR_DOWNLOAD_URL,
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'windsurf',
+    label: 'Windsurf',
+    lane: 'Editor',
+    group: 'desktop',
+    anchor: '编辑器设置只读检测',
+    support: '只读检测',
+    boundary: '只读检测和官方下载安装，不自动写编辑器私有配置。',
+    installItemId: 'windsurf-ide',
+    manualUrl: WINDSURF_DOWNLOAD_URL,
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'zed',
+    label: 'Zed',
+    lane: 'Editor',
+    group: 'desktop',
+    anchor: '官方下载 / OpenCode 扩展宿主',
+    support: '官方入口',
+    boundary: '作为编辑器和扩展宿主展示入口；资产读取按已接入扩展能力汇总。',
+    installItemId: 'zed-ide',
+    manualUrl: ZED_DOWNLOAD_URL,
+    primaryTab: 'import',
+  },
+  {
+    id: 'vscode',
+    label: 'VS Code',
+    lane: 'Editor',
+    group: 'desktop',
+    anchor: '扩展宿主 / 官方下载',
+    support: '官方入口',
+    boundary: '作为 Cline、Roo、OpenCode 等扩展宿主，不直接接管用户设置。',
+    installItemId: 'vscode-ide',
+    manualUrl: VSCODE_DOWNLOAD_URL,
+    primaryTab: 'import',
+  },
+  {
+    id: 'trae',
+    label: 'Trae',
+    lane: 'IDE',
+    group: 'desktop',
+    anchor: '官方下载 / 只读检测',
+    support: '官方入口',
+    boundary: '保留官方安装入口和只读检测位，不伪造配置写入。',
+    installItemId: 'trae-ide',
+    manualUrl: TRAE_HOME_URL,
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'qoder',
+    label: 'Qoder',
+    lane: 'IDE',
+    group: 'desktop',
+    anchor: '官方下载 / JetBrains / CLI',
+    support: '官方入口',
+    boundary: '官方桌面端、JetBrains 插件和 CLI 入口；本页只做安装与资产读取聚合。',
+    installItemId: 'qoder',
+    manualUrl: QODER_DOWNLOAD_URL,
+    primaryTab: 'import',
+  },
+  {
+    id: 'zcode',
+    label: 'ZCode',
+    lane: 'IDE',
+    group: 'desktop',
+    anchor: 'Z.ai 官方入口',
+    support: '官方入口',
+    boundary: '官方入口优先，暂不伪装成本地可写配置。',
+    installItemId: 'zcode',
+    manualUrl: ZCODE_HOME_URL,
+    primaryTab: 'import',
+  },
+  {
+    id: 'lingma',
+    label: '通义灵码 / Qoder CN',
+    lane: 'IDE',
+    group: 'desktop',
+    anchor: '插件市场 / 国内入口',
+    support: '官方入口',
+    boundary: '官方插件和 Qoder CN 入口；只读检测后再做迁移建议。',
+    installItemId: 'lingma',
+    manualUrl: LINGMA_HOME_URL,
+    primaryTab: 'import',
+  },
+  {
+    id: 'openclaw',
+    label: 'OpenClaw',
+    lane: 'Gateway',
+    group: 'gateway',
+    anchor: 'Gateway / Provider profile',
+    boundary: '网关和 provider profile 可编辑，适合做本地路由中枢。',
+    configTool: 'openclaw',
+    importable: true,
+    installItemId: 'openclaw',
+    primaryTab: 'mcp',
+  },
+  {
+    id: 'hermes',
+    label: 'Hermes Agent',
+    lane: 'Agent',
+    group: 'gateway',
+    anchor: 'Workspace / Sessions',
+    boundary: 'Agent 工作区、会话和 provider 路由可读写。',
+    configTool: 'hermes',
+    importable: true,
+    installItemId: 'hermes',
+    primaryTab: 'sessions',
+  },
+  {
+    id: 'cline',
+    label: 'Cline',
+    lane: 'VS Code',
+    group: 'extensions',
+    anchor: '检测 / 导入 / Router 接入包',
+    support: '扩展接入',
+    boundary: '读取扩展状态与会话，写配置只给接入包，不接管扩展安全存储。',
+    importable: true,
+    importTarget: 'all',
+    installItemId: 'cline',
+    primaryTab: 'import',
+  },
+  {
+    id: 'roo-code',
+    label: 'Roo Code',
+    lane: 'VS Code',
+    group: 'extensions',
+    anchor: '检测 / 导入 / Router 接入包',
+    support: '扩展接入',
+    boundary: '读取扩展资产和会话，账号密钥仍由扩展自身管理。',
+    importable: true,
+    importTarget: 'all',
+    installItemId: 'roo-code',
+    primaryTab: 'import',
+  },
+  {
+    id: 'kilo-code',
+    label: 'Kilo Code',
+    lane: 'VS Code',
+    group: 'extensions',
+    anchor: 'Cline/Roo 兼容路线',
+    support: '扩展接入',
+    boundary: '按 Cline/Roo 兼容路线做检测和接入包，不直接改私有状态。',
+    importable: true,
+    importTarget: 'all',
+    installItemId: 'kilo-code',
+    primaryTab: 'import',
+  },
+];
+
+const ASSET_CENTER_TOOL_GROUPS = [
+  { id: 'cli', label: 'CLI Workspaces', tools: ['codex', 'claudecode', 'gemini', 'opencode', 'qwen-code', 'codebuddy-code'] },
+  { id: 'desktop', label: 'Desktop / IDE', tools: ['claude-desktop', 'continue', 'cursor', 'windsurf', 'zed', 'vscode', 'trae', 'qoder', 'zcode', 'lingma'] },
+  { id: 'gateway', label: 'Gateway / Agents', tools: ['openclaw', 'hermes'] },
+  { id: 'extensions', label: 'VS Code Extensions', tools: ['cline', 'roo-code', 'kilo-code'] },
+];
+
+const ASSET_CENTER_TAB_IDS = ['mcp', 'skills', 'prompts', 'sessions', 'sync', 'import'];
+const ASSET_CONFIG_EDITOR_TOOL_IDS = ['codex', 'claudecode', 'claude-desktop', 'gemini', 'opencode', 'openclaw', 'hermes'];
+const ASSET_IMPORT_DIRECT_TOOL_IDS = ['qwen-code', 'codebuddy-code'];
+
+function assetNumber(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function assetToolAliases(tool) {
+  const normalized = normalizeToolCatalogId(tool);
+  const aliases = new Set([normalized]);
+  if (normalized === 'claude-desktop') {
+    aliases.add('claudedesktop');
+    aliases.add('claude-desktop');
+  }
+  if (normalized === 'claudecode') {
+    aliases.add('claude-code');
+    aliases.add('claude');
+  }
+  if (normalized === 'gemini') aliases.add('gemini-cli');
+  if (normalized === 'opencode') aliases.add('open-code');
+  if (normalized === 'openclaw') aliases.add('open-claw');
+  if (normalized === 'hermes') aliases.add('hermes-agent');
+  if (normalized === 'cline') aliases.add('cline-extension');
+  if (normalized === 'roo-code') {
+    aliases.add('roo');
+    aliases.add('roocode');
+  }
+  if (normalized === 'kilo-code') {
+    aliases.add('kilo');
+    aliases.add('kilocode');
+  }
+  if (normalized === 'continue') aliases.add('continue-dev');
+  if (normalized === 'cursor') aliases.add('cursor-editor');
+  if (normalized === 'windsurf') aliases.add('codeium-windsurf');
+  if (normalized === 'qwen-code') {
+    aliases.add('qwen');
+    aliases.add('qwen-cli');
+    aliases.add('qwen-code-cli');
+  }
+  if (normalized === 'codebuddy-code') {
+    aliases.add('codebuddy');
+    aliases.add('codebuddy-cli');
+    aliases.add('tencent-codebuddy');
+  }
+  if (normalized === 'qoder') aliases.add('qoder-ide');
+  if (normalized === 'zcode') {
+    aliases.add('z-code');
+    aliases.add('z-ai-code');
+  }
+  if (normalized === 'lingma') {
+    aliases.add('tongyi-lingma');
+    aliases.add('qoder-cn');
+  }
+  if (normalized === 'zed') {
+    aliases.add('zed-ide');
+    aliases.add('zed-editor');
+  }
+  if (normalized === 'trae') aliases.add('trae-ide');
+  if (normalized === 'vscode') {
+    aliases.add('vs-code');
+    aliases.add('visual-studio-code');
+    aliases.add('vscode-ide');
+  }
+  return [...aliases];
+}
+
+function assetMapCount(map = {}, tool = '') {
+  if (!map || typeof map !== 'object') return 0;
+  for (const alias of assetToolAliases(tool)) {
+    if (!(alias in map)) continue;
+    const value = map[alias];
+    if (value && typeof value === 'object') {
+      return assetNumber(value.count ?? value.total ?? value.sessions ?? value.requests ?? value.skills ?? value.servers);
+    }
+    return assetNumber(value);
+  }
+  return 0;
+}
+
+function assetCountByTool(items = [], tool = '', key = 'tool') {
+  if (!Array.isArray(items)) return 0;
+  const normalized = normalizeToolCatalogId(tool);
+  return items.filter((item) => normalizeToolCatalogId(item?.[key] || item?.tool || '') === normalized).length;
+}
+
+function assetUsageByTool(usage = {}, tool = '') {
+  const normalized = normalizeToolCatalogId(tool);
+  const fromSummary = (() => {
+    const value = assetToolAliases(normalized)
+      .map((alias) => usage.summary?.tools?.[alias])
+      .find((item) => item != null);
+    if (!value) return null;
+    if (typeof value === 'object') {
+      return {
+        tokens: assetNumber(value.total ?? value.totalTokens ?? value.tokens),
+        requests: assetNumber(value.requests),
+      };
+    }
+    return { tokens: assetNumber(value), requests: 0 };
+  })();
+  if (fromSummary && (fromSummary.tokens || fromSummary.requests)) return fromSummary;
+
+  const sources = Array.isArray(usage.sources) ? usage.sources : [];
+  const source = sources.find((item) => normalizeToolCatalogId(item.tool || '') === normalized);
+  if (source) {
+    return {
+      tokens: assetNumber(source.totals?.total ?? source.totalTokens),
+      requests: assetNumber(source.totals?.requests ?? source.requests),
+    };
+  }
+
+  const logs = Array.isArray(usage.requestLogs) ? usage.requestLogs : [];
+  const toolLogs = logs.filter((item) => normalizeToolCatalogId(item.tool || '') === normalized);
+  return {
+    tokens: toolLogs.reduce((sum, item) => sum + assetNumber(item.totalTokens ?? item.totals?.total), 0),
+    requests: toolLogs.length,
+  };
+}
+
+function renderAssetStat(label, value, sub = '') {
+  return `
+    <div class="asset-stat">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value ?? '-'))}</strong>
+      <small>${escapeHtml(sub || '')}</small>
+    </div>
+  `;
+}
+
+function renderAssetOverviewItem(label, value, sub = '') {
+  return `
+    <div class="asset-overview-item">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value ?? '-'))}</strong>
+      <em>${escapeHtml(sub || '')}</em>
+    </div>
+  `;
+}
+
+function assetSummaryCount(summary = {}, keys = []) {
+  const source = summary && typeof summary === 'object' ? summary : {};
+  for (const key of keys) {
+    const value = assetNumber(source[key]);
+    if (value) return value;
+  }
+  return 0;
+}
+
+function assetChip(label, value, tone = '') {
+  return `
+    <span class="${tone ? `is-${escapeHtml(tone)}` : ''}">
+      <strong>${escapeHtml(String(value ?? '-'))}</strong>
+      <em>${escapeHtml(label)}</em>
+    </span>
+  `;
+}
+
+function renderAssetCommandCard({ kicker, title, value, sub, chips = [], tone = 'neutral' }) {
+  return `
+    <div class="asset-command-card is-${escapeHtml(tone)}">
+      <div class="asset-command-card-head">
+        <span>${escapeHtml(kicker)}</span>
+        <strong>${escapeHtml(title)}</strong>
+        <em>${escapeHtml(sub || '')}</em>
+      </div>
+      <div class="asset-command-value">${escapeHtml(String(value ?? '-'))}</div>
+      <div class="asset-command-chips">${chips.join('')}</div>
+    </div>
+  `;
+}
+
+function renderAssetOperationsDeck({
+  providerCatalog = {},
+  mcp = {},
+  prompts = {},
+  skills = {},
+  sessions = {},
+  usage = {},
+  syncTargets = {},
+  syncSnapshots = {},
+  mcpPlan = {},
+  ac = {},
+} = {}) {
+  const providerCount = assetSummaryCount(providerCatalog.summary, ['count', 'providers', 'presets']);
+  const mcpCount = assetSummaryCount(mcp.summary, ['servers', 'count']) || (Array.isArray(mcp.servers) ? mcp.servers.length : 0);
+  const promptCount = assetSummaryCount(prompts.summary, ['files', 'existing', 'count']) || (Array.isArray(prompts.files) ? prompts.files.length : 0);
+  const skillCount = assetSummaryCount(skills.summary, ['skills', 'count']) || (Array.isArray(skills.skills) ? skills.skills.length : 0);
+  const sessionCount = assetSummaryCount(sessions.summary, ['sessions', 'count']) || (Array.isArray(sessions.items) ? sessions.items.length : 0);
+  const usageRequests = assetSummaryCount(usage.summary, ['requests']);
+  const usageTokens = assetSummaryCount(usage.summary, ['totalTokens', 'tokens']);
+  const migrationTotal = providerCount + mcpCount + promptCount + skillCount + sessionCount;
+  const targetTotal = assetSummaryCount(syncTargets.summary, ['targets']) || (Array.isArray(syncTargets.targets) ? syncTargets.targets.length : 0);
+  const readyTargets = assetSummaryCount(syncTargets.summary, ['ready']);
+  const snapshotCount = assetSummaryCount(syncSnapshots.summary, ['snapshots']) || (Array.isArray(syncSnapshots.snapshots) ? syncSnapshots.snapshots.length : 0);
+  const planOps = assetSummaryCount(mcpPlan.summary, ['operations']);
+  const planConflicts = assetSummaryCount(mcpPlan.summary, ['conflicts']);
+  const importState = ac.importApplying
+    ? '应用中'
+    : ac.importLoading
+      ? '预览中'
+      : ac.importResult
+        ? '已应用'
+        : ac.importPreview
+          ? '已有预览'
+          : '可导入';
+  const syncText = targetTotal
+    ? `${assetFmt(readyTargets)} / ${assetFmt(targetTotal)} 个目标可用`
+    : '先添加同步目标';
+  return `
+    <section class="asset-command-deck asset-action-board" aria-label="Asset Center operations workbench">
+      <div class="asset-action-row is-primary">
+        <div>
+          <span>导入 / 分享</span>
+          <strong>${escapeHtml(importState)}</strong>
+          <em>粘贴 Deep Link 或 JSON bundle 先预览；也可以复制本机资产链接发给其他工具。</em>
+        </div>
+        <div class="asset-action-buttons">
+          <button type="button" class="primary tiny-btn" data-asset-jump="import">导入资产</button>
+          <button type="button" class="secondary tiny-btn" data-asset-copy-catalog ${ac.copyingLink ? 'disabled' : ''}>${ac.copyingLink ? '生成中' : '复制分享链接'}</button>
+        </div>
+      </div>
+      <div class="asset-action-row">
+        <div>
+          <span>跨设备同步</span>
+          <strong>${escapeHtml(syncText)}</strong>
+          <em>Dropbox / OneDrive / iCloud / NAS / WebDAV 作为目标池；有快照后可拉取恢复。</em>
+        </div>
+        <div class="asset-action-buttons">
+          <button type="button" class="secondary tiny-btn" data-asset-jump="sync">看同步目标</button>
+        </div>
+      </div>
+      <div class="asset-action-row">
+        <div>
+          <span>本机清理</span>
+          <strong>${escapeHtml(assetFmt(sessionCount))} 个会话</strong>
+          <em>${escapeHtml(assetFmt(migrationTotal))} 个可迁移项，${escapeHtml(assetFmt(snapshotCount))} 个快照，${escapeHtml(assetFmt(planOps))} 个 MCP 同步操作${planConflicts ? `，${escapeHtml(assetFmt(planConflicts))} 个冲突` : ''}。</em>
+        </div>
+        <div class="asset-action-buttons">
+          <button type="button" class="secondary tiny-btn" data-asset-jump="sessions">管理会话</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetProtocolPanel(ac = {}) {
+  const lastUrl = ac.deepLinkLastUrl || '';
+  const listenerState = ac.deepLinkListenerReady ? 'Desktop listener ready' : 'Browser / server mode';
+  const lastState = lastUrl ? `Last ${assetDate(ac.deepLinkLastAt) || '-'}` : 'No incoming link';
+  return `
+    <section class="asset-protocol-panel">
+      <div class="asset-panel-head">
+        <strong>Protocol Intake</strong>
+        <span>${escapeHtml(listenerState)}</span>
+      </div>
+      <div class="asset-protocol-schemes">
+        <span>easyai://</span>
+        <span>easyaiconfig://</span>
+        <span>ccswitch://</span>
+      </div>
+      <div class="asset-protocol-last ${lastUrl ? 'is-active' : ''}">
+        <strong>${escapeHtml(lastState)}</strong>
+        <em>${escapeHtml(ac.deepLinkLastSource || 'waiting')}</em>
+        ${lastUrl ? `<code>${escapeHtml(lastUrl)}</code>` : ''}
+      </div>
+    </section>
+  `;
+}
+
+function assetToolSnapshot(tool, { providerCatalog = {}, mcp = {}, prompts = {}, skills = {}, sessions = {}, usage = {} } = {}) {
+  const providers = assetMapCount(providerCatalog.summary?.tools, tool.id);
+  const mcpServers = assetMapCount(mcp.summary?.tools, tool.id) || assetCountByTool(mcp.servers, tool.id);
+  const promptFiles = assetMapCount(prompts.summary?.tools, tool.id) || assetCountByTool(prompts.files, tool.id);
+  const skillCount = assetMapCount(skills.summary?.tools, tool.id) || assetCountByTool(skills.skills, tool.id);
+  const sessionCount = assetMapCount(sessions.summary?.tools, tool.id) || assetCountByTool(sessions.items, tool.id);
+  const usageStats = assetUsageByTool(usage, tool.id);
+  const categories = [
+    { key: 'providers', label: 'Providers', value: providers },
+    { key: 'mcp', label: 'MCP', value: mcpServers },
+    { key: 'prompts', label: 'Prompts', value: promptFiles },
+    { key: 'skills', label: 'Skills', value: skillCount },
+    { key: 'sessions', label: 'Sessions', value: sessionCount },
+    { key: 'usage', label: 'Usage', value: usageStats.requests },
+  ];
+  const assetTypes = categories.filter((item) => item.value > 0).map((item) => item.label);
+  const totalAssets = providers + mcpServers + promptFiles + skillCount + sessionCount;
+  const status = assetTypes.length ? `${assetFmt(totalAssets)} 项 / ${assetTypes.length} 类` : (tool.support || '等待发现资产');
+  return {
+    tool,
+    providers,
+    mcpServers,
+    promptFiles,
+    skillCount,
+    sessionCount,
+    usageStats,
+    categories,
+    assetTypes,
+    totalAssets,
+    status,
+    tone: assetTypes.length ? 'is-ready' : tool.support ? 'is-readonly' : 'is-empty',
+  };
+}
+
+function renderAssetToolMatrix({ providerCatalog = {}, mcp = {}, prompts = {}, skills = {}, sessions = {}, usage = {} } = {}) {
+  const snapshots = ASSET_CENTER_TOOL_DEFS.map((tool) => assetToolSnapshot(tool, { providerCatalog, mcp, prompts, skills, sessions, usage }));
+  const activeTools = snapshots.filter((item) => item.assetTypes.length).length;
+  const assetGroups = snapshots.reduce((sum, item) => sum + item.assetTypes.length, 0);
+  const totalTokens = snapshots.reduce((sum, item) => sum + item.usageStats.tokens, 0);
+  const renderAssetChips = (item) => {
+    const chips = item.categories
+      .filter((category) => category.value > 0)
+      .map((category) => `
+        <span>
+          <strong>${escapeHtml(assetFmt(category.value))}</strong>
+          <em>${escapeHtml(category.label)}</em>
+        </span>
+      `);
+    if (!chips.length) return '<span class="asset-tool-none">暂无可迁移资产</span>';
+    return chips.join('');
+  };
+  const renderLane = (item) => `
+      <div class="asset-tool-row asset-tool-lane ${item.tone}" data-asset-tool="${escapeHtml(item.tool.id)}">
+        <div class="asset-tool-identity">
+          <span class="asset-tool-mark">${escapeHtml(item.tool.label.slice(0, 2))}</span>
+          <div>
+            <strong>${escapeHtml(item.tool.label)}</strong>
+            <em>${escapeHtml(item.tool.lane || 'Tool')}</em>
+          </div>
+        </div>
+        <div class="asset-tool-assets">${renderAssetChips(item)}</div>
+        <div class="asset-tool-state-stack">
+          <span class="asset-tool-state">${item.assetTypes.length ? 'Ready' : 'Empty'}</span>
+          <span class="asset-tool-lane-kind">${escapeHtml(item.status)}</span>
+        </div>
+        <div class="asset-tool-anchor">
+          <strong>${escapeHtml(item.sessionCount ? `${assetFmt(item.sessionCount)} sessions` : item.usageStats.requests ? `${assetFmt(item.usageStats.requests)} requests` : '用途')}</strong>
+          <span>${escapeHtml(item.tool.anchor || 'asset profile')}</span>
+        </div>
+      </div>
+    `;
+  const groupHtml = ASSET_CENTER_TOOL_GROUPS.map((group) => {
+    const groupSnapshots = group.tools
+      .map((toolId) => snapshots.find((item) => item.tool.id === toolId))
+      .filter(Boolean);
+    const ready = groupSnapshots.filter((item) => item.assetTypes.length).length;
+    const assets = groupSnapshots.reduce((sum, item) => sum + item.assetTypes.length, 0);
+    return `
+      <section class="asset-tool-group" data-asset-tool-group="${escapeHtml(group.id)}">
+        <div class="asset-tool-group-head">
+          <strong>${escapeHtml(group.label)}</strong>
+          <span>${escapeHtml(assetFmt(ready))}/${escapeHtml(assetFmt(groupSnapshots.length))} ready · ${escapeHtml(assetFmt(assets))} asset groups</span>
+        </div>
+        <div class="asset-tool-lanes">${groupSnapshots.map(renderLane).join('')}</div>
+      </section>
+    `;
+  }).join('');
+  return `
+    <section class="asset-tool-matrix asset-tool-workbench">
+      <div class="asset-tool-matrix-head">
+        <div>
+          <strong>多工具资产分布</strong>
+          <span>已接入主工具 + 扩展/编辑器目录，能写入和只读检测分开显示</span>
+        </div>
+        <div class="asset-tool-summary">
+          <span><strong>${escapeHtml(assetFmt(activeTools))}</strong><em>active tools</em></span>
+          <span><strong>${escapeHtml(assetFmt(assetGroups))}</strong><em>asset groups</em></span>
+          <span><strong>${escapeHtml(assetFmt(totalTokens))}</strong><em>tokens</em></span>
+        </div>
+      </div>
+      <div class="asset-tool-row asset-tool-row-head">
+        <span>工具</span>
+        <span>可用资产</span>
+        <span>状态</span>
+        <span>用途</span>
+      </div>
+      <div class="asset-tool-groups">${groupHtml}</div>
+    </section>
+  `;
+}
+
+const ASSET_CAPABILITY_CATEGORY_LABELS = {
+  providers: 'Provider',
+  mcp: 'MCP',
+  prompts: 'Prompt',
+  skills: 'Skill',
+  sessions: '会话',
+  usage: '请求',
+};
+
+function assetCapabilityCatalogActionLabel(tool = {}) {
+  if (tool.support === '官方入口') return '官网';
+  if (tool.support === 'CLI 安装') return '安装';
+  if (tool.support === '扩展接入') return '扩展';
+  return '安装';
+}
+
+function assetCapabilityPrimaryTab(item = {}) {
+  const tool = item.tool || {};
+  if (tool.primaryTab && ASSET_CENTER_TAB_IDS.includes(tool.primaryTab)) return tool.primaryTab;
+  if (item.mcpServers) return 'mcp';
+  if (item.skillCount) return 'skills';
+  if (item.promptFiles) return 'prompts';
+  if (item.sessionCount || item.usageStats?.requests) return 'sessions';
+  return 'import';
+}
+
+function renderAssetCapabilityAssets(item = {}) {
+  const chips = assetItems(item.categories)
+    .filter((category) => assetNumber(category.value) > 0)
+    .map((category) => `
+      <span>
+        <strong>${escapeHtml(assetFmt(category.value))}</strong>
+        <em>${escapeHtml(ASSET_CAPABILITY_CATEGORY_LABELS[category.key] || category.label || category.key)}</em>
+      </span>
+    `);
+  if (chips.length) return chips.join('');
+  const fallback = item.tool?.support || item.tool?.noAssetText || '等待检测';
+  return `<span class="asset-capability-none">${escapeHtml(fallback)}</span>`;
+}
+
+function renderAssetCapabilityActions(item = {}) {
+  const tool = item.tool || {};
+  const catalogId = tool.installItemId || tool.catalogItemId || '';
+  const configTool = assetConfigTool(tool.configTool || tool.id);
+  const importTarget = tool.importable ? (tool.importTarget || tool.id || 'all') : '';
+  const primaryTab = assetCapabilityPrimaryTab(item);
+  let primary = '';
+  const menu = [];
+  const addMenu = (button) => { if (button) menu.push(button); };
+
+  if (configTool) {
+    primary = assetActionButton('配置', { 'data-asset-edit-tool': configTool }, 'primary');
+    if (importTarget) addMenu(assetActionButton(importTarget === 'all' ? '接入包' : '导入', { 'data-asset-import-tool': importTarget }, 'secondary'));
+  } else if (item.assetTypes?.length) {
+    primary = assetActionButton(primaryTab === 'sessions' ? '会话' : '查看', { 'data-asset-jump': primaryTab }, 'primary');
+    if (importTarget) addMenu(assetActionButton(importTarget === 'all' ? '接入包' : '导入', { 'data-asset-import-tool': importTarget }, 'secondary'));
+  } else if (importTarget) {
+    primary = assetActionButton(importTarget === 'all' ? '接入包' : '导入', { 'data-asset-import-tool': importTarget }, 'primary');
+  } else if (catalogId) {
+    primary = assetActionButton(tool.primaryActionLabel || assetCapabilityCatalogActionLabel(tool), { 'data-asset-open-tool': catalogId }, 'primary');
+  } else if (tool.manualUrl) {
+    primary = assetActionButton('官网', { 'data-asset-open-url': tool.manualUrl }, 'primary');
+  }
+
+  if (catalogId && !primary.includes('data-asset-open-tool')) {
+    addMenu(assetActionButton(assetCapabilityCatalogActionLabel(tool), { 'data-asset-open-tool': catalogId }, 'secondary'));
+  }
+  if (tool.manualUrl && !primary.includes('data-asset-open-url')) {
+    addMenu(assetActionButton('官网', { 'data-asset-open-url': tool.manualUrl }, 'ghost'));
+  }
+  if (item.mcpServers && primaryTab !== 'mcp') addMenu(assetActionButton('MCP', { 'data-asset-jump': 'mcp' }, 'ghost'));
+  if (item.skillCount && primaryTab !== 'skills') addMenu(assetActionButton('Skills', { 'data-asset-jump': 'skills' }, 'ghost'));
+  if (item.promptFiles && primaryTab !== 'prompts') addMenu(assetActionButton('Prompts', { 'data-asset-jump': 'prompts' }, 'ghost'));
+  if ((item.sessionCount || item.usageStats?.requests) && primaryTab !== 'sessions') addMenu(assetActionButton('会话', { 'data-asset-jump': 'sessions' }, 'ghost'));
+  if (!primary && primaryTab) primary = assetActionButton('查看', { 'data-asset-jump': primaryTab }, 'primary');
+
+  return assetRowActions([primary], menu.slice(0, 4));
+}
+
+function renderAssetToolCapabilityList({ providerCatalog = {}, mcp = {}, prompts = {}, skills = {}, sessions = {}, usage = {} } = {}) {
+  const snapshots = ASSET_CENTER_TOOL_DEFS.map((tool) => assetToolSnapshot(tool, { providerCatalog, mcp, prompts, skills, sessions, usage }));
+  const activeTools = snapshots.filter((item) => item.assetTypes.length).length;
+  const detectedGroups = snapshots.reduce((sum, item) => sum + item.assetTypes.length, 0);
+  const directTools = snapshots.filter((item) => assetConfigTool(item.tool.configTool || item.tool.id)).length;
+  const importTools = snapshots.filter((item) => item.tool.importable).length;
+  const rows = snapshots.map((item) => {
+    const tool = item.tool || {};
+    const boundary = tool.boundary || (tool.support ? `${tool.support}，暂不直接写配置。` : '等待资产读取结果。');
+    const actionText = assetConfigTool(tool.configTool || tool.id)
+      ? '可配置'
+      : tool.importable
+        ? '可导入'
+        : tool.installItemId || tool.manualUrl
+          ? '官方入口'
+          : '只读';
+    return `
+      <div class="asset-capability-row ${item.assetTypes.length ? 'is-ready' : 'is-quiet'}" data-asset-tool="${escapeHtml(tool.id)}">
+        <div class="asset-capability-identity">
+          <span class="asset-capability-mark">${escapeHtml(String(tool.label || tool.id || '--').slice(0, 2))}</span>
+          <span>
+            <strong>${escapeHtml(tool.label || getToolDisplayName(tool.id))}</strong>
+            <em>${escapeHtml(`${tool.lane || 'Tool'} · ${actionText}`)}</em>
+          </span>
+        </div>
+        <div class="asset-capability-assets">${renderAssetCapabilityAssets(item)}</div>
+        <div class="asset-capability-boundary">
+          <strong>${escapeHtml(tool.anchor || item.status || '资产能力')}</strong>
+          <span>${escapeHtml(boundary)}</span>
+        </div>
+        <div class="asset-capability-actions">${renderAssetCapabilityActions(item)}</div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <section class="asset-capability-list" aria-label="工具能力和资产入口">
+      <div class="asset-capability-head">
+        <div>
+          <strong>工具能力</strong>
+          <span>能编辑、能导入、只能官方安装的工具分开显示，避免误操作。</span>
+        </div>
+        <div class="asset-capability-summary">
+          <span>${escapeHtml(assetFmt(activeTools))} 个工具有资产</span>
+          <span>${escapeHtml(assetFmt(detectedGroups))} 类已读取</span>
+          <span>${escapeHtml(assetFmt(directTools))} 个可配置</span>
+          <span>${escapeHtml(assetFmt(importTools))} 个可导入</span>
+        </div>
+      </div>
+      <div class="asset-capability-table">
+        <div class="asset-capability-row is-head">
+          <span>工具</span>
+          <span>读到的资产</span>
+          <span>能力边界</span>
+          <span>下一步</span>
+        </div>
+        ${rows}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetCenterRows(items = [], columns = []) {
+  if (!items.length) return '<div class="asset-empty">暂无数据</div>';
+  return `
+    <div class="asset-table">
+      ${items.map((item) => `
+        <div class="asset-table-row" style="grid-template-columns:${columns.map((col) => col.width || '1fr').join(' ')}">
+          ${columns.map((col) => `<span>${escapeHtml(String(col.value(item) ?? ''))}</span>`).join('')}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderAssetSessionRows(items = []) {
+  const rows = Array.isArray(items) ? items.slice(0, 8) : [];
+  if (!rows.length) return '<div class="asset-empty">暂无数据</div>';
+  const busyKey = state.assetCenter?.sessionArchiving || '';
+  return `
+    <div class="asset-table asset-session-table">
+      ${rows.map((item, index) => {
+        const key = item.id || `${item.tool || ''}:${item.sessionId || ''}:${item.sourcePath || ''}`;
+        const canArchive = Boolean(item.actions?.delete && item.sourcePath);
+        const busy = busyKey === key;
+        return `
+          <div class="asset-table-row" style="grid-template-columns:1.1fr 1fr 1.4fr 2fr 1fr 0.7fr">
+            <span>${escapeHtml(String(item.tool || '-'))}</span>
+            <span>${escapeHtml(String(item.provider || '-'))}</span>
+            <span>${escapeHtml(String(item.projectKey || item.projectPath || '-'))}</span>
+            <span>${escapeHtml(String(item.title || item.sessionId || '-'))}</span>
+            <span>${escapeHtml(assetDate(item.updatedAt) || '-')}</span>
+            <span>
+              <button type="button" class="ghost tiny-btn asset-row-action" data-asset-session-archive="${index}" ${canArchive && !busy ? '' : 'disabled'}>
+                ${busy ? '归档中' : '归档'}
+              </button>
+            </span>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderAssetSessionTrashRows(entries = []) {
+  const rows = Array.isArray(entries) ? entries.slice(0, 6) : [];
+  if (!rows.length) return '<div class="asset-empty">暂无归档会话</div>';
+  const busyKey = state.assetCenter?.sessionRestoring || '';
+  return `
+    <div class="asset-table asset-session-table asset-session-trash-table">
+      ${rows.map((entry, index) => {
+        const key = String(entry.id || '');
+        const restored = Boolean(entry.restoredAt);
+        const missing = !entry.exists;
+        const canRestore = Boolean(key && entry.exists && !restored);
+        const busy = busyKey === key;
+        const status = restored ? '已恢复' : missing ? '缺失' : '可恢复';
+        return `
+          <div class="asset-table-row" style="grid-template-columns:1fr 1fr 1.8fr 2fr 1fr 0.7fr">
+            <span>${escapeHtml(String(entry.tool || '-'))}</span>
+            <span>${escapeHtml(String(entry.sessionId || '-'))}</span>
+            <span>${escapeHtml(String(entry.title || entry.sourceLabel || '-'))}</span>
+            <span>${escapeHtml(String(entry.originalPath || '-'))}</span>
+            <span>${escapeHtml(status)}</span>
+            <span>
+              <button type="button" class="ghost tiny-btn asset-row-action" data-asset-session-restore="${index}" ${canRestore && !busy ? '' : 'disabled'}>
+                ${busy ? '恢复中' : '恢复'}
+              </button>
+            </span>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function syncSnapshotForTarget(target = {}) {
+  const snapshots = state.assetCenter?.syncSnapshots?.targets || [];
+  return snapshots.find((item) => item.target?.id === target.id) || null;
+}
+
+function renderAssetSyncTargetRows(targets = []) {
+  const rows = Array.isArray(targets) ? targets.slice(0, 8) : [];
+  if (!rows.length) return '<div class="asset-empty">暂无数据</div>';
+  const busyKey = state.assetCenter?.syncBusy || '';
+  return `
+    <div class="asset-table asset-sync-table">
+      ${rows.map((item, index) => {
+        const snapshot = syncSnapshotForTarget(item);
+        const latest = snapshot?.summary?.latestSnapshotId || '';
+        const syncTarget = Boolean((item.path && item.type !== 'webdav') || (item.type === 'webdav' && item.url));
+        const canPush = Boolean(syncTarget && item.enabled && item.ready);
+        const canPull = Boolean(syncTarget && latest);
+        const pushBusy = busyKey === `push:${item.id}`;
+        const pullBusy = busyKey === `pull:${item.id}`;
+        return `
+          <div class="asset-table-row" style="grid-template-columns:0.9fr 1.2fr 2fr 1fr 1.1fr 1.2fr">
+            <span>${escapeHtml(String(item.type || '-'))}</span>
+            <span>${escapeHtml(String(item.label || item.id || '-'))}</span>
+            <span>${escapeHtml(String(item.url || item.path || '-'))}</span>
+            <span>${escapeHtml(item.ready ? 'ready' : item.exists ? 'pending' : 'missing')}</span>
+            <span>${escapeHtml(latest || '-')}</span>
+            <span>
+              <button type="button" class="ghost tiny-btn asset-row-action" data-asset-sync-push="${index}" ${canPush && !busyKey ? '' : 'disabled'}>${pushBusy ? '推送中' : '推送'}</button>
+              <button type="button" class="ghost tiny-btn asset-row-action" data-asset-sync-pull="${index}" ${canPull && !busyKey ? '' : 'disabled'}>${pullBusy ? '拉取中' : '拉取'}</button>
+            </span>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderAssetImportSummary(importPreview, importResult) {
+  const bundle = importPreview?.bundle || null;
+  const dryRun = importPreview?.apply || null;
+  const result = importResult || null;
+  const currentPlan = result || dryRun;
+  const bundleCounts = bundle?.counts || {};
+  const summary = currentPlan?.summary || {};
+  const results = currentPlan?.results || (currentPlan ? { providers: currentPlan } : {});
+  const categoryStats = [
+    { key: 'providers', label: 'Providers', totalKey: 'totalProviders' },
+    { key: 'mcp', label: 'MCP', totalKey: 'totalServers' },
+    { key: 'prompts', label: 'Prompts', totalKey: 'totalPrompts' },
+    { key: 'skills', label: 'Skills', totalKey: 'totalSkills' },
+  ].map((item) => {
+    const categorySummary = results?.[item.key]?.summary || {};
+    const total = categorySummary[item.totalKey] ?? 0;
+    const changed = Number(categorySummary.created || 0)
+      + Number(categorySummary.updated || 0)
+      + Number(categorySummary.appended || 0);
+    return renderAssetStat(
+      item.label,
+      assetFmt(total),
+      `${assetFmt(changed)} changed / ${assetFmt(categorySummary.conflicts)} conflicts`,
+    );
+  }).join('');
+  const operations = Array.isArray(currentPlan?.operations) ? currentPlan.operations : [];
+  const operationRows = renderAssetCenterRows(operations.slice(0, 10), [
+    { width: '0.8fr', value: (item) => item.category || '-' },
+    { width: '0.9fr', value: (item) => item.action || '-' },
+    { width: '1.3fr', value: (item) => item.key || item.serverId || item.promptId || item.skillName || item.sourceId || '-' },
+    { width: '1.5fr', value: (item) => item.name || item.title || item.targetTool || item.tool || '-' },
+    { width: '2fr', value: (item) => item.reason || item.baseUrl || item.targetPath || item.error || '-' },
+  ]);
+  const backupPaths = Object.entries(currentPlan?.backupPaths || {})
+    .filter(([, backupPath]) => backupPath)
+    .map(([category, backupPath]) => `${category}: ${backupPath}`);
+
+  if (!bundle && !currentPlan) {
+    return '<div class="asset-empty">粘贴 EasyAIConfig / cc-switch Deep Link 或 JSON bundle 后先预览。</div>';
+  }
+
+  return `
+    <div class="asset-import-summary">
+      ${bundle ? `
+        <div class="asset-import-metrics">
+          ${renderAssetStat('Bundle Providers', assetFmt(bundleCounts.providers), bundle.schema || 'unknown')}
+          ${renderAssetStat('MCP Servers', assetFmt(bundleCounts.mcpServers), 'managed import')}
+          ${renderAssetStat('Prompts', assetFmt(bundleCounts.prompts), 'managed import')}
+          ${renderAssetStat('Skills', assetFmt(bundleCounts.skills), 'managed import')}
+        </div>
+      ` : ''}
+      ${currentPlan ? `
+        <div class="asset-import-metrics">
+          ${renderAssetStat(result ? 'Applied' : 'Dry Run', result ? (summary.written ? 'written' : 'no write') : 'preview', currentPlan.targetTool || 'codex')}
+          ${renderAssetStat('Created', assetFmt(summary.created), `${assetFmt(summary.updated)} updated`)}
+          ${renderAssetStat('Conflicts', assetFmt(summary.conflicts), `${assetFmt(summary.unchanged)} unchanged`)}
+          ${renderAssetStat('Skipped', assetFmt(summary.skipped), `${assetFmt(summary.stale)} stale`)}
+        </div>
+        <div class="asset-import-metrics">${categoryStats}</div>
+        ${backupPaths.length ? `<div class="asset-import-backup">Backups: <code>${escapeHtml(backupPaths.join(' | '))}</code></div>` : ''}
+        <div class="asset-panel-head asset-import-ops-head"><strong>Asset Operations</strong><span>${result ? 'apply result' : 'dry-run plan'}</span></div>
+        ${operationRows}
+      ` : ''}
+    </div>
+  `;
+}
+
+function assetItems(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function assetFileName(filePath = '') {
+  const text = String(filePath || '');
+  if (!text) return '-';
+  return text.split(/[\\/]/).filter(Boolean).pop() || text;
+}
+
+function assetRowStack(title = '', sub = '') {
+  return `
+    <span class="asset-row-stack">
+      <strong>${escapeHtml(String(title || '-'))}</strong>
+      ${sub ? `<em>${escapeHtml(String(sub))}</em>` : ''}
+    </span>
+  `;
+}
+
+function assetPill(label = '', tone = 'neutral') {
+  return `<span class="asset-pill is-${escapeHtml(tone)}">${escapeHtml(String(label || '-'))}</span>`;
+}
+
+function assetConfigTool(tool = '') {
+  const normalized = normalizeToolCatalogId(tool);
+  return ASSET_CONFIG_EDITOR_TOOL_IDS.includes(normalized) ? normalized : '';
+}
+
+function assetImportTargetTool(tool = '') {
+  const value = normalizeToolCatalogId(tool);
+  if (value === 'all' || value === 'easyai') return value;
+  if (ASSET_IMPORT_DIRECT_TOOL_IDS.includes(value)) return value;
+  return assetConfigTool(value) || 'all';
+}
+
+function assetPathFromItem(item = {}) {
+  return item.sourcePath || item.skillPath || item.rootPath || item.path || item.filePath || '';
+}
+
+function assetFileUrl(filePath = '') {
+  const raw = String(filePath || '').trim();
+  if (!raw) return '';
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+  const normalized = raw.replace(/\\/g, '/');
+  const withLeadingSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
+  return `file://${encodeURI(withLeadingSlash)}`;
+}
+
+function assetActionButton(label = '', attrs = {}, tone = 'secondary') {
+  const attrHtml = Object.entries(attrs)
+    .filter(([, value]) => value !== false && value != null && value !== '')
+    .map(([key, value]) => `${key}="${escapeHtml(String(value))}"`)
+    .join(' ');
+  return `<button type="button" class="${escapeHtml(tone)} tiny-btn asset-inline-btn" ${attrHtml}>${escapeHtml(label)}</button>`;
+}
+
+function assetMoreIcon() {
+  return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1.25"/><circle cx="12" cy="12" r="1.25"/><circle cx="19" cy="12" r="1.25"/></svg>';
+}
+
+function assetActionMenu(buttons = [], label = '更多操作') {
+  const html = buttons.filter(Boolean).join('');
+  if (!html) return '';
+  return `
+    <details class="asset-action-menu">
+      <summary aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+        ${assetMoreIcon()}
+        <span>${escapeHtml(label)}</span>
+      </summary>
+      <div class="asset-action-menu-popover">
+        ${html}
+      </div>
+    </details>
+  `;
+}
+
+function assetRowActions(primaryButtons = [], menuButtons = []) {
+  const primaryHtml = primaryButtons.filter(Boolean).join('');
+  const menuHtml = assetActionMenu(menuButtons);
+  const html = `${primaryHtml}${menuHtml}`;
+  return html ? `<div class="asset-row-actions">${html}</div>` : '-';
+}
+
+function renderAssetListTable(items = [], columns = [], { empty = '暂无数据', className = '' } = {}) {
+  const rows = assetItems(items);
+  if (!rows.length) return `<div class="asset-empty">${escapeHtml(empty)}</div>`;
+  const grid = columns.map((col) => col.width || '1fr').join(' ');
+  const header = columns
+    .map((col) => `<span>${escapeHtml(col.label || '')}</span>`)
+    .join('');
+  return `
+    <div class="asset-list-table ${escapeHtml(className)}" style="--asset-list-cols: ${escapeHtml(grid)}">
+      <div class="asset-list-row is-head">${header}</div>
+      ${rows.map((item, index) => `
+        <div class="asset-list-row">
+          ${columns.map((col) => {
+            const value = typeof col.value === 'function' ? col.value(item, index) : '';
+            const cellClass = col.className ? ` class="${escapeHtml(col.className)}"` : '';
+            return `<span${cellClass}>${col.html ? String(value ?? '') : escapeHtml(String(value ?? ''))}</span>`;
+          }).join('')}
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderAssetTabs(activeTab, counts = {}) {
+  const tabs = [
+    { id: 'mcp', label: 'MCP', count: counts.mcp },
+    { id: 'skills', label: 'Skills', count: counts.skills },
+    { id: 'prompts', label: 'Prompts', count: counts.prompts },
+    { id: 'sessions', label: '会话清理', count: counts.sessions },
+    { id: 'sync', label: '备份恢复', count: counts.sync },
+    { id: 'import', label: '导入迁移', count: counts.import },
+  ];
+  return `
+    <div class="asset-tabs" role="tablist" aria-label="Asset categories">
+      ${tabs.map((tab) => {
+        const selected = activeTab === tab.id;
+        const countText = tab.count == null || tab.count === '' ? '' : assetFmt(tab.count);
+        return `
+          <button
+            type="button"
+            class="asset-tab ${selected ? 'is-active' : ''}"
+            role="tab"
+            aria-selected="${selected ? 'true' : 'false'}"
+            data-asset-tab="${escapeHtml(tab.id)}">
+            <span>${escapeHtml(tab.label)}</span>
+            ${countText ? `<em>${escapeHtml(countText)}</em>` : ''}
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function assetMcpCommand(server = {}) {
+  if (server.url) return server.url;
+  const args = assetItems(server.args).filter(Boolean);
+  const command = [server.command, ...args].filter(Boolean).join(' ');
+  if (command) return command;
+  return server.transport || '-';
+}
+
+function assetMcpPlanForServer(server = {}, operations = []) {
+  const keys = [server.id, server.serverId, server.name]
+    .filter(Boolean)
+    .map((item) => String(item));
+  return assetItems(operations).find((item) => keys.includes(String(item.serverId || item.id || item.key || ''))) || null;
+}
+
+function assetMcpPlanPill(server = {}, operations = []) {
+  if (server.disabled) return assetPill('已禁用', 'muted');
+  const op = assetMcpPlanForServer(server, operations);
+  if (!op) return assetPill('本机可用', 'ok');
+  if (op.conflict || op.status === 'conflict') return assetPill('有冲突', 'warn');
+  if (op.to?.requiresCreate) return assetPill('需创建', 'warn');
+  return assetPill(op.action || op.status || '可同步', 'info');
+}
+
+function renderAssetSourceIssues(sources = []) {
+  const issues = assetItems(sources).filter((item) => !item.exists || item.parseError || item.readError);
+  if (!issues.length) return '';
+  const issueText = issues
+    .map((item) => `${item.label || item.tool || 'source'}: ${item.parseError || item.readError || 'missing'}`)
+    .join(' | ');
+  const issuePaths = issues.map((item) => assetPathFromItem(item)).filter(Boolean).join('\n');
+  return `
+    <div class="asset-inline-alert">
+      <div>
+        <strong>配置源需要处理</strong>
+        <span>${escapeHtml(issueText)}</span>
+      </div>
+      <div class="asset-inline-actions">
+        ${assetRowActions([
+          assetActionButton('导入补齐', { 'data-asset-import-tool': 'all' }, 'primary'),
+        ], [
+          issuePaths ? assetActionButton('复制路径', { 'data-asset-copy': issuePaths, 'data-asset-copy-label': '缺失路径' }, 'ghost') : '',
+          assetActionButton('同步恢复', { 'data-asset-jump': 'sync' }, 'secondary'),
+        ])}
+      </div>
+    </div>
+  `;
+}
+
+function renderAssetProtocolInline(ac = {}) {
+  const lastUrl = ac.deepLinkLastUrl || '';
+  const listenerState = ac.deepLinkListenerReady ? 'Desktop listener ready' : 'Browser / server mode';
+  const lastState = lastUrl ? `Last ${assetDate(ac.deepLinkLastAt) || '-'}` : 'No incoming link';
+  return `
+    <details class="asset-protocol-inline asset-protocol-compact" ${lastUrl ? 'open' : ''}>
+      <summary>
+        <strong>外部导入链接</strong>
+        <span>${escapeHtml(listenerState)}</span>
+      </summary>
+      <div class="asset-protocol-schemes">
+        <span>easyai://</span>
+        <span>easyaiconfig://</span>
+        <span>ccswitch://</span>
+      </div>
+      <div class="asset-protocol-last ${lastUrl ? 'is-active' : ''}">
+        <strong>${escapeHtml(lastState)}</strong>
+        <em>${escapeHtml(ac.deepLinkLastSource || 'waiting')}</em>
+        ${lastUrl ? `<code>${escapeHtml(lastUrl)}</code>` : ''}
+      </div>
+    </details>
+  `;
+}
+
+function renderAssetPurposeBar(counts = {}) {
+  const items = [
+    {
+      tab: 'import',
+      label: '导入迁移',
+      value: '换电脑、换工具、接收分享包',
+      meta: counts.import ? '已有待处理导入' : '先预览再写入',
+    },
+    {
+      tab: 'mcp',
+      label: '复用 MCP',
+      value: '复制命令、打开配置、同步服务',
+      meta: `${assetFmt(counts.mcp || 0)} 个服务`,
+    },
+    {
+      tab: 'skills',
+      label: '复用 Skills',
+      value: '打开目录、导入到工具、补齐缺失',
+      meta: `${assetFmt(counts.skills || 0)} 个 Skill`,
+    },
+    {
+      tab: 'sync',
+      label: '备份恢复',
+      value: '推送快照，拉取恢复',
+      meta: `${assetFmt(counts.sync || 0)} 个目标`,
+    },
+  ];
+  return `
+    <div class="asset-purpose-row" aria-label="资产中心用途">
+      ${items.map((item) => `
+        <button type="button" class="asset-purpose-item" data-asset-jump="${escapeHtml(item.tab)}">
+          <strong>${escapeHtml(item.label)}</strong>
+          <span>${escapeHtml(item.value)}</span>
+          <em>${escapeHtml(item.meta)}</em>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderAssetMcpTab(mcp = {}, mcpPlan = {}) {
+  const servers = assetItems(mcp.servers);
+  const operations = assetItems(mcpPlan.operations);
+  const rows = renderAssetListTable(servers, [
+    {
+      label: '服务',
+      width: 'minmax(190px, 0.9fr)',
+      html: true,
+      value: (item) => assetRowStack(item.id || item.name || item.field, item.sourceLabel || getToolDisplayName(item.tool || '') || ''),
+    },
+    {
+      label: '运行',
+      width: 'minmax(280px, 1.35fr)',
+      html: true,
+      value: (item) => {
+        const keys = assetItems(item.envKeys).filter(Boolean);
+        const sub = keys.length ? `Env: ${keys.join(', ')}` : (item.transport || getToolDisplayName(item.tool || '') || '');
+        return assetRowStack(assetMcpCommand(item), sub);
+      },
+    },
+    {
+      label: '状态',
+      width: 'minmax(110px, 0.42fr)',
+      html: true,
+      value: (item) => assetMcpPlanPill(item, operations),
+    },
+    {
+      label: '操作',
+      width: 'minmax(128px, 0.42fr)',
+      html: true,
+      className: 'asset-actions-cell',
+      value: (item) => {
+        const command = assetMcpCommand(item);
+        const path = assetPathFromItem(item);
+        const configTool = assetConfigTool(item.tool);
+        const primaryAction = configTool
+          ? assetActionButton('配置', { 'data-asset-edit-tool': configTool }, 'primary')
+          : path
+            ? assetActionButton('打开', { 'data-asset-open-path': path }, 'primary')
+            : assetActionButton('同步', { 'data-asset-jump': 'sync' }, 'primary');
+        return assetRowActions([primaryAction], [
+          command && command !== '-' ? assetActionButton('复制命令', { 'data-asset-copy': command, 'data-asset-copy-label': '命令' }, 'secondary') : '',
+          path ? assetActionButton('复制路径', { 'data-asset-copy': path, 'data-asset-copy-label': '路径' }, 'ghost') : '',
+          path ? assetActionButton('打开文件', { 'data-asset-open-path': path }, 'ghost') : '',
+          assetActionButton('同步', { 'data-asset-jump': 'sync' }, 'ghost'),
+        ]);
+      },
+    },
+  ], { empty: '暂无 MCP 服务' });
+
+  const planRows = operations.length ? `
+    <div class="asset-tab-section is-secondary">
+      <div class="asset-tab-section-title">
+          <div class="asset-section-heading">
+            <strong>待同步 MCP</strong>
+            <span>${escapeHtml(assetFmt(operations.length))} 项需要处理</span>
+          </div>
+          <div class="asset-section-actions">
+          ${assetActionMenu([
+            assetActionButton('处理同步', { 'data-asset-jump': 'sync' }, 'ghost'),
+          ], '同步操作')}
+          </div>
+        </div>
+      <div class="asset-plan-list">
+        ${operations.slice(0, 8).map((item) => {
+          const from = item.from?.tool ? getToolDisplayName(item.from.tool) : '-';
+          const to = item.to?.tool ? getToolDisplayName(item.to.tool) : '-';
+          const path = item.to?.sourcePath || item.from?.sourcePath || '';
+          return `
+            <div class="asset-plan-row">
+              <span>${escapeHtml(item.serverId || item.key || '-')}</span>
+              <em>${escapeHtml(`${from} -> ${to}`)}</em>
+              <strong>${escapeHtml(item.action || item.status || '-')}</strong>
+              ${assetRowActions([
+                assetActionButton('同步', { 'data-asset-jump': 'sync' }, 'secondary'),
+              ], [
+                path ? assetActionButton('复制路径', { 'data-asset-copy': path, 'data-asset-copy-label': '路径' }, 'ghost') : '',
+              ])}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  ` : '';
+
+  return `
+    <section class="asset-tab-panel" data-asset-tab-panel="mcp">
+      ${renderAssetSourceIssues(mcp.sources)}
+      <div class="asset-tab-section">
+        <div class="asset-tab-section-title">
+          <div class="asset-section-heading">
+            <strong>MCP 服务</strong>
+            <span>${escapeHtml(assetFmt(servers.length))} 个，可复制、配置、同步</span>
+          </div>
+          <div class="asset-section-actions">
+            ${assetActionMenu([
+              assetActionButton('导入 MCP', { 'data-asset-import-tool': 'all' }, 'ghost'),
+              assetActionButton('同步处理', { 'data-asset-jump': 'sync' }, 'ghost'),
+            ], 'MCP 操作')}
+          </div>
+        </div>
+        ${rows}
+      </div>
+      ${planRows}
+    </section>
+  `;
+}
+
+function renderAssetSkillsTab(skills = {}) {
+  const rows = assetItems(skills.skills);
+  return `
+    <section class="asset-tab-panel" data-asset-tab-panel="skills">
+      ${renderAssetSourceIssues(skills.sources)}
+      <div class="asset-tab-section">
+        <div class="asset-tab-section-title">
+          <div class="asset-section-heading">
+            <strong>Skills</strong>
+            <span>${escapeHtml(assetFmt(rows.length))} 个</span>
+          </div>
+          <div class="asset-section-actions">
+            ${assetActionMenu([
+              assetActionButton('导入 Skill', { 'data-asset-import-tool': 'codex' }, 'ghost'),
+            ], 'Skill 操作')}
+          </div>
+        </div>
+        ${renderAssetListTable(rows, [
+          {
+            label: 'Skill',
+            width: 'minmax(230px, 1.1fr)',
+            html: true,
+            value: (item) => assetRowStack(item.title || item.name, item.description || item.sourceLabel || ''),
+          },
+          {
+            label: '状态',
+            width: 'minmax(104px, 0.42fr)',
+            html: true,
+            value: (item) => assetPill(item.hasDoc ? '可读' : '缺失', item.hasDoc ? 'ok' : 'muted'),
+          },
+          {
+            label: '位置',
+            width: 'minmax(260px, 1.1fr)',
+            html: true,
+            value: (item) => assetRowStack(assetFileName(item.skillPath || item.rootPath), getToolDisplayName(item.tool || '') || item.sourceLabel || ''),
+          },
+          {
+            label: '操作',
+            width: 'minmax(128px, 0.42fr)',
+            html: true,
+            className: 'asset-actions-cell',
+            value: (item) => {
+              const path = assetPathFromItem(item);
+              const configTool = assetConfigTool(item.tool);
+              return assetRowActions([
+                path ? assetActionButton('打开', { 'data-asset-open-path': path }, 'primary') : assetActionButton('导入', { 'data-asset-import-tool': item.tool || 'codex' }, 'primary'),
+              ], [
+                path ? assetActionButton('复制路径', { 'data-asset-copy': path, 'data-asset-copy-label': '路径' }, 'secondary') : '',
+                path ? assetActionButton('打开目录', { 'data-asset-open-path': path }, 'ghost') : '',
+                configTool ? assetActionButton('配置', { 'data-asset-edit-tool': configTool }, 'secondary') : '',
+                assetActionButton('导入', { 'data-asset-import-tool': item.tool || 'codex' }, 'ghost'),
+              ]);
+            },
+          },
+        ], { empty: '暂无 Skills' })}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetPromptsTab(prompts = {}) {
+  const rows = assetItems(prompts.files);
+  return `
+    <section class="asset-tab-panel" data-asset-tab-panel="prompts">
+      ${renderAssetSourceIssues(prompts.files)}
+      <div class="asset-tab-section">
+        <div class="asset-tab-section-title">
+          <div class="asset-section-heading">
+            <strong>Prompts</strong>
+            <span>${escapeHtml(assetFmt(rows.length))} 个文件</span>
+          </div>
+          <div class="asset-section-actions">
+            ${assetActionMenu([
+              assetActionButton('导入 Prompt', { 'data-asset-import-tool': 'all' }, 'ghost'),
+            ], 'Prompt 操作')}
+          </div>
+        </div>
+        ${renderAssetListTable(rows, [
+          {
+            label: '文件',
+            width: 'minmax(210px, 1fr)',
+            html: true,
+            value: (item) => assetRowStack(assetFileName(item.sourcePath), item.sourceLabel || item.id || ''),
+          },
+          { label: '范围', width: 'minmax(150px, 0.55fr)', value: (item) => `${getToolDisplayName(item.tool || '') || item.tool || '-'} · ${item.scope || '-'}` },
+          {
+            label: '状态',
+            width: 'minmax(92px, 0.38fr)',
+            html: true,
+            value: (item) => assetPill(item.exists ? '存在' : '缺失', item.exists ? 'ok' : 'warn'),
+          },
+          {
+            label: '操作',
+            width: 'minmax(128px, 0.42fr)',
+            html: true,
+            className: 'asset-actions-cell',
+            value: (item) => {
+              const path = assetPathFromItem(item);
+              const configTool = assetConfigTool(item.tool);
+              return assetRowActions([
+                path ? assetActionButton('打开', { 'data-asset-open-path': path }, 'primary') : assetActionButton('导入', { 'data-asset-import-tool': item.tool || 'all' }, 'primary'),
+              ], [
+                path ? assetActionButton('复制路径', { 'data-asset-copy': path, 'data-asset-copy-label': '路径' }, 'secondary') : '',
+                path ? assetActionButton('打开文件', { 'data-asset-open-path': path }, 'ghost') : '',
+                configTool ? assetActionButton('配置', { 'data-asset-edit-tool': configTool }, 'secondary') : '',
+                assetActionButton('导入', { 'data-asset-import-tool': item.tool || 'all' }, 'ghost'),
+              ]);
+            },
+          },
+        ], { empty: '暂无 Prompt 文件' })}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetSessionsTab(sessions = {}, sessionTrash = {}) {
+  return `
+    <section class="asset-tab-panel" data-asset-tab-panel="sessions" data-asset-section="sessions">
+      <div class="asset-tab-section">
+        <div class="asset-tab-section-title">
+          <strong>最近会话</strong>
+          <span>${escapeHtml(assetFmt(sessions.summary?.sessions || assetItems(sessions.items).length))} 个</span>
+        </div>
+        ${renderAssetSessionRows(sessions.items || [])}
+      </div>
+      <div class="asset-tab-section is-secondary">
+        <div class="asset-tab-section-title">
+          <strong>已归档</strong>
+          <span>${escapeHtml(assetFmt(sessionTrash.summary?.restorable || assetItems(sessionTrash.entries).length))} 个可恢复</span>
+        </div>
+        ${renderAssetSessionTrashRows(sessionTrash.entries || [])}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetSyncTab(syncTargets = {}, syncSnapshots = {}) {
+  return `
+    <section class="asset-tab-panel" data-asset-tab-panel="sync" data-asset-section="sync">
+      <div class="asset-tab-section">
+        <div class="asset-tab-section-title">
+          <strong>同步目标</strong>
+          <span>${escapeHtml(assetFmt(syncSnapshots.summary?.snapshots || 0))} 个快照</span>
+        </div>
+        ${renderAssetSyncTargetRows(syncTargets.targets || [])}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetImportTab(ac = {}) {
+  const importBusy = Boolean(ac.importLoading || ac.importApplying);
+  const importText = ac.importText || '';
+  const importCodexHome = ac.importCodexHome || '';
+  const importProjectPath = ac.importProjectPath || state.current?.launch?.cwd || '';
+  const importTargetTool = ac.importTargetTool || 'all';
+  const importInstallMode = ac.importInstallMode || 'copy';
+  const targetSelect = `
+    <select data-asset-import-target>
+      <option value="all" ${importTargetTool === 'all' ? 'selected' : ''}>所有支持工具</option>
+      <option value="codex" ${importTargetTool === 'codex' ? 'selected' : ''}>Codex</option>
+      <option value="claudecode" ${importTargetTool === 'claudecode' ? 'selected' : ''}>Claude Code</option>
+      <option value="claude-desktop" ${['claude-desktop', 'claudedesktop'].includes(importTargetTool) ? 'selected' : ''}>Claude Desktop</option>
+      <option value="gemini" ${importTargetTool === 'gemini' ? 'selected' : ''}>Gemini CLI</option>
+      <option value="opencode" ${importTargetTool === 'opencode' ? 'selected' : ''}>OpenCode</option>
+      <option value="openclaw" ${importTargetTool === 'openclaw' ? 'selected' : ''}>OpenClaw</option>
+      <option value="hermes" ${importTargetTool === 'hermes' ? 'selected' : ''}>Hermes Agent</option>
+      <option value="qwen-code" ${importTargetTool === 'qwen-code' ? 'selected' : ''}>Qwen Code CLI</option>
+      <option value="codebuddy-code" ${importTargetTool === 'codebuddy-code' ? 'selected' : ''}>CodeBuddy Code CLI</option>
+      <option value="easyai" ${importTargetTool === 'easyai' ? 'selected' : ''}>EasyAIConfig</option>
+    </select>
+  `;
+
+  return `
+    <section class="asset-tab-panel asset-import-panel" data-asset-tab-panel="import" data-asset-section="import">
+      <div class="asset-tab-section">
+        <div class="asset-tab-section-title">
+          <div class="asset-section-heading">
+            <strong>导入资产</strong>
+            <span>先预览，再写入</span>
+          </div>
+          <div class="asset-import-stage">
+            <span class="${ac.importPreview ? 'is-done' : 'is-active'}">预览</span>
+            <span class="${ac.importConfirmApply ? 'is-active' : ''}">确认</span>
+            <span class="${ac.importResult ? 'is-done' : ''}">写入</span>
+          </div>
+        </div>
+        ${ac.importError ? `<div class="asset-error">${escapeHtml(ac.importError)}</div>` : ''}
+        <div class="asset-import-workbench asset-import-workbench-grid">
+          <div class="asset-import-compose">
+            <textarea
+              class="asset-import-textarea"
+              data-asset-import-text
+              spellcheck="false"
+              placeholder="粘贴 easyai://import?...、ccswitch://import?... 或 JSON bundle">${escapeHtml(importText)}</textarea>
+          </div>
+          <div class="asset-import-commandbar">
+            <label class="asset-import-target">
+              <span>目标</span>
+              ${targetSelect}
+            </label>
+            <label class="asset-import-confirm ${ac.importConfirmApply ? 'is-checked' : ''}">
+              <input type="checkbox" data-asset-import-confirm ${ac.importConfirmApply ? 'checked' : ''}>
+              <span>确认写入</span>
+            </label>
+            <div class="asset-import-actions">
+              <button type="button" class="secondary tiny-btn" data-asset-import-preview ${importBusy ? 'disabled' : ''}>${ac.importLoading ? '预览中' : '预览'}</button>
+              <button type="button" class="primary tiny-btn" data-asset-import-apply ${importBusy ? 'disabled' : ''}>${ac.importApplying ? '写入中' : '写入'}</button>
+              <button type="button" class="ghost tiny-btn" data-asset-import-clear ${importBusy ? 'disabled' : ''}>清空</button>
+            </div>
+          </div>
+        </div>
+        <details class="asset-import-advanced">
+          <summary>高级选项</summary>
+          <div class="asset-import-advanced-grid">
+            <label class="asset-field">
+              <span>Codex Home</span>
+              <input type="text" data-asset-import-codex-home value="${escapeHtml(importCodexHome)}" placeholder="默认 ~/.codex">
+            </label>
+            <label class="asset-field">
+              <span>Project Path</span>
+              <input type="text" data-asset-import-project-path value="${escapeHtml(importProjectPath)}" placeholder="Prompts project scope">
+            </label>
+            <label class="asset-field">
+              <span>Skill Mode</span>
+              <select data-asset-import-install-mode>
+                <option value="copy" ${importInstallMode === 'copy' ? 'selected' : ''}>Copy files</option>
+                <option value="symlink" ${importInstallMode === 'symlink' ? 'selected' : ''}>Symlink</option>
+              </select>
+            </label>
+            <label class="asset-check">
+              <input type="checkbox" data-asset-import-include-catalog ${ac.importIncludeCatalogPresets ? 'checked' : ''}>
+              <span>导入 catalog presets</span>
+            </label>
+            <label class="asset-check">
+              <input type="checkbox" data-asset-import-overwrite ${ac.importOverwrite ? 'checked' : ''}>
+              <span>允许覆盖冲突项</span>
+            </label>
+            <label class="asset-check">
+              <input type="checkbox" data-asset-import-append-prompts ${ac.importAppendPrompts ? 'checked' : ''}>
+              <span>Prompt 冲突时追加</span>
+            </label>
+          </div>
+        </details>
+        ${renderAssetImportSummary(ac.importPreview, ac.importResult)}
+      </div>
+      ${renderAssetProtocolInline(ac)}
+    </section>
+  `;
+}
+
+function renderAssetActiveTab(activeTab, context = {}) {
+  if (activeTab === 'skills') return renderAssetSkillsTab(context.skills);
+  if (activeTab === 'prompts') return renderAssetPromptsTab(context.prompts);
+  if (activeTab === 'sessions') return renderAssetSessionsTab(context.sessions, context.sessionTrash);
+  if (activeTab === 'sync') return renderAssetSyncTab(context.syncTargets, context.syncSnapshots);
+  if (activeTab === 'import') return renderAssetImportTab(context.ac);
+  return renderAssetMcpTab(context.mcp, context.mcpPlan);
+}
+
+function renderAssetCenterPage() {
+  const root = el('assetCenterPage');
+  if (!root) return;
+  const ac = state.assetCenter || {};
+  const index = ac.index || {};
+  const sessions = index.sessionInventory || {};
+  const providerCatalog = index.providerCatalog || {};
+  const sessionTrash = ac.sessionTrash || {};
+  const mcp = index.mcpInventory || {};
+  const prompts = index.promptInventory || {};
+  const skills = index.skillInventory || {};
+  const usage = index.usageInventory || {};
+  const syncTargets = ac.syncTargets || {};
+  const syncSnapshots = ac.syncSnapshots || {};
+  const mcpPlan = ac.mcpPlan || {};
+  const loading = Boolean(ac.loading);
+  const error = ac.error || '';
+  const softLoading = loading && !ac.index;
+  const activeTab = ASSET_CENTER_TAB_IDS.includes(ac.activeTab) ? ac.activeTab : 'mcp';
+  ac.activeTab = activeTab;
+  const counts = {
+    mcp: assetItems(mcp.servers).length,
+    skills: assetItems(skills.skills).length,
+    prompts: assetItems(prompts.files).length,
+    sessions: assetNumber(sessions.summary?.sessions) || assetItems(sessions.items).length,
+    sync: assetNumber(syncTargets.summary?.targets) || assetItems(syncTargets.targets).length,
+    import: ac.importPreview || ac.importResult || ac.deepLinkLastUrl ? 1 : '',
+  };
+  const tabPanel = renderAssetActiveTab(activeTab, {
+    ac,
+    mcp,
+    mcpPlan,
+    providerCatalog,
+    prompts,
+    skills,
+    sessions,
+    sessionTrash,
+    syncTargets,
+    syncSnapshots,
+    usage,
+  });
+
+  root.innerHTML = `
+    <div class="asset-center-head">
+      <div>
+        <div class="asset-center-kicker">Assets</div>
+        <h2>资产中心</h2>
+        <p>把 Codex、Claude、Gemini、OpenCode 以及 Cline/Roo 等扩展里的 MCP、Skills、Prompts 做成可迁移资产：能写的直接配置，不能写的只做检测、导入和接入包。</p>
+      </div>
+      <div class="asset-center-actions">
+        <button type="button" class="secondary tiny-btn" data-asset-refresh ${loading ? 'disabled' : ''}>${loading ? '刷新中' : '刷新'}</button>
+        <button type="button" class="secondary tiny-btn" data-asset-copy-catalog ${ac.copyingLink ? 'disabled' : ''}>${ac.copyingLink ? '打包中' : '打包分享'}</button>
+      </div>
+    </div>
+    ${error ? `<div class="asset-error">${escapeHtml(error)}</div>` : ''}
+    ${softLoading ? '<div class="asset-loading-strip">正在读取本地资产...</div>' : loading ? '<div class="asset-loading-strip">正在刷新资产索引...</div>' : ''}
+    ${renderAssetPurposeBar(counts)}
+    ${renderAssetToolCapabilityList({ providerCatalog, mcp, prompts, skills, sessions, usage })}
+    ${renderAssetTabs(activeTab, counts)}
+    ${tabPanel}
+    ${ac.fetchedAt ? `<div class="asset-foot">Updated ${escapeHtml(assetDate(ac.fetchedAt))}</div>` : ''}
+  `;
+}
+
+async function loadAssetCenter({ force = false } = {}) {
+  if (state.assetCenter.loading && !force) return;
+  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  state.assetCenter.loading = true;
+  state.assetCenter.error = '';
+  state.assetCenter.loadRequestId = requestId;
+  renderAssetCenterPage();
+  const params = new URLSearchParams({
+    usage: '1',
+    days: String(state.dashboardDays || 30),
+    limit: '80',
+  });
+  const cwd = state.current?.launch?.cwd || '';
+  if (cwd) {
+    params.set('cwd', cwd);
+    params.set('projectPath', cwd);
+  }
+
+  const failures = [];
+  let loadedAny = false;
+  const stillCurrent = () => state.assetCenter.loadRequestId === requestId;
+  const recordFailure = (label, error) => {
+    const message = error instanceof Error ? error.message : String(error || '读取失败');
+    failures.push(`${label}: ${message}`);
+    state.assetCenter.error = failures.join('；');
+  };
+  const requests = [
+    {
+      label: '资产索引',
+      run: () => api(`/api/assets/index?${params.toString()}`, { timeoutMs: 45000 }),
+      apply: (data) => { state.assetCenter.index = data || {}; },
+    },
+    {
+      label: 'MCP 同步计划',
+      run: () => api('/api/mcp/sync-plan', { timeoutMs: 30000 }),
+      apply: (data) => { state.assetCenter.mcpPlan = data || null; },
+    },
+    {
+      label: '同步目标',
+      run: () => api('/api/sync/targets', { timeoutMs: 30000 }),
+      apply: (data) => { state.assetCenter.syncTargets = data || null; },
+    },
+    {
+      label: '同步快照',
+      run: () => api('/api/sync/snapshots', { timeoutMs: 30000 }),
+      apply: (data) => { state.assetCenter.syncSnapshots = data || null; },
+    },
+    {
+      label: '会话回收站',
+      run: () => api('/api/sessions/trash', { timeoutMs: 30000 }),
+      apply: (data) => { state.assetCenter.sessionTrash = data || null; },
+    },
+  ];
+
+  const settleOne = async (request) => {
+    try {
+      const json = await request.run();
+      if (!stillCurrent()) return;
+      if (!json?.ok) {
+        recordFailure(request.label, json?.error || '读取失败');
+        renderAssetCenterPage();
+        return;
+      }
+      request.apply(json.data);
+      loadedAny = true;
+      state.assetCenter.fetchedAt = Date.now();
+      renderAssetCenterPage();
+    } catch (error) {
+      if (!stillCurrent()) return;
+      recordFailure(request.label, error);
+      renderAssetCenterPage();
+    }
+  };
+
+  await Promise.allSettled(requests.map(settleOne));
+  if (!stillCurrent()) return;
+  state.assetCenter.loading = false;
+  state.assetCenter.error = failures.join('；');
+  if (loadedAny && !state.assetCenter.fetchedAt) state.assetCenter.fetchedAt = Date.now();
+  renderAssetCenterPage();
+}
+
+function assetSessionKey(item = {}) {
+  return item.id || `${item.tool || ''}:${item.sessionId || ''}:${item.sourcePath || ''}`;
+}
+
+function assetSessionArchivePayload(item = {}, dryRun = true) {
+  return {
+    tool: item.tool || '',
+    sessionId: item.sessionId || '',
+    title: item.title || '',
+    sourcePath: item.sourcePath || '',
+    sourceLabel: item.sourceLabel || '',
+    dryRun,
+  };
+}
+
+function assetSessionRestorePayload(entry = {}, dryRun = true, overwrite = false) {
+  return {
+    archiveId: entry.id || '',
+    tool: entry.tool || '',
+    targetPath: entry.originalPath || '',
+    dryRun,
+    overwrite,
+  };
+}
+
+async function archiveAssetSession(index) {
+  const ac = state.assetCenter || {};
+  const sessions = ac.index?.sessionInventory?.items || [];
+  const item = sessions[Number(index)];
+  if (!item || !item.sourcePath || !item.actions?.delete) {
+    flash('这个会话暂不支持归档', 'error');
+    return;
+  }
+  const key = assetSessionKey(item);
+  if (ac.sessionArchiving) return;
+  ac.sessionArchiving = key;
+  renderAssetCenterPage();
+  try {
+    const previewJson = await api('/api/sessions/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetSessionArchivePayload(item, true)),
+      timeoutMs: 30000,
+    });
+    if (!previewJson.ok) throw new Error(previewJson.error || '会话归档预览失败');
+    const entry = previewJson.data?.entry || {};
+    const confirmed = await openUpdateDialog({
+      eyebrow: 'Session Archive',
+      title: '归档这个会话？',
+      body: `<p>会话会先移动到 EasyAIConfig session trash，可从 trash manifest 恢复。</p>
+        <div class="update-line"><code>${escapeHtml(entry.originalPath || item.sourcePath || '')}</code></div>`,
+      confirmText: '归档',
+      cancelText: '取消',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    const archiveJson = await api('/api/sessions/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetSessionArchivePayload(item, false)),
+      timeoutMs: 30000,
+    });
+    if (!archiveJson.ok) throw new Error(archiveJson.error || '会话归档失败');
+    flash('会话已归档，可从 session trash 恢复', 'success');
+    await loadAssetCenter({ force: true });
+  } catch (error) {
+    flash(error instanceof Error ? error.message : '会话归档失败', 'error');
+  } finally {
+    ac.sessionArchiving = '';
+    renderAssetCenterPage();
+  }
+}
+
+async function restoreAssetSession(index) {
+  const ac = state.assetCenter || {};
+  const entries = ac.sessionTrash?.entries || [];
+  const entry = entries[Number(index)];
+  if (!entry || !entry.id || !entry.exists || entry.restoredAt) {
+    flash('这个归档会话暂不可恢复', 'error');
+    return;
+  }
+  const key = String(entry.id);
+  if (ac.sessionRestoring) return;
+  ac.sessionRestoring = key;
+  renderAssetCenterPage();
+  try {
+    const previewJson = await api('/api/sessions/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetSessionRestorePayload(entry, true, false)),
+      timeoutMs: 30000,
+    });
+    if (!previewJson.ok) throw new Error(previewJson.error || '会话恢复预览失败');
+    const operation = previewJson.data?.operations?.[0] || {};
+    const hasConflict = operation.status === 'conflict' || previewJson.data?.summary?.conflicts;
+    const confirmed = await openUpdateDialog({
+      eyebrow: 'Session Restore',
+      title: hasConflict ? '覆盖恢复这个会话？' : '恢复这个会话？',
+      body: `<p>${hasConflict ? '目标路径已存在，确认后会覆盖原文件。' : '会话会恢复到原始 session 路径。'}</p>
+        <div class="update-line"><code>${escapeHtml(entry.originalPath || operation.targetPath || '')}</code></div>`,
+      confirmText: hasConflict ? '覆盖恢复' : '恢复',
+      cancelText: '取消',
+      tone: hasConflict ? 'danger' : 'default',
+    });
+    if (!confirmed) return;
+    const restoreJson = await api('/api/sessions/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetSessionRestorePayload(entry, false, Boolean(hasConflict))),
+      timeoutMs: 30000,
+    });
+    if (!restoreJson.ok) throw new Error(restoreJson.error || '会话恢复失败');
+    if (restoreJson.data?.summary?.conflicts) {
+      throw new Error('目标路径仍有冲突，未恢复');
+    }
+    flash('会话已恢复', 'success');
+    await loadAssetCenter({ force: true });
+  } catch (error) {
+    flash(error instanceof Error ? error.message : '会话恢复失败', 'error');
+  } finally {
+    ac.sessionRestoring = '';
+    renderAssetCenterPage();
+  }
+}
+
+function assetSyncTargetPayload(item = {}, dryRun = true) {
+  return {
+    targetId: item.id || '',
+    dryRun,
+    includeLocal: true,
+    cwd: state.current?.launch?.cwd || '',
+    projectPath: state.current?.launch?.cwd || '',
+    label: `Asset Center ${new Date().toISOString()}`,
+  };
+}
+
+async function pushAssetSyncTarget(index) {
+  const ac = state.assetCenter || {};
+  const targets = ac.syncTargets?.targets || [];
+  const item = targets[Number(index)];
+  if (!item || !item.id || (!item.path && !item.url)) {
+    flash('这个同步目标暂不支持推送', 'error');
+    return;
+  }
+  const key = `push:${item.id}`;
+  if (ac.syncBusy) return;
+  ac.syncBusy = key;
+  renderAssetCenterPage();
+  try {
+    const previewJson = await api('/api/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetSyncTargetPayload(item, true)),
+      timeoutMs: 45000,
+    });
+    if (!previewJson.ok) throw new Error(previewJson.error || '同步推送预览失败');
+    const entry = previewJson.data?.entry || {};
+    const confirmed = await openUpdateDialog({
+      eyebrow: 'Cloud Sync',
+      title: '推送资产快照？',
+      body: `<p>会把当前资产包写入同步目录的 snapshots，并更新 manifest。</p>
+        <div class="update-line"><code>${escapeHtml(item.path || '')}</code></div>
+        <div class="update-line">大小：${escapeHtml(assetFmt(entry.bytes || 0))} bytes</div>`,
+      confirmText: '推送',
+      cancelText: '取消',
+    });
+    if (!confirmed) return;
+    const pushJson = await api('/api/sync/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetSyncTargetPayload(item, false)),
+      timeoutMs: 45000,
+    });
+    if (!pushJson.ok) throw new Error(pushJson.error || '同步推送失败');
+    flash('同步快照已推送', 'success');
+    await loadAssetCenter({ force: true });
+  } catch (error) {
+    flash(error instanceof Error ? error.message : '同步推送失败', 'error');
+  } finally {
+    ac.syncBusy = '';
+    renderAssetCenterPage();
+  }
+}
+
+function assetSyncPullPayload(item = {}, dryRun = true) {
+  const snapshot = syncSnapshotForTarget(item);
+  return {
+    targetId: item.id || '',
+    snapshotId: snapshot?.summary?.latestSnapshotId || '',
+    dryRun,
+    targetTool: 'all',
+    includeCatalogPresets: true,
+    overwrite: false,
+    append: false,
+    installMode: 'copy',
+    projectPath: state.current?.launch?.cwd || '',
+  };
+}
+
+async function pullAssetSyncTarget(index) {
+  const ac = state.assetCenter || {};
+  const targets = ac.syncTargets?.targets || [];
+  const item = targets[Number(index)];
+  const snapshot = item ? syncSnapshotForTarget(item) : null;
+  if (!item || !item.id || !snapshot?.summary?.latestSnapshotId) {
+    flash('这个同步目标没有可拉取快照', 'error');
+    return;
+  }
+  const key = `pull:${item.id}`;
+  if (ac.syncBusy) return;
+  ac.syncBusy = key;
+  renderAssetCenterPage();
+  try {
+    const previewJson = await api('/api/sync/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetSyncPullPayload(item, true)),
+      timeoutMs: 45000,
+    });
+    if (!previewJson.ok) throw new Error(previewJson.error || '同步拉取预览失败');
+    const summary = previewJson.data?.importResult?.summary || {};
+    const confirmed = await openUpdateDialog({
+      eyebrow: 'Cloud Sync',
+      title: '拉取并应用同步快照？',
+      body: `<p>会读取最新快照并按资产导入规则应用到本机。默认不覆盖冲突项。</p>
+        <div class="update-line">快照：<code>${escapeHtml(snapshot.summary.latestSnapshotId || '')}</code></div>
+        <div class="update-line">变更：${escapeHtml(assetFmt(Number(summary.created || 0) + Number(summary.updated || 0) + Number(summary.appended || 0)))} / 冲突：${escapeHtml(assetFmt(summary.conflicts || 0))}</div>`,
+      confirmText: '拉取应用',
+      cancelText: '取消',
+      tone: summary.conflicts ? 'danger' : 'default',
+    });
+    if (!confirmed) return;
+    const pullJson = await api('/api/sync/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetSyncPullPayload(item, false)),
+      timeoutMs: 45000,
+    });
+    if (!pullJson.ok) throw new Error(pullJson.error || '同步拉取失败');
+    const applied = pullJson.data?.importResult?.summary || {};
+    flash(`同步拉取完成：${assetFmt(applied.created || 0)} 新增，${assetFmt(applied.conflicts || 0)} 冲突`, applied.conflicts ? 'warning' : 'success');
+    await loadAssetCenter({ force: true });
+  } catch (error) {
+    flash(error instanceof Error ? error.message : '同步拉取失败', 'error');
+  } finally {
+    ac.syncBusy = '';
+    renderAssetCenterPage();
+  }
+}
+
+async function copyAssetProviderCatalogLink() {
+  if (state.assetCenter.copyingLink) return;
+  state.assetCenter.copyingLink = true;
+  renderAssetCenterPage();
+  try {
+    const bundleJson = await api('/api/assets/export', { timeoutMs: 30000 });
+    if (!bundleJson.ok) throw new Error(bundleJson.error || '导出失败');
+    const linkJson = await api('/api/assets/deep-link/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ payload: bundleJson.data }),
+      timeoutMs: 30000,
+    });
+    if (!linkJson.ok) throw new Error(linkJson.error || '链接生成失败');
+    await copyText(linkJson.data?.url || '');
+    flash('资产 Deep Link 已复制', 'success');
+  } catch (error) {
+    flash(error instanceof Error ? error.message : '复制失败', 'error');
+  } finally {
+    state.assetCenter.copyingLink = false;
+    renderAssetCenterPage();
+  }
+}
+
+function assetImportRequestBody({ dryRun = true } = {}) {
+  const ac = state.assetCenter || {};
+  return {
+    text: ac.importText || '',
+    codexHome: ac.importCodexHome || '',
+    projectPath: ac.importProjectPath || state.current?.launch?.cwd || '',
+    targetTool: assetImportTargetTool(ac.importTargetTool || 'all'),
+    installMode: ac.importInstallMode || 'copy',
+    includeCatalogPresets: Boolean(ac.importIncludeCatalogPresets),
+    overwrite: Boolean(ac.importOverwrite),
+    append: Boolean(ac.importAppendPrompts),
+    dryRun,
+  };
+}
+
+function syncAssetImportStateFromForm() {
+  const ac = state.assetCenter || {};
+  ac.importText = document.querySelector('[data-asset-import-text]')?.value || ac.importText || '';
+  ac.importCodexHome = document.querySelector('[data-asset-import-codex-home]')?.value?.trim() || '';
+  ac.importProjectPath = document.querySelector('[data-asset-import-project-path]')?.value?.trim() || '';
+  ac.importTargetTool = assetImportTargetTool(document.querySelector('[data-asset-import-target]')?.value || 'all');
+  ac.importInstallMode = document.querySelector('[data-asset-import-install-mode]')?.value || 'copy';
+  ac.importIncludeCatalogPresets = Boolean(document.querySelector('[data-asset-import-include-catalog]')?.checked);
+  ac.importOverwrite = Boolean(document.querySelector('[data-asset-import-overwrite]')?.checked);
+  ac.importAppendPrompts = Boolean(document.querySelector('[data-asset-import-append-prompts]')?.checked);
+  ac.importConfirmApply = Boolean(document.querySelector('[data-asset-import-confirm]')?.checked);
+}
+
+async function previewAssetImportText(text = '', { syncForm = false } = {}) {
+  const ac = state.assetCenter;
+  if (ac.importLoading || ac.importApplying) return;
+  if (syncForm) {
+    syncAssetImportStateFromForm();
+  } else if (typeof text === 'string' && text.trim()) {
+    ac.importText = text.trim();
+  }
+  if (!ac.importText.trim()) {
+    flash('请先粘贴 Deep Link 或 JSON bundle', 'error');
+    return;
+  }
+  ac.importLoading = true;
+  ac.importError = '';
+  ac.importResult = null;
+  renderAssetCenterPage();
+  try {
+    const previewJson = await api('/api/assets/import/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: ac.importText }),
+      timeoutMs: 30000,
+    });
+    if (!previewJson.ok) throw new Error(previewJson.error || '导入包解析失败');
+    const dryRunJson = await api('/api/assets/import/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetImportRequestBody({ dryRun: true })),
+      timeoutMs: 30000,
+    });
+    if (!dryRunJson.ok) throw new Error(dryRunJson.error || '资产 dry-run 失败');
+    ac.importPreview = {
+      bundle: previewJson.data,
+      apply: dryRunJson.data,
+    };
+    const summary = dryRunJson.data?.summary || {};
+    flash(`预览完成：${summary.created || 0} 新增，${summary.conflicts || 0} 冲突`, summary.conflicts ? 'warning' : 'success');
+  } catch (error) {
+    ac.importError = error instanceof Error ? error.message : String(error);
+    flash(ac.importError, 'error');
+  } finally {
+    ac.importLoading = false;
+    renderAssetCenterPage();
+  }
+}
+
+async function previewAssetImportFromInput() {
+  return previewAssetImportText('', { syncForm: true });
+}
+
+async function applyAssetImportFromInput() {
+  const ac = state.assetCenter;
+  if (ac.importLoading || ac.importApplying) return;
+  syncAssetImportStateFromForm();
+  if (!ac.importText.trim()) {
+    flash('请先粘贴 Deep Link 或 JSON bundle', 'error');
+    return;
+  }
+  if (!ac.importConfirmApply) {
+    flash('应用前需要勾选确认写入本机配置', 'error');
+    return;
+  }
+  ac.importApplying = true;
+  ac.importError = '';
+  renderAssetCenterPage();
+  try {
+    const applyJson = await api('/api/assets/import/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assetImportRequestBody({ dryRun: false })),
+      timeoutMs: 30000,
+    });
+    if (!applyJson.ok) throw new Error(applyJson.error || '资产导入失败');
+    ac.importResult = applyJson.data;
+    ac.importConfirmApply = false;
+    const summary = applyJson.data?.summary || {};
+    if (summary.written === false) {
+      flash('导入包已解析；桌面端当前未写入本机配置。', 'warning');
+    } else {
+      flash(`资产导入完成：${summary.created || 0} 新增，${summary.updated || 0} 更新，${summary.conflicts || 0} 冲突`, summary.conflicts ? 'warning' : 'success');
+    }
+    if (summary.written) {
+      void loadAssetCenter({ force: true });
+      void loadState({ preserveForm: true });
+    }
+  } catch (error) {
+    ac.importError = error instanceof Error ? error.message : String(error);
+    flash(ac.importError, 'error');
+  } finally {
+    ac.importApplying = false;
+    renderAssetCenterPage();
+  }
+}
+
+function clearAssetImportInput() {
+  Object.assign(state.assetCenter, {
+    importText: '',
+    importCodexHome: '',
+    importProjectPath: '',
+    importTargetTool: 'all',
+    importInstallMode: 'copy',
+    importIncludeCatalogPresets: false,
+    importOverwrite: false,
+    importAppendPrompts: false,
+    importConfirmApply: false,
+    importPreview: null,
+    importResult: null,
+    importError: '',
+  });
+  renderAssetCenterPage();
+}
+
+function normalizeAssetDeepLinkEventPayload(payload = {}) {
+  if (typeof payload === 'string') return [payload];
+  if (Array.isArray(payload)) return payload.map(String).filter(Boolean);
+  if (Array.isArray(payload.urls)) return payload.urls.map(String).filter(Boolean);
+  if (typeof payload.url === 'string') return [payload.url];
+  if (typeof payload.text === 'string') return [payload.text];
+  return [];
+}
+
+async function handleAssetDeepLinkOpened(payload = {}) {
+  const urls = normalizeAssetDeepLinkEventPayload(payload);
+  const url = urls.find((item) => /^(easyai|easyaiconfig|ccswitch):\/\//i.test(item.trim())) || urls[0] || '';
+  if (!url.trim()) return;
+  Object.assign(state.assetCenter, {
+    activeTab: 'import',
+    importText: url.trim(),
+    importPreview: null,
+    importResult: null,
+    importError: '',
+    deepLinkLastUrl: url.trim(),
+    deepLinkLastSource: payload.source || 'desktop',
+    deepLinkLastAt: Date.now(),
+  });
+  setPage('assets');
+  renderAssetCenterPage();
+  if (!state.assetCenter.index && !state.assetCenter.loading) {
+    void loadAssetCenter({ force: false });
+  }
+  flash('已接收资产 Deep Link，正在预览', 'info');
+  await previewAssetImportText(url.trim(), { syncForm: false });
+}
+
 const SECONDARY_META = {
   quick:          { sub: '选择要配置的工具，或为同一工具保存多份预设。' },
   console:        { sub: '集中监控各 CLI 工具的运行状态与异常检测结果。' },
   dashboard:      { sub: '查看各工具的模型用量、会话趋势与耗时分布。' },
+  assets:         { sub: '按工具拆分可迁移资产与同步状态。' },
   providerRouter: { sub: '启动本地网关，选择主 provider 和 API Key 候选池。' },
   configEditor:   { sub: '搜索配置项，直接编辑底层配置文件。' },
   tools:          { sub: '安装、更新或卸载已接入的 AI 编程工具。' },
@@ -14145,6 +17458,12 @@ function setPage(page = 'quick') {
       void ensureClaudeDashboardData({ force: !hasClaudeDashboardData() });
     } else if (isApiDashboard) {
       void refreshDashboardData({ silent: hasCachedMetrics, tool: dashboardTool });
+    }
+  }
+  if (page === 'assets') {
+    renderAssetCenterPage();
+    if (!state.assetCenter.index && !state.assetCenter.loading) {
+      void loadAssetCenter({ force: false });
     }
   }
   if (page === 'providerRouter') {
@@ -14545,7 +17864,7 @@ function setAdvancedOpen(open) {
 }
 
 function normalizeConfigEditorTool(toolId = '') {
-  if (toolId === 'openclaw' || toolId === 'opencode' || toolId === 'claudecode' || toolId === 'codex') return toolId;
+  if (['codex', 'claudecode', 'claude-desktop', 'gemini', 'opencode', 'openclaw', 'hermes'].includes(toolId)) return toolId;
   return 'codex';
 }
 
@@ -14566,6 +17885,20 @@ function getConfigEditorShellMeta(toolId = '') {
       files: 'settings.json',
       drawerTitle: '原始文件 · settings.json',
     },
+    'claude-desktop': {
+      label: 'Claude Desktop',
+      title: 'Claude Desktop 接入配置',
+      subtitle: '管理 EasyAIConfig Router profile 与资产同步入口，避免覆盖现有 MCP 配置。',
+      files: 'claude_desktop_config.json',
+      drawerTitle: '原始文件 · claude_desktop_config.json',
+    },
+    gemini: {
+      label: 'Gemini CLI',
+      title: 'Gemini CLI 接入配置',
+      subtitle: '管理 Gemini CLI 的 EasyAIConfig Router profile、Prompts 与资产同步入口。',
+      files: 'settings.json',
+      drawerTitle: '原始文件 · settings.json',
+    },
     opencode: {
       label: 'OpenCode',
       title: 'OpenCode 配置编辑',
@@ -14579,6 +17912,13 @@ function getConfigEditorShellMeta(toolId = '') {
       subtitle: '把常用运行项和高级 JSON 分层整理，先调主路径，再补充完整运行配置。',
       files: 'openclaw.json',
       drawerTitle: '原始文件 · openclaw.json',
+    },
+    hermes: {
+      label: 'Hermes Agent',
+      title: 'Hermes Agent 接入配置',
+      subtitle: '管理 Hermes 的 config.yaml、.env 与 EasyAIConfig Router profile。',
+      files: 'config.yaml / .env',
+      drawerTitle: '原始文件 · config.yaml / .env',
     },
   };
   return table[tool] || table.codex;
@@ -14614,8 +17954,11 @@ function renderConfigEditorShell(toolId = '') {
 const CFG_TOOL_LABELS = {
   codex: 'Codex',
   claudecode: 'Claude Code',
+  'claude-desktop': 'Claude Desktop',
+  gemini: 'Gemini CLI',
   opencode: 'OpenCode',
   openclaw: 'OpenClaw',
+  hermes: 'Hermes Agent',
 };
 function cfgToolLabel(toolId) {
   return CFG_TOOL_LABELS[toolId] || (typeof window !== 'undefined' && window.__cfgToolLabel?.(toolId)) || toolId || '';
@@ -14955,10 +18298,10 @@ function getConfigEditorTool() {
   return normalizeConfigEditorTool(state.configEditorTool);
 }
 
-async function setConfigEditorOpen(open) {
+async function setConfigEditorOpen(open, preferredTool = '') {
   state.configEditorOpen = open;
   if (open) {
-    const nextTool = normalizeConfigEditorTool(state.activeTool || state.configEditorTool);
+    const nextTool = normalizeConfigEditorTool(preferredTool || state.activeTool || state.configEditorTool);
     if (flashTemporarilyDisabledTool(nextTool)) {
       state.configEditorOpen = false;
       return false;
@@ -18093,6 +21436,18 @@ async function saveClaudeProviderFormInConfigEditor({ switchOnly = false, provid
 async function saveConfigEditor() {
   setBusy('saveConfigEditorBtn', true, '保存中...');
 
+  if (['claude-desktop', 'gemini', 'hermes'].includes(getConfigEditorTool())) {
+    const tool = getConfigEditorTool();
+    try {
+      setBusy('saveConfigEditorBtn', false);
+      await actionProviderRouterApplyClient(tool);
+      return;
+    } catch (error) {
+      setBusy('saveConfigEditorBtn', false);
+      return flash(error instanceof Error ? error.message : String(error), 'error');
+    }
+  }
+
   // ── OpenCode save ──
   if (getConfigEditorTool() === 'opencode') {
     const rawValue = getRawTextareaValue('opCfgRawJsonTextarea');
@@ -18204,6 +21559,13 @@ async function saveRawConfigEditor() {
 
 async function applyConfigEditor() {
   setBusy('applyConfigEditorBtn', true, '保存中...');
+
+  if (['claude-desktop', 'gemini', 'hermes'].includes(getConfigEditorTool())) {
+    const tool = getConfigEditorTool();
+    setBusy('applyConfigEditorBtn', false);
+    await actionProviderRouterApplyClient(tool);
+    return;
+  }
 
   // ── OpenCode apply ──
   if (getConfigEditorTool() === 'opencode') {
@@ -19324,6 +22686,94 @@ function renderCurrentConfig() {
     return;
   }
 
+  // ── Gemini CLI tab ──
+  if (state.activeTool === 'gemini') {
+    const data = state.geminiState || {};
+    const safe = data.safeProfile || {};
+    const installed = isGeminiInstalled();
+    const model = safe.model || data.model || el('modelSelect')?.value || '未选择模型';
+    const baseUrl = safe.baseUrl || data.baseUrl || el('baseUrlInput')?.value || '';
+    const provider = safe.provider || data.activeProviderKey || 'easyai-router';
+    const hasApiKey = Boolean(safe.hasApiKey || data.routerProfile?.apiKey);
+    const configPath = data.configPath || '~/.gemini/settings.json';
+    const profileReady = Boolean(data.routerProfile && Object.keys(data.routerProfile || {}).length);
+
+    el('currentConfigMain').innerHTML = `<span class="current-provider">Gemini CLI</span><span class="current-model">${escapeHtml(model || '-')}</span>`;
+    el('currentConfigMeta').innerHTML = [
+      `<span class="provider-pill ${installed ? 'ok' : 'warn'}">${installed ? '命令已安装' : '未安装'}</span>`,
+      `<span class="provider-pill ${profileReady ? 'ok' : 'muted'}">${escapeHtml(provider || 'safe profile')}</span>`,
+      `<span class="provider-pill ${hasApiKey ? 'ok' : 'warn'}">${hasApiKey ? 'Key 已就绪' : '缺少 Key'}</span>`,
+      baseUrl ? `<span class="current-url">${escapeHtml(baseUrl)}</span>` : '<span class="current-url">未写入 Base URL</span>',
+    ].join('<span class="meta-sep">·</span>');
+
+    el('providerDropdown').innerHTML = `
+      <button class="provider-option active" type="button">
+        <span class="provider-option-main">
+          <strong>Gemini Router safe profile</strong>
+          <span>${escapeHtml(configPath)}</span>
+        </span>
+        <span class="provider-option-side">
+          <span class="provider-pill ${profileReady ? 'ok' : 'warn'}">${profileReady ? 'profile 已读取' : 'profile 未写入'}</span>
+          <span class="provider-option-model">${escapeHtml(model || '当前')}</span>
+        </span>
+      </button>
+    `;
+    el('providerDropdown').classList.toggle('hide', !state.providerDropdownOpen);
+    el('providerSwitchBtn').setAttribute('aria-expanded', String(state.providerDropdownOpen));
+
+    state.quickTips = [
+      '保存会写入 `~/.gemini/settings.json` 的 `easyaiconfig.router` safe profile',
+      '当前不伪造 Gemini CLI 未确认的原生 provider 字段',
+      '启动 Gemini CLI 后仍由本机 Router profile 作为 EasyAIConfig 资产索引',
+    ];
+    renderQuickRailSupportPanel();
+    return;
+  }
+
+  // ── Hermes Agent tab ──
+  if (state.activeTool === 'hermes') {
+    const data = state.hermesState || {};
+    const native = data.nativeProvider || {};
+    const installed = isHermesInstalled(data);
+    const model = native.model || data.model || el('modelSelect')?.value || '未选择模型';
+    const baseUrl = native.baseUrl || data.baseUrl || el('baseUrlInput')?.value || '';
+    const provider = native.provider || data.activeProviderKey || 'custom';
+    const hasApiKey = Boolean(native.hasApiKey || data.env?.hasEasyAiRouterKey || data.env?.hasOpenAiKey);
+    const configPath = data.configPath || '~/.hermes/config.yaml';
+    const envReady = data.envExists || data.env?.hasEasyAiRouterKey || data.env?.hasOpenAiKey;
+
+    el('currentConfigMain').innerHTML = `<span class="current-provider">Hermes Agent</span><span class="current-model">${escapeHtml(model || '-')}</span>`;
+    el('currentConfigMeta').innerHTML = [
+      `<span class="provider-pill ${installed ? 'ok' : 'warn'}">${installed ? '命令已安装' : '手动安装'}</span>`,
+      `<span class="provider-pill ${provider === 'custom' ? 'ok' : 'muted'}">${escapeHtml(provider || 'custom')}</span>`,
+      `<span class="provider-pill ${hasApiKey ? 'ok' : 'warn'}">${hasApiKey ? 'Key 已就绪' : '缺少 Key'}</span>`,
+      baseUrl ? `<span class="current-url">${escapeHtml(baseUrl)}</span>` : '<span class="current-url">未写入 Base URL</span>',
+    ].join('<span class="meta-sep">·</span>');
+
+    el('providerDropdown').innerHTML = `
+      <button class="provider-option active" type="button">
+        <span class="provider-option-main">
+          <strong>Hermes native model</strong>
+          <span>${escapeHtml(configPath)}</span>
+        </span>
+        <span class="provider-option-side">
+          <span class="provider-pill ${envReady ? 'ok' : 'warn'}">${envReady ? '.env 已读取' : '.env 未写入'}</span>
+          <span class="provider-option-model">${escapeHtml(model || '当前')}</span>
+        </span>
+      </button>
+    `;
+    el('providerDropdown').classList.toggle('hide', !state.providerDropdownOpen);
+    el('providerSwitchBtn').setAttribute('aria-expanded', String(state.providerDropdownOpen));
+
+    state.quickTips = [
+      '保存会写入 `~/.hermes/config.yaml` 顶层 `model` 块',
+      '同时写入 `~/.hermes/.env` 的 Router/OpenAI 兼容环境变量',
+      'EasyAIConfig 仍会保留 `config.json` 里的 router profile 作为资产索引',
+    ];
+    renderQuickRailSupportPanel();
+    return;
+  }
+
   // ── Codex tab (default) ──
   if (!isCodexInstalled()) {
     el('currentConfigMain').innerHTML = '<span class="current-provider">Codex</span><span class="current-model">未安装</span>';
@@ -20031,6 +23481,33 @@ function buildCodexResumeCommand(sessionId = '') {
   return `codex resume ${quotePosixShellArg(id)}`;
 }
 
+function getResumePanelTool() {
+  const tool = state.activeTool || 'codex';
+  return ['codex', 'claudecode', 'gemini', 'opencode', 'openclaw', 'hermes'].includes(tool) ? tool : 'codex';
+}
+
+function isResumePanelToolInstalled(tool = getResumePanelTool()) {
+  if (tool === 'codex') return isCodexInstalled();
+  if (tool === 'claudecode') return isClaudeCodeInstalled();
+  if (tool === 'gemini') return isGeminiInstalled();
+  if (tool === 'opencode') return isOpenCodeInstalled();
+  if (tool === 'openclaw') return isOpenClawInstalled();
+  if (tool === 'hermes') return isHermesInstalled();
+  return false;
+}
+
+function buildGenericSessionOpenCommand(tool = getResumePanelTool(), cwd = '') {
+  const binary = {
+    claudecode: 'claude',
+    gemini: 'gemini',
+    opencode: 'opencode',
+    openclaw: 'openclaw',
+    hermes: 'hermes',
+  }[tool] || tool || 'tool';
+  const dir = String(cwd || '').trim();
+  return dir ? `cd ${quotePosixShellArg(dir)} && ${binary}` : binary;
+}
+
 function downloadTextFile(fileName, content, mime = 'text/plain;charset=utf-8') {
   const blob = new Blob([String(content || '')], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -20104,12 +23581,16 @@ function renderCodexResumeSessions() {
   const hintEl = el('codexResumeHint');
   const scopeBtn = el('codexResumeScopeBtn');
   if (!listEl || !hintEl) return;
+  const panelTool = getResumePanelTool();
+  const panelToolLabel = getToolDisplayName(panelTool);
+  const isCodexPanel = panelTool === 'codex';
+  const toolInstalled = isResumePanelToolInstalled(panelTool);
 
   if (scopeBtn) {
     scopeBtn.textContent = state.codexResumeShowAll ? '只看当前目录' : '显示全部';
   }
 
-  if (!isCodexInstalled()) {
+  if (isCodexPanel && !toolInstalled) {
     state.codexResumeLoading = false;
     state.codexResumeSessions = [];
     listEl.innerHTML = '';
@@ -20119,16 +23600,59 @@ function renderCodexResumeSessions() {
 
   if (state.codexResumeLoading) {
     listEl.innerHTML = '<div class="provider-meta">正在扫描最近会话…</div>';
-    hintEl.textContent = '正在读取 ~/.codex/sessions 里的最近记录。';
+    hintEl.textContent = isCodexPanel
+      ? '正在读取 ~/.codex/sessions 里的最近记录。'
+      : `正在读取 ${panelToolLabel} 的本地 sessions/history。`;
     return;
   }
 
   const items = Array.isArray(state.codexResumeSessions) ? state.codexResumeSessions : [];
   if (!items.length) {
     listEl.innerHTML = '<div class="provider-meta">暂无可恢复会话</div>';
+    hintEl.textContent = isCodexPanel
+      ? (state.codexResumeShowAll
+          ? '还没发现可恢复的 Codex 会话。先在终端里跑一次 Codex，再回来这里恢复。'
+          : '当前仅显示与启动目录相关的会话。若没找到，可点“显示全部”。')
+      : (state.codexResumeShowAll
+          ? `还没发现 ${panelToolLabel} 的本地 session 文件。`
+          : `当前仅显示与启动目录相关的 ${panelToolLabel} session。若没找到，可点“显示全部”。`);
+    return;
+  }
+
+  if (!isCodexPanel) {
     hintEl.textContent = state.codexResumeShowAll
-      ? '还没发现可恢复的 Codex 会话。先在终端里跑一次 Codex，再回来这里恢复。'
-      : '当前仅显示与启动目录相关的会话。若没找到，可点“显示全部”。';
+      ? `已列出最近 ${items.length} 个 ${panelToolLabel} 会话文件，可打开项目或复制路径。`
+      : `已按当前启动目录筛出 ${items.length} 个 ${panelToolLabel} 会话文件；点“显示全部”可看全部历史。`;
+    listEl.innerHTML = items.map((item, index) => {
+      const title = String(item.title || item.sessionId || '未命名会话').trim();
+      const provider = String(item.provider || 'unknown').trim();
+      const model = String(item.model || 'unknown').trim();
+      const cwd = String(item.cwd || item.projectPath || '').trim();
+      const sourcePath = String(item.sourcePath || item.filePath || '').trim();
+      const command = buildGenericSessionOpenCommand(panelTool, cwd);
+      const canOpen = Boolean(toolInstalled && cwd);
+      const meta = [
+        String(item.sessionId || '').trim(),
+        model,
+        provider,
+        formatCodexResumeTime(item.updatedAt),
+      ].filter(Boolean);
+      return `
+        <div class="resume-session-card">
+          <div class="resume-session-main">
+            <div class="resume-session-title">${escapeHtml(title)}</div>
+            <div class="resume-session-meta">${meta.map((part) => `<span>${escapeHtml(part)}</span>`).join('<span class="resume-session-dot">•</span>')}</div>
+            <div class="resume-session-command" title="${escapeHtml(command)}">${escapeHtml(command)}</div>
+            <div class="resume-session-cwd">${escapeHtml(cwd || sourcePath || '未记录工作目录')}</div>
+          </div>
+          <div class="resume-session-actions">
+            <button type="button" class="secondary tiny-btn" data-generic-session-open="${index}" ${canOpen ? '' : 'disabled'}>${toolInstalled ? '打开项目' : '未安装'}</button>
+            <button type="button" class="secondary tiny-btn" data-generic-session-copy-command="${escapeHtml(command)}">复制命令</button>
+            <button type="button" class="secondary tiny-btn" data-generic-session-copy-path="${escapeHtml(sourcePath)}" ${sourcePath ? '' : 'disabled'}>复制路径</button>
+          </div>
+        </div>
+      `;
+    }).join('');
     return;
   }
 
@@ -20168,7 +23692,9 @@ function renderCodexResumeSessions() {
 async function loadCodexResumeSessions({ silent = true } = {}) {
   const listEl = el('codexResumeSessions');
   if (!listEl) return;
-  if (!isCodexInstalled()) {
+  const panelTool = getResumePanelTool();
+  const isCodexPanel = panelTool === 'codex';
+  if (isCodexPanel && !isCodexInstalled()) {
     state.codexResumeLoading = false;
     state.codexResumeSessions = [];
     renderCodexResumeSessions();
@@ -20178,6 +23704,26 @@ async function loadCodexResumeSessions({ silent = true } = {}) {
   state.codexResumeLoading = true;
   renderCodexResumeSessions();
   const context = getCodexResumeContext();
+  if (!isCodexPanel) {
+    const params = new URLSearchParams({
+      tools: panelTool,
+      tool: panelTool,
+      cwd: state.codexResumeShowAll ? '' : context.cwd,
+      limit: '20',
+    });
+    const json = await api(`/api/sessions/inventory?${params.toString()}`);
+    state.codexResumeLoading = false;
+    if (!json.ok) {
+      state.codexResumeSessions = [];
+      renderCodexResumeSessions();
+      if (!silent) flash(json.error || '读取会话失败', 'error');
+      return;
+    }
+    state.codexResumeSessions = json.data?.items || [];
+    renderCodexResumeSessions();
+    return;
+  }
+
   const params = new URLSearchParams({
     cwd: context.cwd,
     codexHome: context.codexHome,
@@ -20285,6 +23831,36 @@ async function triggerCodexResumeAction(action, button, { sessionId = '', last =
   }
   flash(json.data?.message || (action === 'fork' ? '已打开 Codex 分叉恢复' : '已打开 Codex 会话恢复'), 'success');
   return true;
+}
+
+async function openGenericSessionProject(index, button) {
+  const item = (Array.isArray(state.codexResumeSessions) ? state.codexResumeSessions : [])[Number(index)];
+  const cwd = String(item?.cwd || item?.projectPath || '').trim();
+  if (!item || !cwd) {
+    flash('这个 session 没有记录工作目录，不能直接打开项目', 'error');
+    return false;
+  }
+  const originalText = button?.textContent || '';
+  if (button) {
+    button.disabled = true;
+    button.textContent = '打开中...';
+  }
+  const input = el('launchCwdInput');
+  const previousCwd = input?.value || '';
+  if (input) input.value = cwd;
+  try {
+    const ok = await launchActiveTool();
+    if (ok) {
+      refreshToolRuntimeAfterMutation(getResumePanelTool()).catch((e) => console.warn('[openGenericSessionProject] refresh failed', e));
+    }
+    return ok;
+  } finally {
+    if (input && !input.value) input.value = previousCwd;
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
 }
 
 function fillAdvancedFromState() {
@@ -20549,7 +24125,7 @@ async function loadState({ preserveForm = true } = {}) {
   renderCurrentConfig();
 
 // Skip Codex form restoration when non-Codex tool is active
-  if (state.activeTool === 'claudecode' || state.activeTool === 'opencode' || state.activeTool === 'openclaw') {
+  if (['claudecode', 'claude-desktop', 'gemini', 'opencode', 'openclaw', 'hermes'].includes(state.activeTool)) {
     loadCodexResumeSessions({ silent: true }).catch((e) => console.warn('[restoreFromSnapshot] loadCodexResumeSessions failed:', e));
     refreshProviderHealth();
     renderToolConsole();
@@ -20995,6 +24571,23 @@ function trayHookOnHubRender() { scheduleTrayRefresh(); }
   } catch (_) { /* listener 失败也不阻塞 */ }
 })();
 
+(async function installAssetDeepLinkListener() {
+  try {
+    const { listen } = window.__TAURI__?.event || {};
+    if (typeof listen !== 'function') return;
+    state.assetCenter.deepLinkListenerReady = true;
+    renderAssetCenterPage();
+    await listen('asset-deep-link-opened', async (event) => {
+      await handleAssetDeepLinkOpened(event.payload || {});
+    });
+    await listen('deep-link://new-url', async (event) => {
+      await handleAssetDeepLinkOpened({ urls: event.payload || [], source: 'tauri-plugin-deep-link' });
+    });
+  } catch (_) {
+    state.assetCenter.deepLinkListenerReady = false;
+  }
+})();
+
 // ─── Provider 详情视图（inline，非抽屉） ─────────────────────────────
 // 点击行 → 隐藏 hero/toolbar/ribbon/list-wrap，把 #chDetail 显示出来接管整个内容区。
 // 顶部一个 "← 返回" 按钮回列表。4 个 tab：概览 / 用量 / 测试 / 健康。
@@ -21406,11 +24999,7 @@ function getProviderDetailModel(row = lookupProviderDetailRow()) {
 }
 
 function getProviderDetailToolName(row = lookupProviderDetailRow()) {
-  const tool = providerDetailTool(row);
-  if (tool === 'claudecode') return 'Claude Code';
-  if (tool === 'opencode') return 'OpenCode';
-  if (tool === 'openclaw') return 'OpenClaw';
-  return 'Codex';
+  return getToolDisplayName(providerDetailTool(row));
 }
 
 function openProviderDetail(key) {
@@ -21995,7 +25584,30 @@ const PROVIDER_ROUTER_NO_PROXY = '127.0.0.1,localhost,::1';
 const PROVIDER_ROUTER_STRATEGY_LS = 'easyaiconfig_provider_router_strategy_v1';
 const PROVIDER_ROUTER_WEIGHTS_LS = 'easyaiconfig_provider_router_weights_v1';
 const PROVIDER_ROUTER_BALANCE_GUARD_LS = 'easyaiconfig_provider_router_balance_guard_v1';
+const PROVIDER_ROUTER_CIRCUIT_LS = 'easyaiconfig_provider_router_circuit_v1';
 const PROVIDER_ROUTER_STATUS_LOG_LIMIT = 500;
+const PROVIDER_ROUTER_LOG_DEFAULT_PAGE_SIZE = 50;
+const PROVIDER_ROUTER_LOG_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+const PROVIDER_ROUTER_UPSTREAM_TIMEOUT_MS = 600000;
+const PROVIDER_ROUTER_TOOL_DEFS = [
+  { value: 'codex', label: 'Codex', providerSource: 'codex', protocol: 'openai', surface: 'CLI profile', writeTarget: 'config.toml', routingMode: 'native OpenAI' },
+  { value: 'claudecode', label: 'Claude Code', providerSource: 'claudecode', protocol: 'anthropic', surface: 'CLI settings', writeTarget: 'settings/env', routingMode: 'native Anthropic' },
+  { value: 'claude-desktop', label: 'Claude Desktop', providerSource: 'claudecode', protocol: 'anthropic', surface: 'Desktop profile', writeTarget: 'desktop config', routingMode: 'Anthropic bridge' },
+  { value: 'gemini', label: 'Gemini CLI', providerSource: 'codex', protocol: 'openai', surface: 'Router safe profile', writeTarget: 'safe profile', routingMode: 'OpenAI-compatible' },
+  { value: 'opencode', label: 'OpenCode', providerSource: 'codex', protocol: 'openai', surface: 'Provider env', writeTarget: 'provider/env', routingMode: 'OpenAI-compatible' },
+  { value: 'openclaw', label: 'OpenClaw', providerSource: 'codex', protocol: 'openai', surface: 'Gateway config', writeTarget: 'gateway profile', routingMode: 'OpenAI-compatible' },
+  { value: 'hermes', label: 'Hermes Agent', providerSource: 'codex', protocol: 'openai', surface: 'Agent workspace', writeTarget: 'config.yaml + .env', routingMode: 'OpenAI-compatible' },
+];
+const PROVIDER_ROUTER_TOOLS = PROVIDER_ROUTER_TOOL_DEFS.map((item) => item.value);
+const PROVIDER_ROUTER_CAPABILITY_TAGS = [
+  'hot switch',
+  'format rectifier',
+  'auto failover',
+  'circuit breaker',
+  'health probe',
+  'request logs',
+  'one-click client write',
+];
 const PROVIDER_ROUTER_STRATEGIES = [
   { value: 'auto', label: '智能自动', hint: '余额保护 + 权重轮询' },
   { value: 'weighted', label: '权重轮询', hint: '按每行权重分摊请求' },
@@ -22003,6 +25615,135 @@ const PROVIDER_ROUTER_STRATEGIES = [
   { value: 'round_robin', label: '均衡轮询', hint: '所有 Provider 平均轮转' },
   { value: 'priority', label: '主线优先', hint: '主 Provider 优先，失败再切换' },
 ];
+const PROVIDER_ROUTER_PROTOCOL_DEFS = [
+  { value: 'openai-chat', label: 'OpenAI Chat' },
+  { value: 'openai-responses', label: 'OpenAI Responses' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'gemini', label: 'Gemini' },
+];
+
+function providerRouterResponsePreviewBodyText(value) {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value ?? {}, null, 2);
+  } catch (_) {
+    return String(value ?? '');
+  }
+}
+
+function providerRouterResponsePreviewSample(mode = 'error') {
+  if (mode === 'stream') {
+    return {
+      mode,
+      sourceProtocol: 'openai-chat',
+      targetProtocol: 'gemini',
+      status: '200',
+      path: '/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse',
+      body: [
+        'data: {"candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}',
+        '',
+        'data: {"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5}}',
+        '',
+      ].join('\n'),
+    };
+  }
+  if (mode === 'json') {
+    return {
+      mode,
+      sourceProtocol: 'openai-chat',
+      targetProtocol: 'gemini',
+      status: '200',
+      path: '/v1beta/models/gemini-2.5-flash:generateContent',
+      body: providerRouterResponsePreviewBodyText({
+        candidates: [
+          {
+            content: {
+              parts: [
+                { text: 'Hello from Gemini' },
+                { functionCall: { name: 'lookup', args: { id: '42' } } },
+              ],
+            },
+            finishReason: 'STOP',
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 7,
+          candidatesTokenCount: 5,
+          totalTokenCount: 12,
+          cachedContentTokenCount: 2,
+        },
+      }),
+    };
+  }
+  return {
+    mode: 'error',
+    sourceProtocol: 'openai-chat',
+    targetProtocol: 'gemini',
+    status: '400',
+    path: '/v1beta/models/gemini-2.5-flash:generateContent',
+    body: providerRouterResponsePreviewBodyText({
+      error: {
+        code: 400,
+        message: 'Invalid Gemini request',
+        status: 'INVALID_ARGUMENT',
+      },
+    }),
+  };
+}
+
+function ensureProviderRouterResponsePreviewDraft() {
+  const draft = state.providerRouter.responsePreviewDraft;
+  if (!draft || typeof draft !== 'object') {
+    state.providerRouter.responsePreviewDraft = providerRouterResponsePreviewSample('error');
+  }
+  return state.providerRouter.responsePreviewDraft;
+}
+
+function setProviderRouterResponsePreviewSample(mode = 'error') {
+  state.providerRouter.responsePreviewDraft = providerRouterResponsePreviewSample(mode);
+  state.providerRouter.responsePreviewResult = null;
+  state.providerRouter.responsePreviewError = '';
+}
+
+function updateProviderRouterResponsePreviewDraftFrom(container = document.getElementById('providerRouterPage')) {
+  const draft = { ...ensureProviderRouterResponsePreviewDraft() };
+  if (!container) return draft;
+  const source = container.querySelector('[data-provider-router-rectifier-source]');
+  const target = container.querySelector('[data-provider-router-rectifier-target]');
+  const status = container.querySelector('[data-provider-router-rectifier-status]');
+  const path = container.querySelector('[data-provider-router-rectifier-path]');
+  const body = container.querySelector('[data-provider-router-rectifier-body]');
+  if (source instanceof HTMLSelectElement) draft.sourceProtocol = source.value || draft.sourceProtocol;
+  if (target instanceof HTMLSelectElement) draft.targetProtocol = target.value || draft.targetProtocol;
+  if (status instanceof HTMLInputElement) draft.status = status.value || draft.status || '200';
+  if (path instanceof HTMLInputElement) draft.path = path.value || '';
+  if (body instanceof HTMLTextAreaElement) draft.body = body.value || '';
+  state.providerRouter.responsePreviewDraft = draft;
+  return draft;
+}
+
+function parseProviderRouterResponsePreviewBody(raw = '') {
+  const text = String(raw ?? '');
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return JSON.parse(trimmed);
+  }
+  return text;
+}
+
+function getProviderRouterResponsePreviewPayload(container = document.getElementById('providerRouterPage')) {
+  const draft = updateProviderRouterResponsePreviewDraftFrom(container);
+  return {
+    sourceProtocol: normalizeProviderRouterRoutingProtocol(draft.sourceProtocol || 'openai-chat'),
+    targetProtocol: normalizeProviderRouterRoutingProtocol(draft.targetProtocol || 'gemini'),
+    response: {
+      status: Math.max(100, Math.min(599, Math.round(Number(draft.status || 200) || 200))),
+      path: String(draft.path || '').trim(),
+      body: parseProviderRouterResponsePreviewBody(draft.body || ''),
+    },
+  };
+}
 
 function readProviderRouterJsonPref(key, fallback = {}) {
   try {
@@ -22046,13 +25787,110 @@ function writeProviderRouterBalanceGuardPref() {
   } catch (_) {}
 }
 
+function clampProviderRouterNumber(value, min, max, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, num));
+}
+
+function normalizeProviderRouterCircuitPref(input = {}, fallback = {}) {
+  const base = {
+    enabled: fallback.enabled !== false,
+    failureThreshold: Number(fallback.failureThreshold ?? 3),
+    recoveryWaitMs: Number(fallback.recoveryWaitMs ?? 30000),
+    successThreshold: Number(fallback.successThreshold ?? 2),
+    errorRateThreshold: Number(fallback.errorRateThreshold ?? 0.6),
+    minRequests: Number(fallback.minRequests ?? 5),
+  };
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  return {
+    enabled: source.enabled !== false,
+    failureThreshold: Math.round(clampProviderRouterNumber(source.failureThreshold, 1, 100, base.failureThreshold)),
+    recoveryWaitMs: Math.round(clampProviderRouterNumber(source.recoveryWaitMs, 1000, 3600000, base.recoveryWaitMs)),
+    successThreshold: Math.round(clampProviderRouterNumber(source.successThreshold, 1, 20, base.successThreshold)),
+    errorRateThreshold: clampProviderRouterNumber(source.errorRateThreshold, 0.1, 1, base.errorRateThreshold),
+    minRequests: Math.round(clampProviderRouterNumber(source.minRequests, 1, 20, base.minRequests)),
+  };
+}
+
+function readProviderRouterCircuitPref() {
+  const fallback = normalizeProviderRouterCircuitPref({}, {
+    enabled: state.providerRouter.circuitBreakerEnabled !== false,
+    failureThreshold: state.providerRouter.circuitFailureThreshold,
+    recoveryWaitMs: state.providerRouter.circuitRecoveryWaitMs,
+    successThreshold: state.providerRouter.circuitSuccessThreshold,
+    errorRateThreshold: state.providerRouter.circuitErrorRateThreshold,
+    minRequests: state.providerRouter.circuitMinRequests,
+  });
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PROVIDER_ROUTER_CIRCUIT_LS) || '');
+    return normalizeProviderRouterCircuitPref(parsed, fallback);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writeProviderRouterCircuitPref() {
+  try {
+    localStorage.setItem(PROVIDER_ROUTER_CIRCUIT_LS, JSON.stringify({
+      enabled: state.providerRouter.circuitBreakerEnabled !== false,
+      failureThreshold: Math.round(Number(state.providerRouter.circuitFailureThreshold ?? 3)),
+      recoveryWaitMs: Math.round(Number(state.providerRouter.circuitRecoveryWaitMs ?? 30000)),
+      successThreshold: Math.round(Number(state.providerRouter.circuitSuccessThreshold ?? 2)),
+      errorRateThreshold: Number(state.providerRouter.circuitErrorRateThreshold ?? 0.6),
+      minRequests: Math.round(Number(state.providerRouter.circuitMinRequests ?? 5)),
+    }));
+  } catch (_) {}
+}
+
 function normalizeProviderRouterTool(tool = '') {
-  const value = String(tool || '').trim().toLowerCase();
-  return value === 'claude' || value === 'claude-code' || value === 'claudecode' ? 'claudecode' : 'codex';
+  const value = String(tool || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (['claude', 'claude-code', 'claudecode'].includes(value)) return 'claudecode';
+  if (['claude-desktop', 'claudedesktop'].includes(value)) return 'claude-desktop';
+  if (['gemini', 'gemini-cli', 'google-gemini'].includes(value)) return 'gemini';
+  if (['open-code', 'opencode'].includes(value)) return 'opencode';
+  if (['open-claw', 'openclaw'].includes(value)) return 'openclaw';
+  if (['hermes', 'hermes-agent'].includes(value)) return 'hermes';
+  return PROVIDER_ROUTER_TOOLS.includes(value) ? value : 'codex';
+}
+
+function providerRouterToolDef(tool = '') {
+  const normalizedTool = normalizeProviderRouterTool(tool);
+  return PROVIDER_ROUTER_TOOL_DEFS.find((item) => item.value === normalizedTool) || PROVIDER_ROUTER_TOOL_DEFS[0];
 }
 
 function providerRouterToolLabel(tool = '') {
-  return normalizeProviderRouterTool(tool) === 'claudecode' ? 'Claude Code' : 'Codex';
+  return providerRouterToolDef(tool).label;
+}
+
+function providerRouterProtocolLabel(tool = '') {
+  return providerRouterToolDef(tool).protocol === 'anthropic' ? 'Anthropic' : 'OpenAI-compatible';
+}
+
+function isProviderRouterAnthropicTool(tool = '') {
+  return providerRouterToolDef(tool).protocol === 'anthropic';
+}
+
+function providerRouterProviderSourceTool(tool = '') {
+  return providerRouterToolDef(tool).providerSource || 'codex';
+}
+
+function normalizeProviderRouterRoutingProtocol(value = '', tool = '') {
+  const raw = String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (['responses', 'response', 'openai-responses'].includes(raw)) return 'openai-responses';
+  if (['chat', 'openai', 'openai-chat', 'openai-completions', 'chat-completions', 'chat-completion', 'completions'].includes(raw)) return 'openai-chat';
+  if (['anthropic', 'anthropic-messages', 'messages'].includes(raw)) return 'anthropic';
+  if (['gemini', 'google-gemini'].includes(raw)) return 'gemini';
+  return isProviderRouterAnthropicTool(tool) ? 'anthropic' : 'openai-responses';
+}
+
+function getProviderRouterRowProtocol(row = {}, tool = '') {
+  const normalizedTool = normalizeProviderRouterTool(tool || row?.tool || 'codex');
+  if (isProviderRouterAnthropicTool(normalizedTool)) return 'anthropic';
+  const ref = row?.ref && typeof row.ref === 'object' ? row.ref : {};
+  const protocol = row.protocol || row.wireApi || row.wire_api || row.api
+    || ref.protocol || ref.wireApi || ref.wire_api || ref.api || '';
+  return normalizeProviderRouterRoutingProtocol(protocol, normalizedTool);
 }
 
 function providerRouterRouteKey(tool, key) {
@@ -22100,8 +25938,7 @@ function isProviderRouterSelfRow(row, tool = getProviderRouterActiveTool()) {
   const name = String(row.name || '').trim().toLowerCase();
   const baseUrl = String(row.baseUrl || row.ref?.baseUrl || '').trim();
   return key === PROVIDER_ROUTER_CLIENT_PROVIDER_KEY
-    || routeKey === `codex:${PROVIDER_ROUTER_CLIENT_PROVIDER_KEY}`
-    || routeKey === `claudecode:${PROVIDER_ROUTER_CLIENT_PROVIDER_KEY}`
+    || PROVIDER_ROUTER_TOOLS.some((routerTool) => routeKey === `${routerTool}:${PROVIDER_ROUTER_CLIENT_PROVIDER_KEY}`)
     || name === 'easyaiconfig router'
     || isProviderRouterLoopbackEndpoint(baseUrl);
 }
@@ -22172,8 +26009,9 @@ function getProviderRouterActiveTool() {
 
 function getProviderRouterRows(tool = getProviderRouterActiveTool()) {
   const normalizedTool = normalizeProviderRouterTool(tool);
-  const hubRows = typeof window.__chBuildRows === 'function' ? window.__chBuildRows(normalizedTool) : [];
-  const fallbackRows = normalizedTool === 'codex' && Array.isArray(state.current?.providers)
+  const sourceTool = providerRouterProviderSourceTool(normalizedTool);
+  const hubRows = typeof window.__chBuildRows === 'function' ? window.__chBuildRows(sourceTool) : [];
+  const fallbackRows = sourceTool === 'codex' && Array.isArray(state.current?.providers)
     ? state.current.providers.map((provider) => ({
       key: provider.key || '',
       name: provider.name || provider.key || '',
@@ -22185,7 +26023,8 @@ function getProviderRouterRows(tool = getProviderRouterActiveTool()) {
       hasCredential: Boolean(provider.hasApiKey || provider.hasCredential),
       historyOnly: Boolean(provider.historyOnly),
       health: provider.health || null,
-      tool: 'codex',
+      wireApi: provider.wireApi || provider.wire_api || provider.api || '',
+      tool: sourceTool,
       ref: provider,
     }))
     : [];
@@ -22199,13 +26038,16 @@ function getProviderRouterRows(tool = getProviderRouterActiveTool()) {
     if (seen.has(routeKey)) continue;
     seen.add(routeKey);
     const ref = row.ref && typeof row.ref === 'object' ? row.ref : {};
-    const hasPlainClaudeSecret = normalizedTool !== 'claudecode'
+    const needsPlainAnthropicSecret = isProviderRouterAnthropicTool(normalizedTool);
+    const hasPlainAnthropicSecret = !needsPlainAnthropicSecret
       || Boolean(String(ref.apiKey || '').trim() || String(ref.authToken || '').trim());
     candidates.push({
       ...row,
       tool: normalizedTool,
+      sourceTool,
       routeKey,
-      canRoute: normalizedTool === 'codex' || hasPlainClaudeSecret,
+      protocol: getProviderRouterRowProtocol(row, normalizedTool),
+      canRoute: !needsPlainAnthropicSecret || hasPlainAnthropicSecret,
       apiKey: String(ref.apiKey || '').trim(),
       authToken: String(ref.authToken || '').trim(),
     });
@@ -22354,6 +26196,56 @@ function ensureProviderRouterBalanceGuardState() {
   state.providerRouter.balanceGuardHydrated = true;
 }
 
+function ensureProviderRouterCircuitState() {
+  if (state.providerRouter.circuitHydrated) return;
+  const pref = readProviderRouterCircuitPref();
+  state.providerRouter.circuitBreakerEnabled = pref.enabled !== false;
+  state.providerRouter.circuitFailureThreshold = pref.failureThreshold;
+  state.providerRouter.circuitRecoveryWaitMs = pref.recoveryWaitMs;
+  state.providerRouter.circuitSuccessThreshold = pref.successThreshold;
+  state.providerRouter.circuitErrorRateThreshold = pref.errorRateThreshold;
+  state.providerRouter.circuitMinRequests = pref.minRequests;
+  state.providerRouter.circuitHydrated = true;
+}
+
+function getProviderRouterCircuitSettings() {
+  ensureProviderRouterCircuitState();
+  const pref = normalizeProviderRouterCircuitPref({
+    enabled: state.providerRouter.circuitBreakerEnabled !== false,
+    failureThreshold: state.providerRouter.circuitFailureThreshold,
+    recoveryWaitMs: state.providerRouter.circuitRecoveryWaitMs,
+    successThreshold: state.providerRouter.circuitSuccessThreshold,
+    errorRateThreshold: state.providerRouter.circuitErrorRateThreshold,
+    minRequests: state.providerRouter.circuitMinRequests,
+  });
+  state.providerRouter.circuitBreakerEnabled = pref.enabled !== false;
+  state.providerRouter.circuitFailureThreshold = pref.failureThreshold;
+  state.providerRouter.circuitRecoveryWaitMs = pref.recoveryWaitMs;
+  state.providerRouter.circuitSuccessThreshold = pref.successThreshold;
+  state.providerRouter.circuitErrorRateThreshold = pref.errorRateThreshold;
+  state.providerRouter.circuitMinRequests = pref.minRequests;
+  return pref;
+}
+
+function setProviderRouterCircuitSetting(key, value) {
+  ensureProviderRouterCircuitState();
+  if (key === 'enabled') {
+    state.providerRouter.circuitBreakerEnabled = Boolean(value);
+  } else if (key === 'failureThreshold') {
+    state.providerRouter.circuitFailureThreshold = Math.round(clampProviderRouterNumber(value, 1, 100, 3));
+  } else if (key === 'recoveryWaitMs') {
+    state.providerRouter.circuitRecoveryWaitMs = Math.round(clampProviderRouterNumber(value, 1000, 3600000, 30000));
+  } else if (key === 'successThreshold') {
+    state.providerRouter.circuitSuccessThreshold = Math.round(clampProviderRouterNumber(value, 1, 20, 2));
+  } else if (key === 'errorRateThreshold') {
+    state.providerRouter.circuitErrorRateThreshold = clampProviderRouterNumber(value, 0.1, 1, 0.6);
+  } else if (key === 'minRequests') {
+    state.providerRouter.circuitMinRequests = Math.round(clampProviderRouterNumber(value, 1, 20, 5));
+  }
+  getProviderRouterCircuitSettings();
+  writeProviderRouterCircuitPref();
+}
+
 function providerRouterFiniteNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
@@ -22399,6 +26291,23 @@ function getProviderRouterLogUsageParts(item = {}) {
   return parts;
 }
 
+function getProviderRouterLogTransformParts(item = {}) {
+  const rectified = item.rectified && typeof item.rectified === 'object' ? item.rectified : {};
+  const sourceProtocol = String(item.sourceProtocol || rectified.sourceProtocol || '').trim();
+  const targetProtocol = String(item.targetProtocol || rectified.targetProtocol || '').trim();
+  const requestConverted = Boolean(item.requestConverted || rectified.request);
+  const responseConverted = Boolean(item.responseConverted || rectified.response);
+  const errorNormalized = Boolean(item.errorNormalized || rectified.error);
+  const parts = [];
+  if (sourceProtocol && targetProtocol && (sourceProtocol !== targetProtocol || requestConverted || responseConverted || errorNormalized)) {
+    parts.push(`${sourceProtocol} -> ${targetProtocol}`);
+  }
+  if (requestConverted) parts.push('request converted');
+  if (responseConverted) parts.push('response converted');
+  if (errorNormalized) parts.push('error normalized');
+  return parts;
+}
+
 function formatProviderRouterTraffic(item = {}) {
   const requestBytes = Number(item.requestBytes || 0) || 0;
   const responseBytes = Number(item.responseBytes || 0) || 0;
@@ -22407,10 +26316,11 @@ function formatProviderRouterTraffic(item = {}) {
 }
 
 function getProviderRouterProviderNames() {
-  return new Map([
-    ...getProviderRouterRows('codex'),
-    ...getProviderRouterRows('claudecode'),
-  ].flatMap((item) => [[item.routeKey, item.name || item.key], [item.key, item.name || item.key]]));
+  return new Map(
+    PROVIDER_ROUTER_TOOLS
+      .flatMap((tool) => getProviderRouterRows(tool))
+      .flatMap((item) => [[item.routeKey, item.name || item.key], [item.key, item.name || item.key]])
+  );
 }
 
 function getProviderRouterLogFilter() {
@@ -22423,7 +26333,7 @@ function getProviderRouterLogFilter() {
     query: String(current.query || ''),
     provider: String(current.provider || 'all').trim() || 'all',
     status: ['all', 'success', 'failed', 'retry'].includes(rawStatus) ? rawStatus : 'all',
-    tool: ['all', 'codex', 'claudecode'].includes(rawTool) ? rawTool : 'all',
+    tool: rawTool === 'all' || PROVIDER_ROUTER_TOOLS.includes(rawTool) ? rawTool : 'all',
   };
   state.providerRouter.logFilter = filter;
   return filter;
@@ -22433,8 +26343,10 @@ function providerRouterLogTool(item = {}) {
   const direct = String(item.tool || '').trim().toLowerCase();
   if (direct) return normalizeProviderRouterTool(direct);
   const providerKey = String(item.providerKey || '').trim().toLowerCase();
-  if (providerKey.startsWith('claudecode:') || providerKey.startsWith('claude:')) return 'claudecode';
-  if (providerKey.startsWith('codex:')) return 'codex';
+  for (const tool of PROVIDER_ROUTER_TOOLS) {
+    if (providerKey.startsWith(`${tool}:`)) return tool;
+  }
+  if (providerKey.startsWith('claude:')) return 'claudecode';
   return '';
 }
 
@@ -22463,6 +26375,7 @@ function providerRouterLogMatchesFilter(item = {}, filter = getProviderRouterLog
     item.status == null ? 'ERR' : String(item.status),
     item.error,
     item.retry ? 'retry' : '',
+    ...getProviderRouterLogTransformParts(item),
     providerKey,
     providerText,
     providerRouterToolLabel(providerRouterLogTool(item) || 'codex'),
@@ -22473,6 +26386,124 @@ function providerRouterLogMatchesFilter(item = {}, filter = getProviderRouterLog
 function getFilteredProviderRouterLogs(logs = [], providerNames = getProviderRouterProviderNames()) {
   const filter = getProviderRouterLogFilter();
   return logs.filter((item) => providerRouterLogMatchesFilter(item, filter, providerNames));
+}
+
+function normalizeProviderRouterLogPageSize(value) {
+  const numeric = Math.round(Number(value) || PROVIDER_ROUTER_LOG_DEFAULT_PAGE_SIZE);
+  return PROVIDER_ROUTER_LOG_PAGE_SIZE_OPTIONS.includes(numeric)
+    ? numeric
+    : PROVIDER_ROUTER_LOG_DEFAULT_PAGE_SIZE;
+}
+
+function getProviderRouterLogPageSize() {
+  const size = normalizeProviderRouterLogPageSize(state.providerRouter.logPageSize);
+  state.providerRouter.logPageSize = size;
+  return size;
+}
+
+function providerRouterLogQueryParams(page = state.providerRouter.logPage || 1) {
+  const filter = getProviderRouterLogFilter();
+  const params = new URLSearchParams({
+    page: String(Math.max(1, Math.round(Number(page) || 1))),
+    pageSize: String(getProviderRouterLogPageSize()),
+  });
+  const query = String(filter.query || '').trim();
+  if (query) params.set('query', query);
+  if (filter.provider !== 'all') params.set('provider', filter.provider);
+  if (filter.tool !== 'all') params.set('tool', filter.tool);
+  if (filter.status !== 'all') params.set('status', filter.status);
+  return params;
+}
+
+function updateProviderRouterLogsPanel() {
+  if (state.providerRouter.activeTab === 'stats') refreshProviderRouterStatsPanel();
+  else renderProviderRouterPage();
+}
+
+async function fetchProviderRouterLogs(options = {}) {
+  const nextPage = Math.max(1, Math.round(Number(options.page || state.providerRouter.logPage || 1) || 1));
+  state.providerRouter.logPage = nextPage;
+  state.providerRouter.logsLoading = true;
+  if (!options.keepError) state.providerRouter.logsError = '';
+  if (!options.silent) updateProviderRouterLogsPanel();
+  try {
+    const params = providerRouterLogQueryParams(nextPage);
+    const res = await api(`/api/provider-router/logs?${params.toString()}`, { timeoutMs: 12000 });
+    if (!res?.ok) throw new Error(res?.error || '读取网关日志失败');
+    const data = res.data || {};
+    const pagination = data.pagination || {};
+    state.providerRouter.logData = data;
+    state.providerRouter.logPage = Math.max(1, Math.round(Number(pagination.page || nextPage) || nextPage));
+    state.providerRouter.logPageSize = normalizeProviderRouterLogPageSize(pagination.pageSize || state.providerRouter.logPageSize);
+    state.providerRouter.logsError = '';
+    state.providerRouter.lastFetchedAt = Date.now();
+    return data;
+  } catch (error) {
+    state.providerRouter.logsError = error?.message || String(error);
+    if (!options.silent) flash(state.providerRouter.logsError, 'error');
+    return null;
+  } finally {
+    state.providerRouter.logsLoading = false;
+    updateProviderRouterLogsPanel();
+  }
+}
+
+function scheduleProviderRouterLogsFetch(delayMs = 220) {
+  if (state.providerRouter.logFetchTimer) clearTimeout(state.providerRouter.logFetchTimer);
+  state.providerRouter.logFetchTimer = setTimeout(() => {
+    state.providerRouter.logFetchTimer = null;
+    void fetchProviderRouterLogs({ page: 1, silent: true });
+  }, delayMs);
+}
+
+function providerRouterLogClearBeforeMs(container = document.getElementById('providerRouterPage')) {
+  const input = container?.querySelector('[data-provider-router-log-clear-before]');
+  const raw = String((input instanceof HTMLInputElement ? input.value : state.providerRouter.logClearBefore) || '').trim();
+  if (!raw) return 0;
+  const time = new Date(raw).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function providerRouterDatetimeLocalMax() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+async function clearProviderRouterLogs(mode = 'before') {
+  if (state.providerRouter.logClearing) return;
+  const container = document.getElementById('providerRouterPage');
+  const payload = mode === 'all'
+    ? { mode: 'all' }
+    : { beforeMs: providerRouterLogClearBeforeMs(container) };
+  if (mode !== 'all' && !payload.beforeMs) {
+    flash('先选择要清理到哪个时间点', 'warning');
+    return;
+  }
+  if (mode === 'all' && !window.confirm('确定清空全部网关历史日志？运行中的新请求仍会继续记录。')) return;
+  state.providerRouter.logClearing = true;
+  state.providerRouter.logsError = '';
+  updateProviderRouterLogsPanel();
+  try {
+    const res = await api('/api/provider-router/logs/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      timeoutMs: 15000,
+    });
+    if (!res?.ok) throw new Error(res?.error || '清理网关日志失败');
+    const deleted = Number(res.data?.deleted || 0) || 0;
+    flash(`已清理 ${deleted} 条网关日志`, deleted ? 'success' : 'info');
+    state.providerRouter.logData = null;
+    state.providerRouter.logPage = 1;
+    await fetchProviderRouterStatus(true);
+  } catch (error) {
+    state.providerRouter.logsError = error?.message || String(error);
+    flash(state.providerRouter.logsError, 'error');
+  } finally {
+    state.providerRouter.logClearing = false;
+    updateProviderRouterLogsPanel();
+  }
 }
 
 function getProviderRouterBalanceMeta(row) {
@@ -22542,7 +26573,7 @@ function getProviderRouterOrigin(status = state.providerRouter.status || {}) {
 function getProviderRouterEndpoint(tool = getProviderRouterActiveTool(), status = state.providerRouter.status || {}) {
   const normalizedTool = normalizeProviderRouterTool(tool);
   const origin = getProviderRouterOrigin(status);
-  if (normalizedTool === 'claudecode') {
+  if (isProviderRouterAnthropicTool(normalizedTool)) {
     return String(status.anthropicBaseUrl || origin).replace(/\/+$/, '');
   }
   return String(status.openaiBaseUrl || status.baseUrl || `${origin}/v1`).replace(/\/+$/, '');
@@ -22554,6 +26585,17 @@ function getProviderRouterCopyText(kind = 'base') {
   const claudeBase = getProviderRouterEndpoint('claudecode');
   const healthUrl = `${getProviderRouterOrigin()}/_easyai/health`;
   if (kind === 'api-key') return PROVIDER_ROUTER_CLIENT_KEY;
+  const baseMatch = String(kind || '').match(/^(.+)-base$/);
+  if (baseMatch) return getProviderRouterEndpoint(baseMatch[1]);
+  const envMatch = String(kind || '').match(/^(.+)-env$/);
+  if (envMatch) {
+    const tool = normalizeProviderRouterTool(envMatch[1]);
+    const endpoint = getProviderRouterEndpoint(tool);
+    if (isProviderRouterAnthropicTool(tool)) {
+      return `export NO_PROXY="${PROVIDER_ROUTER_NO_PROXY}"\nexport no_proxy="${PROVIDER_ROUTER_NO_PROXY}"\nexport ANTHROPIC_BASE_URL="${endpoint}"\nexport ANTHROPIC_API_KEY="${PROVIDER_ROUTER_CLIENT_KEY}"`;
+    }
+    return `export NO_PROXY="${PROVIDER_ROUTER_NO_PROXY}"\nexport no_proxy="${PROVIDER_ROUTER_NO_PROXY}"\nexport OPENAI_BASE_URL="${endpoint}"\nexport OPENAI_API_KEY="${PROVIDER_ROUTER_CLIENT_KEY}"`;
+  }
   if (kind === 'codex-env') {
     return `export NO_PROXY="${PROVIDER_ROUTER_NO_PROXY}"\nexport no_proxy="${PROVIDER_ROUTER_NO_PROXY}"\nexport OPENAI_BASE_URL="${codexBase}"\nexport OPENAI_API_KEY="${PROVIDER_ROUTER_CLIENT_KEY}"`;
   }
@@ -22586,8 +26628,12 @@ function getProviderRouterCopyText(kind = 'base') {
   if (kind === 'router-logs') {
     const status = state.providerRouter.status || {};
     const stats = status.stats || {};
+    const logData = state.providerRouter.logData || {};
     const providerNames = getProviderRouterProviderNames();
-    const logs = getFilteredProviderRouterLogs(Array.isArray(stats.logs) ? stats.logs : [], providerNames);
+    const sourceLogs = Array.isArray(logData.logs)
+      ? logData.logs
+      : (Array.isArray(stats.logs) ? stats.logs : []);
+    const logs = Array.isArray(logData.logs) ? sourceLogs : getFilteredProviderRouterLogs(sourceLogs, providerNames);
     if (!logs.length) return 'EasyAIConfig Router: no logs';
     return logs.map((item) => {
       const at = item.at ? formatRelativeTime(item.at) : '-';
@@ -22602,8 +26648,6 @@ function getProviderRouterCopyText(kind = 'base') {
     }).join('\n');
   }
   if (kind === 'curl-health') return `curl -fsS --max-time 5 ${healthUrl}`;
-  if (kind === 'codex-base') return codexBase;
-  if (kind === 'claude-base') return claudeBase;
   return getProviderRouterEndpoint(activeTool);
 }
 
@@ -22619,6 +26663,9 @@ async function fetchProviderRouterStatus(force = false) {
       state.providerRouter.status = res.data || null;
       state.providerRouter.lastFetchedAt = Date.now();
       state.providerRouter.error = '';
+      if (state.providerRouter.activeTab === 'stats') {
+        await fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
+      }
     } else if (force) {
       state.providerRouter.error = res?.error || '读取路由状态失败';
     }
@@ -22631,7 +26678,7 @@ async function fetchProviderRouterStatus(force = false) {
 
 function getProviderRouterProbeModel(tool = getProviderRouterActiveTool()) {
   const normalizedTool = normalizeProviderRouterTool(tool);
-  if (normalizedTool === 'claudecode') {
+  if (isProviderRouterAnthropicTool(normalizedTool)) {
     return sanitizeClaudeModelValue(state.claudeCodeState?.model || state.claudeCodeState?.settings?.model || '') || 'claude-sonnet-4-20250514';
   }
   return el('modelSelect')?.value?.trim() || state.current?.summary?.model || 'gpt-5.5';
@@ -22686,9 +26733,9 @@ async function actionProviderRouterStart() {
   const primary = getProviderRouterPrimaryRow(candidates, tool);
   const selectedRows = getProviderRouterSelectedRows(candidates, tool);
   if (!primary || !selectedRows.length) {
-    const message = tool === 'claudecode'
-      ? '没有可直接路由的 Claude Code API Key Provider；请在 Claude Provider 里保存明文 API Key 或 Auth Token'
-      : '没有可用于路由的 Codex API Key Provider';
+    const message = isProviderRouterAnthropicTool(tool)
+      ? `没有可直接路由的 ${providerRouterToolLabel(tool)} API Key Provider；请在 Claude Provider 里保存明文 API Key 或 Auth Token`
+      : `没有可用于路由的 ${providerRouterToolLabel(tool)} OpenAI-compatible API Key Provider`;
     flash(message, 'error');
     return;
   }
@@ -22697,6 +26744,7 @@ async function actionProviderRouterStart() {
   renderProviderRouterPage();
   const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
   ensureProviderRouterBalanceGuardState();
+  const circuit = getProviderRouterCircuitSettings();
   const routeStrategy = getProviderRouterStrategy(tool);
   try {
     const res = await api('/api/provider-router/start', {
@@ -22712,6 +26760,12 @@ async function actionProviderRouterStart() {
         balanceGuardEnabled: state.providerRouter.balanceGuardEnabled !== false,
         balanceMinPercent: Math.max(0, Math.min(100, Number(state.providerRouter.balanceMinPercent) || 0)),
         balanceMinAmount: Math.max(0, Number(state.providerRouter.balanceMinAmount) || 0),
+        circuitBreakerEnabled: circuit.enabled !== false,
+        circuitFailureThreshold: circuit.failureThreshold,
+        circuitRecoveryWaitMs: circuit.recoveryWaitMs,
+        circuitSuccessThreshold: circuit.successThreshold,
+        circuitErrorRateThreshold: circuit.errorRateThreshold,
+        circuitMinRequests: circuit.minRequests,
         providerKeys: selectedRows.map((item) => item.key),
         providerTargets: selectedRows.map((item) => {
           const balance = getProviderRouterBalanceMeta(item);
@@ -22721,8 +26775,9 @@ async function actionProviderRouterStart() {
             routeKey: item.routeKey,
             name: item.name || item.key,
             baseUrl: item.baseUrl || '',
-            apiKey: item.tool === 'claudecode' ? (item.apiKey || '') : '',
-            authToken: item.tool === 'claudecode' ? (item.authToken || '') : '',
+            protocol: item.protocol || getProviderRouterRowProtocol(item, item.tool),
+            apiKey: isProviderRouterAnthropicTool(item.tool) ? (item.apiKey || '') : '',
+            authToken: isProviderRouterAnthropicTool(item.tool) ? (item.authToken || '') : '',
             weight: getProviderRouterWeight(item.routeKey, tool),
             balanceRemaining: balance.remaining,
             balanceTotal: balance.total,
@@ -22734,7 +26789,7 @@ async function actionProviderRouterStart() {
         }),
         port: 18791,
         roundRobin: routeStrategy !== 'priority',
-        timeoutMs: 180000,
+        timeoutMs: PROVIDER_ROUTER_UPSTREAM_TIMEOUT_MS,
       }),
       timeoutMs: 20000,
     });
@@ -22819,10 +26874,12 @@ async function actionProviderRouterCopy(kind = 'base') {
   const labels = {
     base: '当前 Base URL',
     'codex-base': 'Codex Base URL',
+    'claudecode-base': 'Claude Code Base URL',
     'claude-base': 'Claude Code Base URL',
     'api-key': '客户端 API Key',
     'codex-env': 'Codex 环境变量',
     'codex-toml': 'Codex 配置片段',
+    'claudecode-env': 'Claude Code 环境变量',
     'claude-env': 'Claude Code 环境变量',
     'claude-json': 'Claude Code settings 片段',
     'router-logs': '网关日志',
@@ -22831,76 +26888,77 @@ async function actionProviderRouterCopy(kind = 'base') {
   try {
     if (typeof copyText === 'function') await copyText(text);
     else await navigator.clipboard.writeText(text);
-    flash(`已复制${labels[kind] || '配置'}`, 'success');
+    const dynamicLabel = String(kind || '').endsWith('-base')
+      ? `${providerRouterToolLabel(String(kind).replace(/-base$/, ''))} Base URL`
+      : String(kind || '').endsWith('-env')
+        ? `${providerRouterToolLabel(String(kind).replace(/-env$/, ''))} 环境变量`
+        : '配置';
+    flash(`已复制${labels[kind] || dynamicLabel}`, 'success');
   } catch {
     flash(text, 'info');
   }
 }
 
+function getProviderRouterApplyModel(tool) {
+  const targetTool = normalizeProviderRouterTool(tool || getProviderRouterActiveTool());
+  if (targetTool === 'claudecode') {
+    return sanitizeClaudeModelValue(state.claudeCodeState?.model || el('modelSelect')?.value || '') || '';
+  }
+  if (targetTool === 'opencode') {
+    return String(state.opencodeState?.model || el('modelSelect')?.value || '').trim();
+  }
+  if (targetTool === 'openclaw') {
+    const quick = state.openClawQuickConfig || deriveOpenClawQuickConfig(state.openclawState || {});
+    return String(quick.model || el('modelSelect')?.value || '').trim();
+  }
+  return String(el('modelSelect')?.value || state.current?.summary?.model || '').trim();
+}
+
 async function actionProviderRouterApplyClient(tool) {
   const targetTool = normalizeProviderRouterTool(tool || getProviderRouterActiveTool());
   const endpoint = getProviderRouterEndpoint(targetTool);
+  const model = getProviderRouterApplyModel(targetTool);
   state.providerRouter.loading = true;
   state.providerRouter.error = '';
   renderProviderRouterPage();
   try {
-    if (targetTool === 'claudecode') {
-      const currentSettings = cloneJson(state.claudeCodeState?.settings || {});
-      const settings = ensurePlainObject(currentSettings, {});
-      settings.env = ensurePlainObject(settings.env, {});
-      settings.easyaiconfig = ensurePlainObject(settings.easyaiconfig, {});
-      settings.easyaiconfig.providers = ensurePlainObject(settings.easyaiconfig.providers, {});
-      const model = sanitizeClaudeModelValue(state.claudeCodeState?.model || el('modelSelect')?.value || settings.model || '') || '';
-      if (model) settings.model = model;
-      settings.env.NO_PROXY = PROVIDER_ROUTER_NO_PROXY;
-      settings.env.no_proxy = PROVIDER_ROUTER_NO_PROXY;
-      settings.env.ANTHROPIC_BASE_URL = endpoint;
-      settings.env.ANTHROPIC_API_KEY = PROVIDER_ROUTER_CLIENT_KEY;
-      delete settings.env.ANTHROPIC_AUTH_TOKEN;
-      settings.easyaiconfig.providers[PROVIDER_ROUTER_CLIENT_PROVIDER_KEY] = {
-        ...(settings.easyaiconfig.providers[PROVIDER_ROUTER_CLIENT_PROVIDER_KEY] || {}),
-        name: 'EasyAIConfig Router',
-        baseUrl: endpoint,
-        apiKey: PROVIDER_ROUTER_CLIENT_KEY,
-        authToken: '',
-        model,
-        updatedAt: new Date().toISOString(),
-      };
-      settings.easyaiconfig.activeProvider = PROVIDER_ROUTER_CLIENT_PROVIDER_KEY;
-      const saved = await saveClaudeCodeSettingsJson(settings);
-      if (!saved.ok) throw new Error(saved.error || 'Claude Code 网关配置写入失败');
-      await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
-      if (typeof populateConfigEditor === 'function') populateConfigEditor();
-      flashClaudeCodeSavedNeedsRestart(saved);
-      return;
-    }
-
     const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
-    const model = el('modelSelect')?.value?.trim() || state.current?.summary?.model || 'gpt-5.5';
-    rememberCodexProviderBeforeRouter();
-    const saved = await api('/api/config/save', {
+    if (targetTool === 'codex') rememberCodexProviderBeforeRouter();
+    const saved = await api('/api/provider-router/apply-client', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        tool: targetTool,
         scope: el('scopeSelect')?.value || 'global',
         projectPath: el('projectPathInput')?.value?.trim() || '',
         codexHome,
-        providerKey: PROVIDER_ROUTER_CLIENT_PROVIDER_KEY,
-        providerLabel: 'EasyAIConfig Router',
-        baseUrl: endpoint,
+        endpoint,
         apiKey: PROVIDER_ROUTER_CLIENT_KEY,
+        noProxy: PROVIDER_ROUTER_NO_PROXY,
         model,
-        activate: true,
       }),
     });
-    if (!saved.ok) throw new Error(saved.error || 'Codex 网关配置写入失败');
-    await loadState({ preserveForm: true });
+    if (!saved.ok) throw new Error(saved.error || `${providerRouterToolLabel(targetTool)} 网关配置写入失败`);
+    if (targetTool === 'codex') await loadState({ preserveForm: true });
+    if (targetTool === 'claudecode') await loadClaudeCodeQuickState({ force: false, cacheOnly: false });
+    if (targetTool === 'opencode') await loadOpenCodeQuickState();
+    if (targetTool === 'openclaw') await loadOpenClawQuickState();
+    if (targetTool === 'gemini') await loadGeminiQuickState();
+    if (targetTool === 'hermes') await loadHermesQuickState();
     if (typeof populateConfigEditor === 'function') populateConfigEditor();
-    flashCodexSavedNeedsRestart(saved, 'Codex 网关 Provider 已写入');
+    if (targetTool === 'codex') {
+      flashCodexSavedNeedsRestart(saved, 'Codex 网关 Provider 已写入');
+    } else if (targetTool === 'claudecode') {
+      flashClaudeCodeSavedNeedsRestart(saved);
+    } else {
+      flashToolSavedNeedsRestart(providerRouterToolLabel(targetTool), `${providerRouterToolLabel(targetTool)} 网关配置已写入`);
+    }
+    return true;
   } catch (err) {
     const message = err?.message || String(err);
     state.providerRouter.error = message;
     flash(message, 'error');
+    return false;
   } finally {
     state.providerRouter.loading = false;
     renderProviderRouterPage();
@@ -22934,18 +26992,73 @@ function restoreProviderRouterLogSearchFocus(container, focusState) {
   } catch (_) {}
 }
 
+function getProviderRouterCircuitMeta(item = {}) {
+  const stateValue = String(item.circuitState || item.circuit?.state || 'closed').trim().toLowerCase();
+  const state = stateValue || 'closed';
+  const labels = {
+    closed: 'closed',
+    open: 'open',
+    'half-open': 'half-open',
+    disabled: 'disabled',
+  };
+  const tone = state === 'open' ? 'is-bad' : state === 'half-open' ? 'is-warn' : state === 'disabled' ? 'is-muted' : 'is-ok';
+  const openUntilMs = Number(item.circuitOpenUntilMs ?? item.circuit?.openUntilMs ?? 0);
+  const openUntil = Number.isFinite(openUntilMs) && openUntilMs > 0
+    ? formatRelativeTime(new Date(openUntilMs).toISOString())
+    : '';
+  const recentRequests = Number(item.circuitRecentRequests ?? item.circuit?.recentRequests ?? 0) || 0;
+  const recentFailures = Number(item.circuitRecentFailures ?? item.circuit?.recentFailures ?? 0) || 0;
+  const errorRate = Number(item.circuitErrorRate ?? item.circuit?.errorRate ?? 0);
+  const rateLabel = Number.isFinite(errorRate) && recentRequests
+    ? `${Math.round(errorRate * 100)}%`
+    : '';
+  const pieces = [
+    labels[state] || state,
+    openUntil ? `恢复 ${openUntil}` : '',
+    recentRequests ? `窗口 ${recentFailures}/${recentRequests}${rateLabel ? ` · ${rateLabel}` : ''}` : '',
+  ].filter(Boolean);
+  return {
+    state,
+    tone,
+    label: pieces.join(' · ') || 'closed',
+  };
+}
+
 function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter.loading) } = {}) {
   const esc = escapeHtml;
   const status = state.providerRouter.status || {};
   const stats = status.stats || {};
   const providerStats = Array.isArray(stats.providers) ? stats.providers : [];
-  const routerLogs = Array.isArray(stats.logs) ? stats.logs : [];
+  const logData = state.providerRouter.logData && typeof state.providerRouter.logData === 'object'
+    ? state.providerRouter.logData
+    : null;
+  const hasPagedLogData = Boolean(logData && Array.isArray(logData.logs));
+  const routerLogs = hasPagedLogData
+    ? logData.logs
+    : (Array.isArray(stats.logs) ? stats.logs : []);
   const providerNames = getProviderRouterProviderNames();
   const logFilter = getProviderRouterLogFilter();
-  const filteredRouterLogs = getFilteredProviderRouterLogs(routerLogs, providerNames);
+  const filteredRouterLogs = hasPagedLogData
+    ? routerLogs
+    : getFilteredProviderRouterLogs(routerLogs, providerNames);
   const logFiltersActive = isProviderRouterLogFilterActive(logFilter);
+  const logPagination = logData?.pagination || {};
+  const logRetention = logData?.retention || {};
+  const logLoading = Boolean(state.providerRouter.logsLoading);
+  const logClearing = Boolean(state.providerRouter.logClearing);
+  const logError = state.providerRouter.logsError || '';
+  const totalLogCount = Number(logPagination.total ?? (hasPagedLogData ? filteredRouterLogs.length : routerLogs.length)) || 0;
+  const currentLogPage = Math.max(1, Number(logPagination.page || state.providerRouter.logPage || 1) || 1);
+  const logPageSize = getProviderRouterLogPageSize();
+  const logPageCount = Math.max(1, Number(logPagination.pageCount || (totalLogCount ? Math.ceil(totalLogCount / logPageSize) : 1)) || 1);
+  const hasPrevLogPage = Boolean(logPagination.hasPrev ?? (currentLogPage > 1));
+  const hasNextLogPage = Boolean(logPagination.hasNext ?? (currentLogPage < logPageCount));
+  const hasAnyRouterLogRecord = totalLogCount > 0 || routerLogs.length > 0 || logFiltersActive;
   const routerLogProviderOptionMap = new Map();
-  routerLogs.forEach((item) => {
+  const providerOptionSource = Array.isArray(logData?.providers) && logData.providers.length
+    ? logData.providers
+    : routerLogs;
+  providerOptionSource.forEach((item) => {
     const key = String(item.providerKey || '').trim();
     if (key) routerLogProviderOptionMap.set(key, providerNames.get(key) || key);
   });
@@ -22960,8 +27073,7 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
   ].join('');
   const routerLogToolOptions = [
     ['all', '全部工具'],
-    ['codex', 'Codex'],
-    ['claudecode', 'Claude Code'],
+    ...PROVIDER_ROUTER_TOOL_DEFS.map((item) => [item.value, item.label]),
   ].map(([value, label]) => `<option value="${esc(value)}" ${logFilter.tool === value ? 'selected' : ''}>${esc(label)}</option>`).join('');
   const routerLogStatusOptions = [
     ['all', '全部状态'],
@@ -22969,6 +27081,9 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
     ['failed', '失败'],
     ['retry', '重试'],
   ].map(([value, label]) => `<option value="${esc(value)}" ${logFilter.status === value ? 'selected' : ''}>${esc(label)}</option>`).join('');
+  const routerLogPageSizeOptions = PROVIDER_ROUTER_LOG_PAGE_SIZE_OPTIONS
+    .map((value) => `<option value="${esc(value)}" ${logPageSize === value ? 'selected' : ''}>${esc(value)} 条</option>`)
+    .join('');
   const statsTrafficLabel = [
     Number(stats.requestBytes || 0) ? `请求 ${formatBytes(stats.requestBytes)}` : '',
     Number(stats.responseBytes || 0) ? `响应 ${formatBytes(stats.responseBytes)}` : '',
@@ -22978,8 +27093,17 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
     Number(stats.cachedInputTokens || 0) ? `缓存 ${formatProviderRouterTokens(stats.cachedInputTokens)}` : '',
     Number(stats.outputTokens || 0) ? `输出 ${formatProviderRouterTokens(stats.outputTokens)}` : '',
   ].filter(Boolean).join(' / ') || '暂无 token';
-  const routerLogCountText = `${filteredRouterLogs.length} / ${routerLogs.length} 条`;
-  const routerLogRefreshText = state.providerRouter.lastFetchedAt
+  const circuit = stats.circuit || {};
+  const circuitEnabled = status.circuitBreakerEnabled !== false && circuit.enabled !== false;
+  const circuitLabel = circuitEnabled
+    ? `open ${Number(circuit.open || 0)} / half ${Number(circuit.halfOpen || 0)}`
+    : '未启用';
+  const routerLogCountText = hasPagedLogData
+    ? `第 ${currentLogPage} / ${logPageCount} 页 · 共 ${totalLogCount} 条`
+    : `${filteredRouterLogs.length} / ${routerLogs.length} 条`;
+  const routerLogRefreshText = logLoading
+    ? '查询中'
+    : state.providerRouter.lastFetchedAt
     ? `已刷新 ${formatRelativeTime(new Date(state.providerRouter.lastFetchedAt).toISOString())}`
     : '可刷新';
   const routerLogRows = filteredRouterLogs.map((item) => {
@@ -22989,25 +27113,30 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
     const latencyText = item.latencyMs == null ? '-' : `${item.latencyMs}ms`;
     const trafficText = formatProviderRouterTraffic(item);
     const usageText = getProviderRouterLogUsageParts(item).join(' / ');
+    const transformText = getProviderRouterLogTransformParts(item).join(' · ');
     const errorText = item.error ? String(item.error) : (item.retry ? '已尝试切换下一个 Provider' : '');
     return `
       <div class="pd-router-log-row ${tone}">
         <span>${esc(item.at ? formatRelativeTime(item.at) : '-')}</span>
         <code>${esc(item.method || '-')} ${esc(item.target || '-')}</code>
         <strong>${esc(providerText)}</strong>
-        <em>${esc(statusText)} · ${esc(latencyText)}${trafficText ? ` · ${esc(trafficText)}` : ''}${usageText ? ` · ${esc(usageText)}` : ''}${item.retry ? ' · retry' : ''}${errorText ? ` · ${esc(errorText)}` : ''}</em>
+        <em>${esc(statusText)} · ${esc(latencyText)}${trafficText ? ` · ${esc(trafficText)}` : ''}${usageText ? ` · ${esc(usageText)}` : ''}${transformText ? ` · ${esc(transformText)}` : ''}${item.retry ? ' · retry' : ''}${errorText ? ` · ${esc(errorText)}` : ''}</em>
       </div>`;
   }).join('');
-  const routerLogEmpty = routerLogs.length
+  const routerLogEmpty = hasAnyRouterLogRecord
     ? '<div class="pd-empty pd-empty-small">没有匹配的历史日志</div>'
     : '<div class="pd-empty pd-empty-small">暂无历史日志</div>';
+  const retentionDays = Number(logRetention.days || stats.retentionDays || 30) || 30;
+  const clearBeforeMax = providerRouterDatetimeLocalMax();
+  const clearBeforeValue = esc(state.providerRouter.logClearBefore || '');
   return `
     <div class="pd-router-panel" data-provider-router-panel="stats">
       <div class="pd-router-stat-summary">
         <span><strong>${esc(String(stats.requests || 0))}</strong><em>累计请求</em></span>
         <span><strong>${esc(statsTokenLabel)}</strong><em>输入 / 缓存 / 输出</em></span>
         <span><strong>${esc(statsTrafficLabel)}</strong><em>请求 / 响应流量</em></span>
-        <span><strong>${esc(String(routerLogs.length))}</strong><em>最近日志</em></span>
+        <span><strong>${esc(circuitLabel)}</strong><em>Circuit breaker</em></span>
+        <span><strong>${esc(String(totalLogCount || routerLogs.length))}</strong><em>日志记录</em></span>
       </div>
       ${providerStats.length ? `
         <div class="pd-router-provider-stats">
@@ -23020,11 +27149,13 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
           ${providerStats.map((item) => {
             const itemTraffic = formatProviderRouterTraffic(item);
             const itemUsage = getProviderRouterLogUsageParts(item).join(' / ');
+            const circuitMeta = getProviderRouterCircuitMeta(item);
+            const healthText = item.health ? ` · ${item.health}` : '';
             return `
               <div class="pd-router-stat-row">
                 <span>${esc(providerNames.get(item.providerKey) || item.providerKey || '-')}</span>
-                <code>${esc(String(item.lastStatus || '-'))}</code>
-                <em>请求 ${esc(String(item.requests || 0))} · 成功 ${esc(String(item.successes || 0))} · 失败 ${esc(String(item.failures || 0))}${item.lastError ? ` · ${esc(item.lastError)}` : ''}</em>
+                <code class="${esc(circuitMeta.tone)}">${esc(String(item.lastStatus || '-'))} · ${esc(circuitMeta.label)}</code>
+                <em>请求 ${esc(String(item.requests || 0))} · 成功 ${esc(String(item.successes || 0))} · 失败 ${esc(String(item.failures || 0))}${esc(healthText)}${item.lastError ? ` · ${esc(item.lastError)}` : ''}</em>
                 <em>${esc(itemUsage || '暂无 token')}${itemTraffic ? ` · ${esc(itemTraffic)}` : ''}</em>
               </div>`;
           }).join('')}
@@ -23033,31 +27164,44 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
         <div class="pd-router-log-head">
           <div>
             <strong>历史请求日志</strong>
-            <span>${esc(routerLogCountText)} · ${esc(routerLogRefreshText)}</span>
+            <span>${esc(routerLogCountText)} · ${esc(routerLogRefreshText)} · 自动保留 ${esc(String(retentionDays))} 天</span>
           </div>
           <div>
-            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${loading ? 'disabled' : ''}>刷新</button>
-            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="router-logs" ${filteredRouterLogs.length ? '' : 'disabled'}>复制日志</button>
+            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${(loading || logLoading) ? 'disabled' : ''}>刷新</button>
+            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-copy="router-logs" ${filteredRouterLogs.length ? '' : 'disabled'}>复制本页</button>
           </div>
         </div>
+        ${logError ? `<div class="pd-remote-alert is-bad">${esc(logError)}</div>` : ''}
         <div class="pd-router-log-filters">
           <label class="pd-router-log-search">
             <span>搜索</span>
-            <input type="search" value="${esc(logFilter.query)}" placeholder="路径 / Provider / 错误" data-provider-router-log-search ${routerLogs.length ? '' : 'disabled'} />
+            <input type="search" value="${esc(logFilter.query)}" placeholder="路径 / Provider / 转换 / 错误" data-provider-router-log-search ${hasAnyRouterLogRecord ? '' : 'disabled'} />
           </label>
           <label class="pd-router-log-filter">
             <span>工具</span>
-            <div class="select-wrap"><select data-provider-router-log-filter="tool" ${routerLogs.length ? '' : 'disabled'}>${routerLogToolOptions}</select></div>
+            <div class="select-wrap"><select data-provider-router-log-filter="tool" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogToolOptions}</select></div>
           </label>
           <label class="pd-router-log-filter">
             <span>Provider</span>
-            <div class="select-wrap"><select data-provider-router-log-filter="provider" ${routerLogs.length ? '' : 'disabled'}>${routerLogProviderOptions}</select></div>
+            <div class="select-wrap"><select data-provider-router-log-filter="provider" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogProviderOptions}</select></div>
           </label>
           <label class="pd-router-log-filter">
             <span>状态</span>
-            <div class="select-wrap"><select data-provider-router-log-filter="status" ${routerLogs.length ? '' : 'disabled'}>${routerLogStatusOptions}</select></div>
+            <div class="select-wrap"><select data-provider-router-log-filter="status" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogStatusOptions}</select></div>
           </label>
           <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-log-filter-reset ${logFiltersActive ? '' : 'disabled'}>重置</button>
+        </div>
+        <div class="pd-router-log-maintenance">
+          <div>
+            <strong>清理日志</strong>
+            <span>最多保留一个月；也可以手动清理指定时间点之前的记录。</span>
+          </div>
+          <label>
+            <span>早于</span>
+            <input type="datetime-local" max="${esc(clearBeforeMax)}" value="${clearBeforeValue}" data-provider-router-log-clear-before ${logClearing ? 'disabled' : ''} />
+          </label>
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small ${logClearing ? 'is-busy' : ''}" data-provider-router-log-clear="before" ${logClearing ? 'disabled' : ''}>清理</button>
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-log-clear="all" ${logClearing || !hasAnyRouterLogRecord ? 'disabled' : ''}>清空</button>
         </div>
         ${filteredRouterLogs.length ? `
           <div class="pd-router-log-list">
@@ -23069,6 +27213,137 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
             </div>
             ${routerLogRows}
           </div>` : routerLogEmpty}
+        <div class="pd-router-log-pagination">
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-log-page="prev" ${hasPrevLogPage && !logLoading ? '' : 'disabled'}>上一页</button>
+          <span>第 <strong>${esc(String(currentLogPage))}</strong> / ${esc(String(logPageCount))} 页 · 共 ${esc(String(totalLogCount))} 条</span>
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-log-page="next" ${hasNextLogPage && !logLoading ? '' : 'disabled'}>下一页</button>
+          <label>
+            <span>每页</span>
+            <div class="select-wrap"><select data-provider-router-log-page-size ${logLoading ? 'disabled' : ''}>${routerLogPageSizeOptions}</select></div>
+          </label>
+        </div>
+      </div>
+	    </div>`;
+}
+
+async function runProviderRouterResponsePreview() {
+  const container = document.getElementById('providerRouterPage');
+  let payload;
+  try {
+    payload = getProviderRouterResponsePreviewPayload(container);
+  } catch (error) {
+    state.providerRouter.responsePreviewError = error?.message || '响应 Body 不是有效 JSON';
+    state.providerRouter.responsePreviewResult = null;
+    renderProviderRouterPage();
+    return;
+  }
+  state.providerRouter.responsePreviewLoading = true;
+  state.providerRouter.responsePreviewError = '';
+  renderProviderRouterPage();
+  try {
+    const res = await api('/api/local-routing/response-rectifier/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      timeoutMs: 15000,
+    });
+    if (!res?.ok) throw new Error(res?.error || '响应转换预览失败');
+    state.providerRouter.responsePreviewResult = res.data || null;
+    state.providerRouter.responsePreviewError = '';
+  } catch (error) {
+    state.providerRouter.responsePreviewResult = null;
+    state.providerRouter.responsePreviewError = error?.message || String(error);
+    flash(state.providerRouter.responsePreviewError, 'error');
+  } finally {
+    state.providerRouter.responsePreviewLoading = false;
+    renderProviderRouterPage();
+  }
+}
+
+function renderProviderRouterRectifierPanel({ loading = Boolean(state.providerRouter.loading) } = {}) {
+  const esc = escapeHtml;
+  const draft = ensureProviderRouterResponsePreviewDraft();
+  const result = state.providerRouter.responsePreviewResult;
+  const error = state.providerRouter.responsePreviewError || '';
+  const busy = Boolean(state.providerRouter.responsePreviewLoading);
+  const disabled = loading || busy;
+  const sourceProtocol = normalizeProviderRouterRoutingProtocol(draft.sourceProtocol || 'openai-chat');
+  const targetProtocol = normalizeProviderRouterRoutingProtocol(draft.targetProtocol || 'gemini');
+  const protocolOptions = (active) => PROVIDER_ROUTER_PROTOCOL_DEFS.map((item) => (
+    `<option value="${esc(item.value)}" ${item.value === active ? 'selected' : ''}>${esc(item.label)}</option>`
+  )).join('');
+  const responseBody = result?.response?.body;
+  const outputText = error
+    ? error
+    : result
+      ? providerRouterResponsePreviewBodyText(responseBody)
+      : '等待预览';
+  const resultTone = error ? 'is-bad' : result?.changed ? 'is-ok' : result ? 'is-muted' : '';
+  const resultLabel = error
+    ? '失败'
+    : result
+      ? (result.changed ? '已转换' : '未变化')
+      : '未运行';
+  const resultMeta = result
+    ? `${result.sourceProtocol || sourceProtocol} -> ${result.targetProtocol || targetProtocol} · HTTP ${result.response?.status || draft.status || 200}`
+    : `${sourceProtocol} -> ${targetProtocol}`;
+  const changes = Array.isArray(result?.changes) ? result.changes : [];
+  const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
+  const notes = [
+    ...changes.map((item) => `<span class="is-ok">${esc(item)}</span>`),
+    ...warnings.map((item) => `<span class="is-warn">${esc(item)}</span>`),
+  ].join('');
+  const sampleMode = draft.mode || 'error';
+  const sampleButtons = [
+    ['error', '错误'],
+    ['json', 'JSON'],
+    ['stream', 'SSE'],
+  ].map(([mode, label]) => (
+    `<button type="button" class="pd-btn pd-btn-small ${sampleMode === mode ? 'is-active' : ''}" data-provider-router-rectifier-sample="${esc(mode)}">${esc(label)}</button>`
+  )).join('');
+  return `
+    <div class="pd-router-panel" data-provider-router-panel="rectifier">
+      <div class="pd-router-rectifier-head">
+        <div>
+          <strong>响应转换预览</strong>
+          <span>Gemini upstream -> caller protocol</span>
+        </div>
+        <div>${sampleButtons}</div>
+      </div>
+      <div class="pd-router-rectifier-fields">
+        <label class="pd-router-rectifier-field">
+          <span>客户端协议</span>
+          <div class="select-wrap"><select data-provider-router-rectifier-source ${disabled ? 'disabled' : ''}>${protocolOptions(sourceProtocol)}</select></div>
+        </label>
+        <label class="pd-router-rectifier-field">
+          <span>上游协议</span>
+          <div class="select-wrap"><select data-provider-router-rectifier-target ${disabled ? 'disabled' : ''}>${protocolOptions(targetProtocol)}</select></div>
+        </label>
+        <label class="pd-router-rectifier-field">
+          <span>状态码</span>
+          <input type="number" min="100" max="599" step="1" value="${esc(draft.status || '200')}" data-provider-router-rectifier-status ${disabled ? 'disabled' : ''} />
+        </label>
+        <label class="pd-router-rectifier-field is-wide">
+          <span>上游路径</span>
+          <input type="text" value="${esc(draft.path || '')}" data-provider-router-rectifier-path ${disabled ? 'disabled' : ''} />
+        </label>
+      </div>
+      <div class="pd-router-rectifier-workbench">
+        <label class="pd-router-rectifier-editor">
+          <span>上游响应 Body</span>
+          <textarea data-provider-router-rectifier-body spellcheck="false" ${disabled ? 'disabled' : ''}>${esc(draft.body || '')}</textarea>
+        </label>
+        <div class="pd-router-rectifier-result">
+          <div class="pd-router-rectifier-result-head">
+            <div>
+              <strong class="${esc(resultTone)}">${esc(resultLabel)}</strong>
+              <span>${esc(resultMeta)}</span>
+            </div>
+            <button type="button" class="pd-btn pd-btn-primary pd-btn-small ${busy ? 'is-busy' : ''}" data-provider-router-rectifier-run ${disabled ? 'disabled' : ''}>${busy ? '转换中' : '预览转换'}</button>
+          </div>
+          ${notes ? `<div class="pd-router-rectifier-notes">${notes}</div>` : ''}
+          <pre data-provider-router-rectifier-output>${esc(outputText)}</pre>
+        </div>
       </div>
     </div>`;
 }
@@ -23101,9 +27376,12 @@ function ensureProviderRouterEvents() {
     if (!getProviderRouterPageTarget(target)) return;
     const routerTab = target.closest('[data-provider-router-tab]');
     if (routerTab) {
-      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'pool').trim();
-      state.providerRouter.activeTab = ['pool', 'clients', 'stats'].includes(tab) ? tab : 'pool';
+      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'clients').trim();
+      state.providerRouter.activeTab = ['clients', 'gateway', 'pool', 'stats', 'rectifier'].includes(tab) ? tab : 'clients';
       renderProviderRouterPage();
+      if (state.providerRouter.activeTab === 'stats') {
+        void fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
+      }
       return;
     }
     const toolBtn = target.closest('[data-provider-router-tool]');
@@ -23132,7 +27410,33 @@ function ensureProviderRouterEvents() {
     if (target.closest('[data-provider-router-probe]')) { probeProviderRouterProxy(); return; }
     if (target.closest('[data-provider-router-log-filter-reset]')) {
       state.providerRouter.logFilter = { query: '', provider: 'all', status: 'all', tool: 'all' };
+      state.providerRouter.logPage = 1;
+      state.providerRouter.logData = null;
       refreshProviderRouterStatsPanel();
+      void fetchProviderRouterLogs({ page: 1, silent: true });
+      return;
+    }
+    const pageBtn = target.closest('[data-provider-router-log-page]');
+    if (pageBtn) {
+      const direction = pageBtn.getAttribute('data-provider-router-log-page') || '';
+      const current = Math.max(1, Number(state.providerRouter.logPage || 1) || 1);
+      const nextPage = direction === 'next' ? current + 1 : Math.max(1, current - 1);
+      void fetchProviderRouterLogs({ page: nextPage });
+      return;
+    }
+    const clearBtn = target.closest('[data-provider-router-log-clear]');
+    if (clearBtn) {
+      void clearProviderRouterLogs(clearBtn.getAttribute('data-provider-router-log-clear') || 'before');
+      return;
+    }
+    const rectifierSampleBtn = target.closest('[data-provider-router-rectifier-sample]');
+    if (rectifierSampleBtn) {
+      setProviderRouterResponsePreviewSample(rectifierSampleBtn.getAttribute('data-provider-router-rectifier-sample') || 'error');
+      renderProviderRouterPage();
+      return;
+    }
+    if (target.closest('[data-provider-router-rectifier-run]')) {
+      runProviderRouterResponsePreview();
       return;
     }
     const copyBtn = target.closest('[data-provider-router-copy]');
@@ -23155,8 +27459,31 @@ function ensureProviderRouterEvents() {
       if (['provider', 'status', 'tool'].includes(key)) {
         filter[key] = target.value || 'all';
         state.providerRouter.logFilter = filter;
+        state.providerRouter.logPage = 1;
+        state.providerRouter.logData = null;
         refreshProviderRouterStatsPanel();
+        void fetchProviderRouterLogs({ page: 1, silent: true });
       }
+      return;
+    }
+    if (target instanceof HTMLSelectElement && target.matches('[data-provider-router-log-page-size]')) {
+      state.providerRouter.logPageSize = normalizeProviderRouterLogPageSize(target.value);
+      state.providerRouter.logPage = 1;
+      state.providerRouter.logData = null;
+      refreshProviderRouterStatsPanel();
+      void fetchProviderRouterLogs({ page: 1, silent: true });
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-log-clear-before]')) {
+      state.providerRouter.logClearBefore = target.value || '';
+      return;
+    }
+    if (target instanceof HTMLSelectElement && (
+      target.matches('[data-provider-router-rectifier-source]')
+      || target.matches('[data-provider-router-rectifier-target]')
+    )) {
+      updateProviderRouterResponsePreviewDraftFrom();
+      state.providerRouter.responsePreviewError = '';
       return;
     }
     if (target instanceof HTMLSelectElement && target.matches('[data-provider-router-strategy]')) {
@@ -23185,6 +27512,36 @@ function ensureProviderRouterEvents() {
       renderProviderRouterPage();
       return;
     }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-circuit-enabled]')) {
+      setProviderRouterCircuitSetting('enabled', target.checked);
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-circuit-failure-threshold]')) {
+      setProviderRouterCircuitSetting('failureThreshold', target.value);
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-circuit-recovery-wait-ms]')) {
+      setProviderRouterCircuitSetting('recoveryWaitMs', target.value);
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-circuit-success-threshold]')) {
+      setProviderRouterCircuitSetting('successThreshold', target.value);
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-circuit-error-rate-threshold]')) {
+      setProviderRouterCircuitSetting('errorRateThreshold', target.value);
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-circuit-min-requests]')) {
+      setProviderRouterCircuitSetting('minRequests', target.value);
+      renderProviderRouterPage();
+      return;
+    }
     if (target instanceof HTMLInputElement && target.matches('[data-provider-router-weight]')) {
       setProviderRouterWeight(target.getAttribute('data-provider-router-weight') || '', target.value, getProviderRouterActiveTool());
       renderProviderRouterPage();
@@ -23208,12 +27565,19 @@ function ensureProviderRouterEvents() {
   });
   document.addEventListener('input', (e) => {
     const target = e.target;
-    if (!(target instanceof HTMLInputElement) || !getProviderRouterPageTarget(target)) return;
+    if (!((target instanceof HTMLInputElement) || (target instanceof HTMLTextAreaElement)) || !getProviderRouterPageTarget(target)) return;
     if (target.matches('[data-provider-router-log-search]')) {
       const filter = getProviderRouterLogFilter();
       filter.query = target.value;
       state.providerRouter.logFilter = filter;
+      state.providerRouter.logPage = 1;
+      state.providerRouter.logData = null;
       refreshProviderRouterStatsPanel();
+      scheduleProviderRouterLogsFetch();
+      return;
+    }
+    if (target.matches('[data-provider-router-log-clear-before]')) {
+      state.providerRouter.logClearBefore = target.value || '';
       return;
     }
     if (target.matches('[data-provider-router-weight]')) {
@@ -23230,6 +27594,35 @@ function ensureProviderRouterEvents() {
       ensureProviderRouterBalanceGuardState();
       state.providerRouter.balanceMinAmount = Math.max(0, Number(target.value) || 0);
       writeProviderRouterBalanceGuardPref();
+      return;
+    }
+    if (target.matches('[data-provider-router-circuit-failure-threshold]')) {
+      setProviderRouterCircuitSetting('failureThreshold', target.value);
+      return;
+    }
+    if (target.matches('[data-provider-router-circuit-recovery-wait-ms]')) {
+      setProviderRouterCircuitSetting('recoveryWaitMs', target.value);
+      return;
+    }
+    if (target.matches('[data-provider-router-circuit-success-threshold]')) {
+      setProviderRouterCircuitSetting('successThreshold', target.value);
+      return;
+    }
+    if (target.matches('[data-provider-router-circuit-error-rate-threshold]')) {
+      setProviderRouterCircuitSetting('errorRateThreshold', target.value);
+      return;
+    }
+    if (target.matches('[data-provider-router-circuit-min-requests]')) {
+      setProviderRouterCircuitSetting('minRequests', target.value);
+      return;
+    }
+    if (
+      target.matches('[data-provider-router-rectifier-status]')
+      || target.matches('[data-provider-router-rectifier-path]')
+      || target.matches('[data-provider-router-rectifier-body]')
+    ) {
+      updateProviderRouterResponsePreviewDraftFrom();
+      state.providerRouter.responsePreviewError = '';
     }
   });
 }
@@ -23244,6 +27637,7 @@ function renderProviderRouterPage() {
     : null;
   const esc = escapeHtml;
   const status = state.providerRouter.status || {};
+  const stats = status.stats || {};
   const running = Boolean(status.running);
   const loading = Boolean(state.providerRouter.loading);
   const error = state.providerRouter.error || '';
@@ -23254,23 +27648,59 @@ function renderProviderRouterPage() {
   const balanceGuardEnabled = state.providerRouter.balanceGuardEnabled !== false;
   const balanceMinPercent = Math.max(0, Math.min(100, Number(state.providerRouter.balanceMinPercent) || 0));
   const balanceMinAmount = Math.max(0, Number(state.providerRouter.balanceMinAmount) || 0);
+  const circuitSettings = getProviderRouterCircuitSettings();
+  const circuitEnabled = circuitSettings.enabled !== false;
+  const circuitRateValue = Number(circuitSettings.errorRateThreshold || 0.6).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
   const toolLabel = providerRouterToolLabel(activeTool);
-  const tools = ['codex', 'claudecode'];
+  const tools = PROVIDER_ROUTER_TOOLS;
   const toolCounts = Object.fromEntries(tools.map((tool) => {
     const rows = getProviderRouterRows(tool);
     return [tool, { total: rows.length, routable: rows.filter((item) => item.canRoute).length }];
   }));
+  const totalRouterRows = Object.values(toolCounts).reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const totalRoutableRows = Object.values(toolCounts).reduce((sum, item) => sum + Number(item.routable || 0), 0);
+  const coverageCards = tools.map((tool) => {
+    const def = providerRouterToolDef(tool);
+    const count = toolCounts[tool] || { total: 0, routable: 0 };
+    const endpoint = getProviderRouterEndpoint(tool, status);
+    const isActiveTool = activeTool === tool;
+    return `
+      <button type="button" class="pd-router-coverage-card ${isActiveTool ? 'is-active' : ''}" data-provider-router-tool="${esc(tool)}" aria-pressed="${isActiveTool ? 'true' : 'false'}">
+        <span class="pd-router-coverage-top">
+          <strong>${esc(def.label)}</strong>
+          <em>${esc(providerRouterProtocolLabel(tool))}</em>
+        </span>
+        <span class="pd-router-coverage-meta">
+          <i>${esc(def.writeTarget || 'client config')}</i>
+          <b>${esc(String(count.routable))}/${esc(String(count.total))}</b>
+        </span>
+        <span class="pd-router-coverage-bottom">
+          <code>${esc(endpoint)}</code>
+        </span>
+      </button>`;
+  }).join('');
+  const capabilityTags = PROVIDER_ROUTER_CAPABILITY_TAGS.map((item) => `<span>${esc(item)}</span>`).join('');
+  const coveragePanel = `
+    <section class="pd-router-client-coverage" aria-label="Provider Router seven client coverage">
+      <div class="pd-router-coverage-summary">
+        <div>
+          <span>CLIENTS</span>
+          <strong>${esc(String(PROVIDER_ROUTER_TOOL_DEFS.length))} 个客户端接入</strong>
+          <em>Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw、Hermes Agent 共用本地 Router；先一键写入配置，再到负载池选择 Provider。</em>
+        </div>
+        <strong class="pd-router-coverage-health">${esc(String(totalRoutableRows))}/${esc(String(totalRouterRows))} 可路由 · ${esc(running ? '网关运行中' : '网关未启动')}</strong>
+      </div>
+      <div class="pd-router-coverage-tags">${capabilityTags}</div>
+      <div class="pd-router-coverage-grid">${coverageCards}</div>
+    </section>`;
   const candidates = getProviderRouterRows(activeTool);
   const primary = getProviderRouterPrimaryRow(candidates, activeTool);
   const selected = getProviderRouterSelectedKeySet(candidates, activeTool);
   const selectedRows = getProviderRouterSelectedRows(candidates, activeTool);
   const activeKeys = Array.isArray(status.providerKeys) ? status.providerKeys : [];
-  const stats = status.stats || {};
   const startedAt = status.startedAt ? formatRelativeTime(status.startedAt) : '';
   const activeStatusTool = normalizeProviderRouterTool(status.tool || activeTool);
   const runningDifferentTool = running && activeStatusTool !== activeTool;
-  const codexBaseUrl = getProviderRouterEndpoint('codex', status);
-  const claudeBaseUrl = getProviderRouterEndpoint('claudecode', status);
   const currentBaseUrl = getProviderRouterEndpoint(activeTool, status);
   const originUrl = getProviderRouterOrigin(status);
   const strategyOptions = PROVIDER_ROUTER_STRATEGIES.map((item) => (
@@ -23286,7 +27716,7 @@ function renderProviderRouterPage() {
     const weight = getProviderRouterWeight(item.routeKey, activeTool);
     const health = item.health || {};
     const healthText = health.loading ? '检测中' : health.ok ? '可用' : health.checked ? '失败' : '未检测';
-    const authText = item.tool === 'claudecode'
+    const authText = isProviderRouterAnthropicTool(item.tool)
       ? (item.authToken ? 'Auth Token' : item.apiKey ? 'API Key' : '仅掩码')
       : 'API Key';
     const routeHint = item.canRoute
@@ -23319,9 +27749,11 @@ function renderProviderRouterPage() {
   }).join('');
   const toolTabs = tools.map((tool) => {
     const count = toolCounts[tool] || { total: 0, routable: 0 };
+    const toolDef = providerRouterToolDef(tool);
+    const protocolLabel = toolDef.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI-compatible';
     return `
-      <button type="button" class="pd-router-tool-tab ${activeTool === tool ? 'is-active' : ''}" data-provider-router-tool="${tool}">
-        <span>${esc(providerRouterToolLabel(tool))}</span>
+      <button type="button" class="pd-router-tool-tab ${activeTool === tool ? 'is-active' : ''}" data-provider-router-tool="${esc(tool)}" aria-pressed="${activeTool === tool ? 'true' : 'false'}">
+        <span><strong>${esc(toolDef.label)}</strong><small>${esc(protocolLabel)}</small></span>
         <em>${esc(String(count.routable))}/${esc(String(count.total))}</em>
       </button>`;
   }).join('');
@@ -23374,25 +27806,28 @@ function renderProviderRouterPage() {
       : running
         ? '重启网关'
         : '启动网关';
-  const activeTab = ['pool', 'clients', 'stats'].includes(state.providerRouter.activeTab) ? state.providerRouter.activeTab : 'pool';
+  const routerTabKeys = ['clients', 'gateway', 'pool', 'rectifier', 'stats'];
+  const activeTab = routerTabKeys.includes(state.providerRouter.activeTab) ? state.providerRouter.activeTab : 'clients';
   state.providerRouter.activeTab = activeTab;
   const routerTabs = [
+    { key: 'clients', label: '客户端接入', meta: `${PROVIDER_ROUTER_TOOL_DEFS.length} 个` },
+    { key: 'gateway', label: '网关运行', meta: running ? '运行中' : '未启动' },
     { key: 'pool', label: '负载池', meta: selectedSummary },
-    { key: 'clients', label: '客户端配置', meta: '复制 / 写入' },
-    { key: 'stats', label: '运行统计', meta: String(stats.requests || 0) },
+    { key: 'rectifier', label: '格式转换', meta: '预览' },
+    { key: 'stats', label: '运行日志', meta: String(stats.requests || 0) },
   ].map((tab) => `
     <button type="button" class="pd-router-tab ${activeTab === tab.key ? 'is-active' : ''}" data-provider-router-tab="${esc(tab.key)}">
       <span>${esc(tab.label)}</span>
       <em>${esc(tab.meta)}</em>
     </button>`).join('');
   const poolPanel = `
-    <div class="pd-router-panel">
+    <div class="pd-router-panel pd-router-pool-panel">
       <div class="pd-router-pool-toolbar">
         <div class="pd-router-tool-tabs">${toolTabs}</div>
         <div class="pd-router-pool-summary">
           <strong>${esc(toolLabel)}</strong>
           <span>${esc(selectedSummary)} 个已加入负载池</span>
-          <em>仅路由可读取密钥的 Provider。</em>
+          <em>${esc(PROVIDER_ROUTER_TOOL_DEFS.length)} 个客户端入口已接入，按工具隔离 Provider 池。</em>
         </div>
       </div>
       <div class="pd-router-strategy-bar">
@@ -23419,6 +27854,37 @@ function renderProviderRouterPage() {
         </label>
         <div class="pd-router-strategy-note">低余额自动跳过，未知余额仍可路由。</div>
       </div>
+      <div class="pd-router-circuit-bar">
+        <div class="pd-router-switch-field">
+          <span>熔断保护</span>
+          <label class="pd-router-switch ${circuitEnabled ? 'is-on' : ''}">
+            <input type="checkbox" data-provider-router-circuit-enabled ${circuitEnabled ? 'checked' : ''} ${loading ? 'disabled' : ''} />
+            <span aria-hidden="true"></span>
+            <strong>启用</strong>
+          </label>
+        </div>
+        <label class="pd-router-threshold">
+          <span>失败阈值</span>
+          <input type="number" min="1" max="100" step="1" value="${esc(circuitSettings.failureThreshold)}" data-provider-router-circuit-failure-threshold ${loading || !circuitEnabled ? 'disabled' : ''} />
+        </label>
+        <label class="pd-router-threshold">
+          <span>恢复等待(ms)</span>
+          <input type="number" min="1000" max="3600000" step="1000" value="${esc(circuitSettings.recoveryWaitMs)}" data-provider-router-circuit-recovery-wait-ms ${loading || !circuitEnabled ? 'disabled' : ''} />
+        </label>
+        <label class="pd-router-threshold">
+          <span>半开成功</span>
+          <input type="number" min="1" max="20" step="1" value="${esc(circuitSettings.successThreshold)}" data-provider-router-circuit-success-threshold ${loading || !circuitEnabled ? 'disabled' : ''} />
+        </label>
+        <label class="pd-router-threshold">
+          <span>错误率</span>
+          <input type="number" min="0.1" max="1" step="0.05" value="${esc(circuitRateValue)}" data-provider-router-circuit-error-rate-threshold ${loading || !circuitEnabled ? 'disabled' : ''} />
+        </label>
+        <label class="pd-router-threshold">
+          <span>窗口请求</span>
+          <input type="number" min="1" max="20" step="1" value="${esc(circuitSettings.minRequests)}" data-provider-router-circuit-min-requests ${loading || !circuitEnabled ? 'disabled' : ''} />
+        </label>
+        <div class="pd-router-strategy-note">连续失败或窗口错误率达到阈值时跳过 Provider；恢复等待后进入 half-open 试探。</div>
+      </div>
       ${candidates.length ? `
         <div class="pd-router-provider-list">
           <div class="pd-router-provider-head">
@@ -23432,39 +27898,123 @@ function renderProviderRouterPage() {
           ${candidateList}
         </div>` : `<div class="pd-empty pd-empty-small">没有可用于路由的 ${esc(toolLabel)} API Key Provider。先在快速配置或连接详情里保存一个 Provider。</div>`}
     </div>`;
+  const clientRows = tools.map((tool) => {
+    const endpoint = getProviderRouterEndpoint(tool, status);
+    const protocolLabel = isProviderRouterAnthropicTool(tool) ? 'Anthropic' : 'OpenAI';
+    const copyActions = [
+      `<button type="button" data-provider-router-copy="${esc(`${tool}-base`)}">复制 Base URL</button>`,
+      `<button type="button" data-provider-router-copy="${esc(`${tool}-env`)}">复制 env</button>`,
+      tool === 'codex'
+        ? `<button type="button" data-provider-router-copy="codex-toml">复制 config.toml 片段</button>`
+        : '',
+      tool === 'claudecode'
+        ? `<button type="button" data-provider-router-copy="claude-json">复制 settings.json</button>`
+        : '',
+    ].filter(Boolean).join('');
+    return `
+        <div class="pd-router-client-row">
+          <strong>${esc(providerRouterToolLabel(tool))}</strong>
+          <code>${esc(endpoint)}</code>
+          <code>${esc(PROVIDER_ROUTER_CLIENT_KEY)}</code>
+          <span class="pd-router-client-actions">
+            <em>${esc(protocolLabel)}</em>
+            <details class="pd-router-client-menu">
+              <summary aria-label="${esc(providerRouterToolLabel(tool))} 复制配置" title="复制配置">...</summary>
+              <div>${copyActions}</div>
+            </details>
+            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small pd-router-client-apply" data-provider-router-apply="${esc(tool)}" ${loading ? 'disabled' : ''}>一键配置</button>
+          </span>
+        </div>`;
+  }).join('');
   const clientsPanel = `
-    <div class="pd-router-panel">
+    <div class="pd-router-panel pd-router-clients-panel">
+      ${coveragePanel}
       <div class="pd-router-client-table">
         <div class="pd-router-client-row is-head">
           <span>客户端</span>
           <span>Base URL</span>
           <span>API Key</span>
-          <span>操作</span>
+          <span>配置</span>
         </div>
-        <div class="pd-router-client-row">
-          <strong>Codex</strong>
-          <code>${esc(codexBaseUrl)}</code>
-          <code>${esc(PROVIDER_ROUTER_CLIENT_KEY)}</code>
-          <span class="pd-router-client-actions">
-            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="codex-env">复制 env</button>
-            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="codex-toml">复制片段</button>
-            <button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-provider-router-apply="codex" ${loading ? 'disabled' : ''}>一键配置</button>
-          </span>
+        ${clientRows}
+      </div>
+	    </div>`;
+  const endpointButtons = tools.map((tool) => `
+          <button type="button" data-provider-router-copy="${esc(`${tool}-base`)}">
+            <div>
+              <span>${esc(providerRouterToolLabel(tool))} Base URL</span>
+              <code>${esc(getProviderRouterEndpoint(tool, status))}</code>
+            </div>
+            <em>复制</em>
+          </button>`).join('');
+  const gatewayPanel = `
+    <section class="pd-router-gateway">
+      <div class="pd-router-gateway-top">
+        <div class="pd-router-gateway-title">
+          <div class="pd-router-kicker">GATEWAY</div>
+          <div class="pd-router-title">本地监听与路由</div>
+          <div class="pd-router-sub">${esc(statusNote)} · 客户端接入本机地址</div>
         </div>
-        <div class="pd-router-client-row">
-          <strong>Claude Code</strong>
-          <code>${esc(claudeBaseUrl)}</code>
-          <code>${esc(PROVIDER_ROUTER_CLIENT_KEY)}</code>
-          <span class="pd-router-client-actions">
-            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="claude-env">复制 env</button>
-            <button type="button" class="pd-btn pd-btn-small" data-provider-router-copy="claude-json">复制 JSON</button>
-            <button type="button" class="pd-btn pd-btn-primary pd-btn-small" data-provider-router-apply="claudecode" ${loading ? 'disabled' : ''}>一键配置</button>
-          </span>
+        <div class="pd-router-state-pill ${proxyReady ? 'is-on is-proxying' : running ? 'is-running' : 'is-off'} ${(probeLoading || probeFailed || (running && !proxyReady)) ? 'is-warning' : ''}">
+          <span></span>
+          <strong>${esc(runningText)}</strong>
         </div>
       </div>
-    </div>`;
+
+      <div class="pd-router-gateway-main">
+        <div class="pd-router-metrics">
+          <div>
+            <span>监听</span>
+            <strong>${esc(originUrl)}</strong>
+            <em>${status.portFallback ? '自动端口' : '默认 18791'}</em>
+          </div>
+          <div>
+            <span>反代</span>
+            <strong class="${proxyReady ? 'is-ok' : probeFailed ? 'is-bad' : probeLoading ? 'is-warning' : ''}">${esc(probeStateText)}</strong>
+            <em>${esc(probeDetail)}</em>
+          </div>
+          <div>
+            <span>Provider</span>
+            <strong>${esc(selectedSummary)}</strong>
+            <em>已选 / 可路由</em>
+          </div>
+          <div>
+            <span>请求</span>
+            <strong>${esc(String(stats.requests || 0))}</strong>
+            <em>成功 ${esc(String(stats.forwarded || 0))} / 失败 ${esc(String(stats.failed || 0))}</em>
+          </div>
+        </div>
+
+        <div class="pd-router-actions">
+          <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-provider-router-start ${loading || !selectedRows.length ? 'disabled' : ''}>${esc(startActionText)}</button>
+          <button type="button" class="pd-btn pd-btn-ghost" data-provider-router-stop ${(!running || loading) ? 'disabled' : ''}>停止</button>
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small ${probeLoading ? 'is-busy' : ''}" data-provider-router-probe ${(!running || loading || probeLoading) ? 'disabled' : ''}>${probeLoading ? '探测中' : '测试反代'}</button>
+          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${loading ? 'disabled' : ''}>刷新</button>
+        </div>
+      </div>
+
+      <div class="pd-router-endpoint-strip">
+        ${endpointButtons}
+        <button type="button" data-provider-router-copy="api-key">
+          <div>
+            <span>客户端 API Key</span>
+            <code>${esc(PROVIDER_ROUTER_CLIENT_KEY)}</code>
+          </div>
+          <em>复制</em>
+        </button>
+      </div>
+    </section>`;
   const statsPanel = renderProviderRouterStatsPanel({ loading });
-  const activePanel = activeTab === 'clients' ? clientsPanel : activeTab === 'stats' ? statsPanel : poolPanel;
+  const rectifierPanel = renderProviderRouterRectifierPanel({ loading });
+  const activePanel = activeTab === 'clients'
+    ? clientsPanel
+    : activeTab === 'gateway'
+      ? gatewayPanel
+      : activeTab === 'stats'
+        ? statsPanel
+        : activeTab === 'rectifier'
+          ? rectifierPanel
+          : poolPanel;
 
   container.innerHTML = `
     <div class="pd-router provider-router-shell">
@@ -23475,7 +28025,7 @@ function renderProviderRouterPage() {
             <em>·</em>
             <span>自动路由网关</span>
           </div>
-          <p>选择 Provider 池，本机网关自动转发请求。</p>
+          <p>面向七个 AI Coding 客户端的本地网关：统一热切换、格式转换、自动 failover、熔断、健康探测和请求日志。</p>
         </div>
         <div class="pd-router-page-meta">
           <span>${esc(statusScopeLabel)}</span>
@@ -23483,76 +28033,6 @@ function renderProviderRouterPage() {
         </div>
       </header>
       ${error ? `<div class="pd-remote-alert is-bad">${esc(error)}</div>` : ''}
-      <section class="pd-router-gateway">
-        <div class="pd-router-gateway-top">
-          <div class="pd-router-gateway-title">
-            <div class="pd-router-kicker">GATEWAY</div>
-            <div class="pd-router-title">本地监听与路由</div>
-            <div class="pd-router-sub">${esc(statusNote)} · 客户端接入本机地址</div>
-          </div>
-          <div class="pd-router-state-pill ${proxyReady ? 'is-on is-proxying' : running ? 'is-running' : 'is-off'} ${(probeLoading || probeFailed || (running && !proxyReady)) ? 'is-warning' : ''}">
-            <span></span>
-            <strong>${esc(runningText)}</strong>
-          </div>
-        </div>
-
-        <div class="pd-router-gateway-main">
-          <div class="pd-router-metrics">
-            <div>
-              <span>监听</span>
-              <strong>${esc(originUrl)}</strong>
-              <em>${status.portFallback ? '自动端口' : '默认 18791'}</em>
-            </div>
-            <div>
-              <span>反代</span>
-              <strong class="${proxyReady ? 'is-ok' : probeFailed ? 'is-bad' : probeLoading ? 'is-warning' : ''}">${esc(probeStateText)}</strong>
-              <em>${esc(probeDetail)}</em>
-            </div>
-            <div>
-              <span>Provider</span>
-              <strong>${esc(selectedSummary)}</strong>
-              <em>已选 / 可路由</em>
-            </div>
-            <div>
-              <span>请求</span>
-              <strong>${esc(String(stats.requests || 0))}</strong>
-              <em>成功 ${esc(String(stats.forwarded || 0))} / 失败 ${esc(String(stats.failed || 0))}</em>
-            </div>
-          </div>
-
-          <div class="pd-router-actions">
-            <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-provider-router-start ${loading || !selectedRows.length ? 'disabled' : ''}>${esc(startActionText)}</button>
-            <button type="button" class="pd-btn pd-btn-ghost" data-provider-router-stop ${(!running || loading) ? 'disabled' : ''}>停止</button>
-            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small ${probeLoading ? 'is-busy' : ''}" data-provider-router-probe ${(!running || loading || probeLoading) ? 'disabled' : ''}>${probeLoading ? '探测中' : '测试反代'}</button>
-            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${loading ? 'disabled' : ''}>刷新</button>
-          </div>
-        </div>
-
-        <div class="pd-router-endpoint-strip">
-          <button type="button" data-provider-router-copy="codex-base">
-            <div>
-              <span>Codex Base URL</span>
-              <code>${esc(codexBaseUrl)}</code>
-            </div>
-            <em>复制</em>
-          </button>
-          <button type="button" data-provider-router-copy="claude-base">
-            <div>
-              <span>Claude Code Base URL</span>
-              <code>${esc(claudeBaseUrl)}</code>
-            </div>
-            <em>复制</em>
-          </button>
-          <button type="button" data-provider-router-copy="api-key">
-            <div>
-              <span>客户端 API Key</span>
-              <code>${esc(PROVIDER_ROUTER_CLIENT_KEY)}</code>
-            </div>
-            <em>复制</em>
-          </button>
-        </div>
-      </section>
-
       <section class="pd-router-tabs-shell">
         <div class="pd-router-tabs">${routerTabs}</div>
         ${activePanel}
@@ -23574,6 +28054,13 @@ function renderProviderRouterPage() {
         input.setSelectionRange(start, end);
       } catch (_) {}
     }
+  }
+  if (activeTab === 'stats' && !state.providerRouter.logData && !state.providerRouter.logsLoading && !state.providerRouter.logsError) {
+    setTimeout(() => {
+      if (state.providerRouter.activeTab === 'stats' && !state.providerRouter.logData && !state.providerRouter.logsLoading && !state.providerRouter.logsError) {
+        void fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
+      }
+    }, 0);
   }
   requestAnimationFrame(() => window.EasyAIConfigI18n?.apply?.(container));
 }
@@ -25912,13 +30399,27 @@ function renderPdTestResult(result) {
 }
 
 function providerEvalProtocolLabel(row) {
-  if (isClaudeProviderDetail(row)) return 'Anthropic /v1/messages';
+  const tool = providerDetailTool(row);
+  if (tool === 'claudecode' || tool === 'claude-desktop') return 'Anthropic /v1/messages';
   const wireApi = String(row?.ref?.wireApi || row?.wireApi || '').trim().toLowerCase();
   if (wireApi === 'responses') return 'OpenAI /responses';
   if (wireApi === 'chat' || wireApi === 'completions' || wireApi === 'chat-completions') {
     return 'OpenAI-compatible /chat/completions';
   }
   return 'OpenAI /responses';
+}
+
+function isPdEvalSupportedTool(row = lookupProviderDetailRow()) {
+  const tool = normalizeToolCatalogId(providerDetailTool(row));
+  return ['codex', 'claudecode', 'claude-desktop', 'gemini', 'opencode', 'openclaw', 'hermes'].includes(tool);
+}
+
+function canRunPdModelEval(row = lookupProviderDetailRow()) {
+  if (!row || row.mode !== 'apikey' || !row.hasCredential || row.historyOnly) return false;
+  const tool = normalizeToolCatalogId(providerDetailTool(row));
+  if (tool === 'codex' || tool === 'claudecode' || tool === 'claude-desktop') return true;
+  const ref = row.ref && typeof row.ref === 'object' ? row.ref : {};
+  return Boolean(String(ref.apiKey || ref.authToken || '').trim());
 }
 
 function formatTokenCount(value) {
@@ -26234,19 +30735,18 @@ function getPdEvalBatchCandidateId(row = {}) {
 function getPdEvalBatchCandidates(currentRow = lookupProviderDetailRow()) {
   const rows = [];
   const seen = new Set();
-  for (const tool of ['codex', 'claudecode']) {
+  for (const tool of ['codex', 'claudecode', 'claude-desktop', 'gemini', 'opencode', 'openclaw', 'hermes']) {
     const toolRows = typeof window.__chBuildRows === 'function' ? window.__chBuildRows(tool) : [];
     for (const row of toolRows || []) {
       const id = getPdEvalBatchCandidateId(row);
       if (!id || seen.has(id)) continue;
-      if (row.mode !== 'apikey' || !row.hasCredential || row.historyOnly) continue;
-      if (!isCodexProviderDetail(row) && !isClaudeProviderDetail(row)) continue;
+      if (!canRunPdModelEval(row)) continue;
       seen.add(id);
       rows.push({
         id,
         row,
         tool,
-        toolLabel: tool === 'claudecode' ? 'Claude' : 'GPT',
+        toolLabel: getToolDisplayName(tool),
         name: row.name || row.key,
         key: row.key,
         model: getProviderDetailModel(row) || '自动选择',
@@ -26662,17 +31162,19 @@ function renderPdEval(row) {
   const running = state.providerDetail.evalRunning;
   const historyCount = Array.isArray(state.providerDetail.evalHistory) ? state.providerDetail.evalHistory.length : 0;
   const isApiKey = row.mode === 'apikey';
-  const isCodex = isCodexProviderDetail(row);
-  const isClaude = isClaudeProviderDetail(row);
+  const toolName = getProviderDetailToolName(row);
 
   if (!isApiKey) {
     return '<div class="pd-empty"><div class="pd-empty-title-line">OAuth 不支持模型验真</div><p>这里只检测 API Key Provider；OAuth 登录态不在这里做协议探针。</p></div>';
   }
-  if (!isCodex && !isClaude) {
-    return '<div class="pd-empty"><div class="pd-empty-title-line">当前支持 Codex / Claude Code Provider</div><p>OpenCode / OpenClaw 的 provider 协议后续单独接入。</p></div>';
+  if (!isPdEvalSupportedTool(row)) {
+    return `<div class="pd-empty"><div class="pd-empty-title-line">${esc(toolName)} 暂无可复用验真适配器</div><p>模型验真已覆盖七类 AI Coding 工具入口；这个来源还缺少可读取的 API Key Provider 元数据。</p></div>`;
   }
   if (!row.hasCredential) {
     return '<div class="pd-empty"><div class="pd-empty-title-line">缺少 API Key</div><p>保存 Key 后才能运行模型真实性和能力快测。</p></div>';
+  }
+  if (!canRunPdModelEval(row)) {
+    return `<div class="pd-empty"><div class="pd-empty-title-line">${esc(toolName)} 已接入 Router 验证</div><p>这个 Provider 目前只有掩码凭证或外部登录态；可在 Provider Router 里做健康检查、热切换和协议转换，模型真实性测试需要可读取的明文 API Key。</p></div>`;
   }
 
   const evalView = normalizeProviderDetailEvalView(state.providerDetail.evalView);
@@ -27267,9 +31769,7 @@ function startPdEvalProgressTicker(expectedKey, expectedTool) {
 
 async function requestPdModelEvalForRow(row, options = {}) {
   if (!row || row.mode !== 'apikey') return { ok: false, error: '缺少 API Key Provider' };
-  const isCodex = isCodexProviderDetail(row);
-  const isClaude = isClaudeProviderDetail(row);
-  if (!isCodex && !isClaude) return { ok: false, error: '当前快测支持 Codex / Claude Code API Provider' };
+  if (!canRunPdModelEval(row)) return { ok: false, error: `${getProviderDetailToolName(row)} 缺少可读取的 API Key Provider 元数据` };
   const codexHome = (typeof getDashboardCodexHome === 'function' ? getDashboardCodexHome() : '') || state.current?.codexHome || '';
   const isBatch = options.mode === 'batch';
   const profile = isBatch ? 'batch' : (options.profile === 'professional' ? 'professional' : 'quick');
@@ -27286,7 +31786,7 @@ async function requestPdModelEvalForRow(row, options = {}) {
       scope: el('scopeSelect')?.value || 'global',
       projectPath: el('projectPathInput')?.value?.trim() || '',
       codexHome,
-      tool: isClaude ? 'claudecode' : 'codex',
+      tool: normalizeToolCatalogId(providerDetailTool(row)) === 'claude-desktop' ? 'claudecode' : normalizeToolCatalogId(providerDetailTool(row)),
       providerKey: row.key,
       model: getProviderDetailModel(row),
       profile,
@@ -27299,10 +31799,8 @@ async function requestPdModelEvalForRow(row, options = {}) {
 async function actionPdRunEval(profile = 'quick') {
   const row = lookupProviderDetailRow();
   if (!row || row.mode !== 'apikey') return;
-  const isCodex = isCodexProviderDetail(row);
-  const isClaude = isClaudeProviderDetail(row);
-  if (!isCodex && !isClaude) {
-    flash('当前快测支持 Codex / Claude Code API Provider', 'error');
+  if (!canRunPdModelEval(row)) {
+    flash(`${getProviderDetailToolName(row)} 缺少可读取的 API Key Provider 元数据`, 'error');
     return;
   }
   const expectedKey = row.key;
@@ -28102,6 +32600,9 @@ async function saveConfigOnly() {
   }
   if (state.activeTool === 'openclaw') {
     return saveOpenClawConfigOnly();
+  }
+  if (['claude-desktop', 'gemini', 'hermes'].includes(state.activeTool)) {
+    return actionProviderRouterApplyClient(state.activeTool);
   }
   const payload = currentPayload();
   // 不在前端做任何拦截。用户点了保存就是想保存，
@@ -29239,6 +33740,22 @@ const WIZARD_TOOL_META = {
     binaryKey: 'claudecode',
     configLabel: '~/.claude/settings.json',
   },
+  'claude-desktop': {
+    name: 'Claude Desktop',
+    package: 'Claude Desktop',
+    installApi: '',
+    methods: [{ id: 'manual', label: '手动安装', cmd: '打开 https://claude.ai/download 安装 Claude Desktop', tag: '桌面端' }],
+    binaryKey: 'claude-desktop',
+    configLabel: '~/Library/Application Support/Claude/claude_desktop_config.json',
+  },
+  gemini: {
+    name: 'Gemini CLI',
+    package: '@google/gemini-cli',
+    installApi: '',
+    methods: [{ id: 'manual', label: 'npm', cmd: 'npm install -g @google/gemini-cli', tag: '手动执行' }],
+    binaryKey: 'gemini',
+    configLabel: '~/.gemini/settings.json',
+  },
   opencode: {
     name: 'OpenCode',
     package: 'opencode / opencode-ai',
@@ -29279,6 +33796,14 @@ const WIZARD_TOOL_META = {
       ],
     binaryKey: 'openclaw',
     configLabel: '~/.openclaw/openclaw.json',
+  },
+  hermes: {
+    name: 'Hermes Agent',
+    package: 'Hermes Agent',
+    installApi: '',
+    methods: [{ id: 'manual', label: '手动安装', cmd: '按 Hermes Agent 官方仓库安装，并确保 hermes 命令在 PATH 中', tag: '手动' }],
+    binaryKey: 'hermes',
+    configLabel: '~/.hermes/config.yaml',
   },
 };
 
@@ -29353,12 +33878,13 @@ async function wizardRunInstall() {
   const meta = WIZARD_TOOL_META[tool];
   const selectedMethod = meta.methods.find(m => m.id === method);
 
-  // Source / Docker → show instruction dialog (multi-step manual)
-  if (method === 'source' || method === 'docker') {
-    const titles = { source: '源码构建步骤', docker: 'Docker 部署步骤' };
+  // Manual / Source / Docker → show instruction dialog, do not call missing install APIs.
+  if (method === 'manual' || method === 'source' || method === 'docker') {
+    const titles = { manual: '手动安装步骤', source: '源码构建步骤', docker: 'Docker 部署步骤' };
     let instructions = [selectedMethod?.cmd || ''];
     let message = '请打开终端（Terminal），粘贴以下命令执行。';
     try {
+      if (!meta.installApi) throw new Error('manual install only');
       const json = await api(meta.installApi, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -29389,6 +33915,11 @@ async function wizardRunInstall() {
         if (btn) { btn.textContent = '已复制 ✓'; setTimeout(() => { btn.textContent = '复制命令'; }, 1500); }
       });
     });
+    el('wizardInstallResult').classList.remove('hide');
+    el('wizardInstallResult').className = 'wib-result success';
+    el('wizardInstallResult').textContent = `${meta.name} 手动安装步骤已打开；完成安装后可以继续配置。`;
+    el('wizardInstallBtn').style.display = 'none';
+    el('wizardInstallNextBtn').style.display = '';
     return;
   }
 
@@ -29973,6 +34504,164 @@ function bindEvents() {
   el('uninstallCodexBtn')?.addEventListener('click', uninstallCodex);
   el('refreshBtn').addEventListener('click', () => loadState({ preserveForm: true }));
   el('reloadBackupsBtn').addEventListener('click', loadBackups);
+  document.addEventListener('click', (event) => {
+    const activeAssetMenu = event.target.closest('.asset-action-menu');
+    document.querySelectorAll('.asset-action-menu[open]').forEach((menu) => {
+      if (menu !== activeAssetMenu) menu.removeAttribute('open');
+    });
+    if (event.target.closest('.asset-action-menu-popover button')) {
+      setTimeout(() => {
+        document.querySelectorAll('.asset-action-menu[open]').forEach((menu) => menu.removeAttribute('open'));
+      }, 0);
+    }
+    const assetTabBtn = event.target.closest('[data-asset-tab]');
+    if (assetTabBtn) {
+      const tab = assetTabBtn.getAttribute('data-asset-tab') || 'mcp';
+      state.assetCenter.activeTab = ASSET_CENTER_TAB_IDS.includes(tab) ? tab : 'mcp';
+      renderAssetCenterPage();
+      if (state.assetCenter.activeTab === 'import') {
+        setTimeout(() => document.querySelector('[data-asset-import-text]')?.focus(), 60);
+      }
+      return;
+    }
+    const assetCopyBtn = event.target.closest('[data-asset-copy]');
+    if (assetCopyBtn) {
+      const text = assetCopyBtn.getAttribute('data-asset-copy') || '';
+      const label = assetCopyBtn.getAttribute('data-asset-copy-label') || '内容';
+      if (text) {
+        copyText(text)
+          .then(() => flash(`${label}已复制`, 'success'))
+          .catch(() => flash(`${label}复制失败`, 'error'));
+      }
+      return;
+    }
+    const assetOpenUrlBtn = event.target.closest('[data-asset-open-url]');
+    if (assetOpenUrlBtn) {
+      const url = assetOpenUrlBtn.getAttribute('data-asset-open-url') || '';
+      if (url) {
+        openExternalUrl(url)
+          .then(() => flash('已打开官方入口', 'success'))
+          .catch(() => flash('打开官方入口失败', 'error'));
+      }
+      return;
+    }
+    const assetOpenToolBtn = event.target.closest('[data-asset-open-tool]');
+    if (assetOpenToolBtn) {
+      const itemId = assetOpenToolBtn.getAttribute('data-asset-open-tool') || '';
+      if (itemId) {
+        state.toolsCatalogQuery = '';
+        state.toolsCatalogTag = 'all';
+        state.toolsCatalogPage = 1;
+        state.toolsCatalogDetailId = '';
+        setPage('tools');
+        const item = findToolCatalogItemById(itemId);
+        if (item) {
+          openToolCatalogDetail(item);
+        } else {
+          state.toolsCatalogDetailId = itemId;
+          renderToolsPage();
+        }
+      }
+      return;
+    }
+    const assetOpenPathBtn = event.target.closest('[data-asset-open-path]');
+    if (assetOpenPathBtn) {
+      const path = assetOpenPathBtn.getAttribute('data-asset-open-path') || '';
+      const url = assetFileUrl(path);
+      if (url) {
+        openExternalUrl(url)
+          .then(() => flash('已打开文件位置', 'success'))
+          .catch(() => flash('打开文件位置失败', 'error'));
+      }
+      return;
+    }
+    const assetEditToolBtn = event.target.closest('[data-asset-edit-tool]');
+    if (assetEditToolBtn) {
+      const tool = assetConfigTool(assetEditToolBtn.getAttribute('data-asset-edit-tool') || '');
+      if (!tool) {
+        flash('这个资产暂不支持配置编辑', 'error');
+        return;
+      }
+      void setConfigEditorOpen(true, tool);
+      return;
+    }
+    const assetImportToolBtn = event.target.closest('[data-asset-import-tool]');
+    if (assetImportToolBtn) {
+      state.assetCenter.importTargetTool = assetImportTargetTool(assetImportToolBtn.getAttribute('data-asset-import-tool') || 'all');
+      state.assetCenter.activeTab = 'import';
+      renderAssetCenterPage();
+      setTimeout(() => document.querySelector('[data-asset-import-text]')?.focus(), 80);
+      return;
+    }
+    const assetJumpBtn = event.target.closest('[data-asset-jump]');
+    if (assetJumpBtn) {
+      const target = String(assetJumpBtn.getAttribute('data-asset-jump') || '').replace(/[^a-z-]/gi, '');
+      if (ASSET_CENTER_TAB_IDS.includes(target)) {
+        state.assetCenter.activeTab = target;
+        renderAssetCenterPage();
+      }
+      const node = target ? document.querySelector(`[data-asset-section="${target}"]`) : null;
+      node?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (target === 'import') {
+        setTimeout(() => document.querySelector('[data-asset-import-text]')?.focus(), 180);
+      }
+      return;
+    }
+    if (event.target.closest('[data-asset-refresh]')) {
+      void loadAssetCenter({ force: true });
+      return;
+    }
+    if (event.target.closest('[data-asset-copy-catalog]')) {
+      void copyAssetProviderCatalogLink();
+      return;
+    }
+    const archiveSessionBtn = event.target.closest('[data-asset-session-archive]');
+    if (archiveSessionBtn) {
+      void archiveAssetSession(archiveSessionBtn.getAttribute('data-asset-session-archive'));
+      return;
+    }
+    const restoreSessionBtn = event.target.closest('[data-asset-session-restore]');
+    if (restoreSessionBtn) {
+      void restoreAssetSession(restoreSessionBtn.getAttribute('data-asset-session-restore'));
+      return;
+    }
+    const syncPushBtn = event.target.closest('[data-asset-sync-push]');
+    if (syncPushBtn) {
+      void pushAssetSyncTarget(syncPushBtn.getAttribute('data-asset-sync-push'));
+      return;
+    }
+    const syncPullBtn = event.target.closest('[data-asset-sync-pull]');
+    if (syncPullBtn) {
+      void pullAssetSyncTarget(syncPullBtn.getAttribute('data-asset-sync-pull'));
+      return;
+    }
+    if (event.target.closest('[data-asset-import-preview]')) {
+      void previewAssetImportFromInput();
+      return;
+    }
+    if (event.target.closest('[data-asset-import-apply]')) {
+      void applyAssetImportFromInput();
+      return;
+    }
+    if (event.target.closest('[data-asset-import-clear]')) {
+      clearAssetImportInput();
+    }
+  });
+  document.addEventListener('input', (event) => {
+    if (event.target.closest('[data-asset-import-text], [data-asset-import-codex-home], [data-asset-import-project-path]')) {
+      syncAssetImportStateFromForm();
+      state.assetCenter.importResult = null;
+      state.assetCenter.importError = '';
+    }
+  });
+  document.addEventListener('change', (event) => {
+    if (event.target.closest('[data-asset-import-target], [data-asset-import-install-mode], [data-asset-import-include-catalog], [data-asset-import-overwrite], [data-asset-import-append-prompts], [data-asset-import-confirm]')) {
+      syncAssetImportStateFromForm();
+      state.assetCenter.importResult = null;
+      state.assetCenter.importError = '';
+      renderAssetCenterPage();
+    }
+  });
   let scopedConfigReloadSeq = 0;
   const reloadScopedCodexConfig = async () => {
     const seq = ++scopedConfigReloadSeq;
@@ -30029,6 +34718,31 @@ function bindEvents() {
   });
 
   el('codexResumeSessions')?.addEventListener('click', async (event) => {
+    const genericOpenBtn = event.target.closest('[data-generic-session-open]');
+    if (genericOpenBtn) {
+      await openGenericSessionProject(genericOpenBtn.dataset.genericSessionOpen || '0', genericOpenBtn);
+      return;
+    }
+    const genericCopyCommandBtn = event.target.closest('[data-generic-session-copy-command]');
+    if (genericCopyCommandBtn) {
+      try {
+        await copyText(genericCopyCommandBtn.dataset.genericSessionCopyCommand || '');
+        flash('打开命令已复制', 'success');
+      } catch {
+        flash('复制失败', 'error');
+      }
+      return;
+    }
+    const genericCopyPathBtn = event.target.closest('[data-generic-session-copy-path]');
+    if (genericCopyPathBtn) {
+      try {
+        await copyText(genericCopyPathBtn.dataset.genericSessionCopyPath || '');
+        flash('会话路径已复制', 'success');
+      } catch {
+        flash('复制失败', 'error');
+      }
+      return;
+    }
     const resumeBtn = event.target.closest('[data-codex-resume-id]');
     if (resumeBtn) {
       await triggerCodexResumeAction('resume', resumeBtn, { sessionId: resumeBtn.dataset.codexResumeId || '' });
@@ -30781,6 +35495,23 @@ function bindEvents() {
     const drawer = document.getElementById('cfg3Drawer');
     if (drawer && drawer.classList.contains('open')) closeCfg3Drawer();
   });
+  document.addEventListener('click', async (e) => {
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    const applyBtn = target.closest('[data-cfg-router-apply]');
+    if (applyBtn) {
+      const tool = normalizeProviderRouterTool(applyBtn.getAttribute('data-cfg-router-apply') || getConfigEditorTool());
+      await actionProviderRouterApplyClient(tool);
+      return;
+    }
+    const openBtn = target.closest('[data-cfg-router-open]');
+    if (openBtn) {
+      const tool = normalizeProviderRouterTool(openBtn.getAttribute('data-cfg-router-open') || getConfigEditorTool());
+      state.providerRouter.activeTool = tool;
+      state.providerRouter.activeTab = 'clients';
+      setPage('providerRouter');
+    }
+  });
 
   const consoleTabs = el('toolConsoleTabs');
   if (consoleTabs) {
@@ -31457,7 +36188,7 @@ function bindEvents() {
     void runSystemToolUninstall('sysUninstallOpenClawBtn', 'openclaw');
   });
   el('sysUninstallAllToolsBtn')?.addEventListener('click', async () => {
-    const confirmed = window.confirm('确认卸载全部工具（Codex / Claude Code / OpenCode / OpenClaw）吗？');
+    const confirmed = window.confirm('确认卸载可自动管理的 CLI 工具（Codex / Claude Code / OpenCode / OpenClaw）吗？Claude Desktop / Gemini CLI / Hermes Agent 属于手动或外部包管理安装，不会在此自动卸载。');
     if (!confirmed) return;
     setBusy('sysUninstallAllToolsBtn', true, '卸载中...');
     await uninstallToolForSystemSettings('codex');
