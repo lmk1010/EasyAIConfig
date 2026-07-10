@@ -213,7 +213,7 @@ const state = {
     error: '',
     lastFetchedAt: 0,
     activeTool: 'codex',
-    activeTab: 'routes',
+    activeTab: 'gateway',
     logFilter: { query: '', provider: 'all', status: 'all', tool: 'all' },
     logData: null,
     logPage: 1,
@@ -27375,7 +27375,7 @@ function providerRouterLogQueryParams(page = state.providerRouter.logPage || 1) 
 }
 
 function updateProviderRouterLogsPanel() {
-  if (state.providerRouter.activeTab === 'stats') refreshProviderRouterStatsPanel();
+  if (state.providerRouter.activeTab === 'logs') refreshProviderRouterStatsPanel();
   else renderProviderRouterPage();
 }
 
@@ -27622,7 +27622,7 @@ async function fetchProviderRouterStatus(force = false) {
       state.providerRouter.status = res.data || null;
       state.providerRouter.lastFetchedAt = Date.now();
       state.providerRouter.error = '';
-      if (state.providerRouter.activeTab === 'stats') {
+      if (state.providerRouter.activeTab === 'logs') {
         await fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
       }
     } else if (force) {
@@ -28316,7 +28316,7 @@ function renderProviderRouterRectifierPanel({ loading = Boolean(state.providerRo
 function refreshProviderRouterStatsPanel() {
   const container = document.getElementById('providerRouterPage');
   const panel = container?.querySelector('[data-provider-router-panel="stats"]');
-  if (!container || !panel || state.providerRouter.activeTab !== 'stats') {
+  if (!container || !panel || state.providerRouter.activeTab !== 'logs') {
     renderProviderRouterPage();
     return;
   }
@@ -28341,10 +28341,10 @@ function ensureProviderRouterEvents() {
     if (!getProviderRouterPageTarget(target)) return;
     const routerTab = target.closest('[data-provider-router-tab]');
     if (routerTab) {
-      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'routes').trim();
-      state.providerRouter.activeTab = ['routes', 'strategy', 'clients', 'runtime', 'stats', 'rectifier'].includes(tab) ? tab : 'routes';
+      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'gateway').trim();
+      state.providerRouter.activeTab = ['gateway', 'logs'].includes(tab) ? tab : 'gateway';
       renderProviderRouterPage();
-      if (state.providerRouter.activeTab === 'stats') {
+      if (state.providerRouter.activeTab === 'logs') {
         void fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
       }
       return;
@@ -28752,18 +28752,14 @@ function renderProviderRouterPage() {
       : running
         ? '重启网关'
         : '启动网关';
-  const legacyTabMap = { overview: 'routes', gateway: 'runtime', pool: 'strategy' };
+  const legacyTabMap = { overview: 'gateway', routes: 'gateway', strategy: 'gateway', clients: 'gateway', runtime: 'gateway', rectifier: 'gateway', stats: 'logs' };
   const normalizedTab = legacyTabMap[state.providerRouter.activeTab] || state.providerRouter.activeTab;
-  const routerTabKeys = ['routes', 'strategy', 'clients', 'runtime', 'rectifier', 'stats'];
-  const activeTab = routerTabKeys.includes(normalizedTab) ? normalizedTab : 'routes';
+  const routerTabKeys = ['gateway', 'logs'];
+  const activeTab = routerTabKeys.includes(normalizedTab) ? normalizedTab : 'gateway';
   state.providerRouter.activeTab = activeTab;
   const routerTabs = [
-    { key: 'routes', label: '线路', meta: selectedSummary },
-    { key: 'strategy', label: '策略', meta: activeStrategyMeta.label },
-    { key: 'clients', label: '客户端', meta: String(tools.length) },
-    { key: 'runtime', label: '运行', meta: running ? '运行中' : '未启动' },
-    { key: 'rectifier', label: '格式转换', meta: '高级' },
-    { key: 'stats', label: '日志', meta: String(stats.requests || 0) },
+    { key: 'gateway', label: '网关', meta: running ? '运行中' : '未启动' },
+    { key: 'logs', label: '日志', meta: String(stats.requests || 0) },
   ].map((tab) => `
     <button type="button" class="pd-router-tab ${activeTab === tab.key ? 'is-active' : ''}" data-provider-router-tab="${esc(tab.key)}">
       <span>${esc(tab.label)}</span><em>${esc(tab.meta)}</em>
@@ -28971,45 +28967,6 @@ function renderProviderRouterPage() {
     activeTool === 'codex' ? '<button type="button" data-provider-router-copy="codex-toml">复制 config.toml</button>' : '',
     activeTool === 'claudecode' ? '<button type="button" data-provider-router-copy="claude-json">复制 settings.json</button>' : '',
   ].filter(Boolean).join('');
-  const overviewPanel = `
-    <div class="pd-router-simple-flow pd-router-console">
-      <div class="pd-router-console-bar">
-        <div class="pd-router-client-picker">
-          <div class="select-wrap"><select data-provider-router-tool-select>${toolSelectOptions}</select></div>
-          <div class="pd-router-client-endpoint"><span>${esc(providerRouterProtocolLabel(activeTool))}</span><code>${esc(currentBaseUrl)}</code></div>
-        </div>
-        <div class="pd-router-simple-status ${proxyReady ? 'is-ok' : running ? 'is-warning' : ''}"><i></i><strong>${esc(routerStateText)}</strong></div>
-        <details class="pd-router-more-menu">
-          <summary aria-label="更多操作" title="更多操作">•••</summary>
-          <div>
-            <button type="button" data-provider-router-apply="${esc(activeTool)}">仅写入客户端配置</button>
-            ${activeToolCopyActions}
-            ${running ? `<button type="button" data-provider-router-probe ${probeLoading ? 'disabled' : ''}>${probeLoading ? '测试中' : '测试连接'}</button>` : ''}
-            ${running ? '<button type="button" data-provider-router-stop>停止网关</button>' : ''}
-          </div>
-        </details>
-      </div>
-
-      <section class="pd-router-console-routes">
-        <div class="pd-router-console-heading">
-          <div><strong>${esc(toolLabel)} 路由线路</strong><span>勾选参与自动切换的线路，并指定一个主线路。</span></div>
-          <span>${esc(selectedSummary)}</span>
-        </div>
-        <div class="pd-router-simple-providers">
-          ${simpleProviderRows || `<div class="pd-router-console-empty"><strong>还没有可用线路</strong><span>先到“快速配置”添加 ${esc(toolLabel)} Provider，再回到这里启动。</span></div>`}
-        </div>
-      </section>
-
-      <footer class="pd-router-console-footer">
-        <div>
-          <span>${esc(statusNote)}</span>
-          <code>${esc(originUrl)}</code>
-          ${running ? `<em>${esc(probeStateText)} · ${esc(String(stats.requests || 0))} 次请求</em>` : ''}
-        </div>
-        <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-provider-router-quick-start ${loading || !selectedRows.length ? 'disabled' : ''}>${loading ? '处理中' : running ? '应用并重启' : '接入并启动'}</button>
-      </footer>
-
-    </div>`;
   const clientsPanel = `
     <div class="pd-router-tab-content pd-router-clients-content">
       <div class="pd-router-section-heading"><div><strong>客户端接入</strong><span>查看各客户端地址，按需一键写入或复制配置。</span></div></div>
@@ -29018,29 +28975,54 @@ function renderProviderRouterPage() {
         ${clientRows}
       </div>
     </div>`;
-  const strategyPanel = `
-    <div class="pd-router-tab-content pd-router-strategy-content">
-      <div class="pd-router-section-heading"><div><strong>路由策略</strong><span>权重、余额保护和熔断只在需要精细控制时调整。</span></div></div>
-      ${poolPanel}
-    </div>`;
-  const runtimePanel = `
-    <div class="pd-router-tab-content pd-router-runtime-content">
-      <div class="pd-router-section-heading"><div><strong>运行状态</strong><span>查看监听、反代探测、请求统计与全部本地端点。</span></div></div>
-      ${gatewayPanel}
+  const rectifierPanel = renderProviderRouterRectifierPanel({ loading });
+  const overviewPanel = `
+    <div class="pd-router-workspace">
+      <section class="pd-router-hero-card ${running ? 'is-running' : ''}">
+        <div class="pd-router-hero-main">
+          <div class="pd-router-hero-status"><i></i><span>${esc(statusScopeLabel)}</span><strong>${esc(routerStateText)}</strong></div>
+          <h2>${running ? '本地网关正在运行' : '开启本地自动路由'}</h2>
+          <p>${running ? `${esc(probeDetail)}，请求会按当前线路池自动切换。` : '选择客户端和线路，一次启动即可接入本地网关。'}</p>
+          <div class="pd-router-hero-endpoint"><span>${esc(providerRouterProtocolLabel(activeTool))}</span><code>${esc(currentBaseUrl)}</code><button type="button" data-provider-router-copy="${esc(`${activeTool}-base`)}">复制</button></div>
+        </div>
+        <div class="pd-router-hero-actions">
+          <div class="pd-router-hero-client"><span>当前客户端</span><div class="select-wrap"><select data-provider-router-tool-select>${toolSelectOptions}</select></div></div>
+          <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-provider-router-quick-start ${loading || !selectedRows.length ? 'disabled' : ''}>${loading ? '处理中' : running ? '应用并重启' : '开启网关'}</button>
+          ${running ? '<button type="button" class="pd-router-stop-link" data-provider-router-stop>停止网关</button>' : ''}
+        </div>
+        <div class="pd-router-hero-metrics">
+          <div><span>线路</span><strong>${esc(selectedSummary)}</strong><em>已选 / 可用</em></div>
+          <div><span>连接</span><strong>${esc(probeStateText)}</strong><em>${esc(probe.latencyMs ? `${probe.latencyMs}ms` : '本机监听')}</em></div>
+          <div><span>请求</span><strong>${esc(String(stats.requests || 0))}</strong><em>${esc(String(stats.failed || 0))} 次失败</em></div>
+          <div><span>策略</span><strong>${esc(activeStrategyMeta.label)}</strong><em>自动故障切换</em></div>
+        </div>
+      </section>
+
+      <section class="pd-router-routes-section">
+        <div class="pd-router-section-title">
+          <div><span>ROUTES</span><h3>${esc(toolLabel)} 线路</h3><p>勾选参与路由的 Provider，并指定一个主线路。</p></div>
+          <details class="pd-router-more-menu">
+            <summary aria-label="更多操作" title="更多操作">•••</summary>
+            <div>
+              <button type="button" data-provider-router-apply="${esc(activeTool)}">仅写入客户端配置</button>
+              ${activeToolCopyActions}
+              ${running ? `<button type="button" data-provider-router-probe ${probeLoading ? 'disabled' : ''}>${probeLoading ? '测试中' : '测试连接'}</button>` : ''}
+              <button type="button" data-provider-router-refresh>刷新状态</button>
+            </div>
+          </details>
+        </div>
+        <div class="pd-router-simple-providers">
+          ${simpleProviderRows || `<div class="pd-router-console-empty"><strong>还没有可用线路</strong><span>先到快速配置添加 ${esc(toolLabel)} Provider。</span></div>`}
+        </div>
+      </section>
+
+      <details class="pd-router-advanced">
+        <summary><span><strong>高级设置</strong><em>路由策略、余额保护、熔断和客户端配置</em></span><b>展开</b></summary>
+        <div class="pd-router-advanced-body">${poolPanel}${clientsPanel}${rectifierPanel}</div>
+      </details>
     </div>`;
   const statsPanel = renderProviderRouterStatsPanel({ loading });
-  const rectifierPanel = renderProviderRouterRectifierPanel({ loading });
-  const activePanel = activeTab === 'stats'
-        ? statsPanel
-        : activeTab === 'rectifier'
-          ? rectifierPanel
-          : activeTab === 'strategy'
-            ? strategyPanel
-            : activeTab === 'clients'
-              ? clientsPanel
-              : activeTab === 'runtime'
-                ? runtimePanel
-                : overviewPanel;
+  const activePanel = activeTab === 'logs' ? statsPanel : overviewPanel;
 
   container.innerHTML = `
     <div class="pd-router provider-router-shell">
@@ -29051,7 +29033,7 @@ function renderProviderRouterPage() {
             <em>·</em>
             <span>自动路由网关</span>
           </div>
-          <p>选择客户端和线路，点击一次即可接入并启动。</p>
+          <p>一个入口管理本地网关与自动线路切换。</p>
         </div>
         <div class="pd-router-page-meta">
           <span>${esc(statusScopeLabel)}</span>
@@ -29062,7 +29044,6 @@ function renderProviderRouterPage() {
       <section class="pd-router-tabs-shell">
         <div class="pd-router-tabs">${routerTabs}</div>
         ${activePanel}
-        <div class="pd-router-note">提示：自动路由不会改变模型能力。多条线路使用相同模型名时，切换最稳定。</div>
       </section>
     </div>`;
   if (window.initCustomSelect) {
@@ -29081,9 +29062,9 @@ function renderProviderRouterPage() {
       } catch (_) {}
     }
   }
-  if (activeTab === 'stats' && !state.providerRouter.logData && !state.providerRouter.logsLoading && !state.providerRouter.logsError) {
+  if (activeTab === 'logs' && !state.providerRouter.logData && !state.providerRouter.logsLoading && !state.providerRouter.logsError) {
     setTimeout(() => {
-      if (state.providerRouter.activeTab === 'stats' && !state.providerRouter.logData && !state.providerRouter.logsLoading && !state.providerRouter.logsError) {
+      if (state.providerRouter.activeTab === 'logs' && !state.providerRouter.logData && !state.providerRouter.logsLoading && !state.providerRouter.logsError) {
         void fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
       }
     }, 0);
@@ -36579,7 +36560,7 @@ function bindEvents() {
     if (openBtn) {
       const tool = normalizeProviderRouterTool(openBtn.getAttribute('data-cfg-router-open') || getConfigEditorTool());
       state.providerRouter.activeTool = tool;
-      state.providerRouter.activeTab = 'clients';
+      state.providerRouter.activeTab = 'gateway';
       setPage('providerRouter');
     }
   });
