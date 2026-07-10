@@ -9091,6 +9091,7 @@ function getDashboardUsageInventoryEntryForTool(tool = '', win = getDashboardWin
 }
 
 function normalizeDashboardUsageTotals(totals = {}) {
+  const requestsAvailable = totals.requests != null;
   return {
     input: Number(totals.input || 0),
     cachedInput: Number(totals.cachedInput || totals.cacheRead || 0),
@@ -9098,10 +9099,11 @@ function normalizeDashboardUsageTotals(totals = {}) {
     reasoning: Number(totals.reasoning || 0),
     cacheRead: Number(totals.cacheRead || totals.cachedInput || 0),
     cacheCreation: Number(totals.cacheCreation || 0),
+    cacheCreationAvailable: totals.cacheCreationAvailable === true,
     total: Number(totals.total || 0),
     cost: Number(totals.cost || 0),
     officialCost: Number(totals.officialCost || 0),
-    requests: Number(totals.requests || 0),
+    requests: requestsAvailable ? Number(totals.requests || 0) : null,
   };
 }
 
@@ -9783,6 +9785,7 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     reasoning: 0,
     cachedRead: 0,
     cacheWrite: 0,
+    cacheWriteAvailable: false,
     requests: 0,
     totalCost: 0,
     matched: 0,
@@ -9796,6 +9799,7 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     const reasoning = entry.totals?.reasoning || 0;
     const cachedRead = entry.totals?.cachedInput || entry.totals?.cacheRead || 0;
     const cacheWrite = entry.totals?.cacheCreation || 0;
+    const cacheWriteAvailable = entry.totals?.cacheCreationAvailable === true;
     const requestsValue = entry.requests ?? entry.totals?.requests;
     const requests = Number(requestsValue || 0);
     const requestsAvailable = requestsValue != null;
@@ -9807,6 +9811,7 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     totals.reasoning += reasoning;
     totals.cachedRead += cachedRead;
     totals.cacheWrite += cacheWrite;
+    totals.cacheWriteAvailable ||= cacheWriteAvailable;
     totals.requests += requests;
     if (cost) {
       totals.totalCost += cost.totalCost;
@@ -9844,9 +9849,9 @@ function renderModelCostRows(models = [], totalTokens = 0) {
         <strong>${escapeHtml(formatDashboardMetric(cachedRead))}</strong>
         <span>${escapeHtml(appText('缓存读取'))}</span>
       </div>
-      <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(cacheWrite))}">
-        <strong>${escapeHtml(formatDashboardMetric(cacheWrite))}</strong>
-        <span>${escapeHtml(appText('缓存创建'))}</span>
+      <div class="db3-price-metric" title="${escapeHtml(cacheWriteAvailable ? formatDashboardMetricFull(cacheWrite) : appText('Codex 本地日志未提供缓存创建用量'))}">
+        <strong>${cacheWriteAvailable ? escapeHtml(formatDashboardMetric(cacheWrite)) : '—'}</strong>
+        <span>${escapeHtml(appText(cacheWriteAvailable ? '缓存创建' : '缓存创建不可用'))}</span>
       </div>
       <div class="db3-price-total ${cost ? '' : 'db3-price-total--na'}">
         <strong>${escapeHtml(cost ? formatDashboardUsd(cost.totalCost, { min: 4, max: 4 }) : '—')}</strong>
@@ -9877,9 +9882,9 @@ function renderModelCostRows(models = [], totalTokens = 0) {
       <strong>${escapeHtml(formatDashboardMetric(totals.cachedRead))}</strong>
       <span>${escapeHtml(appText('缓存读取'))}</span>
     </div>
-    <div class="db3-price-metric">
-      <strong>${escapeHtml(formatDashboardMetric(totals.cacheWrite))}</strong>
-      <span>${escapeHtml(appText('缓存创建'))}</span>
+    <div class="db3-price-metric" title="${escapeHtml(totals.cacheWriteAvailable ? formatDashboardMetricFull(totals.cacheWrite) : appText('Codex 本地日志未提供缓存创建用量'))}">
+      <strong>${totals.cacheWriteAvailable ? escapeHtml(formatDashboardMetric(totals.cacheWrite)) : '—'}</strong>
+      <span>${escapeHtml(appText(totals.cacheWriteAvailable ? '缓存创建' : '缓存创建不可用'))}</span>
     </div>
     <div class="db3-price-total">
       <strong>${escapeHtml(totals.totalCost ? formatDashboardUsd(totals.totalCost, { min: 4, max: 4 }) : '—')}</strong>
@@ -10392,6 +10397,9 @@ function renderDashboardPage() {
   const codexOutput = codexModels.length ? codexModelTotals.output : codexFallbackTotals.output;
   const codexCached = codexModels.length ? codexModelTotals.cachedInput : codexFallbackTotals.cachedInput;
   const codexCacheCreation = codexModels.length ? codexModelTotals.cacheCreation : codexFallbackTotals.cacheCreation;
+  const codexCacheCreationAvailable = codexModels.length
+    ? codexModels.some((entry) => entry?.totals?.cacheCreationAvailable === true)
+    : codexFallbackTotals.cacheCreationAvailable;
   const codexReasoning = codexModels.length ? codexModelTotals.reasoning : codexFallbackTotals.reasoning;
 
   // 顶部和模型计费明细必须使用同一滚动窗口、同一模型聚合口径。
@@ -10411,7 +10419,7 @@ function renderDashboardPage() {
     { label: '输入', value: codexInputPct, meta: codexInput },
     { label: '输出', value: codexTotal ? Math.round(codexOutput / codexTotal * 100) : 0, meta: codexOutput },
     { label: '缓存读取', value: codexCacheHitPct, meta: codexCached },
-    { label: '缓存创建', value: codexTotal ? Math.round(codexCacheCreation / codexTotal * 100) : 0, meta: codexCacheCreation },
+    { label: codexCacheCreationAvailable ? '缓存创建' : '缓存创建不可用', value: codexCacheCreationAvailable && codexTotal ? Math.round(codexCacheCreation / codexTotal * 100) : 0, meta: codexCacheCreationAvailable ? codexCacheCreation : '—' },
     { label: '推理', value: codexTotal ? Math.round(codexReasoning / codexTotal * 100) : 0, meta: codexReasoning },
   ];
 
@@ -31098,6 +31106,7 @@ function renderPdUsageModelCostTable(models = [], totalTokens = 0) {
         const pct = totalTokens ? Math.round(tokens / totalTokens * 1000) / 10 : 0;
         const cached = Number(totals.cachedInput || totals.cacheRead || 0);
         const cacheWrite = Number(totals.cacheCreation || 0);
+        const cacheWriteAvailable = totals.cacheCreationAvailable === true;
         const matchText = !pricingEntry ? '未匹配定价' : pricingEntry.fallback ? '估算匹配' : '精确匹配';
         return `
           <div class="pd-model-cost-row ${pricingEntry?.fallback ? 'is-fallback' : ''} ${!pricingEntry ? 'is-missing' : ''}">
@@ -31109,7 +31118,7 @@ function renderPdUsageModelCostTable(models = [], totalTokens = 0) {
             <div><strong>${esc(fmtM(tokens))}</strong><span>${esc(String(pct))}%</span></div>
             <div><strong>${esc(fmtM(totals.input || 0))}</strong><span>input</span></div>
             <div><strong>${esc(fmtM(Number(totals.output || 0) + Number(totals.reasoning || 0)))}</strong><span>${totals.reasoning ? `reason ${esc(fmtM(totals.reasoning))}` : 'output'}</span></div>
-            <div><strong>${esc(fmtM(cached))}</strong><span>${cacheWrite ? `write ${esc(fmtM(cacheWrite))}` : 'read'}</span></div>
+            <div><strong>${esc(fmtM(cached))}</strong><span>${cacheWriteAvailable ? `write ${esc(fmtM(cacheWrite))}` : 'write — · read'}</span></div>
             <div class="pd-model-cost-total"><strong>${cost ? esc(fmtUsd(cost.totalCost)) : '—'}</strong><span>${cost ? 'USD' : '无价格'}</span></div>
           </div>`;
       }).join('')}

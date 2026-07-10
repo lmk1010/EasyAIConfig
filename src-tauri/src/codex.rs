@@ -5236,6 +5236,9 @@ struct CodexUsageTotals {
     cached_input: u64,
     output: u64,
     reasoning: u64,
+    cache_creation: u64,
+    cache_creation_available: bool,
+    requests: u64,
     total: u64,
 }
 
@@ -5288,6 +5291,7 @@ struct CodexUsageSessionFile {
 // 都要全扫一遍 ~/.claude/projects/**/*.jsonl。stale-while-revalidate 路径下
 // 前端会再起一次显式 refresh 兜底，所以延长 TTL 不会让数据真过期。
 const CODEX_USAGE_CACHE_TTL_SECS: i64 = 3600;
+const CODEX_USAGE_SCHEMA_VERSION: u64 = 2;
 
 fn codex_usage_num(value: Option<&Value>) -> u64 {
     value
@@ -5300,12 +5304,44 @@ fn codex_usage_num(value: Option<&Value>) -> u64 {
         .unwrap_or(0)
 }
 
-fn add_codex_usage_totals(target: &mut CodexUsageTotals, usage: &Value) {
-    target.input += codex_usage_num(usage.get("input_tokens"));
-    target.cached_input += codex_usage_num(usage.get("cached_input_tokens"));
-    target.output += codex_usage_num(usage.get("output_tokens"));
-    target.reasoning += codex_usage_num(usage.get("reasoning_output_tokens"));
-    target.total += codex_usage_num(usage.get("total_tokens"));
+fn normalized_codex_usage(usage: &Value) -> CodexUsageTotals {
+    CodexUsageTotals {
+        input: codex_usage_num(usage.get("input_tokens")),
+        cached_input: codex_usage_num(usage.get("cached_input_tokens")),
+        output: codex_usage_num(usage.get("output_tokens")),
+        reasoning: codex_usage_num(usage.get("reasoning_output_tokens")),
+        cache_creation: 0,
+        cache_creation_available: false,
+        requests: 0,
+        total: codex_usage_num(usage.get("total_tokens")),
+    }
+}
+
+fn diff_codex_usage(current: &CodexUsageTotals, previous: Option<&CodexUsageTotals>) -> CodexUsageTotals {
+    let Some(previous) = previous else {
+        return current.clone();
+    };
+    if current.total < previous.total {
+        return current.clone();
+    }
+    CodexUsageTotals {
+        input: current.input.saturating_sub(previous.input),
+        cached_input: current.cached_input.saturating_sub(previous.cached_input),
+        output: current.output.saturating_sub(previous.output),
+        reasoning: current.reasoning.saturating_sub(previous.reasoning),
+        cache_creation: 0,
+        cache_creation_available: false,
+        requests: 0,
+        total: current.total.saturating_sub(previous.total),
+    }
+}
+
+fn add_codex_totals_struct(target: &mut CodexUsageTotals, usage: &CodexUsageTotals) {
+    target.input = target.input.saturating_add(usage.input);
+    target.cached_input = target.cached_input.saturating_add(usage.cached_input);
+    target.output = target.output.saturating_add(usage.output);
+    target.reasoning = target.reasoning.saturating_add(usage.reasoning);
+    target.total = target.total.saturating_add(usage.total);
 }
 
 /// 把 source/sessions/ 下的所有 .jsonl 会话拷贝到 target/sessions/。
@@ -5638,8 +5674,9 @@ const USAGE_PRICING_VERSION: u32 = 3;
 
 fn codex_usage_cache_key(sessions_root: &Path, day_count: i64) -> String {
     format!(
-        "v{}::{}::{}",
+        "v{}-schema{}::{}::{}",
         USAGE_PRICING_VERSION,
+        CODEX_USAGE_SCHEMA_VERSION,
         sessions_root.to_string_lossy(),
         day_count
     )
@@ -5819,15 +5856,17 @@ fn read_codex_usage_cache(
     if row.1 != day_count {
         return None;
     }
-    if cache_only {
-        return serde_json::from_str::<Value>(&row.5).ok();
+    let payload = serde_json::from_str::<Value>(&row.5).ok()?;
+    if payload.get("schemaVersion").and_then(Value::as_u64) != Some(CODEX_USAGE_SCHEMA_VERSION) {
+        return None;
     }
+    if cache_only { return Some(payload); }
     if let Ok(generated_at) = chrono::DateTime::parse_from_rfc3339(&row.4) {
         let age_secs = chrono::Utc::now()
             .signed_duration_since(generated_at.with_timezone(&chrono::Utc))
             .num_seconds();
         if age_secs >= 0 && age_secs <= CODEX_USAGE_CACHE_TTL_SECS {
-            return serde_json::from_str::<Value>(&row.5).ok();
+            return Some(payload);
         }
     }
     if row.2 != file_count {
@@ -5836,7 +5875,7 @@ fn read_codex_usage_cache(
     if row.3 != latest_mtime_ms {
         return None;
     }
-    serde_json::from_str::<Value>(&row.5).ok()
+    Some(payload)
 }
 
 fn write_codex_usage_cache(
@@ -5961,6 +6000,8 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
         let mut provider = String::new();
         let mut cwd = String::new();
         let mut current_model = String::new();
+        let mut last_total_usage: Option<CodexUsageTotals> = None;
+        let mut last_usage_signature = String::new();
 
         for line in reader.lines().map_while(Result::ok) {
             let trimmed = line.trim();
@@ -6025,16 +6066,6 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
                 continue;
             }
 
-            let payload = event.get("payload").and_then(Value::as_object);
-            if event.get("type").and_then(Value::as_str) != Some("event_msg")
-                || payload
-                    .and_then(|item| item.get("type"))
-                    .and_then(Value::as_str)
-                    != Some("token_count")
-            {
-                continue;
-            }
-
             let ts_raw = event.get("timestamp").and_then(Value::as_str).unwrap_or("");
             let Ok(ts) = chrono::DateTime::parse_from_rfc3339(ts_raw) else {
                 continue;
@@ -6044,27 +6075,89 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
                 continue;
             }
 
-            let usage = payload
-                .and_then(|item| item.get("info"))
-                .and_then(Value::as_object)
-                .and_then(|info| {
-                    info.get("last_token_usage")
-                        .or_else(|| info.get("total_token_usage"))
-                });
-            let Some(usage) = usage else {
+            let payload = event.get("payload").and_then(Value::as_object);
+            let event_message_type = payload
+                .and_then(|item| item.get("type"))
+                .and_then(Value::as_str);
+            if event.get("type").and_then(Value::as_str) != Some("event_msg") {
                 continue;
-            };
-
-            add_codex_usage_totals(&mut totals, usage);
-
-            let day_key = ts_utc.format("%Y-%m-%d").to_string();
-            add_codex_usage_totals(by_day.entry(day_key).or_default(), usage);
+            }
 
             let provider_key = if provider.trim().is_empty() {
                 "unknown".to_string()
             } else {
                 provider.clone()
             };
+            let model_key = if current_model.trim().is_empty() {
+                "unknown".to_string()
+            } else {
+                current_model.clone()
+            };
+            let session_key = if session_id.trim().is_empty() {
+                file_path.file_stem().and_then(|name| name.to_str()).unwrap_or("unknown").to_string()
+            } else {
+                session_id.clone()
+            };
+            let updated_at = ts_utc.to_rfc3339();
+
+            if event_message_type == Some("user_message") {
+                totals.requests = totals.requests.saturating_add(1);
+                let day_key = ts_utc.format("%Y-%m-%d").to_string();
+                let day_stat = by_day.entry(day_key).or_default();
+                day_stat.requests = day_stat.requests.saturating_add(1);
+                let provider_stat = by_provider.entry(provider_key.clone()).or_insert_with(|| CodexUsageProviderStat {
+                    provider: provider_key.clone(), totals: CodexUsageTotals::default(), events: 0, requests: 0,
+                });
+                provider_stat.requests = provider_stat.requests.saturating_add(1);
+                provider_stat.totals.requests = provider_stat.totals.requests.saturating_add(1);
+                let model_stat = by_model.entry(model_key.clone()).or_insert_with(|| CodexUsageModelStat {
+                    model: model_key.clone(), totals: CodexUsageTotals::default(), events: 0, requests: 0,
+                });
+                model_stat.requests = model_stat.requests.saturating_add(1);
+                model_stat.totals.requests = model_stat.totals.requests.saturating_add(1);
+                let provider_model_key = format!("{}\u{0}{}", provider_key, model_key);
+                let provider_model_stat = by_provider_model.entry(provider_model_key).or_insert_with(|| CodexUsageProviderModelStat {
+                    provider: provider_key.clone(), model: model_key.clone(), totals: CodexUsageTotals::default(), events: 0, requests: 0,
+                });
+                provider_model_stat.requests = provider_model_stat.requests.saturating_add(1);
+                provider_model_stat.totals.requests = provider_model_stat.totals.requests.saturating_add(1);
+                let session_stat = by_session.entry(session_key.clone()).or_insert_with(|| CodexUsageSessionStat {
+                    session_id: session_key, provider: provider_key, model: model_key, cwd: cwd.clone(), totals: CodexUsageTotals::default(),
+                    updated_at_ms: ts_utc.timestamp_millis(), updated_at: updated_at.clone(), requests: 0,
+                });
+                session_stat.requests = session_stat.requests.saturating_add(1);
+                session_stat.totals.requests = session_stat.totals.requests.saturating_add(1);
+                session_stat.updated_at_ms = session_stat.updated_at_ms.max(ts_utc.timestamp_millis());
+                session_stat.updated_at = updated_at;
+                continue;
+            }
+            if event_message_type != Some("token_count") { continue; }
+
+            let info = payload
+                .and_then(|item| item.get("info"))
+                .and_then(Value::as_object);
+            let Some(info) = info else {
+                continue;
+            };
+            let usage = if let Some(total_usage) = info.get("total_token_usage") {
+                let current = normalized_codex_usage(total_usage);
+                let delta = diff_codex_usage(&current, last_total_usage.as_ref());
+                last_total_usage = Some(current);
+                delta
+            } else if let Some(last_usage) = info.get("last_token_usage") {
+                let signature = serde_json::to_string(last_usage).unwrap_or_default();
+                if signature == last_usage_signature { continue; }
+                last_usage_signature = signature;
+                normalized_codex_usage(last_usage)
+            } else {
+                continue;
+            };
+            if usage.total == 0 { continue; }
+
+            add_codex_totals_struct(&mut totals, &usage);
+
+            let day_key = ts_utc.format("%Y-%m-%d").to_string();
+            add_codex_totals_struct(by_day.entry(day_key).or_default(), &usage);
             let provider_stat =
                 by_provider
                     .entry(provider_key.clone())
@@ -6074,15 +6167,8 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
                         events: 0,
                         requests: 0,
                     });
-            add_codex_usage_totals(&mut provider_stat.totals, usage);
+            add_codex_totals_struct(&mut provider_stat.totals, &usage);
             provider_stat.events += 1;
-            provider_stat.requests = provider_stat.requests.saturating_add(1);
-
-            let model_key = if current_model.trim().is_empty() {
-                "unknown".to_string()
-            } else {
-                current_model.clone()
-            };
             let model_stat =
                 by_model
                     .entry(model_key.clone())
@@ -6092,9 +6178,8 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
                         events: 0,
                         requests: 0,
                     });
-            add_codex_usage_totals(&mut model_stat.totals, usage);
+            add_codex_totals_struct(&mut model_stat.totals, &usage);
             model_stat.events += 1;
-            model_stat.requests = model_stat.requests.saturating_add(1);
 
             let provider_model_key = format!("{}\u{0}{}", provider_key, model_key);
             let provider_model_stat = by_provider_model.entry(provider_model_key).or_insert_with(|| CodexUsageProviderModelStat {
@@ -6104,20 +6189,8 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
                 events: 0,
                 requests: 0,
             });
-            add_codex_usage_totals(&mut provider_model_stat.totals, usage);
+            add_codex_totals_struct(&mut provider_model_stat.totals, &usage);
             provider_model_stat.events = provider_model_stat.events.saturating_add(1);
-            provider_model_stat.requests = provider_model_stat.requests.saturating_add(1);
-
-            let session_key = if session_id.trim().is_empty() {
-                file_path
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("unknown")
-                    .to_string()
-            } else {
-                session_id.clone()
-            };
-            let updated_at = ts_utc.to_rfc3339();
             let session_stat =
                 by_session
                     .entry(session_key.clone())
@@ -6134,8 +6207,7 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
             if session_stat.model == "unknown" && !current_model.trim().is_empty() {
                 session_stat.model = current_model.clone();
             }
-            add_codex_usage_totals(&mut session_stat.totals, usage);
-            session_stat.requests = session_stat.requests.saturating_add(1);
+            add_codex_totals_struct(&mut session_stat.totals, &usage);
             if ts_utc.timestamp_millis() > session_stat.updated_at_ms {
                 session_stat.updated_at_ms = ts_utc.timestamp_millis();
                 session_stat.updated_at = updated_at;
@@ -6158,6 +6230,9 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
             "cachedInput": totals.cached_input,
             "output": totals.output,
             "reasoning": totals.reasoning,
+            "cacheCreation": totals.cache_creation,
+            "cacheCreationAvailable": totals.cache_creation_available,
+            "requests": totals.requests,
             "total": totals.total,
             })
         })
@@ -6178,6 +6253,9 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
 
     let payload = json!({
       "ok": true,
+      "schemaVersion": CODEX_USAGE_SCHEMA_VERSION,
+      "requestCountSource": "user_message",
+      "cacheCreationAvailable": false,
       "days": day_count,
       "generatedAt": chrono::Utc::now().to_rfc3339(),
       "source": sessions_root.to_string_lossy().to_string(),
@@ -6187,6 +6265,9 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
         "cachedInput": totals.cached_input,
         "output": totals.output,
         "reasoning": totals.reasoning,
+        "cacheCreation": totals.cache_creation,
+        "cacheCreationAvailable": totals.cache_creation_available,
+        "requests": totals.requests,
         "total": totals.total,
       },
       "daily": daily,
@@ -6204,6 +6285,8 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
         "cachedInput": item.totals.cached_input,
         "output": item.totals.output,
         "reasoning": item.totals.reasoning,
+        "cacheCreation": item.totals.cache_creation,
+        "cacheCreationAvailable": item.totals.cache_creation_available,
         "total": item.totals.total,
       })).collect::<Vec<_>>(),
     });

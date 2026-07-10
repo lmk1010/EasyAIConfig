@@ -65,6 +65,22 @@ test('Codex cost tables expose request counts without treating sessions as reque
   assert.match(appJs, /请求次数不可用/);
 });
 
+test('Codex local usage distinguishes user requests from token snapshots', () => {
+  const configStore = readFileSync(new URL('../src/lib/config-store.js', import.meta.url), 'utf8');
+  const rustSource = readFileSync(new URL('../src-tauri/src/codex.rs', import.meta.url), 'utf8');
+  assert.match(configStore, /payload\.type === 'user_message'/);
+  assert.doesNotMatch(configStore, /byProvider\.get\(providerKey\)\.requests \+= 1;\s*\n\s*\n\s*const modelKey/);
+  assert.match(configStore, /schemaVersion: CODEX_USAGE_SCHEMA_VERSION/);
+  assert.match(rustSource, /event_message_type == Some\("user_message"\)/);
+  assert.match(rustSource, /CODEX_USAGE_SCHEMA_VERSION: u64 = 2/);
+});
+
+test('Codex cache creation displays unavailable when local logs omit it', () => {
+  assert.match(appJs, /cacheCreationAvailable: totals\.cacheCreationAvailable === true/);
+  assert.match(appJs, /Codex 本地日志未提供缓存创建用量/);
+  assert.match(appJs, /缓存创建不可用/);
+});
+
 test('Codex dashboard totals use the same model aggregate as billing details', () => {
   assert.match(appJs, /const codexTotal = codexModelTotal \|\| codexFallbackTotals\.total/);
   assert.match(appJs, /codexModels\.reduce\(\(sum, entry\) => sum \+ Number\(calcModelCost\(entry\)\?\.totalCost \|\| 0\), 0\)/);

@@ -1037,9 +1037,14 @@ function createCodexUsageTotals() {
     cachedInput: 0,
     output: 0,
     reasoning: 0,
+    cacheCreation: 0,
+    cacheCreationAvailable: false,
+    requests: 0,
     total: 0,
   };
 }
+
+const CODEX_USAGE_SCHEMA_VERSION = 2;
 
 function createOpenCodeUsageTotals() {
   return {
@@ -1283,6 +1288,7 @@ async function readCodexUsageFromDashboardCacheSqlite(codexHome, dayCount) {
   try {
     const payload = JSON.parse(String(row.payload));
     if (!payload || typeof payload !== 'object') return null;
+    if (Number(payload.schemaVersion || 0) !== CODEX_USAGE_SCHEMA_VERSION) return null;
     payload.cacheUpdatedAt = Number(row.updated_at || 0) || Date.now();
     return payload;
   } catch {
@@ -1514,6 +1520,37 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
   const byProviderModel = new Map();
   const bySession = new Map();
 
+  const ensureSession = ({ sessionKey, providerKey, modelKey, cwd, ts }) => {
+    if (!bySession.has(sessionKey)) {
+      bySession.set(sessionKey, {
+        sessionId: sessionKey,
+        provider: providerKey,
+        model: modelKey,
+        cwd,
+        totals: createCodexUsageTotals(),
+        updatedAt: ts,
+        requestUsageSnapshots: new Map(),
+        lastTotalUsage: null,
+        lastUsageSignature: '',
+        requests: 0,
+      });
+    }
+    const item = bySession.get(sessionKey);
+    item.updatedAt = Math.max(item.updatedAt || ts, ts);
+    if (!item.cwd && cwd) item.cwd = cwd;
+    if ((!item.provider || item.provider === 'unknown') && providerKey) item.provider = providerKey;
+    if (modelKey && (item.model === 'unknown' || !item.model)) item.model = modelKey;
+    return item;
+  };
+
+  const ensureRequestBuckets = (providerKey, modelKey) => {
+    if (!byProvider.has(providerKey)) byProvider.set(providerKey, { provider: providerKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
+    if (!byModel.has(modelKey)) byModel.set(modelKey, { model: modelKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
+    const providerModelKey = `${providerKey}\u0000${modelKey}`;
+    if (!byProviderModel.has(providerModelKey)) byProviderModel.set(providerModelKey, { provider: providerKey, model: modelKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
+    return { providerModelKey };
+  };
+
   // Get session file list from Codex's own SQLite (for speed), fallback to directory walk
   const sessionFiles = await listRecentCodexSessionFilesFromSqlite(normalizedCodexHome, dayCount);
 
@@ -1551,34 +1588,36 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
         continue;
       }
 
-      // Process token_count events
       const payload = event.payload || {};
-      if (event.type !== 'event_msg' || payload.type !== 'token_count') continue;
       const ts = Date.parse(String(event.timestamp || ''));
       if (!Number.isFinite(ts) || ts < windowStartMs) continue;
       const sessionKey = sessionId || path.basename(filePath, '.jsonl');
       const providerKey = provider || 'unknown';
+      const modelKey = currentModel || payload.info?.model || 'unknown';
 
-      if (!bySession.has(sessionKey)) {
-        bySession.set(sessionKey, {
-          sessionId: sessionKey,
-          provider: providerKey,
-          model: currentModel || 'unknown',
-          cwd,
-          totals: createCodexUsageTotals(),
-          updatedAt: ts,
-          requestUsageSnapshots: new Map(),
-          lastTotalUsage: null,
-          lastUsageSignature: '',
-          requests: 0,
-        });
+      // A local Codex request is one user-submitted turn. token_count events are
+      // cumulative snapshots and can occur dozens of times during that turn.
+      if (event.type === 'event_msg' && payload.type === 'user_message') {
+        const item = ensureSession({ sessionKey, providerKey, modelKey, cwd, ts });
+        const { providerModelKey } = ensureRequestBuckets(providerKey, modelKey);
+        const dayKey = new Date(ts).toISOString().slice(0, 10);
+        if (!byDay.has(dayKey)) byDay.set(dayKey, createCodexUsageTotals());
+        totals.requests += 1;
+        byDay.get(dayKey).requests += 1;
+        byProvider.get(providerKey).requests += 1;
+        byProvider.get(providerKey).totals.requests += 1;
+        byModel.get(modelKey).requests += 1;
+        byModel.get(modelKey).totals.requests += 1;
+        byProviderModel.get(providerModelKey).requests += 1;
+        byProviderModel.get(providerModelKey).totals.requests += 1;
+        item.requests += 1;
+        item.totals.requests += 1;
+        continue;
       }
 
-      const item = bySession.get(sessionKey);
-      item.updatedAt = Math.max(item.updatedAt || ts, ts);
-      if (!item.cwd && cwd) item.cwd = cwd;
-      if (!item.provider && providerKey) item.provider = providerKey;
-      if (currentModel && item.model === 'unknown') item.model = currentModel;
+      // Process token_count events
+      if (event.type !== 'event_msg' || payload.type !== 'token_count') continue;
+      const item = ensureSession({ sessionKey, providerKey, modelKey, cwd, ts });
 
       const info = payload.info || {};
       const requestKey = buildUsageRequestKey({
@@ -1621,25 +1660,18 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
       if (!byDay.has(dayKey)) byDay.set(dayKey, createCodexUsageTotals());
       addCodexUsageTotals(byDay.get(dayKey), usage);
 
-      if (!byProvider.has(providerKey)) byProvider.set(providerKey, { provider: providerKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
+      ensureRequestBuckets(providerKey, modelKey);
       addCodexUsageTotals(byProvider.get(providerKey).totals, usage);
       byProvider.get(providerKey).events += 1;
-      byProvider.get(providerKey).requests += 1;
 
-      const modelKey = currentModel || payload.info?.model || 'unknown';
-      if (!byModel.has(modelKey)) byModel.set(modelKey, { model: modelKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
       addCodexUsageTotals(byModel.get(modelKey).totals, usage);
       byModel.get(modelKey).events += 1;
-      byModel.get(modelKey).requests += 1;
 
       const providerModelKey = `${providerKey}\u0000${modelKey}`;
-      if (!byProviderModel.has(providerModelKey)) byProviderModel.set(providerModelKey, { provider: providerKey, model: modelKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
       addCodexUsageTotals(byProviderModel.get(providerModelKey).totals, usage);
       byProviderModel.get(providerModelKey).events += 1;
-      byProviderModel.get(providerModelKey).requests += 1;
 
       addCodexUsageTotals(item.totals, usage);
-      item.requests += 1;
     }
   }
 
@@ -1659,6 +1691,9 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
 
   const metrics = {
     ok: true,
+    schemaVersion: CODEX_USAGE_SCHEMA_VERSION,
+    requestCountSource: 'user_message',
+    cacheCreationAvailable: false,
     days: dayCount,
     source: dashboardCacheDbPath(),
     sourceType: 'dashboard-cache-sqlite',
