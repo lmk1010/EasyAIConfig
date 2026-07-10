@@ -1049,7 +1049,9 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(stylesCss, /\.pd-router-simple-flow/);
   assert.match(stylesCss, /\.pd-router-more-menu/);
   assert.match(stylesCss, /\.pd-router-simple-provider/);
-  assert.match(stylesCss, /\.pd-router-tabs[\s\S]{0,180}repeat\(2, minmax\(140px, 1fr\)\)/);
+  assert.match(stylesCss, /\.pd-router-tabs[\s\S]{0,180}repeat\(2, minmax\(112px, 1fr\)\)/);
+  assert.match(stylesCss, /\.pd-router-simple-providers[\s\S]{0,160}repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.ok(routerRenderBody.indexOf('${gatewayHero}') < routerRenderBody.indexOf('<section class="pd-router-tabs-shell">'));
   assert.match(stylesCss, /\.pd-router-advanced-body > \.pd-router-panel/);
   assert.match(routerRenderBody, /pd-router-advanced-body/);
   assert.doesNotMatch(routerRenderBody, /pd-router-simple-step/);

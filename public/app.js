@@ -28976,8 +28976,7 @@ function renderProviderRouterPage() {
       </div>
     </div>`;
   const rectifierPanel = renderProviderRouterRectifierPanel({ loading });
-  const overviewPanel = `
-    <div class="pd-router-workspace">
+  const gatewayHero = `
       <section class="pd-router-hero-card ${running ? 'is-running' : ''}">
         <div class="pd-router-hero-main">
           <div class="pd-router-hero-status"><i></i><span>${esc(statusScopeLabel)}</span><strong>${esc(routerStateText)}</strong></div>
@@ -28996,8 +28995,9 @@ function renderProviderRouterPage() {
           <div><span>请求</span><strong>${esc(String(stats.requests || 0))}</strong><em>${esc(String(stats.failed || 0))} 次失败</em></div>
           <div><span>策略</span><strong>${esc(activeStrategyMeta.label)}</strong><em>自动故障切换</em></div>
         </div>
-      </section>
-
+      </section>`;
+  const overviewPanel = `
+    <div class="pd-router-workspace">
       <section class="pd-router-routes-section">
         <div class="pd-router-section-title">
           <div><span>ROUTES</span><h3>${esc(toolLabel)} 线路</h3><p>勾选参与路由的 Provider，并指定一个主线路。</p></div>
@@ -29041,6 +29041,7 @@ function renderProviderRouterPage() {
         </div>
       </header>
       ${error ? `<div class="pd-remote-alert is-bad">${esc(error)}</div>` : ''}
+      ${gatewayHero}
       <section class="pd-router-tabs-shell">
         <div class="pd-router-tabs">${routerTabs}</div>
         ${activePanel}
