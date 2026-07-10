@@ -213,7 +213,7 @@ const state = {
     error: '',
     lastFetchedAt: 0,
     activeTool: 'codex',
-    activeTab: 'clients',
+    activeTab: 'routes',
     logFilter: { query: '', provider: 'all', status: 'all', tool: 'all' },
     logData: null,
     logPage: 1,
@@ -9783,6 +9783,7 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     reasoning: 0,
     cachedRead: 0,
     cacheWrite: 0,
+    requests: 0,
     totalCost: 0,
     matched: 0,
   };
@@ -9795,6 +9796,9 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     const reasoning = entry.totals?.reasoning || 0;
     const cachedRead = entry.totals?.cachedInput || entry.totals?.cacheRead || 0;
     const cacheWrite = entry.totals?.cacheCreation || 0;
+    const requestsValue = entry.requests ?? entry.totals?.requests;
+    const requests = Number(requestsValue || 0);
+    const requestsAvailable = requestsValue != null;
     const pct = totalTokens ? Math.round(tokens / totalTokens * 100) : 0;
     const modelLabel = (pricingEntry?.fallback ? entry.model : (cost?.pricing?.label || pricingEntry?.pricing?.label || entry.model));
 
@@ -9803,6 +9807,7 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     totals.reasoning += reasoning;
     totals.cachedRead += cachedRead;
     totals.cacheWrite += cacheWrite;
+    totals.requests += requests;
     if (cost) {
       totals.totalCost += cost.totalCost;
       totals.matched += 1;
@@ -9823,6 +9828,10 @@ function renderModelCostRows(models = [], totalTokens = 0) {
           <span>${escapeHtml(appText(matchTag))}</span>
         </div>
       </div>
+      <div class="db3-price-metric">
+        <strong>${requestsAvailable ? escapeHtml(String(requests)) : '—'}</strong>
+        <span>${escapeHtml(appText('请求次数'))}</span>
+      </div>
       <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(input))}">
         <strong>${escapeHtml(formatDashboardMetric(input))}</strong>
         <span>${escapeHtml(appText('输入'))}</span>
@@ -9833,7 +9842,11 @@ function renderModelCostRows(models = [], totalTokens = 0) {
       </div>
       <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(cachedRead))}">
         <strong>${escapeHtml(formatDashboardMetric(cachedRead))}</strong>
-        <span>${cacheWrite ? `${escapeHtml(appText('写'))} ${escapeHtml(formatDashboardMetric(cacheWrite))}` : escapeHtml(appText('缓存读'))}</span>
+        <span>${escapeHtml(appText('缓存读取'))}</span>
+      </div>
+      <div class="db3-price-metric" title="${escapeHtml(formatDashboardMetricFull(cacheWrite))}">
+        <strong>${escapeHtml(formatDashboardMetric(cacheWrite))}</strong>
+        <span>${escapeHtml(appText('缓存创建'))}</span>
       </div>
       <div class="db3-price-total ${cost ? '' : 'db3-price-total--na'}">
         <strong>${escapeHtml(cost ? formatDashboardUsd(cost.totalCost, { min: 4, max: 4 }) : '—')}</strong>
@@ -9849,6 +9862,10 @@ function renderModelCostRows(models = [], totalTokens = 0) {
       </div>
     </div>
     <div class="db3-price-metric">
+      <strong>${models.some((entry) => (entry.requests ?? entry.totals?.requests) != null) ? escapeHtml(String(totals.requests)) : '—'}</strong>
+      <span>${escapeHtml(appText('请求次数'))}</span>
+    </div>
+    <div class="db3-price-metric">
       <strong>${escapeHtml(formatDashboardMetric(totals.input))}</strong>
       <span>${escapeHtml(appText('输入'))}</span>
     </div>
@@ -9858,7 +9875,11 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     </div>
     <div class="db3-price-metric">
       <strong>${escapeHtml(formatDashboardMetric(totals.cachedRead))}</strong>
-      <span>${totals.cacheWrite ? `${escapeHtml(appText('写'))} ${escapeHtml(formatDashboardMetric(totals.cacheWrite))}` : escapeHtml(appText('缓存读'))}</span>
+      <span>${escapeHtml(appText('缓存读取'))}</span>
+    </div>
+    <div class="db3-price-metric">
+      <strong>${escapeHtml(formatDashboardMetric(totals.cacheWrite))}</strong>
+      <span>${escapeHtml(appText('缓存创建'))}</span>
     </div>
     <div class="db3-price-total">
       <strong>${escapeHtml(totals.totalCost ? formatDashboardUsd(totals.totalCost, { min: 4, max: 4 }) : '—')}</strong>
@@ -9869,9 +9890,11 @@ function renderModelCostRows(models = [], totalTokens = 0) {
     <div class="db3-price-grid">
       <div class="db3-price-row db3-price-row--head">
         <div>${escapeHtml(appText('模型'))}</div>
+        <div>${escapeHtml(appText('请求次数'))}</div>
         <div>${escapeHtml(appText('输入'))}</div>
         <div>${escapeHtml(appText('输出 / 推理'))}</div>
-        <div>${escapeHtml(appText('缓存'))}</div>
+        <div>${escapeHtml(appText('缓存读取'))}</div>
+        <div>${escapeHtml(appText('缓存创建'))}</div>
         <div>${escapeHtml(appText('预估费用'))}</div>
       </div>
       ${rows.join('')}
@@ -9905,10 +9928,14 @@ function applyDashboardFilter(metrics, filter, tool) {
   };
   const filteredSessions = sessions.filter((s) => matchProvider(s?.provider) && matchModel(s?.model));
   const metric = (s, key) => Number((s && s[key] != null ? s[key] : s?.totals?.[key]) || 0);
+  const requestMetric = (s) => {
+    const value = s?.requests ?? s?.totals?.requests;
+    return value == null ? null : Number(value || 0);
+  };
   const cachedMetric = (s) => Number(s?.cachedInput ?? s?.cacheRead ?? s?.totals?.cachedInput ?? s?.totals?.cacheRead ?? 0);
   const sessionDay = (s) => String(s?.lastActiveAt || s?.updatedAt || s?.startedAt || '').slice(0, 10);
   // 重算 totals
-  const totals = { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: 0 };
+  const totals = { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: null };
   for (const s of filteredSessions) {
     totals.input += metric(s, 'input');
     totals.output += metric(s, 'output');
@@ -9918,14 +9945,15 @@ function applyDashboardFilter(metrics, filter, tool) {
     totals.cacheCreation += metric(s, 'cacheCreation');
     totals.total += metric(s, 'total');
     totals.cost += metric(s, 'cost');
-    totals.requests += Math.max(1, metric(s, 'requests'));
+    const requests = requestMetric(s);
+    if (requests != null) totals.requests = Number(totals.requests || 0) + requests;
   }
   // 重算 daily：按日期分桶
   const dailyMap = new Map();
   for (const s of filteredSessions) {
     const day = sessionDay(s);
     if (!day) continue;
-    const bucket = dailyMap.get(day) || { date: day, input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: 0 };
+    const bucket = dailyMap.get(day) || { date: day, input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: null };
     bucket.input += metric(s, 'input');
     bucket.output += metric(s, 'output');
     bucket.reasoning += metric(s, 'reasoning');
@@ -9934,7 +9962,8 @@ function applyDashboardFilter(metrics, filter, tool) {
     bucket.cacheCreation += metric(s, 'cacheCreation');
     bucket.total += metric(s, 'total');
     bucket.cost += metric(s, 'cost');
-    bucket.requests += Math.max(1, metric(s, 'requests'));
+    const requests = requestMetric(s);
+    if (requests != null) bucket.requests = Number(bucket.requests || 0) + requests;
     dailyMap.set(day, bucket);
   }
   const daily = [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -9942,8 +9971,8 @@ function applyDashboardFilter(metrics, filter, tool) {
   const provMap = new Map();
   for (const s of filteredSessions) {
     const k = s.provider || 'unknown';
-    const cur = provMap.get(k) || { provider: k, events: 0, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: 0 } };
-    cur.events += Math.max(1, metric(s, 'requests'));
+    const cur = provMap.get(k) || { provider: k, events: 0, requests: null, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: null } };
+    cur.events += 1;
     cur.totals.input += metric(s, 'input');
     cur.totals.output += metric(s, 'output');
     cur.totals.reasoning += metric(s, 'reasoning');
@@ -9952,7 +9981,11 @@ function applyDashboardFilter(metrics, filter, tool) {
     cur.totals.cacheCreation += metric(s, 'cacheCreation');
     cur.totals.total += metric(s, 'total');
     cur.totals.cost += metric(s, 'cost');
-    cur.totals.requests += Math.max(1, metric(s, 'requests'));
+    const requests = requestMetric(s);
+    if (requests != null) {
+      cur.totals.requests = Number(cur.totals.requests || 0) + requests;
+      cur.requests = Number(cur.requests || 0) + requests;
+    }
     provMap.set(k, cur);
   }
   const providers = [...provMap.values()].sort((a, b) => b.totals.total - a.totals.total);
@@ -9960,8 +9993,8 @@ function applyDashboardFilter(metrics, filter, tool) {
   const modelMap = new Map();
   for (const s of filteredSessions) {
     const k = s.model || 'unknown';
-    const cur = modelMap.get(k) || { model: k, events: 0, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: 0 } };
-    cur.events += Math.max(1, metric(s, 'requests'));
+    const cur = modelMap.get(k) || { model: k, events: 0, requests: null, totals: { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, cost: 0, requests: null } };
+    cur.events += 1;
     cur.totals.input += metric(s, 'input');
     cur.totals.output += metric(s, 'output');
     cur.totals.reasoning += metric(s, 'reasoning');
@@ -9970,7 +10003,11 @@ function applyDashboardFilter(metrics, filter, tool) {
     cur.totals.cacheCreation += metric(s, 'cacheCreation');
     cur.totals.total += metric(s, 'total');
     cur.totals.cost += metric(s, 'cost');
-    cur.totals.requests += Math.max(1, metric(s, 'requests'));
+    const requests = requestMetric(s);
+    if (requests != null) {
+      cur.totals.requests = Number(cur.totals.requests || 0) + requests;
+      cur.requests = Number(cur.requests || 0) + requests;
+    }
     modelMap.set(k, cur);
   }
   const models = [...modelMap.values()].sort((a, b) => b.totals.total - a.totals.total);
@@ -10338,17 +10375,28 @@ function renderDashboardPage() {
     return date >= winFrom && date <= winTo;
   });
 
-  // Recompute totals from the sliced window
-  const codexTotal = codexDaily.reduce((s, d) => s + (d.total || 0), 0);
-  const codexInput = codexDaily.reduce((s, d) => s + (d.input || 0), 0);
-  const codexOutput = codexDaily.reduce((s, d) => s + (d.output || 0), 0);
-  const codexCached = codexDaily.reduce((s, d) => s + (d.cachedInput || 0), 0);
-  const codexReasoning = codexDaily.reduce((s, d) => s + (d.reasoning || 0), 0);
   const codexModels = codexMetrics.models || [];
   const codexModelTotal = codexModels.reduce((sum, entry) => sum + (entry.totals?.total || 0), 0);
-  
-  // 直接按窗口内每日 token 分布 × 主模型单价算钱，比"窗口占比 × 模型总费用"准。
-  const codexTotalCost = estimateCostByDaily(codexDaily, codexModels, 'codex');
+  const codexModelTotals = codexModels.reduce((sum, entry) => {
+    const totals = entry?.totals || {};
+    sum.input += Number(totals.input || 0);
+    sum.output += Number(totals.output || 0);
+    sum.cachedInput += Number(totals.cachedInput || totals.cacheRead || 0);
+    sum.cacheCreation += Number(totals.cacheCreation || 0);
+    sum.reasoning += Number(totals.reasoning || 0);
+    return sum;
+  }, { input: 0, output: 0, cachedInput: 0, cacheCreation: 0, reasoning: 0 });
+  const codexFallbackTotals = normalizeDashboardUsageTotals(codexMetrics.totals || {});
+  const codexTotal = codexModelTotal || codexFallbackTotals.total;
+  const codexInput = codexModels.length ? codexModelTotals.input : codexFallbackTotals.input;
+  const codexOutput = codexModels.length ? codexModelTotals.output : codexFallbackTotals.output;
+  const codexCached = codexModels.length ? codexModelTotals.cachedInput : codexFallbackTotals.cachedInput;
+  const codexCacheCreation = codexModels.length ? codexModelTotals.cacheCreation : codexFallbackTotals.cacheCreation;
+  const codexReasoning = codexModels.length ? codexModelTotals.reasoning : codexFallbackTotals.reasoning;
+
+  // 顶部和模型计费明细必须使用同一滚动窗口、同一模型聚合口径。
+  // 后端 days=1 表示最近 24 小时，不能再按本地/UTC 日历日期裁掉跨日部分。
+  const codexTotalCost = codexModels.reduce((sum, entry) => sum + Number(calcModelCost(entry)?.totalCost || 0), 0);
 
   const codexCacheHitPct = codexTotal ? Math.round(codexCached / codexTotal * 100) : 0;
   const codexInputPct = codexTotal ? Math.round(codexInput / codexTotal * 100) : 0;
@@ -10362,7 +10410,8 @@ function renderDashboardPage() {
   const codexBreakdownItems = [
     { label: '输入', value: codexInputPct, meta: codexInput },
     { label: '输出', value: codexTotal ? Math.round(codexOutput / codexTotal * 100) : 0, meta: codexOutput },
-    { label: '缓存', value: codexCacheHitPct, meta: codexCached },
+    { label: '缓存读取', value: codexCacheHitPct, meta: codexCached },
+    { label: '缓存创建', value: codexTotal ? Math.round(codexCacheCreation / codexTotal * 100) : 0, meta: codexCacheCreation },
     { label: '推理', value: codexTotal ? Math.round(codexReasoning / codexTotal * 100) : 0, meta: codexReasoning },
   ];
 
@@ -10408,7 +10457,7 @@ function renderDashboardPage() {
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10.5h12M3.5 8.5l2-2 2.5 2 4.5-4"/></svg>
               ${escapeHtml(appText('Token 构成'))}
             </div>
-            <div class="db2-card-meta">${escapeHtml(appText('输入 / 输出 / 缓存 / 推理'))}</div>
+            <div class="db2-card-meta">${escapeHtml(appText('输入 / 输出 / 缓存创建 / 缓存读取 / 推理'))}</div>
           </div>
           ${miniBars(codexBreakdownItems)}
         </section>
@@ -26510,15 +26559,6 @@ const PROVIDER_ROUTER_TOOL_DEFS = [
   { value: 'hermes', label: 'Hermes Agent', providerSource: 'codex', protocol: 'openai', surface: 'Agent workspace', writeTarget: 'config.yaml + .env', routingMode: 'OpenAI-compatible' },
 ];
 const PROVIDER_ROUTER_TOOLS = PROVIDER_ROUTER_TOOL_DEFS.map((item) => item.value);
-const PROVIDER_ROUTER_CAPABILITY_TAGS = [
-  'hot switch',
-  'format rectifier',
-  'auto failover',
-  'circuit breaker',
-  'health probe',
-  'request logs',
-  'one-click client write',
-];
 const PROVIDER_ROUTER_STRATEGIES = [
   { value: 'auto', label: '智能自动', hint: '余额保护 + 权重轮询' },
   { value: 'weighted', label: '权重轮询', hint: '按每行权重分摊请求' },
@@ -27723,6 +27763,12 @@ async function actionProviderRouterStart() {
   }
 }
 
+async function actionProviderRouterQuickStart() {
+  const applied = await actionProviderRouterApplyClient(getProviderRouterActiveTool());
+  if (!applied) return;
+  await actionProviderRouterStart();
+}
+
 async function actionProviderRouterStop() {
   let restoreCodexAfterStop = false;
   const activeCodexProvider = getActiveCodexProviderForRouterCheck();
@@ -28287,8 +28333,8 @@ function ensureProviderRouterEvents() {
     if (!getProviderRouterPageTarget(target)) return;
     const routerTab = target.closest('[data-provider-router-tab]');
     if (routerTab) {
-      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'clients').trim();
-      state.providerRouter.activeTab = ['clients', 'gateway', 'pool', 'stats', 'rectifier'].includes(tab) ? tab : 'clients';
+      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'routes').trim();
+      state.providerRouter.activeTab = ['routes', 'strategy', 'clients', 'runtime', 'stats', 'rectifier'].includes(tab) ? tab : 'routes';
       renderProviderRouterPage();
       if (state.providerRouter.activeTab === 'stats') {
         void fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
@@ -28315,6 +28361,7 @@ function ensureProviderRouterEvents() {
       renderProviderRouterPage();
       return;
     }
+    if (target.closest('[data-provider-router-quick-start]')) { void actionProviderRouterQuickStart(); return; }
     if (target.closest('[data-provider-router-start]')) { actionProviderRouterStart(); return; }
     if (target.closest('[data-provider-router-stop]')) { actionProviderRouterStop(); return; }
     if (target.closest('[data-provider-router-refresh]')) { fetchProviderRouterStatus(true); return; }
@@ -28383,6 +28430,22 @@ function ensureProviderRouterEvents() {
       state.providerRouter.logData = null;
       refreshProviderRouterStatsPanel();
       void fetchProviderRouterLogs({ page: 1, silent: true });
+      return;
+    }
+    if (target instanceof HTMLSelectElement && target.matches('[data-provider-router-tool-select]')) {
+      state.providerRouter.activeTool = normalizeProviderRouterTool(target.value || 'codex');
+      renderProviderRouterPage();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.matches('[data-provider-router-primary-select]')) {
+      const routeKey = target.getAttribute('data-provider-router-primary-select') || '';
+      const tool = getProviderRouterActiveTool();
+      const candidates = getProviderRouterRows(tool);
+      const selected = getProviderRouterSelectedKeySet(candidates, tool);
+      selected.add(routeKey);
+      setProviderRouterSelectedKeys(selected, candidates, tool);
+      setProviderRouterPrimaryKey(routeKey, tool);
+      renderProviderRouterPage();
       return;
     }
     if (target instanceof HTMLInputElement && target.matches('[data-provider-router-log-clear-before]')) {
@@ -28568,42 +28631,6 @@ function renderProviderRouterPage() {
     const rows = getProviderRouterRows(tool);
     return [tool, { total: rows.length, routable: rows.filter((item) => item.canRoute).length }];
   }));
-  const totalRouterRows = Object.values(toolCounts).reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const totalRoutableRows = Object.values(toolCounts).reduce((sum, item) => sum + Number(item.routable || 0), 0);
-  const coverageCards = tools.map((tool) => {
-    const def = providerRouterToolDef(tool);
-    const count = toolCounts[tool] || { total: 0, routable: 0 };
-    const endpoint = getProviderRouterEndpoint(tool, status);
-    const isActiveTool = activeTool === tool;
-    return `
-      <button type="button" class="pd-router-coverage-card ${isActiveTool ? 'is-active' : ''}" data-provider-router-tool="${esc(tool)}" aria-pressed="${isActiveTool ? 'true' : 'false'}">
-        <span class="pd-router-coverage-top">
-          <strong>${esc(def.label)}</strong>
-          <em>${esc(providerRouterProtocolLabel(tool))}</em>
-        </span>
-        <span class="pd-router-coverage-meta">
-          <i>${esc(def.writeTarget || 'client config')}</i>
-          <b>${esc(String(count.routable))}/${esc(String(count.total))}</b>
-        </span>
-        <span class="pd-router-coverage-bottom">
-          <code>${esc(endpoint)}</code>
-        </span>
-      </button>`;
-  }).join('');
-  const capabilityTags = PROVIDER_ROUTER_CAPABILITY_TAGS.map((item) => `<span>${esc(item)}</span>`).join('');
-  const coveragePanel = `
-    <section class="pd-router-client-coverage" aria-label="Provider Router seven client coverage">
-      <div class="pd-router-coverage-summary">
-        <div>
-          <span>CLIENTS</span>
-          <strong>${esc(String(PROVIDER_ROUTER_TOOL_DEFS.length))} 个客户端接入</strong>
-          <em>Claude Code、Claude Desktop、Codex、Gemini CLI、OpenCode、OpenClaw、Hermes Agent 共用本地 Router；先一键写入配置，再到负载池选择 Provider。</em>
-        </div>
-        <strong class="pd-router-coverage-health">${esc(String(totalRoutableRows))}/${esc(String(totalRouterRows))} 可路由 · ${esc(running ? '网关运行中' : '网关未启动')}</strong>
-      </div>
-      <div class="pd-router-coverage-tags">${capabilityTags}</div>
-      <div class="pd-router-coverage-grid">${coverageCards}</div>
-    </section>`;
   const candidates = getProviderRouterRows(activeTool);
   const primary = getProviderRouterPrimaryRow(candidates, activeTool);
   const selected = getProviderRouterSelectedKeySet(candidates, activeTool);
@@ -28717,19 +28744,21 @@ function renderProviderRouterPage() {
       : running
         ? '重启网关'
         : '启动网关';
-  const routerTabKeys = ['clients', 'gateway', 'pool', 'rectifier', 'stats'];
-  const activeTab = routerTabKeys.includes(state.providerRouter.activeTab) ? state.providerRouter.activeTab : 'clients';
+  const legacyTabMap = { overview: 'routes', gateway: 'runtime', pool: 'strategy' };
+  const normalizedTab = legacyTabMap[state.providerRouter.activeTab] || state.providerRouter.activeTab;
+  const routerTabKeys = ['routes', 'strategy', 'clients', 'runtime', 'rectifier', 'stats'];
+  const activeTab = routerTabKeys.includes(normalizedTab) ? normalizedTab : 'routes';
   state.providerRouter.activeTab = activeTab;
   const routerTabs = [
-    { key: 'clients', label: '客户端接入', meta: `${PROVIDER_ROUTER_TOOL_DEFS.length} 个` },
-    { key: 'gateway', label: '网关运行', meta: running ? '运行中' : '未启动' },
-    { key: 'pool', label: '负载池', meta: selectedSummary },
-    { key: 'rectifier', label: '格式转换', meta: '预览' },
-    { key: 'stats', label: '运行日志', meta: String(stats.requests || 0) },
+    { key: 'routes', label: '线路', meta: selectedSummary },
+    { key: 'strategy', label: '策略', meta: activeStrategyMeta.label },
+    { key: 'clients', label: '客户端', meta: String(tools.length) },
+    { key: 'runtime', label: '运行', meta: running ? '运行中' : '未启动' },
+    { key: 'rectifier', label: '格式转换', meta: '高级' },
+    { key: 'stats', label: '日志', meta: String(stats.requests || 0) },
   ].map((tab) => `
     <button type="button" class="pd-router-tab ${activeTab === tab.key ? 'is-active' : ''}" data-provider-router-tab="${esc(tab.key)}">
-      <span>${esc(tab.label)}</span>
-      <em>${esc(tab.meta)}</em>
+      <span>${esc(tab.label)}</span><em>${esc(tab.meta)}</em>
     </button>`).join('');
   const poolPanel = `
     <div class="pd-router-panel pd-router-pool-panel">
@@ -28837,19 +28866,6 @@ function renderProviderRouterPage() {
           </span>
         </div>`;
   }).join('');
-  const clientsPanel = `
-    <div class="pd-router-panel pd-router-clients-panel">
-      ${coveragePanel}
-      <div class="pd-router-client-table">
-        <div class="pd-router-client-row is-head">
-          <span>客户端</span>
-          <span>Base URL</span>
-          <span>API Key</span>
-          <span>配置</span>
-        </div>
-        ${clientRows}
-      </div>
-	    </div>`;
   const endpointButtons = tools.map((tool) => `
           <button type="button" data-provider-router-copy="${esc(`${tool}-base`)}">
             <div>
@@ -28915,17 +28931,108 @@ function renderProviderRouterPage() {
         </button>
       </div>
     </section>`;
+  const toolSelectOptions = tools.map((tool) => {
+    const count = toolCounts[tool] || { total: 0, routable: 0 };
+    return `<option value="${esc(tool)}" ${tool === activeTool ? 'selected' : ''}>${esc(providerRouterToolLabel(tool))} · ${esc(String(count.routable))} 条线路</option>`;
+  }).join('');
+  const simpleProviderRows = candidates.map((item) => {
+    const isPrimary = item.routeKey === primary?.routeKey;
+    const isSelected = selected.has(item.routeKey);
+    const isActive = activeKeys.includes(item.routeKey);
+    const health = item.health || {};
+    const healthText = health.loading ? '检测中' : health.ok ? '可用' : health.checked ? '不可用' : '未检测';
+    return `
+      <div class="pd-router-simple-provider ${isPrimary ? 'is-primary' : ''} ${isActive ? 'is-active' : ''} ${!item.canRoute ? 'is-disabled' : ''}">
+        <label class="provider-router-pool-toggle" title="${item.canRoute ? '加入自动路由' : '缺少可读取的 API Key'}">
+          <input type="checkbox" data-provider-router-toggle="${esc(item.routeKey)}" ${isSelected ? 'checked' : ''} ${!item.canRoute || loading ? 'disabled' : ''} />
+          <span aria-hidden="true"></span>
+        </label>
+        <div>
+          <strong>${esc(item.name || item.key)}</strong>
+          <span>${esc(healthText)}${item.model ? ` · ${esc(item.model)}` : ''}</span>
+        </div>
+        <label class="pd-router-simple-primary" title="设为主线路">
+          <input type="radio" name="provider-router-primary" data-provider-router-primary-select="${esc(item.routeKey)}" ${isPrimary ? 'checked' : ''} ${!item.canRoute || loading ? 'disabled' : ''} />
+          <span>${isPrimary ? '主线路' : '备用'}</span>
+        </label>
+      </div>`;
+  }).join('');
+  const activeToolCopyActions = [
+    `<button type="button" data-provider-router-copy="${esc(`${activeTool}-base`)}">复制 Base URL</button>`,
+    `<button type="button" data-provider-router-copy="${esc(`${activeTool}-env`)}">复制环境变量</button>`,
+    activeTool === 'codex' ? '<button type="button" data-provider-router-copy="codex-toml">复制 config.toml</button>' : '',
+    activeTool === 'claudecode' ? '<button type="button" data-provider-router-copy="claude-json">复制 settings.json</button>' : '',
+  ].filter(Boolean).join('');
+  const overviewPanel = `
+    <div class="pd-router-simple-flow pd-router-console">
+      <div class="pd-router-console-bar">
+        <div class="pd-router-client-picker">
+          <div class="select-wrap"><select data-provider-router-tool-select>${toolSelectOptions}</select></div>
+          <div class="pd-router-client-endpoint"><span>${esc(providerRouterProtocolLabel(activeTool))}</span><code>${esc(currentBaseUrl)}</code></div>
+        </div>
+        <div class="pd-router-simple-status ${proxyReady ? 'is-ok' : running ? 'is-warning' : ''}"><i></i><strong>${esc(routerStateText)}</strong></div>
+        <details class="pd-router-more-menu">
+          <summary aria-label="更多操作" title="更多操作">•••</summary>
+          <div>
+            <button type="button" data-provider-router-apply="${esc(activeTool)}">仅写入客户端配置</button>
+            ${activeToolCopyActions}
+            ${running ? `<button type="button" data-provider-router-probe ${probeLoading ? 'disabled' : ''}>${probeLoading ? '测试中' : '测试连接'}</button>` : ''}
+            ${running ? '<button type="button" data-provider-router-stop>停止网关</button>' : ''}
+          </div>
+        </details>
+      </div>
+
+      <section class="pd-router-console-routes">
+        <div class="pd-router-console-heading">
+          <div><strong>${esc(toolLabel)} 路由线路</strong><span>勾选参与自动切换的线路，并指定一个主线路。</span></div>
+          <span>${esc(selectedSummary)}</span>
+        </div>
+        <div class="pd-router-simple-providers">
+          ${simpleProviderRows || `<div class="pd-router-console-empty"><strong>还没有可用线路</strong><span>先到“快速配置”添加 ${esc(toolLabel)} Provider，再回到这里启动。</span></div>`}
+        </div>
+      </section>
+
+      <footer class="pd-router-console-footer">
+        <div>
+          <span>${esc(statusNote)}</span>
+          <code>${esc(originUrl)}</code>
+          ${running ? `<em>${esc(probeStateText)} · ${esc(String(stats.requests || 0))} 次请求</em>` : ''}
+        </div>
+        <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-provider-router-quick-start ${loading || !selectedRows.length ? 'disabled' : ''}>${loading ? '处理中' : running ? '应用并重启' : '接入并启动'}</button>
+      </footer>
+
+    </div>`;
+  const clientsPanel = `
+    <div class="pd-router-tab-content pd-router-clients-content">
+      <div class="pd-router-section-heading"><div><strong>客户端接入</strong><span>查看各客户端地址，按需一键写入或复制配置。</span></div></div>
+      <div class="pd-router-client-table">
+        <div class="pd-router-client-row is-head"><span>客户端</span><span>Base URL</span><span>API Key</span><span>配置</span></div>
+        ${clientRows}
+      </div>
+    </div>`;
+  const strategyPanel = `
+    <div class="pd-router-tab-content pd-router-strategy-content">
+      <div class="pd-router-section-heading"><div><strong>路由策略</strong><span>权重、余额保护和熔断只在需要精细控制时调整。</span></div></div>
+      ${poolPanel}
+    </div>`;
+  const runtimePanel = `
+    <div class="pd-router-tab-content pd-router-runtime-content">
+      <div class="pd-router-section-heading"><div><strong>运行状态</strong><span>查看监听、反代探测、请求统计与全部本地端点。</span></div></div>
+      ${gatewayPanel}
+    </div>`;
   const statsPanel = renderProviderRouterStatsPanel({ loading });
   const rectifierPanel = renderProviderRouterRectifierPanel({ loading });
-  const activePanel = activeTab === 'clients'
-    ? clientsPanel
-    : activeTab === 'gateway'
-      ? gatewayPanel
-      : activeTab === 'stats'
+  const activePanel = activeTab === 'stats'
         ? statsPanel
         : activeTab === 'rectifier'
           ? rectifierPanel
-          : poolPanel;
+          : activeTab === 'strategy'
+            ? strategyPanel
+            : activeTab === 'clients'
+              ? clientsPanel
+              : activeTab === 'runtime'
+                ? runtimePanel
+                : overviewPanel;
 
   container.innerHTML = `
     <div class="pd-router provider-router-shell">
@@ -28936,7 +29043,7 @@ function renderProviderRouterPage() {
             <em>·</em>
             <span>自动路由网关</span>
           </div>
-          <p>面向七个 AI Coding 客户端的本地网关：统一热切换、格式转换、自动 failover、熔断、健康探测和请求日志。</p>
+          <p>选择客户端和线路，点击一次即可接入并启动。</p>
         </div>
         <div class="pd-router-page-meta">
           <span>${esc(statusScopeLabel)}</span>
@@ -28947,7 +29054,7 @@ function renderProviderRouterPage() {
       <section class="pd-router-tabs-shell">
         <div class="pd-router-tabs">${routerTabs}</div>
         ${activePanel}
-        <div class="pd-router-note">当前选中复制地址：<code>${esc(currentBaseUrl)}</code>。网关不伪装模型能力；要稳定自动路由，池子里的 Provider 最好支持同一模型名。</div>
+        <div class="pd-router-note">提示：自动路由不会改变模型能力。多条线路使用相同模型名时，切换最稳定。</div>
       </section>
     </div>`;
   if (window.initCustomSelect) {
@@ -29604,6 +29711,7 @@ function renderPdModels(row) {
       <div class="pdm-list-head">
         <div class="pdm-list-title">支持的模型 <em>${esc(String(saved.length))}</em>${allModels.length !== saved.length ? `<span class="pdm-list-meta">可见 ${esc(String(allModels.length))}</span>` : ''}</div>
         <div class="pdm-list-actions">
+          <button type="button" class="pdm-link-btn pdm-sync-btn" data-pd-models-sync-codex>同步到 Codex</button>
           ${saved.length ? '<button type="button" class="pdm-link-btn pdm-clear-btn" data-pd-models-clear>清空已保存</button>' : ''}
           <button type="button" class="pdm-link-btn pdm-add-btn" data-pd-models-add>＋ 添加模型</button>
         </div>
@@ -29738,8 +29846,45 @@ async function bindPdModelsEvents() {
   }
 
   root.addEventListener('click', async (e) => {
-    const actionButton = e.target.closest('.pdm-card-actions button, [data-pd-models-clear]');
+    const actionButton = e.target.closest('.pdm-card-actions button, [data-pd-models-clear], [data-pd-models-sync-codex]');
     if (actionButton) e.stopPropagation();
+    const syncCodex = e.target.closest('[data-pd-models-sync-codex]');
+    if (syncCodex) {
+      e.preventDefault();
+      if (syncCodex.dataset.busy === '1') return;
+      const currentRow = lookupProviderDetailRow();
+      const currentModel = getProviderDetailModel(currentRow);
+      const savedModels = normalizeProviderModelList(state.providerSavedModels?.[providerKey] || []);
+      const liveModels = normalizeProviderModelList(state.providerDetail?.detected?.[providerKey]?.models || []);
+      const models = normalizeProviderModelList([...savedModels, ...liveModels, currentModel]);
+      if (!models.length) {
+        flash('请先添加模型或从 Provider 拉取模型', 'warning');
+        return;
+      }
+      syncCodex.dataset.busy = '1';
+      syncCodex.disabled = true;
+      const originalText = syncCodex.textContent;
+      syncCodex.textContent = '同步中…';
+      try {
+        const res = await api('/api/codex/model-catalog/sync', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ codexHome, providerKey, models }),
+        });
+        if (!res?.ok) {
+          flash(`同步失败: ${res?.error || '未知'}`, 'error');
+          return;
+        }
+        const data = res.data || {};
+        flash(`已同步 ${data.addedCount || 0} 个新模型，共 ${data.totalCount || models.length} 个 · 重启 Codex 后生效`, 'success');
+      } catch (err) {
+        flash(`同步异常: ${err.message || err}`, 'error');
+      } finally {
+        syncCodex.textContent = originalText;
+        syncCodex.disabled = false;
+        delete syncCodex.dataset.busy;
+      }
+      return;
+    }
     const remove = e.target.closest('[data-pd-model-remove]');
     if (remove) {
       e.preventDefault();
@@ -30826,7 +30971,7 @@ function filterPdUsageSessionsByWindow(sessions = [], usageWindow = getPdUsageWi
 }
 
 function createPdUsageTotals() {
-  return { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0 };
+  return { input: 0, output: 0, reasoning: 0, cachedInput: 0, cacheRead: 0, cacheCreation: 0, total: 0, requests: null };
 }
 
 function addPdUsageTotals(totals, source = {}) {
@@ -30837,6 +30982,7 @@ function addPdUsageTotals(totals, source = {}) {
   totals.cacheRead += Number(source.cacheRead || 0);
   totals.cacheCreation += Number(source.cacheCreation || 0);
   totals.total += Number(source.total || 0);
+  if (source.requests != null) totals.requests = Number(totals.requests || 0) + Number(source.requests || 0);
   return totals;
 }
 
@@ -30852,8 +30998,8 @@ function aggregatePdUsageByModel(sessions = []) {
   for (const session of sessions || []) {
     const model = String(session?.model || 'unknown').trim() || 'unknown';
     const key = model.toLowerCase();
-    const cur = map.get(key) || { model, events: 0, firstAt: 0, lastAt: 0, totals: createPdUsageTotals() };
-    cur.events += 1;
+    const cur = map.get(key) || { model, requests: null, firstAt: 0, lastAt: 0, totals: createPdUsageTotals() };
+    if (session?.requests != null) cur.requests = Number(cur.requests || 0) + Number(session.requests || 0);
     addPdUsageTotals(cur.totals, session);
     const ms = getPdUsageSessionTime(session);
     if (ms) {
@@ -30908,6 +31054,9 @@ function renderPdUsageWindowControls(activeWindow, usageRefreshing) {
 function renderPdUsageModelFilter(models = [], activeModel = 'all') {
   if (!models.length) return '';
   const topModels = models.slice(0, 10);
+  const requestValues = models.map((model) => model.requests).filter((value) => value != null);
+  const allRequests = requestValues.length ? requestValues.reduce((sum, value) => sum + Number(value || 0), 0) : null;
+  const formatRequests = (value) => value == null ? '请求次数 —' : `${Number(value || 0)} 次请求`;
   return `
     <div class="pd-section">
       <div class="pd-section-title">
@@ -30915,11 +31064,11 @@ function renderPdUsageModelFilter(models = [], activeModel = 'all') {
         <span class="pd-section-meta">${escapeHtml(String(models.length))} 个模型</span>
       </div>
       <div class="pd-chip-row pd-chip-row-clickable">
-        <button type="button" class="pd-chip pd-chip-button ${activeModel === 'all' ? 'is-active' : ''}" data-pd-usage-model="all"><strong>全部模型</strong><em>${escapeHtml(String(models.reduce((a, m) => a + Number(m.events || 0), 0)))} 次</em></button>
+        <button type="button" class="pd-chip pd-chip-button ${activeModel === 'all' ? 'is-active' : ''}" data-pd-usage-model="all"><strong>全部模型</strong><em>${escapeHtml(formatRequests(allRequests))}</em></button>
         ${topModels.map((model) => `
           <button type="button" class="pd-chip pd-chip-button ${activeModel === model.model ? 'is-active' : ''}" data-pd-usage-model="${escapeHtml(model.model)}">
             <strong>${escapeHtml(model.model)}</strong>
-            <em>${escapeHtml(String(model.events || 0))} 次</em>
+            <em>${escapeHtml(formatRequests(model.requests))}</em>
           </button>`).join('')}
       </div>
     </div>`;
@@ -30934,6 +31083,7 @@ function renderPdUsageModelCostTable(models = [], totalTokens = 0) {
     <div class="pd-model-cost-table">
       <div class="pd-model-cost-row pd-model-cost-head">
         <div>模型</div>
+        <div>请求次数</div>
         <div>Token</div>
         <div>输入</div>
         <div>输出 / 推理</div>
@@ -30953,8 +31103,9 @@ function renderPdUsageModelCostTable(models = [], totalTokens = 0) {
           <div class="pd-model-cost-row ${pricingEntry?.fallback ? 'is-fallback' : ''} ${!pricingEntry ? 'is-missing' : ''}">
             <div class="pd-model-cost-name">
               <strong>${esc(pricingEntry?.fallback ? model.model : (pricingEntry?.pricing?.label || model.model))}</strong>
-              <span>${esc(model.model)} · ${esc(matchText)} · ${esc(String(model.events || 0))} 次</span>
+              <span>${esc(model.model)} · ${esc(matchText)}</span>
             </div>
+            <div><strong>${model.requests != null ? esc(String(Number(model.requests || 0))) : '—'}</strong><span>requests</span></div>
             <div><strong>${esc(fmtM(tokens))}</strong><span>${esc(String(pct))}%</span></div>
             <div><strong>${esc(fmtM(totals.input || 0))}</strong><span>input</span></div>
             <div><strong>${esc(fmtM(Number(totals.output || 0) + Number(totals.reasoning || 0)))}</strong><span>${totals.reasoning ? `reason ${esc(fmtM(totals.reasoning))}` : 'output'}</span></div>
@@ -31049,7 +31200,15 @@ function renderPdUsage(row) {
       </div>`;
   }
 
-  const allModelAgg = aggregatePdUsageByModel(matchedSessionsAll);
+  const providerModelRows = (Array.isArray(codexMetrics.providerModels) ? codexMetrics.providerModels : [])
+    .filter((entry) => matchProvider(entry?.provider))
+    .map((entry) => ({
+      ...entry,
+      model: String(entry?.model || 'unknown'),
+      requests: entry?.requests == null ? null : Number(entry.requests || 0),
+      totals: { ...createPdUsageTotals(), ...(entry?.totals || {}) },
+    }));
+  const allModelAgg = providerModelRows.length ? providerModelRows : aggregatePdUsageByModel(matchedSessionsAll);
   const requestedModel = state.providerDetail.usageModel || 'all';
   const modelExists = requestedModel === 'all' || allModelAgg.some((m) => m.model === requestedModel);
   const activeModel = modelExists ? requestedModel : 'all';
@@ -31057,23 +31216,25 @@ function renderPdUsage(row) {
   const matchedSessions = activeModel === 'all'
     ? matchedSessionsAll
     : matchedSessionsAll.filter((s) => String(s?.model || 'unknown') === activeModel);
-  const totals = matchedSessions.length ? aggregatePdUsageTotals(matchedSessions) : (matched?.totals || {});
+  const selectedModelAgg = activeModel === 'all' ? allModelAgg : allModelAgg.filter((entry) => entry.model === activeModel);
+  const totals = activeModel === 'all'
+    ? { ...(matched?.totals || aggregatePdUsageTotals(matchedSessionsAll)), requests: matched?.requests ?? aggregatePdUsageTotals(matchedSessionsAll).requests }
+    : selectedModelAgg.reduce((sum, entry) => addPdUsageTotals(sum, { ...(entry.totals || {}), requests: entry.requests }), createPdUsageTotals());
   const input = Number(totals.input || 0);
   const cached = Number(totals.cachedInput || totals.cacheRead || 0);
   const output = Number(totals.output || 0);
   const reasoning = Number(totals.reasoning || 0);
   const grandTotal = Number(totals.total || input + output + reasoning);
-  const events = matchedSessions.length || Number(matched?.events || 0);
+  const requestsAvailable = totals.requests != null;
+  const requests = Number(totals.requests || 0);
 
   // 总用量在同一时间窗口所有 Codex sessions 里占比
-  const allTotal = sessionsInWindow.length
-    ? aggregatePdUsageTotals(sessionsInWindow).total
-    : providers.reduce((a, p) => a + Number(p?.totals?.total || 0), 0);
+  const allTotal = Number(codexMetrics?.totals?.total || providers.reduce((a, p) => a + Number(p?.totals?.total || 0), 0));
   const sharePct = allTotal > 0 ? Math.round(grandTotal / allTotal * 1000) / 10 : 0;
 
   const fmtM = (v) => (typeof formatDashboardMetric === 'function') ? formatDashboardMetric(v) : String(v);
   const fmtUsd = (v) => (typeof formatDashboardUsd === 'function') ? formatDashboardUsd(v, { min: 2, max: 2 }) : ('$' + (v || 0).toFixed(2));
-  const modelAgg = aggregatePdUsageByModel(matchedSessions);
+  const modelAgg = selectedModelAgg;
   const costSummary = summarizePdUsageModelCosts(modelAgg);
   const pricingSub = costSummary.missing
     ? `${costSummary.exact} 精确 / ${costSummary.fallback} 估算 / ${costSummary.missing} 无价格`
@@ -31100,7 +31261,7 @@ function renderPdUsage(row) {
         <div class="pd-stat-mini">
           <div class="pd-stat-mini-label">总 Token</div>
           <div class="pd-stat-mini-value">${esc(fmtM(grandTotal))}</div>
-          <div class="pd-stat-mini-sub">${esc(String(events))} 次会话 · ${esc(usageWindow.label)}</div>
+          <div class="pd-stat-mini-sub">${requestsAvailable ? `${esc(String(requests))} 次请求` : '请求次数不可用'} · ${esc(usageWindow.label)}</div>
         </div>
         <div class="pd-stat-mini">
           <div class="pd-stat-mini-label">输入 / 缓存</div>

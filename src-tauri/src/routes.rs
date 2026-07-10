@@ -6289,6 +6289,9 @@ async fn dispatch(
         ("/api/provider/saved-models", "POST") => {
             crate::provider_models::save_provider_models(body)
         }
+        ("/api/codex/model-catalog/sync", "POST") => {
+            crate::codex_model_catalog::sync_model_catalog(body)
+        }
         ("/api/codex/sessions", "GET") => list_codex_sessions(query),
         ("/api/codex/session-detail", "GET") => get_codex_session_detail(query),
         ("/api/codex/resume", "POST") => resume_codex_session(body),

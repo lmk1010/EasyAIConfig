@@ -5245,6 +5245,7 @@ struct CodexUsageProviderStat {
     provider: String,
     totals: CodexUsageTotals,
     events: u64,
+    requests: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -5253,6 +5254,17 @@ struct CodexUsageModelStat {
     model: String,
     totals: CodexUsageTotals,
     events: u64,
+    requests: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexUsageProviderModelStat {
+    provider: String,
+    model: String,
+    totals: CodexUsageTotals,
+    events: u64,
+    requests: u64,
 }
 
 #[derive(Clone)]
@@ -5264,6 +5276,7 @@ struct CodexUsageSessionStat {
     totals: CodexUsageTotals,
     updated_at_ms: i64,
     updated_at: String,
+    requests: u64,
 }
 
 struct CodexUsageSessionFile {
@@ -5926,6 +5939,7 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
           "daily": Vec::<Value>::new(),
           "providers": Vec::<Value>::new(),
           "models": Vec::<Value>::new(),
+          "providerModels": Vec::<Value>::new(),
           "sessions": Vec::<Value>::new(),
         }));
     }
@@ -5934,6 +5948,7 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
     let mut by_day: BTreeMap<String, CodexUsageTotals> = BTreeMap::new();
     let mut by_provider: BTreeMap<String, CodexUsageProviderStat> = BTreeMap::new();
     let mut by_model: BTreeMap<String, CodexUsageModelStat> = BTreeMap::new();
+    let mut by_provider_model: BTreeMap<String, CodexUsageProviderModelStat> = BTreeMap::new();
     let mut by_session: BTreeMap<String, CodexUsageSessionStat> = BTreeMap::new();
 
     for file_entry in session_files {
@@ -6057,9 +6072,11 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
                         provider: provider_key.clone(),
                         totals: CodexUsageTotals::default(),
                         events: 0,
+                        requests: 0,
                     });
             add_codex_usage_totals(&mut provider_stat.totals, usage);
             provider_stat.events += 1;
+            provider_stat.requests = provider_stat.requests.saturating_add(1);
 
             let model_key = if current_model.trim().is_empty() {
                 "unknown".to_string()
@@ -6073,9 +6090,23 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
                         model: model_key.clone(),
                         totals: CodexUsageTotals::default(),
                         events: 0,
+                        requests: 0,
                     });
             add_codex_usage_totals(&mut model_stat.totals, usage);
             model_stat.events += 1;
+            model_stat.requests = model_stat.requests.saturating_add(1);
+
+            let provider_model_key = format!("{}\u{0}{}", provider_key, model_key);
+            let provider_model_stat = by_provider_model.entry(provider_model_key).or_insert_with(|| CodexUsageProviderModelStat {
+                provider: provider_key.clone(),
+                model: model_key.clone(),
+                totals: CodexUsageTotals::default(),
+                events: 0,
+                requests: 0,
+            });
+            add_codex_usage_totals(&mut provider_model_stat.totals, usage);
+            provider_model_stat.events = provider_model_stat.events.saturating_add(1);
+            provider_model_stat.requests = provider_model_stat.requests.saturating_add(1);
 
             let session_key = if session_id.trim().is_empty() {
                 file_path
@@ -6098,11 +6129,13 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
                         totals: CodexUsageTotals::default(),
                         updated_at_ms: ts_utc.timestamp_millis(),
                         updated_at: updated_at.clone(),
+                        requests: 0,
                     });
             if session_stat.model == "unknown" && !current_model.trim().is_empty() {
                 session_stat.model = current_model.clone();
             }
             add_codex_usage_totals(&mut session_stat.totals, usage);
+            session_stat.requests = session_stat.requests.saturating_add(1);
             if ts_utc.timestamp_millis() > session_stat.updated_at_ms {
                 session_stat.updated_at_ms = ts_utc.timestamp_millis();
                 session_stat.updated_at = updated_at;
@@ -6136,6 +6169,9 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
     let mut models = by_model.into_values().collect::<Vec<_>>();
     models.sort_by(|left, right| right.totals.total.cmp(&left.totals.total));
 
+    let mut provider_models = by_provider_model.into_values().collect::<Vec<_>>();
+    provider_models.sort_by(|left, right| right.totals.total.cmp(&left.totals.total));
+
     let mut sessions = by_session.into_values().collect::<Vec<_>>();
     sessions.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
     sessions.truncate(12);
@@ -6156,12 +6192,14 @@ pub(crate) fn get_codex_usage_metrics(query: &Value) -> Result<Value, String> {
       "daily": daily,
       "providers": providers,
       "models": models,
+      "providerModels": provider_models,
       "sessions": sessions.into_iter().map(|item| json!({
         "sessionId": item.session_id,
         "provider": item.provider,
         "model": item.model,
         "cwd": item.cwd,
         "updatedAt": item.updated_at,
+        "requests": item.requests,
         "input": item.totals.input,
         "cachedInput": item.totals.cached_input,
         "output": item.totals.output,

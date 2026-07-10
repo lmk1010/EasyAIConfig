@@ -76,6 +76,7 @@ import {
 import {
   listConfigDiagnostics,
 } from './lib/config-diagnostics.js';
+import { syncCodexModelCatalog } from './lib/codex-model-catalog.js';
 import {
   listSyncTargets,
   listSyncSnapshots,
@@ -1855,6 +1856,14 @@ export async function startServer(options = {}) {
         error: error instanceof Error ? error.message : String(error),
         diag,
       });
+    }
+  });
+
+  app.post('/api/codex/model-catalog/sync', async (req, res) => {
+    try {
+      ok(res, { data: await syncCodexModelCatalog(req.body || {}) });
+    } catch (error) {
+      fail(res, error);
     }
   });
 

@@ -374,6 +374,7 @@ pub(crate) fn compare_versions(left: &str, right: &str) -> Ordering {
 mod app_settings;
 mod claudecode_oauth_profiles;
 mod codex;
+mod codex_model_catalog;
 mod codex_oauth_usage;
 mod config;
 mod network;

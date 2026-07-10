@@ -1396,6 +1396,7 @@ async function readCodexUsageFromSqlite(codexHome, dayCount) {
   const byDay = new Map();
   const byProvider = new Map();
   const byModel = new Map();
+  const byProviderModel = new Map();
   const sessions = [];
 
   for (const row of rows) {
@@ -1414,13 +1415,18 @@ async function readCodexUsageFromSqlite(codexHome, dayCount) {
     if (!byDay.has(dayKey)) byDay.set(dayKey, createCodexUsageTotals());
     byDay.get(dayKey).total += totalTokens;
 
-    if (!byProvider.has(providerKey)) byProvider.set(providerKey, { provider: providerKey, totals: createCodexUsageTotals(), events: 0 });
+    if (!byProvider.has(providerKey)) byProvider.set(providerKey, { provider: providerKey, totals: createCodexUsageTotals(), events: 0, requests: null });
     byProvider.get(providerKey).totals.total += totalTokens;
     byProvider.get(providerKey).events += 1;
 
-    if (!byModel.has(modelKey)) byModel.set(modelKey, { model: modelKey, totals: createCodexUsageTotals(), events: 0 });
+    if (!byModel.has(modelKey)) byModel.set(modelKey, { model: modelKey, totals: createCodexUsageTotals(), events: 0, requests: null });
     byModel.get(modelKey).totals.total += totalTokens;
     byModel.get(modelKey).events += 1;
+
+    const providerModelKey = `${providerKey}\u0000${modelKey}`;
+    if (!byProviderModel.has(providerModelKey)) byProviderModel.set(providerModelKey, { provider: providerKey, model: modelKey, totals: createCodexUsageTotals(), events: 0, requests: null });
+    byProviderModel.get(providerModelKey).totals.total += totalTokens;
+    byProviderModel.get(providerModelKey).events += 1;
 
     sessions.push({
       sessionId: String(row?.id || '').trim(),
@@ -1428,6 +1434,7 @@ async function readCodexUsageFromSqlite(codexHome, dayCount) {
       model: modelKey,
       cwd: String(row?.cwd || '').trim(),
       updatedAt,
+      requests: null,
       input: 0,
       cachedInput: 0,
       output: 0,
@@ -1447,6 +1454,7 @@ async function readCodexUsageFromSqlite(codexHome, dayCount) {
     daily: [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, sum]) => ({ date, ...sum })),
     providers: [...byProvider.values()].sort((a, b) => b.totals.total - a.totals.total),
     models: [...byModel.values()].sort((a, b) => b.totals.total - a.totals.total),
+    providerModels: [...byProviderModel.values()].sort((a, b) => b.totals.total - a.totals.total),
     sessions: sessions.slice(0, 12),
   };
 }
@@ -1492,7 +1500,7 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
     return {
       ok: true, days: dayCount, source: '', sourceType: 'none',
       generatedAt: new Date().toISOString(),
-      totals: createCodexUsageTotals(), daily: [], providers: [], models: [], sessions: [],
+      totals: createCodexUsageTotals(), daily: [], providers: [], models: [], providerModels: [], sessions: [],
     };
   }
 
@@ -1503,6 +1511,7 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
   const byDay = new Map();
   const byProvider = new Map();
   const byModel = new Map();
+  const byProviderModel = new Map();
   const bySession = new Map();
 
   // Get session file list from Codex's own SQLite (for speed), fallback to directory walk
@@ -1561,6 +1570,7 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
           requestUsageSnapshots: new Map(),
           lastTotalUsage: null,
           lastUsageSignature: '',
+          requests: 0,
         });
       }
 
@@ -1611,28 +1621,39 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
       if (!byDay.has(dayKey)) byDay.set(dayKey, createCodexUsageTotals());
       addCodexUsageTotals(byDay.get(dayKey), usage);
 
-      if (!byProvider.has(providerKey)) byProvider.set(providerKey, { provider: providerKey, totals: createCodexUsageTotals(), events: 0 });
+      if (!byProvider.has(providerKey)) byProvider.set(providerKey, { provider: providerKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
       addCodexUsageTotals(byProvider.get(providerKey).totals, usage);
       byProvider.get(providerKey).events += 1;
+      byProvider.get(providerKey).requests += 1;
 
       const modelKey = currentModel || payload.info?.model || 'unknown';
-      if (!byModel.has(modelKey)) byModel.set(modelKey, { model: modelKey, totals: createCodexUsageTotals(), events: 0 });
+      if (!byModel.has(modelKey)) byModel.set(modelKey, { model: modelKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
       addCodexUsageTotals(byModel.get(modelKey).totals, usage);
       byModel.get(modelKey).events += 1;
+      byModel.get(modelKey).requests += 1;
+
+      const providerModelKey = `${providerKey}\u0000${modelKey}`;
+      if (!byProviderModel.has(providerModelKey)) byProviderModel.set(providerModelKey, { provider: providerKey, model: modelKey, totals: createCodexUsageTotals(), events: 0, requests: 0 });
+      addCodexUsageTotals(byProviderModel.get(providerModelKey).totals, usage);
+      byProviderModel.get(providerModelKey).events += 1;
+      byProviderModel.get(providerModelKey).requests += 1;
 
       addCodexUsageTotals(item.totals, usage);
+      item.requests += 1;
     }
   }
 
   const daily = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([date, sum]) => ({ date, ...sum }));
   const providers = [...byProvider.values()].sort((a, b) => b.totals.total - a.totals.total);
   const models = [...byModel.values()].sort((a, b) => b.totals.total - a.totals.total);
+  const providerModels = [...byProviderModel.values()].sort((a, b) => b.totals.total - a.totals.total);
   const sessions = [...bySession.values()].filter((item) => item.totals.total > 0).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 12).map((item) => ({
     sessionId: item.sessionId,
     provider: item.provider,
     model: item.model,
     cwd: item.cwd,
     updatedAt: item.updatedAt,
+    requests: item.requests,
     ...item.totals,
   }));
 
@@ -1646,6 +1667,7 @@ export async function getCodexUsageMetrics({ codexHome = defaultCodexHome(), day
     daily,
     providers,
     models,
+    providerModels,
     sessions,
   };
 
