@@ -27520,6 +27520,46 @@ function getProviderRouterSelectedRows(candidates = getProviderRouterRows(), too
   return candidates.filter((item) => item.canRoute && selected.has(item.routeKey));
 }
 
+function getProviderRouterGatewayRows() {
+  const rows = [
+    ...getProviderRouterRows('codex'),
+    ...getProviderRouterRows('claudecode'),
+  ];
+  const seen = new Set();
+  return rows.filter((item) => {
+    if (!item?.routeKey || seen.has(item.routeKey)) return false;
+    seen.add(item.routeKey);
+    return true;
+  });
+}
+
+function getProviderRouterGatewaySelectedKeySet(candidates = getProviderRouterGatewayRows()) {
+  const validKeys = new Set(candidates.filter((item) => item.canRoute).map((item) => item.routeKey));
+  const saved = Array.isArray(state.providerRouter.gatewaySelectedProviderKeys)
+    ? state.providerRouter.gatewaySelectedProviderKeys.filter((key) => validKeys.has(key))
+    : [];
+  return new Set(saved.length ? saved : [...validKeys]);
+}
+
+function setProviderRouterGatewaySelectedKeys(keySet, candidates = getProviderRouterGatewayRows()) {
+  const validKeys = new Set(candidates.filter((item) => item.canRoute).map((item) => item.routeKey));
+  state.providerRouter.gatewaySelectedProviderKeys = [...keySet].filter((key) => validKeys.has(key));
+  const selected = getProviderRouterGatewaySelectedKeySet(candidates);
+  if (!selected.has(state.providerRouter.gatewayPrimaryProviderKey)) {
+    state.providerRouter.gatewayPrimaryProviderKey = candidates.find((item) => item.canRoute && selected.has(item.routeKey))?.routeKey || '';
+  }
+}
+
+function getProviderRouterGatewayPrimaryRow(candidates = getProviderRouterGatewayRows()) {
+  const selected = getProviderRouterGatewaySelectedKeySet(candidates);
+  const saved = String(state.providerRouter.gatewayPrimaryProviderKey || '').trim();
+  const primary = candidates.find((item) => item.routeKey === saved && item.canRoute && selected.has(item.routeKey))
+    || candidates.find((item) => item.canRoute && selected.has(item.routeKey))
+    || null;
+  state.providerRouter.gatewayPrimaryProviderKey = primary?.routeKey || '';
+  return primary;
+}
+
 function getProviderRouterOrigin(status = state.providerRouter.status || {}) {
   const explicit = String(status.originUrl || status.anthropicBaseUrl || '').trim();
   if (explicit) return explicit.replace(/\/+$/, '');
@@ -27542,8 +27582,13 @@ function getProviderRouterCopyText(kind = 'base') {
   const activeTool = getProviderRouterActiveTool();
   const codexBase = getProviderRouterEndpoint('codex');
   const claudeBase = getProviderRouterEndpoint('claudecode');
+  const origin = getProviderRouterOrigin();
   const healthUrl = `${getProviderRouterOrigin()}/_easyai/health`;
   if (kind === 'api-key') return PROVIDER_ROUTER_CLIENT_KEY;
+  if (kind === 'router-origin') return origin;
+  if (kind === 'protocol-openai-responses') return `${origin}/v1/responses`;
+  if (kind === 'protocol-openai-chat') return `${origin}/v1/chat/completions`;
+  if (kind === 'protocol-anthropic') return `${origin}/v1/messages`;
   const baseMatch = String(kind || '').match(/^(.+)-base$/);
   if (baseMatch) return getProviderRouterEndpoint(baseMatch[1]);
   const envMatch = String(kind || '').match(/^(.+)-env$/);
@@ -27687,15 +27732,13 @@ async function probeProviderRouterProxy(options = {}) {
 }
 
 async function actionProviderRouterStart() {
-  const tool = getProviderRouterActiveTool();
-  const candidates = getProviderRouterRows(tool);
-  const primary = getProviderRouterPrimaryRow(candidates, tool);
-  const selectedRows = getProviderRouterSelectedRows(candidates, tool);
+  const tool = 'codex';
+  const candidates = getProviderRouterGatewayRows();
+  const primary = getProviderRouterGatewayPrimaryRow(candidates);
+  const selected = getProviderRouterGatewaySelectedKeySet(candidates);
+  const selectedRows = candidates.filter((item) => item.canRoute && selected.has(item.routeKey));
   if (!primary || !selectedRows.length) {
-    const message = isProviderRouterAnthropicTool(tool)
-      ? `没有可直接路由的 ${providerRouterToolLabel(tool)} API Key Provider；请在 Claude Provider 里保存明文 API Key 或 Auth Token`
-      : `没有可用于路由的 ${providerRouterToolLabel(tool)} OpenAI-compatible API Key Provider`;
-    flash(message, 'error');
+    flash('没有可用于统一网关的 API Key Provider', 'error');
     return;
   }
   state.providerRouter.loading = true;
@@ -27755,9 +27798,8 @@ async function actionProviderRouterStart() {
     if (res?.ok && res.data) {
       state.providerRouter.status = res.data;
       state.providerRouter.lastFetchedAt = Date.now();
-      const label = providerRouterToolLabel(tool);
       const noProxyHint = res.data.localRouterNoProxyAdded ? '；已写入 NO_PROXY，当前已打开的 Codex 进程需要重启后生效' : '';
-      flash(res.data.portFallback ? `${label} 网关已启动，默认端口被占用，已使用自动端口${noProxyHint}` : `${label} 本地网关已启动${noProxyHint}`, 'success');
+      flash(res.data.portFallback ? `统一网关已启动，默认端口被占用，已使用自动端口${noProxyHint}` : `统一网关已启动${noProxyHint}`, 'success');
     } else {
       state.providerRouter.error = res?.error || '启动本地路由失败';
       flash(state.providerRouter.error, 'error');
@@ -27993,7 +28035,6 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
   const esc = escapeHtml;
   const status = state.providerRouter.status || {};
   const stats = status.stats || {};
-  const providerStats = Array.isArray(stats.providers) ? stats.providers : [];
   const logData = state.providerRouter.logData && typeof state.providerRouter.logData === 'object'
     ? state.providerRouter.logData
     : null;
@@ -28049,20 +28090,6 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
   const routerLogPageSizeOptions = PROVIDER_ROUTER_LOG_PAGE_SIZE_OPTIONS
     .map((value) => `<option value="${esc(value)}" ${logPageSize === value ? 'selected' : ''}>${esc(value)} 条</option>`)
     .join('');
-  const statsTrafficLabel = [
-    Number(stats.requestBytes || 0) ? `请求 ${formatBytes(stats.requestBytes)}` : '',
-    Number(stats.responseBytes || 0) ? `响应 ${formatBytes(stats.responseBytes)}` : '',
-  ].filter(Boolean).join(' / ') || '暂无流量';
-  const statsTokenLabel = [
-    Number(stats.inputTokens || 0) ? `输入 ${formatProviderRouterTokens(stats.inputTokens)}` : '',
-    Number(stats.cachedInputTokens || 0) ? `缓存 ${formatProviderRouterTokens(stats.cachedInputTokens)}` : '',
-    Number(stats.outputTokens || 0) ? `输出 ${formatProviderRouterTokens(stats.outputTokens)}` : '',
-  ].filter(Boolean).join(' / ') || '暂无 token';
-  const circuit = stats.circuit || {};
-  const circuitEnabled = status.circuitBreakerEnabled !== false && circuit.enabled !== false;
-  const circuitLabel = circuitEnabled
-    ? `open ${Number(circuit.open || 0)} / half ${Number(circuit.halfOpen || 0)}`
-    : '未启用';
   const routerLogCountText = hasPagedLogData
     ? `第 ${currentLogPage} / ${logPageCount} 页 · 共 ${totalLogCount} 条`
     : `${filteredRouterLogs.length} / ${routerLogs.length} 条`;
@@ -28071,21 +28098,56 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
     : state.providerRouter.lastFetchedAt
     ? `已刷新 ${formatRelativeTime(new Date(state.providerRouter.lastFetchedAt).toISOString())}`
     : '可刷新';
+  const chartSource = [...filteredRouterLogs]
+    .map((item) => ({ ...item, chartAt: Number(item.atMs || Date.parse(item.at || '')) || 0 }))
+    .filter((item) => item.chartAt > 0)
+    .sort((a, b) => a.chartAt - b.chartAt);
+  const chartBucketCount = Math.min(18, Math.max(8, chartSource.length || 8));
+  const chartStart = chartSource[0]?.chartAt || Date.now();
+  const chartEnd = chartSource[chartSource.length - 1]?.chartAt || chartStart;
+  const chartSpan = Math.max(1, chartEnd - chartStart);
+  const chartBuckets = Array.from({ length: chartBucketCount }, () => ({ total: 0, failed: 0 }));
+  chartSource.forEach((item) => {
+    const bucketIndex = Math.min(chartBucketCount - 1, Math.floor(((item.chartAt - chartStart) / chartSpan) * chartBucketCount));
+    chartBuckets[bucketIndex].total += 1;
+    if (!item.success) chartBuckets[bucketIndex].failed += 1;
+  });
+  const chartMax = Math.max(1, ...chartBuckets.map((item) => item.total));
+  const chartBars = chartBuckets.map((item, index) => {
+    const barWidth = 100 / chartBucketCount;
+    const height = item.total ? Math.max(5, (item.total / chartMax) * 76) : 2;
+    const failedHeight = item.failed ? Math.max(3, (item.failed / chartMax) * 76) : 0;
+    const x = index * barWidth + barWidth * 0.16;
+    const width = barWidth * 0.68;
+    return `<g><rect class="pd-router-chart-bar" x="${x.toFixed(2)}" y="${(88 - height).toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" rx="1.6" />${failedHeight ? `<rect class="pd-router-chart-failed" x="${x.toFixed(2)}" y="${(88 - failedHeight).toFixed(2)}" width="${width.toFixed(2)}" height="${failedHeight.toFixed(2)}" rx="1.6" />` : ''}</g>`;
+  }).join('');
+  const chartSuccesses = chartSource.filter((item) => item.success).length;
+  const chartAverageLatency = chartSource.length
+    ? Math.round(chartSource.reduce((sum, item) => sum + (Number(item.latencyMs) || 0), 0) / chartSource.length)
+    : 0;
+  const chartTimeLabel = chartSource.length > 1
+    ? `${new Date(chartStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — ${new Date(chartEnd).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : '等待请求数据';
   const routerLogRows = filteredRouterLogs.map((item) => {
     const statusText = item.status == null ? 'ERR' : String(item.status);
     const tone = item.success ? 'is-ok' : item.retry ? 'is-warn' : 'is-bad';
     const providerText = providerNames.get(item.providerKey) || item.providerKey || '-';
     const latencyText = item.latencyMs == null ? '-' : `${item.latencyMs}ms`;
-    const trafficText = formatProviderRouterTraffic(item);
-    const usageText = getProviderRouterLogUsageParts(item).join(' / ');
-    const transformText = getProviderRouterLogTransformParts(item).join(' · ');
+    const ttftText = item.ttftMs == null ? '-' : `${item.ttftMs}ms`;
+    const inputTokens = formatProviderRouterTokens(Number(item.inputTokens || 0));
+    const cachedTokens = formatProviderRouterTokens(Number(item.cachedInputTokens || 0));
+    const outputTokens = formatProviderRouterTokens(Number(item.outputTokens || 0));
     const errorText = item.error ? String(item.error) : (item.retry ? '已尝试切换下一个 Provider' : '');
     return `
       <div class="pd-router-log-row ${tone}">
-        <span>${esc(item.at ? formatRelativeTime(item.at) : '-')}</span>
-        <code>${esc(item.method || '-')} ${esc(item.target || '-')}</code>
-        <strong>${esc(providerText)}</strong>
-        <em>${esc(statusText)} · ${esc(latencyText)}${trafficText ? ` · ${esc(trafficText)}` : ''}${usageText ? ` · ${esc(usageText)}` : ''}${transformText ? ` · ${esc(transformText)}` : ''}${item.retry ? ' · retry' : ''}${errorText ? ` · ${esc(errorText)}` : ''}</em>
+        <span class="pd-router-log-time"><strong>${esc(item.at ? new Date(item.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-')}</strong><em>${esc(item.at ? formatRelativeTime(item.at) : '')}</em></span>
+        <code class="pd-router-log-request"><strong>${esc(item.method || '-')}</strong><span>${esc(item.target || '-')}</span></code>
+        <strong class="pd-router-log-provider">${esc(providerText)}</strong>
+        <span class="pd-router-log-token"><strong>${esc(inputTokens)}</strong><em>输入</em></span>
+        <span class="pd-router-log-token"><strong>${esc(cachedTokens)}</strong><em>缓存</em></span>
+        <span class="pd-router-log-token"><strong>${esc(outputTokens)}</strong><em>输出</em></span>
+        <span class="pd-router-log-latency"><strong>${esc(latencyText)}</strong><em>TTFT ${esc(ttftText)}</em></span>
+        <span class="pd-router-log-result"><strong>${esc(statusText)}</strong><em>${item.retry ? 'retry' : item.success ? '成功' : '失败'}${errorText ? ` · ${esc(errorText)}` : ''}</em></span>
       </div>`;
   }).join('');
   const routerLogEmpty = hasAnyRouterLogRecord
@@ -28096,35 +28158,15 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
   const clearBeforeValue = esc(state.providerRouter.logClearBefore || '');
   return `
     <div class="pd-router-panel" data-provider-router-panel="stats">
-      <div class="pd-router-stat-summary">
-        <span><strong>${esc(String(stats.requests || 0))}</strong><em>累计请求</em></span>
-        <span><strong>${esc(statsTokenLabel)}</strong><em>输入 / 缓存 / 输出</em></span>
-        <span><strong>${esc(statsTrafficLabel)}</strong><em>请求 / 响应流量</em></span>
-        <span><strong>${esc(circuitLabel)}</strong><em>Circuit breaker</em></span>
-        <span><strong>${esc(String(totalLogCount || routerLogs.length))}</strong><em>日志记录</em></span>
-      </div>
-      ${providerStats.length ? `
-        <div class="pd-router-provider-stats">
-          <div class="pd-router-stat-head">
-            <span>Provider</span>
-            <span>状态</span>
-            <span>请求</span>
-            <span>Token / 流量</span>
-          </div>
-          ${providerStats.map((item) => {
-            const itemTraffic = formatProviderRouterTraffic(item);
-            const itemUsage = getProviderRouterLogUsageParts(item).join(' / ');
-            const circuitMeta = getProviderRouterCircuitMeta(item);
-            const healthText = item.health ? ` · ${item.health}` : '';
-            return `
-              <div class="pd-router-stat-row">
-                <span>${esc(providerNames.get(item.providerKey) || item.providerKey || '-')}</span>
-                <code class="${esc(circuitMeta.tone)}">${esc(String(item.lastStatus || '-'))} · ${esc(circuitMeta.label)}</code>
-                <em>请求 ${esc(String(item.requests || 0))} · 成功 ${esc(String(item.successes || 0))} · 失败 ${esc(String(item.failures || 0))}${esc(healthText)}${item.lastError ? ` · ${esc(item.lastError)}` : ''}</em>
-                <em>${esc(itemUsage || '暂无 token')}${itemTraffic ? ` · ${esc(itemTraffic)}` : ''}</em>
-              </div>`;
-          }).join('')}
-        </div>` : '<div class="pd-router-stats-empty">暂无 Provider 统计</div>'}
+      <section class="pd-router-log-chart">
+        <div class="pd-router-log-chart-head">
+          <div><strong>请求趋势</strong><span>${esc(chartTimeLabel)} · 当前筛选结果</span></div>
+          <div class="pd-router-log-chart-legend"><span><i></i>${esc(String(chartSource.length))} 请求</span><span><i></i>${esc(String(chartSuccesses))} 成功</span><span><i></i>${esc(String(chartAverageLatency))}ms 平均耗时</span></div>
+        </div>
+        ${chartSource.length
+          ? `<svg viewBox="0 0 100 92" preserveAspectRatio="none" role="img" aria-label="请求趋势图"><line x1="0" y1="88" x2="100" y2="88" />${chartBars}</svg>`
+          : '<div class="pd-router-log-chart-empty">开启网关并发起请求后，这里会显示实时趋势</div>'}
+      </section>
       <div class="pd-router-log-block">
         <div class="pd-router-log-head">
           <div>
@@ -28134,7 +28176,7 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
           <button type="button" class="pd-router-log-refresh" data-provider-router-refresh ${(loading || logLoading) ? 'disabled' : ''}>刷新</button>
         </div>
         ${logError ? `<div class="pd-remote-alert is-bad">${esc(logError)}</div>` : ''}
-        <div class="pd-router-log-toolbar">
+        <div class="pd-router-log-toolbar" role="search">
           <label class="pd-router-log-search">
             <span aria-hidden="true">⌕</span>
             <input type="search" value="${esc(logFilter.query)}" aria-label="搜索日志" placeholder="搜索路径、Provider 或错误" data-provider-router-log-search ${hasAnyRouterLogRecord ? '' : 'disabled'} />
@@ -28162,6 +28204,10 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
               <span>时间</span>
               <span>请求</span>
               <span>Provider</span>
+              <span>输入</span>
+              <span>缓存</span>
+              <span>输出</span>
+              <span>耗时 / TTFT</span>
               <span>结果</span>
             </div>
             ${routerLogRows}
@@ -28346,15 +28392,19 @@ function ensureProviderRouterEvents() {
     const primaryBtn = target.closest('[data-provider-router-primary]');
     if (primaryBtn) {
       const routeKey = primaryBtn.getAttribute('data-provider-router-primary') || '';
-      const tool = getProviderRouterActiveTool();
-      const candidates = getProviderRouterRows(tool);
-      const selected = getProviderRouterSelectedKeySet(candidates, tool);
+      const candidates = getProviderRouterGatewayRows();
+      const selected = getProviderRouterGatewaySelectedKeySet(candidates);
       if (!selected.has(routeKey)) {
         selected.add(routeKey);
-        setProviderRouterSelectedKeys(selected, candidates);
+        setProviderRouterGatewaySelectedKeys(selected, candidates);
       }
-      setProviderRouterPrimaryKey(routeKey, tool);
+      state.providerRouter.gatewayPrimaryProviderKey = routeKey;
       renderProviderRouterPage();
+      return;
+    }
+    if (target.closest('[data-provider-router-power]')) {
+      if (state.providerRouter.status?.running) void actionProviderRouterStop();
+      else void actionProviderRouterStart();
       return;
     }
     if (target.closest('[data-provider-router-quick-start]')) { void actionProviderRouterQuickStart(); return; }
@@ -28435,12 +28485,11 @@ function ensureProviderRouterEvents() {
     }
     if (target instanceof HTMLInputElement && target.matches('[data-provider-router-primary-select]')) {
       const routeKey = target.getAttribute('data-provider-router-primary-select') || '';
-      const tool = getProviderRouterActiveTool();
-      const candidates = getProviderRouterRows(tool);
-      const selected = getProviderRouterSelectedKeySet(candidates, tool);
+      const candidates = getProviderRouterGatewayRows();
+      const selected = getProviderRouterGatewaySelectedKeySet(candidates);
       selected.add(routeKey);
-      setProviderRouterSelectedKeys(selected, candidates, tool);
-      setProviderRouterPrimaryKey(routeKey, tool);
+      setProviderRouterGatewaySelectedKeys(selected, candidates);
+      state.providerRouter.gatewayPrimaryProviderKey = routeKey;
       renderProviderRouterPage();
       return;
     }
@@ -28513,16 +28562,17 @@ function ensureProviderRouterEvents() {
       return;
     }
     if (target instanceof HTMLInputElement && target.matches('[data-provider-router-weight]')) {
-      setProviderRouterWeight(target.getAttribute('data-provider-router-weight') || '', target.value, getProviderRouterActiveTool());
+      const routeKey = target.getAttribute('data-provider-router-weight') || '';
+      const row = getProviderRouterGatewayRows().find((item) => item.routeKey === routeKey);
+      setProviderRouterWeight(routeKey, target.value, row?.tool || getProviderRouterActiveTool());
       renderProviderRouterPage();
       return;
     }
     if (!(target instanceof HTMLInputElement)) return;
     if (!target.matches('[data-provider-router-toggle]')) return;
     const routeKey = target.getAttribute('data-provider-router-toggle') || '';
-    const tool = getProviderRouterActiveTool();
-    const candidates = getProviderRouterRows(tool);
-    const selected = getProviderRouterSelectedKeySet(candidates, tool);
+    const candidates = getProviderRouterGatewayRows();
+    const selected = getProviderRouterGatewaySelectedKeySet(candidates);
     if (target.checked) selected.add(routeKey);
     else selected.delete(routeKey);
     if (!selected.size) {
@@ -28530,7 +28580,7 @@ function ensureProviderRouterEvents() {
       selected.add(routeKey);
       flash('路由池至少要保留一个 Provider', 'warning');
     }
-    setProviderRouterSelectedKeys(selected, candidates, tool);
+    setProviderRouterGatewaySelectedKeys(selected, candidates);
     renderProviderRouterPage();
   });
   document.addEventListener('input', (e) => {
@@ -28627,15 +28677,13 @@ function renderProviderRouterPage() {
     const rows = getProviderRouterRows(tool);
     return [tool, { total: rows.length, routable: rows.filter((item) => item.canRoute).length }];
   }));
-  const candidates = getProviderRouterRows(activeTool);
-  const primary = getProviderRouterPrimaryRow(candidates, activeTool);
-  const selected = getProviderRouterSelectedKeySet(candidates, activeTool);
-  const selectedRows = getProviderRouterSelectedRows(candidates, activeTool);
+  const candidates = getProviderRouterGatewayRows();
+  const primary = getProviderRouterGatewayPrimaryRow(candidates);
+  const selected = getProviderRouterGatewaySelectedKeySet(candidates);
+  const selectedRows = candidates.filter((item) => item.canRoute && selected.has(item.routeKey));
   const activeKeys = Array.isArray(status.providerKeys) ? status.providerKeys : [];
   const startedAt = status.startedAt ? formatRelativeTime(status.startedAt) : '';
   const activeStatusTool = normalizeProviderRouterTool(status.tool || activeTool);
-  const runningDifferentTool = running && activeStatusTool !== activeTool;
-  const currentBaseUrl = getProviderRouterEndpoint(activeTool, status);
   const originUrl = getProviderRouterOrigin(status);
   const strategyOptions = PROVIDER_ROUTER_STRATEGIES.map((item) => (
     `<option value="${esc(item.value)}" ${item.value === activeRouteStrategy ? 'selected' : ''}>${esc(item.label)}</option>`
@@ -28647,7 +28695,7 @@ function renderProviderRouterPage() {
     const balance = getProviderRouterBalanceMeta(item);
     const balancePct = providerRouterFiniteNumber(balance.percent);
     const balanceStyle = balancePct == null ? '' : ` style="--pd-router-balance-fill:${Math.max(0, Math.min(100, balancePct)).toFixed(1)}%"`;
-    const weight = getProviderRouterWeight(item.routeKey, activeTool);
+    const weight = getProviderRouterWeight(item.routeKey, item.tool);
     const health = item.health || {};
     const healthText = health.loading ? '检测中' : health.ok ? '可用' : health.checked ? '失败' : '未检测';
     const authText = isProviderRouterAnthropicTool(item.tool)
@@ -28725,19 +28773,15 @@ function renderProviderRouterPage() {
           ? '点击测试反代'
           : '启动后自动探测';
   const statusToolLabel = running ? providerRouterToolLabel(activeStatusTool) : toolLabel;
-  const statusScopeLabel = running ? `${statusToolLabel} 网关` : '本地网关';
+  const statusScopeLabel = '本地网关';
   const runningText = running
     ? `${statusToolLabel} 网关 ${routerStateText}`
     : '网关未启动';
   const selectedSummary = `${selectedRows.length} / ${candidates.filter((item) => item.canRoute).length}`;
-  const statusNote = runningDifferentTool
-    ? `当前运行的是 ${providerRouterToolLabel(activeStatusTool)} 网关，切换到 ${toolLabel} 会自动重启监听。`
-    : (startedAt ? `启动于 ${startedAt}` : '本机监听 127.0.0.1');
+  const statusNote = startedAt ? `启动于 ${startedAt}` : '本机监听 127.0.0.1';
   const startActionText = loading
     ? '处理中'
-    : runningDifferentTool
-      ? '切换并重启网关'
-      : running
+    : running
         ? '重启网关'
         : '启动网关';
   const legacyTabMap = { overview: 'gateway', routes: 'gateway', strategy: 'gateway', clients: 'gateway', runtime: 'gateway', rectifier: 'gateway', stats: 'logs' };
@@ -28923,10 +28967,6 @@ function renderProviderRouterPage() {
         </button>
       </div>
     </section>`;
-  const toolSelectOptions = tools.map((tool) => {
-    const count = toolCounts[tool] || { total: 0, routable: 0 };
-    return `<option value="${esc(tool)}" ${tool === activeTool ? 'selected' : ''}>${esc(providerRouterToolLabel(tool))} · ${esc(String(count.routable))} 条线路</option>`;
-  }).join('');
   const simpleProviderRows = candidates.map((item) => {
     const isPrimary = item.routeKey === primary?.routeKey;
     const isSelected = selected.has(item.routeKey);
@@ -28969,13 +29009,22 @@ function renderProviderRouterPage() {
         <div class="pd-router-hero-main">
           <div class="pd-router-hero-status"><i></i><span>${esc(statusScopeLabel)}</span><strong>${esc(routerStateText)}</strong></div>
           <h2>${running ? '本地网关正在运行' : '开启本地自动路由'}</h2>
-          <p>${running ? `${esc(probeDetail)}，请求会按当前线路池自动切换。` : '选择客户端和线路，一次启动即可接入本地网关。'}</p>
-          <div class="pd-router-hero-endpoint"><span>${esc(providerRouterProtocolLabel(activeTool))}</span><code>${esc(currentBaseUrl)}</code><button type="button" data-provider-router-copy="${esc(`${activeTool}-base`)}">复制</button></div>
+          <p>${running ? `${esc(probeDetail)}，三个协议入口共用当前线路池。` : '选择参与反代的线路后，开启一个统一的本地网关。'}</p>
+          <div class="pd-router-hero-addresses">
+            <div class="pd-router-origin"><span>网关前缀</span><code>${esc(originUrl)}</code><button type="button" data-provider-router-copy="router-origin">复制</button></div>
+            <div class="pd-router-protocol-paths" aria-label="协议路径">
+              <button type="button" data-provider-router-copy="protocol-openai-responses"><span>Responses</span><code>/v1/responses</code></button>
+              <button type="button" data-provider-router-copy="protocol-openai-chat"><span>Chat</span><code>/v1/chat/completions</code></button>
+              <button type="button" data-provider-router-copy="protocol-anthropic"><span>Anthropic</span><code>/v1/messages</code></button>
+            </div>
+          </div>
         </div>
         <div class="pd-router-hero-actions">
-          <div class="pd-router-hero-client"><span>当前客户端</span><div class="select-wrap"><select aria-label="当前客户端" data-provider-router-tool-select>${toolSelectOptions}</select></div></div>
-          <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-provider-router-quick-start ${loading || !selectedRows.length ? 'disabled' : ''}>${loading ? '处理中' : running ? '应用并重启' : '开启网关'}</button>
-          ${running ? '<button type="button" class="pd-router-stop-link" data-provider-router-stop>停止网关</button>' : ''}
+          <button type="button" class="pd-router-power ${running ? 'is-on' : ''} ${loading ? 'is-busy' : ''}" data-provider-router-power aria-label="${running ? '关闭网关' : '开启网关'}" title="${running ? '关闭网关' : '开启网关'}" ${loading || (!running && !selectedRows.length) ? 'disabled' : ''}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8v8.4M6.5 6.7a8 8 0 1 0 11 0"/></svg>
+          </button>
+          <strong>${loading ? '处理中' : running ? '关闭网关' : '开启网关'}</strong>
+          <span>${esc(selectedRows.length)} 条线路参与反代</span>
         </div>
         <div class="pd-router-hero-metrics">
           <div><span>线路</span><strong>${esc(selectedSummary)}</strong><em>已选 / 可用</em></div>
@@ -28988,7 +29037,7 @@ function renderProviderRouterPage() {
     <div class="pd-router-workspace">
       <section class="pd-router-routes-section">
         <div class="pd-router-section-title">
-          <div><span>ROUTES</span><h3>${esc(toolLabel)} 线路</h3><p>勾选参与路由的 Provider，并指定一个主线路。</p></div>
+          <div><span>ROUTES</span><h3>统一线路池</h3><p>勾选参与反代的 Codex 与 Claude API Provider，并指定一个主线路。</p></div>
           <details class="pd-router-more-menu">
             <summary aria-label="更多操作" title="更多操作">•••</summary>
             <div>
@@ -29000,7 +29049,7 @@ function renderProviderRouterPage() {
           </details>
         </div>
         <div class="pd-router-simple-providers">
-          ${simpleProviderRows || `<div class="pd-router-console-empty"><strong>还没有可用线路</strong><span>先到快速配置添加 ${esc(toolLabel)} Provider。</span></div>`}
+          ${simpleProviderRows || '<div class="pd-router-console-empty"><strong>还没有可用线路</strong><span>先到快速配置添加 Codex 或 Claude API Provider。</span></div>'}
         </div>
       </section>
 

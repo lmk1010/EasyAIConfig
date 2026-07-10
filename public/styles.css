@@ -43831,9 +43831,13 @@ body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle:hover sp
   transform: translateY(-1px);
 }
 body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle input:checked + span {
-  border-color: rgba(111,147,247,0.68);
-  background: linear-gradient(145deg, rgba(111,147,247,0.38), rgba(73,112,218,0.2));
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 5px 14px rgba(65,105,210,0.2);
+  border-color: rgba(111,147,247,0.62);
+  background: linear-gradient(145deg, rgba(255,255,255,0.14), rgba(255,255,255,0.045));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 4px 12px rgba(0,0,0,0.08);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle input:checked + span {
+  background: linear-gradient(145deg, rgba(255,255,255,0.94), rgba(226,232,240,0.58));
+  box-shadow: inset 0 1px 0 #fff, 0 4px 12px rgba(74,93,128,0.1);
 }
 body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle input:checked + span::after {
   content: "";
@@ -43842,7 +43846,7 @@ body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle input:ch
   top: 2px;
   width: 5px;
   height: 9px;
-  border: solid rgba(255,255,255,0.96);
+  border: solid #6f93f7;
   border-width: 0 1.8px 1.8px 0;
   transform: rotate(43deg);
 }
@@ -44207,5 +44211,499 @@ body[data-page="providerRouter"] .shell-v2 .pd-router-log-pagination {
 @media (max-width: 620px) {
   body[data-page="providerRouter"] .shell-v2 .provider-router-page {
     padding-top: 26px;
+  }
+}
+
+/* Provider Router unified gateway control */
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-card {
+  grid-template-columns: minmax(0, 1fr) 132px;
+  column-gap: 30px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-main {
+  gap: 6px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-addresses {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  margin-top: 5px;
+  padding-top: 11px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-hero-addresses {
+  border-top-color: rgba(15,23,42,0.07);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 25px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin > span {
+  color: var(--s2-faint);
+  font-size: 0.54rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--s2-text);
+  font-size: 0.63rem;
+  white-space: nowrap;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin > button {
+  border: 0;
+  padding: 3px 0 3px 8px;
+  background: transparent;
+  color: #6f93f7;
+  font-size: 0.55rem;
+  font-weight: 720;
+  cursor: pointer;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding-left: 68px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths > button {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 8px;
+  background: rgba(255,255,255,0.028);
+  color: var(--s2-muted);
+  cursor: pointer;
+  text-align: left;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths > button {
+  background: rgba(15,23,42,0.025);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths > button:hover {
+  background: rgba(91,140,255,0.08);
+  color: var(--s2-text);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths span {
+  flex: 0 0 auto;
+  color: #7798f3;
+  font-size: 0.51rem;
+  font-weight: 740;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: inherit;
+  font-size: 0.53rem;
+  white-space: nowrap;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions {
+  align-self: center;
+  width: 132px;
+  display: grid;
+  grid-template-rows: auto auto auto;
+  justify-items: center;
+  gap: 7px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power {
+  position: relative;
+  width: 58px;
+  min-width: 58px;
+  height: 58px;
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(111,147,247,0.34);
+  border-radius: 50%;
+  padding: 0;
+  background: linear-gradient(145deg, rgba(255,255,255,0.16), rgba(91,140,255,0.08));
+  color: #7397f5;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 9px 24px rgba(51,91,193,0.13);
+  backdrop-filter: blur(18px) saturate(155%);
+  -webkit-backdrop-filter: blur(18px) saturate(155%);
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-power {
+  border-color: rgba(70,111,224,0.24);
+  background: linear-gradient(145deg, rgba(255,255,255,0.96), rgba(224,232,255,0.72));
+  box-shadow: inset 0 1px 0 #fff, 0 9px 24px rgba(74,93,128,0.14);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: rgba(111,147,247,0.62);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.38), 0 13px 28px rgba(51,91,193,0.2);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power svg {
+  width: 25px;
+  height: 25px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-on {
+  border-color: rgba(52,211,153,0.48);
+  background: linear-gradient(145deg, rgba(52,211,153,0.22), rgba(16,185,129,0.08));
+  color: #42cf9e;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 9px 26px rgba(16,185,129,0.17);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power:disabled {
+  opacity: 0.42;
+  cursor: default;
+  filter: grayscale(0.15);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions > strong {
+  color: var(--s2-text);
+  font-size: 0.62rem;
+  font-weight: 740;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions > span {
+  color: var(--s2-faint);
+  font-size: 0.52rem;
+  text-align: center;
+}
+@media (max-width: 900px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-hero-card {
+    grid-template-columns: minmax(0, 1fr) 110px;
+  }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions { width: 110px; }
+}
+@media (max-width: 680px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-hero-card {
+    grid-template-columns: 1fr;
+  }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions {
+    width: 100%;
+    grid-template-columns: auto auto 1fr;
+    grid-template-rows: auto;
+    justify-items: start;
+    align-items: center;
+  }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-power {
+    width: 46px;
+    min-width: 46px;
+    height: 46px;
+    min-height: 46px;
+  }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Provider Router focused log workspace */
+body[data-page="providerRouter"] .shell-v2 .pd-router-panel[data-provider-router-panel="stats"] {
+  display: grid;
+  gap: 18px;
+  padding-top: 18px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart {
+  min-height: 176px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(91,140,255,0.055), rgba(255,255,255,0.018));
+  overflow: hidden;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart {
+  border-color: rgba(15,23,42,0.07);
+  background: linear-gradient(145deg, rgba(91,140,255,0.055), rgba(255,255,255,0.74));
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-head > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-head strong {
+  color: var(--s2-text);
+  font-size: 0.7rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-head span {
+  color: var(--s2-muted);
+  font-size: 0.55rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-legend i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #7ea0f8;
+  box-shadow: 0 0 0 3px rgba(91,140,255,0.1);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-legend span:nth-child(2) i { background: #61b89a; box-shadow: 0 0 0 3px rgba(73,175,139,0.1); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-legend span:nth-child(3) i { background: #aab2c0; box-shadow: 0 0 0 3px rgba(148,163,184,0.1); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart svg {
+  width: 100%;
+  height: 104px;
+  overflow: visible;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart svg > line {
+  stroke: rgba(255,255,255,0.08);
+  stroke-width: 0.5;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart svg > line { stroke: rgba(15,23,42,0.08); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-bar { fill: rgba(111,147,247,0.58); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-failed { fill: rgba(239,110,116,0.82); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-block {
+  gap: 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+  grid-template-columns: minmax(260px, 1.55fr) minmax(122px, 0.55fr) minmax(150px, 0.7fr) minmax(122px, 0.55fr) auto auto;
+  gap: 8px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .select-wrap {
+  height: 34px;
+  min-height: 34px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter select,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .custom-select-trigger,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-refresh,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-reset,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more > summary {
+  box-sizing: border-box;
+  height: 34px !important;
+  min-height: 34px !important;
+  max-height: 34px !important;
+  margin: 0 !important;
+  border-radius: 9px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-list {
+  overflow-x: auto;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-row {
+  min-width: 1080px;
+  grid-template-columns: 104px minmax(220px, 1.5fr) minmax(118px, 0.75fr) 78px 78px 78px 112px minmax(142px, 0.9fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-row.is-head {
+  min-height: 36px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-time,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-token,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-latency,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-result {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-time strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-token strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-latency strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-result strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-provider {
+  overflow: hidden;
+  color: var(--s2-text);
+  font-size: 0.59rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-time em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-token em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-latency em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-result em {
+  overflow: hidden;
+  color: var(--s2-faint);
+  font-size: 0.49rem;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-request {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  color: var(--s2-muted);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-request strong {
+  flex: 0 0 auto;
+  color: #7ea0f8;
+  font-size: 0.52rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-request span {
+  overflow: hidden;
+  font-family: var(--font-mono-ui);
+  font-size: 0.53rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-row.is-ok .pd-router-log-result strong { color: #55b68f; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-row.is-warn .pd-router-log-result strong { color: #d4a458; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-row.is-bad .pd-router-log-result strong { color: #ee777d; }
+@media (max-width: 1040px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+    grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(116px, 0.48fr)) auto auto;
+  }
+}
+@media (max-width: 760px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-head { display: grid; }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-legend { justify-content: flex-start; }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar { grid-template-columns: minmax(0, 1fr) auto auto; }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-search { grid-column: 1 / -1; }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter { grid-column: span 1; }
+}
+
+/* Provider Router log readability pass */
+body[data-page="providerRouter"] .shell-v2 .pd-router-panel[data-provider-router-panel="stats"] {
+  gap: 16px;
+  padding-top: 14px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart {
+  min-height: 132px;
+  gap: 8px;
+  padding: 14px 16px 10px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-head strong {
+  font-size: 0.8rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-head span,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-legend span {
+  font-size: 0.62rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart svg {
+  height: 68px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-empty {
+  min-height: 64px;
+  display: grid;
+  place-items: center;
+  color: var(--s2-faint);
+  font-size: 0.66rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-head strong {
+  font-size: 0.78rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-head span {
+  font-size: 0.61rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+  grid-template-columns: minmax(260px, 1.55fr) minmax(122px, 0.55fr) minmax(150px, 0.7fr) minmax(122px, 0.55fr) auto auto;
+  gap: 0;
+  padding: 3px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.025);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.045);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+  border: 1px solid rgba(15,23,42,0.085);
+  background: rgba(255,255,255,0.66);
+  box-shadow: inset 0 1px 0 #fff, 0 6px 18px rgba(74,93,128,0.045);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .select-wrap {
+  height: 38px;
+  min-height: 38px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter select,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .custom-select-trigger,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-refresh,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-reset,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more > summary {
+  height: 38px !important;
+  min-height: 38px !important;
+  max-height: 38px !important;
+  border: 0 !important;
+  border-radius: 8px;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-size: 0.64rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter {
+  position: relative;
+  border-right: 1px solid rgba(255,255,255,0.07);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-search,
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter {
+  border-right-color: rgba(15,23,42,0.07);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input {
+  padding-left: 32px;
+  font-size: 0.66rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search > span {
+  left: 12px;
+  font-size: 0.9rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-refresh {
+  margin-left: 8px !important;
+  padding: 0 13px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-reset {
+  margin-left: 4px !important;
+  padding: 0 11px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more {
+  margin-left: 2px !important;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-row.is-head {
+  font-size: 0.61rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-time strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-token strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-latency strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-result strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-provider {
+  font-size: 0.65rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-time em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-token em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-latency em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-result em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-request span {
+  font-size: 0.55rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-request strong {
+  font-size: 0.57rem;
+}
+@media (max-width: 760px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+    gap: 3px;
+    padding: 5px;
+  }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-search,
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter {
+    border-right: 0;
   }
 }
