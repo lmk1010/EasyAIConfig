@@ -604,11 +604,13 @@ function renderLauncherPage(tp, providers) {
   ];
   const claudeModelOpts = [
     { value: '', label: '默认' },
+    { value: 'claude-fable-5', label: 'claude-fable-5' },
+    { value: 'claude-mythos-5', label: 'claude-mythos-5' },
+    { value: 'claude-sonnet-5', label: 'claude-sonnet-5 · 首发价' },
     { value: 'claude-opus-4-8', label: 'claude-opus-4-8' },
     { value: 'claude-opus-4-7', label: 'claude-opus-4-7 (1M)' },
     { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' },
     { value: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
-    { value: 'claude-fable-5', label: 'claude-fable-5' },
     { value: 'custom', label: '自定义…' },
   ];
   // 从 provider 拉到的真实模型（如果有）— 拼到前面

@@ -27150,10 +27150,10 @@ button.ch-row-balance {
 .shell-v2 .dashboard-page .db3-cost-area-totals em { font-style: normal; font-size: 0.64rem; color: var(--s2-faint); }
 .shell-v2 .dashboard-page .db3-cost-area-totals strong { font-size: 1rem; font-weight: 700; color: var(--s2-text); }
 
-/* ── 新版 "GPT 计费标准" 4 列轻量价表 ── */
+/* ── 新版模型计费标准 5 列轻量价表 ── */
 .shell-v2 .dashboard-page .db3-rate-table { display: grid; gap: 0; }
 .shell-v2 .dashboard-page .db3-rate-table-head,
-.shell-v2 .dashboard-page .db3-rate-table-row { display: grid; grid-template-columns: minmax(160px, 1.6fr) repeat(3, minmax(80px, 1fr)); gap: 14px; align-items: baseline; padding: 11px 2px; }
+.shell-v2 .dashboard-page .db3-rate-table-row { display: grid; grid-template-columns: minmax(160px, 1.6fr) repeat(4, minmax(72px, 1fr)); gap: 14px; align-items: baseline; padding: 11px 2px; }
 .shell-v2 .dashboard-page .db3-rate-table-head { padding: 2px 2px 8px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--s2-faint); border-bottom: 1px solid rgba(255,255,255,0.06); }
 .shell-v2 .dashboard-page .db3-rate-table-head > :not(:first-child),
 .shell-v2 .dashboard-page .db3-rate-table-row > :not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }

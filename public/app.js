@@ -4818,6 +4818,12 @@ const CLAUDE_MODEL_ALIASES = [
 // Claude model IDs (official docs + common gateway-compatible aliases)
 const CLAUDE_MODEL_PRESETS = [
   // Latest family (official overview page)
+  'claude-fable-5',
+  'claude-fable-5-latest',
+  'claude-mythos-5',
+  'claude-mythos-5-latest',
+  'claude-sonnet-5',
+  'claude-sonnet-5-latest',
   'claude-opus-4-6',
   'claude-sonnet-4-6',
   'claude-haiku-4-5',
@@ -9384,17 +9390,17 @@ function renderDashboardLoadingCard() {
 //   input            非缓存输入单价（OpenAI 的 input_tokens 已含 cached，计费时要先减掉）
 //   output           输出+推理单价
 //   cached           缓存读单价（OpenAI 直接给；Anthropic ≈ input * 0.1）
-//   cacheWrite       缓存写入单价（仅 Anthropic 有，5 分钟 TTL 默认 input * 1.25）
+//   cacheWrite       缓存写入单价（有明确价格时直接使用；Anthropic 缺省为 input * 1.25）
 //   provider         'openai' / 'anthropic'，决定走哪套公式（见 calcModelCost）
 const CODEX_MODEL_PRICING = {
   // ── OpenAI / Codex（价来源：ccusage pricing.rs put_builtin_pricing）──
-  'gpt-5.6-sol':       { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.6 Sol' },
-  'gpt-5.6-terra':     { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.6 Terra' },
-  'gpt-5.6-luna':      { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.6 Luna' },
+  'gpt-5.6-sol':       { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  cacheWrite: 6.25,  label: 'GPT-5.6 Sol' },
+  'gpt-5.6-terra':     { provider: 'openai',    input: 2.50,  output: 15.00, cached: 0.25,  cacheWrite: 3.125, label: 'GPT-5.6 Terra' },
+  'gpt-5.6-luna':      { provider: 'openai',    input: 1.00,  output: 6.00,  cached: 0.10,  cacheWrite: 1.25,  label: 'GPT-5.6 Luna' },
   'gpt-5.5':           { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.5' },
   'gpt-5.5-pro':       { provider: 'openai',    input: 30.00, output: 180.00, cached: null, label: 'GPT-5.5 Pro' },
   'gpt-5.4-pro':       { provider: 'openai',    input: 30.00, output: 180.00, cached: null, label: 'GPT-5.4 Pro' },
-  'gpt-5.4':           { provider: 'openai',    input: 2.50,  output: 15.00, cached: 0.25,  label: 'GPT-5.4' },
+  'gpt-5.4':           { provider: 'openai',    input: 5.00,  output: 22.50, cached: 0.50,  label: 'GPT-5.4' },
   'gpt-5.4-mini':      { provider: 'openai',    input: 0.75,  output: 4.50,  cached: 0.075, label: 'GPT-5.4 mini' },
   'gpt-5.4-nano':      { provider: 'openai',    input: 0.20,  output: 1.25,  cached: 0.02,  label: 'GPT-5.4 nano' },
   'gpt-5.3-codex':     { provider: 'openai',    input: 1.75,  output: 14.00, cached: 0.175, label: 'GPT-5.3 Codex' },
@@ -9422,6 +9428,11 @@ const CODEX_MODEL_PRICING = {
   'claude-opus-4.6':           { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Claude Opus 4.6' },
   'claude-opus-4-7':           { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Claude Opus 4.7' },
   'claude-opus-4-8':           { provider: 'anthropic', input: 5.00,  output: 25.00, cached: 0.50,  cacheWrite: 6.25,   label: 'Claude Opus 4.8' },
+  // Claude 5
+  // Sonnet 5 首发价有效至 2026-08-31；届时改为标准 $3/$15/$3.75/$0.30。
+  'claude-fable-5':            { provider: 'anthropic', input: 10.00, output: 50.00, cached: 1.00,  cacheWrite: 12.50,  label: 'Claude Fable 5' },
+  'claude-mythos-5':           { provider: 'anthropic', input: 10.00, output: 50.00, cached: 1.00,  cacheWrite: 12.50,  label: 'Claude Mythos 5' },
+  'claude-sonnet-5':           { provider: 'anthropic', input: 2.00,  output: 10.00, cached: 0.20,  cacheWrite: 2.50,   standardAfter: '2026-09-01', standardInput: 3.00, standardOutput: 15.00, standardCached: 0.30, standardCacheWrite: 3.75, label: 'Claude Sonnet 5' },
   // Sonnet 4-5/6
   'claude-sonnet-4-5':         { provider: 'anthropic', input: 3.00,  output: 15.00, cached: 0.30,  cacheWrite: 3.75,   label: 'Claude Sonnet 4.5' },
   'claude-sonnet-4-5-thinking':{ provider: 'anthropic', input: 3.00,  output: 15.00, cached: 0.30,  cacheWrite: 3.75,   label: 'Sonnet 4.5 Thinking' },
@@ -9431,8 +9442,6 @@ const CODEX_MODEL_PRICING = {
   'claude-3-5-haiku':          { provider: 'anthropic', input: 0.80,  output: 4.00,  cached: 0.08,  cacheWrite: 1.00,   label: 'Claude Haiku 3.5' },
   'claude-haiku-4':            { provider: 'anthropic', input: 0.80,  output: 4.00,  cached: 0.08,  cacheWrite: 1.00,   label: 'Claude Haiku 4' },
   'claude-haiku-4-5':          { provider: 'anthropic', input: 1.00,  output: 5.00,  cached: 0.10,  cacheWrite: 1.25,   label: 'Claude Haiku 4.5' },
-  // Fable 5（最新一代，1M context，比 opus 贵一档）
-  'claude-fable-5':            { provider: 'anthropic', input: 10.00, output: 50.00, cached: 1.00,  cacheWrite: 12.50,  label: 'Claude Fable 5' },
 };
 
 // 家族级 fallback：精确 / 前缀 都没命中时，用同家族里 input 单价最高的一条估算
@@ -9441,6 +9450,8 @@ const PRICING_FAMILIES = [
   { prefix: 'gpt-5',         label: 'GPT-5 家族' },
   { prefix: 'gpt-4',         label: 'GPT-4 家族' },
   { prefix: 'claude-opus',   label: 'Claude Opus 家族' },
+  { prefix: 'claude-fable',  label: 'Claude Fable 家族' },
+  { prefix: 'claude-mythos', label: 'Claude Mythos 家族' },
   { prefix: 'claude-sonnet', label: 'Claude Sonnet 家族' },
   { prefix: 'claude-haiku',  label: 'Claude Haiku 家族' },
   { prefix: 'o3',            label: 'o3 家族' },
@@ -9448,14 +9459,28 @@ const PRICING_FAMILIES = [
 ];
 
 function lookupModelPricingEntry(modelName) {
-  const name = String(modelName || '').trim().toLowerCase();
+  const normalizedName = String(modelName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+  const name = normalizedName.includes('/') ? normalizedName.split('/').filter(Boolean).pop() : normalizedName;
   if (!name || name === 'unknown') return null;
-  if (CODEX_MODEL_PRICING[name]) return { key: name, pricing: CODEX_MODEL_PRICING[name], fallback: false };
+  const resolveTimedPricing = (pricing) => {
+    if (!pricing?.standardAfter || Date.now() < Date.parse(`${pricing.standardAfter}T00:00:00Z`)) return pricing;
+    return {
+      ...pricing,
+      input: pricing.standardInput,
+      output: pricing.standardOutput,
+      cached: pricing.standardCached,
+      cacheWrite: pricing.standardCacheWrite,
+    };
+  };
+  if (CODEX_MODEL_PRICING[name]) return { key: name, pricing: resolveTimedPricing(CODEX_MODEL_PRICING[name]), fallback: false };
   const keys = Object.keys(CODEX_MODEL_PRICING).sort((a, b) => b.length - a.length);
   for (const key of keys) {
     if (!name.startsWith(key)) continue;
     const suffix = name.slice(key.length);
-    const pricing = CODEX_MODEL_PRICING[key];
+    const pricing = resolveTimedPricing(CODEX_MODEL_PRICING[key]);
     const isSnapshotAlias = /^-(latest|\d{8}|\d{4}-\d{2}-\d{2})(?:$|-)/.test(suffix);
     if (isSnapshotAlias) return { key, pricing, fallback: false };
     return {
@@ -9471,7 +9496,8 @@ function lookupModelPricingEntry(modelName) {
       .filter(([k]) => k.startsWith(family.prefix));
     if (!candidates.length) continue;
     candidates.sort((a, b) => (b[1].input || 0) - (a[1].input || 0));
-    const [bestKey, bestPricing] = candidates[0];
+    const [bestKey, rawBestPricing] = candidates[0];
+    const bestPricing = resolveTimedPricing(rawBestPricing);
     return {
       key: bestKey,
       pricing: { ...bestPricing, label: `${family.label}（按 ${bestPricing.label} 估算）` },
@@ -9635,9 +9661,11 @@ function estimateCostByDaily(dailyItems = [], models = [], kind = 'codex') {
         + cacheCreation * writeRate) / 1e6;
     } else {
       const nonCached = Math.max(0, input - cached);
+      const writeRate = Number.isFinite(pricing.cacheWrite) ? pricing.cacheWrite : 0;
       total += (nonCached * pricing.input
         + cached * pricing.cached
-        + output * pricing.output) / 1e6;
+        + output * pricing.output
+        + cacheCreation * writeRate) / 1e6;
     }
   }
   return total;
@@ -9659,7 +9687,7 @@ function formatDashboardUsd(value, { min = 2, max = 4 } = {}) {
 //   cached_input_tokens  其中命中缓存的部分（要扣掉后再按 cached 单价收）
 //   output_tokens        输出
 //   reasoning_output_tokens  推理（按 output 单价收）
-//   公式 = (input - cached) * inputRate + cached * cachedRate + (output + reasoning) * outputRate
+//   公式 = (input - cached) * inputRate + cached * cachedRate + cacheCreation * cacheWriteRate + (output + reasoning) * outputRate
 //   旧实现里 input * inputRate + cached * cachedRate 是把 cached 那段重复算了一次。
 //
 // Anthropic (Claude Code):
@@ -9691,7 +9719,8 @@ function calcModelCost(modelEntry) {
     // OpenAI：input 字段含 cached，必须先减出 non-cached 部分
     const nonCached = Math.max(0, input - cachedRead);
     inputCost = nonCached * pricing.input;
-    cacheWriteCost = 0; // OpenAI 不另外收缓存写入
+    const writeRate = Number.isFinite(pricing.cacheWrite) ? pricing.cacheWrite : 0;
+    cacheWriteCost = cacheWrite * writeRate;
   }
   const outputCost = (out + reasoning) * pricing.output;
   const cachedRate = Number.isFinite(pricing.cached) ? pricing.cached : pricing.input;
@@ -9726,6 +9755,7 @@ function renderPricingStandardsCards(models = [], preferredKeys = []) {
         <div>${escapeHtml(appText('模型'))}</div>
         <div>${escapeHtml(appText('输入'))}</div>
         <div>${escapeHtml(appText('输出'))}</div>
+        <div>${escapeHtml(appText('缓存写'))}</div>
         <div>${escapeHtml(appText('缓存读'))}</div>
       </div>
       ${keys.map((key) => {
@@ -9738,6 +9768,7 @@ function renderPricingStandardsCards(models = [], preferredKeys = []) {
           </div>
           <div class="db3-rate-table-num">${escapeHtml(formatDashboardUsd(pricing.input, { min: pricing.input < 1 ? 3 : 2, max: 3 }))}</div>
           <div class="db3-rate-table-num">${escapeHtml(formatDashboardUsd(pricing.output, { min: pricing.output < 1 ? 3 : 2, max: 3 }))}</div>
+          <div class="db3-rate-table-num">${Number.isFinite(pricing.cacheWrite) ? escapeHtml(formatDashboardUsd(pricing.cacheWrite, { min: pricing.cacheWrite < 1 ? 3 : 2, max: 3 })) : '—'}</div>
           <div class="db3-rate-table-num">${pricing.cached == null ? '—' : escapeHtml(formatDashboardUsd(pricing.cached, { min: pricing.cached < 1 ? 3 : 2, max: 3 }))}</div>
         </div>`;
       }).join('')}
@@ -11151,9 +11182,11 @@ function _initDbInteractiveChart(chartId) {
                 // OpenAI：input_tokens 已含 cached，先扣 cached（和 ccusage 的
                 // calculate_codex_model_cost 一致：non_cached = input - cached）
                 const nonCached = Math.max(0, dayInput - dayCached);
+                const writeRate = Number.isFinite(pricing.cacheWrite) ? pricing.cacheWrite : 0;
                 dayCost = (nonCached * pricing.input
                   + dayCached * pricing.cached
-                  + dayOutput * pricing.output) / 1e6;
+                  + dayOutput * pricing.output
+                  + dayCacheCreation * writeRate) / 1e6;
               }
               costLine = `<div class="db2-tip-row db2-tip-cost"><span>${escapeHtml(appText('预估费用'))}</span><strong>${escapeHtml(formatDashboardUsd(dayCost, { min: 2, max: 4 }))}</strong></div>`;
             }
@@ -14492,7 +14525,7 @@ const OPENCLAW_PROTOCOL_META = {
   'anthropic-messages': {
     label: 'Claude / Anthropic Messages',
     defaultBaseUrl: 'https://api.anthropic.com',
-    defaultModel: 'anthropic/claude-sonnet-4-6',
+    defaultModel: 'anthropic/claude-sonnet-5',
     defaultEnvKey: 'ANTHROPIC_API_KEY',
     endpointHint: '/v1/messages',
   },
@@ -14536,6 +14569,9 @@ const OPENCLAW_MODEL_PRESETS = [
   {
     label: 'Anthropic / Claude',
     options: [
+      { value: 'anthropic/claude-fable-5', label: 'Claude Fable 5', apis: ['anthropic-messages'] },
+      { value: 'anthropic/claude-mythos-5', label: 'Claude Mythos 5', apis: ['anthropic-messages'] },
+      { value: 'anthropic/claude-sonnet-5', label: 'Claude Sonnet 5', apis: ['anthropic-messages'] },
       { value: 'anthropic/claude-opus-4-6', label: 'Claude Opus 4.6', apis: ['anthropic-messages'] },
       { value: 'anthropic/claude-opus-4-5', label: 'Claude Opus 4.5', apis: ['anthropic-messages'] },
       { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6', apis: ['anthropic-messages'] },
@@ -14606,10 +14642,11 @@ const CODEX_MODEL_PRESETS = [
     ],
   },
   {
-    label: 'Anthropic / Claude (Fable + Mythos)',
+    label: 'Anthropic / Claude 5 + 4.x',
     options: [
       { value: 'claude-fable-5', label: 'Claude Fable 5 (2026-06，1M ctx)' },
       { value: 'claude-mythos-5', label: 'Claude Mythos 5 (同 spec)' },
+      { value: 'claude-sonnet-5', label: 'Claude Sonnet 5 (首发价至 2026-08-31)' },
       { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
       { value: 'claude-opus-4-7', label: 'Claude Opus 4.7 (1M)' },
       { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
@@ -24901,7 +24938,7 @@ async function syncFromClaudeCodeEnv() {
     const ccModel = data.model;
     if (ccModel) {
       const ALIAS_MAP = {
-        'sonnet': 'anthropic/claude-sonnet-4-6',
+        'sonnet': 'anthropic/claude-sonnet-5',
         'opus': 'anthropic/claude-opus-4-6',
         'haiku': 'anthropic/claude-haiku-3-5',
       };
@@ -29460,8 +29497,11 @@ function formatPdModelPricing(model) {
   if (!entry?.pricing) return { label: '无本地定价', title: '本地价格表没有这个模型，费用页不会把它混入主模型估算。', className: 'is-missing' };
   const p = entry.pricing;
   const fmt = (value) => value == null ? '—' : formatDashboardUsd(value, { min: value < 1 ? 3 : 2, max: 3 });
+  const cacheLabel = Number.isFinite(p.cacheWrite)
+    ? `CACHE W ${fmt(p.cacheWrite)} · R ${fmt(p.cached)}`
+    : `CACHE ${fmt(p.cached)}`;
   return {
-    label: `IN ${fmt(p.input)} · OUT ${fmt(p.output)} · CACHE ${fmt(p.cached)}`,
+    label: `IN ${fmt(p.input)} · OUT ${fmt(p.output)} · ${cacheLabel}`,
     title: entry.fallback ? `${p.label} · 估算匹配` : `${p.label} · 精确匹配`,
     className: entry.fallback ? 'is-fallback' : 'is-priced',
   };

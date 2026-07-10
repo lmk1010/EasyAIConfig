@@ -6412,12 +6412,20 @@ async function readClaudeTelemetryUsageForHome({ days = 30, home, claudeJsonPath
 
   // Pricing per million tokens (Anthropic official)
   const PRICING = {
-    'claude-opus-4-6':   { input: 15, output: 75, cacheRead: 1.5, cacheCreate: 18.75 },
+    'claude-fable-5':    { input: 10, output: 50, cacheRead: 1, cacheCreate: 12.5 },
+    'claude-mythos-5':   { input: 10, output: 50, cacheRead: 1, cacheCreate: 12.5 },
+    'claude-sonnet-5': Date.now() < Date.parse('2026-09-01T00:00:00Z')
+      ? { input: 2, output: 10, cacheRead: 0.2, cacheCreate: 2.5 }
+      : { input: 3, output: 15, cacheRead: 0.3, cacheCreate: 3.75 },
+    'claude-opus-4-6':   { input: 5, output: 25, cacheRead: 0.5, cacheCreate: 6.25 },
     'claude-sonnet-4-6': { input: 3,  output: 15, cacheRead: 0.3, cacheCreate: 3.75 },
-    'claude-haiku-4-5':  { input: 0.8, output: 4, cacheRead: 0.08, cacheCreate: 1 },
+    'claude-haiku-4-5':  { input: 1, output: 5, cacheRead: 0.1, cacheCreate: 1.25 },
   };
   function matchPricing(model) {
-    const m = (model || '').toLowerCase();
+    const m = (model || '').toLowerCase().replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+    if (m.includes('fable-5')) return PRICING['claude-fable-5'];
+    if (m.includes('mythos-5')) return PRICING['claude-mythos-5'];
+    if (m.includes('sonnet-5')) return PRICING['claude-sonnet-5'];
     if (m.includes('opus'))   return PRICING['claude-opus-4-6'];
     if (m.includes('sonnet')) return PRICING['claude-sonnet-4-6'];
     if (m.includes('haiku'))  return PRICING['claude-haiku-4-5'];
