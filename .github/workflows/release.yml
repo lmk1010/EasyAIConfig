@@ -192,18 +192,21 @@ jobs:
           test -f "$sig"
           asset_name=$(basename "$asset")
           # Rename macOS updater bundles to include arch suffix so that
-          # aarch64 and x86_64 don't collide when artifacts are merged.
-          # Without this, both produce "EasyAIConfig.app.tar.gz" and one
-          # overwrites the other in R2, causing signature verification failure.
+          # aarch64 and x86_64 don't collide when artifacts are merged. The
+          # release version must also be part of the R2 object name: reusing a
+          # fixed CDN URL can serve an older cached bundle with the new
+          # latest.json signature, which always fails verification.
+          release_version='${{ needs.create-release.outputs.tag }}'
+          release_version="${release_version#v}"
           case '${{ matrix.updater_platform }}' in
             darwin-aarch64)
-              renamed="${asset_name%.app.tar.gz}_aarch64.app.tar.gz"
+              renamed="${asset_name%.app.tar.gz}_${release_version}_aarch64.app.tar.gz"
               cp "$asset" "dist/updater/${renamed}"
               cp "$sig" "dist/updater/${renamed}.sig"
               asset_name="$renamed"
               ;;
             darwin-x86_64)
-              renamed="${asset_name%.app.tar.gz}_x64.app.tar.gz"
+              renamed="${asset_name%.app.tar.gz}_${release_version}_x64.app.tar.gz"
               cp "$asset" "dist/updater/${renamed}"
               cp "$sig" "dist/updater/${renamed}.sig"
               asset_name="$renamed"
