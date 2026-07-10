@@ -810,6 +810,10 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(routerRenderBody, /pd-router-hero-card/);
   assert.match(routerRenderBody, /pd-router-hero-metrics/);
   assert.match(routerRenderBody, /pd-router-routes-section/);
+  assert.match(appJs, /pd-router-log-toolbar/);
+  assert.match(appJs, /pd-router-log-more-menu/);
+  assert.match(stylesCss, /provider-router-pool-toggle input:checked \+ span::after/);
+  assert.match(stylesCss, /backdrop-filter:\s*blur\(24px\) saturate\(165%\)/);
   assert.match(routerRenderBody, /data-provider-router-quick-start/);
   assert.match(routerRenderBody, /开启网关/);
   assert.match(routerRenderBody, /pd-router-more-menu/);
@@ -1021,7 +1025,7 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(appJs, /request converted/);
   assert.match(appJs, /response converted/);
   assert.match(appJs, /error normalized/);
-  assert.match(appJs, /路径 \/ Provider \/ 转换 \/ 错误/);
+  assert.match(appJs, /搜索路径、Provider 或错误/);
   assert.match(routerRenderBody, /data-provider-router-tab="\$\{esc\(tab\.key\)\}"/);
   assert.match(routerRenderBody, /key: 'gateway', label: '网关'/);
   assert.match(routerRenderBody, /key: 'logs', label: '日志'/);

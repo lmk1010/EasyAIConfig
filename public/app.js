@@ -28089,8 +28089,8 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
       </div>`;
   }).join('');
   const routerLogEmpty = hasAnyRouterLogRecord
-    ? '<div class="pd-empty pd-empty-small">没有匹配的历史日志</div>'
-    : '<div class="pd-empty pd-empty-small">暂无历史日志</div>';
+    ? '<div class="pd-router-log-empty">没有匹配的历史日志</div>'
+    : '<div class="pd-router-log-empty">暂无历史日志</div>';
   const retentionDays = Number(logRetention.days || stats.retentionDays || 30) || 30;
   const clearBeforeMax = providerRouterDatetimeLocalMax();
   const clearBeforeValue = esc(state.providerRouter.logClearBefore || '');
@@ -28124,49 +28124,37 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
                 <em>${esc(itemUsage || '暂无 token')}${itemTraffic ? ` · ${esc(itemTraffic)}` : ''}</em>
               </div>`;
           }).join('')}
-        </div>` : '<div class="pd-empty pd-empty-small">暂无 Provider 统计</div>'}
+        </div>` : '<div class="pd-router-stats-empty">暂无 Provider 统计</div>'}
       <div class="pd-router-log-block">
         <div class="pd-router-log-head">
           <div>
             <strong>历史请求日志</strong>
             <span>最近日志 · ${esc(routerLogCountText)} · ${esc(routerLogRefreshText)} · 自动保留 ${esc(String(retentionDays))} 天</span>
           </div>
-          <div>
-            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-refresh ${(loading || logLoading) ? 'disabled' : ''}>刷新</button>
-            <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-copy="router-logs" ${filteredRouterLogs.length ? '' : 'disabled'}>复制本页</button>
-          </div>
+          <button type="button" class="pd-router-log-refresh" data-provider-router-refresh ${(loading || logLoading) ? 'disabled' : ''}>刷新</button>
         </div>
         ${logError ? `<div class="pd-remote-alert is-bad">${esc(logError)}</div>` : ''}
-        <div class="pd-router-log-filters">
+        <div class="pd-router-log-toolbar">
           <label class="pd-router-log-search">
-            <span>搜索</span>
-            <input type="search" value="${esc(logFilter.query)}" placeholder="路径 / Provider / 转换 / 错误" data-provider-router-log-search ${hasAnyRouterLogRecord ? '' : 'disabled'} />
+            <span aria-hidden="true">⌕</span>
+            <input type="search" value="${esc(logFilter.query)}" aria-label="搜索日志" placeholder="搜索路径、Provider 或错误" data-provider-router-log-search ${hasAnyRouterLogRecord ? '' : 'disabled'} />
           </label>
-          <label class="pd-router-log-filter">
-            <span>工具</span>
-            <div class="select-wrap"><select data-provider-router-log-filter="tool" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogToolOptions}</select></div>
-          </label>
-          <label class="pd-router-log-filter">
-            <span>Provider</span>
-            <div class="select-wrap"><select data-provider-router-log-filter="provider" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogProviderOptions}</select></div>
-          </label>
-          <label class="pd-router-log-filter">
-            <span>状态</span>
-            <div class="select-wrap"><select data-provider-router-log-filter="status" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogStatusOptions}</select></div>
-          </label>
-          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-log-filter-reset ${logFiltersActive ? '' : 'disabled'}>重置</button>
-        </div>
-        <div class="pd-router-log-maintenance">
-          <div>
-            <strong>清理日志</strong>
-            <span>自动保留一个月；也可以手动清理指定时间点之前的记录。</span>
-          </div>
-          <label>
-            <span>早于</span>
-            <input type="datetime-local" max="${esc(clearBeforeMax)}" value="${clearBeforeValue}" data-provider-router-log-clear-before ${logClearing ? 'disabled' : ''} />
-          </label>
-          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small ${logClearing ? 'is-busy' : ''}" data-provider-router-log-clear="before" ${logClearing ? 'disabled' : ''}>清理</button>
-          <button type="button" class="pd-btn pd-btn-ghost pd-btn-small" data-provider-router-log-clear="all" ${logClearing || !hasAnyRouterLogRecord ? 'disabled' : ''}>清空</button>
+          <div class="pd-router-log-filter"><div class="select-wrap"><select aria-label="筛选工具" data-provider-router-log-filter="tool" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogToolOptions}</select></div></div>
+          <div class="pd-router-log-filter"><div class="select-wrap"><select aria-label="筛选 Provider" data-provider-router-log-filter="provider" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogProviderOptions}</select></div></div>
+          <div class="pd-router-log-filter"><div class="select-wrap"><select aria-label="筛选状态" data-provider-router-log-filter="status" ${hasAnyRouterLogRecord ? '' : 'disabled'}>${routerLogStatusOptions}</select></div></div>
+          <button type="button" class="pd-router-log-reset" data-provider-router-log-filter-reset ${logFiltersActive ? '' : 'disabled'}>重置</button>
+          <details class="pd-router-log-more">
+            <summary aria-label="更多日志操作" title="更多日志操作">•••</summary>
+            <div class="pd-router-log-more-menu">
+              <button type="button" data-provider-router-copy="router-logs" ${filteredRouterLogs.length ? '' : 'disabled'}>复制本页</button>
+              <div class="pd-router-log-cleanup">
+                <span>清理此时间之前</span>
+                <input type="datetime-local" max="${esc(clearBeforeMax)}" value="${clearBeforeValue}" data-provider-router-log-clear-before ${logClearing ? 'disabled' : ''} />
+                <button type="button" class="${logClearing ? 'is-busy' : ''}" data-provider-router-log-clear="before" ${logClearing ? 'disabled' : ''}>清理所选</button>
+              </div>
+              <button type="button" class="is-danger" data-provider-router-log-clear="all" ${logClearing || !hasAnyRouterLogRecord ? 'disabled' : ''}>清空全部日志</button>
+            </div>
+          </details>
         </div>
         ${filteredRouterLogs.length ? `
           <div class="pd-router-log-list">
@@ -28947,7 +28935,7 @@ function renderProviderRouterPage() {
     const healthText = health.loading ? '检测中' : health.ok ? '可用' : health.checked ? '不可用' : '未检测';
     return `
       <div class="pd-router-simple-provider ${isPrimary ? 'is-primary' : ''} ${isActive ? 'is-active' : ''} ${!item.canRoute ? 'is-disabled' : ''}">
-        <label class="provider-router-pool-toggle" title="${item.canRoute ? '加入自动路由' : '缺少可读取的 API Key'}">
+        <label class="provider-router-pool-toggle" title="${item.canRoute ? '加入或移出线路池' : '缺少可读取的 API Key'}" aria-label="${item.canRoute ? '加入或移出线路池' : '缺少可读取的 API Key'}">
           <input type="checkbox" data-provider-router-toggle="${esc(item.routeKey)}" ${isSelected ? 'checked' : ''} ${!item.canRoute || loading ? 'disabled' : ''} />
           <span aria-hidden="true"></span>
         </label>
@@ -28985,7 +28973,7 @@ function renderProviderRouterPage() {
           <div class="pd-router-hero-endpoint"><span>${esc(providerRouterProtocolLabel(activeTool))}</span><code>${esc(currentBaseUrl)}</code><button type="button" data-provider-router-copy="${esc(`${activeTool}-base`)}">复制</button></div>
         </div>
         <div class="pd-router-hero-actions">
-          <div class="pd-router-hero-client"><span>当前客户端</span><div class="select-wrap"><select data-provider-router-tool-select>${toolSelectOptions}</select></div></div>
+          <div class="pd-router-hero-client"><span>当前客户端</span><div class="select-wrap"><select aria-label="当前客户端" data-provider-router-tool-select>${toolSelectOptions}</select></div></div>
           <button type="button" class="pd-btn pd-btn-primary ${loading ? 'is-busy' : ''}" data-provider-router-quick-start ${loading || !selectedRows.length ? 'disabled' : ''}>${loading ? '处理中' : running ? '应用并重启' : '开启网关'}</button>
           ${running ? '<button type="button" class="pd-router-stop-link" data-provider-router-stop>停止网关</button>' : ''}
         </div>

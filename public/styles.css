@@ -43751,3 +43751,461 @@ body[data-page="providerRouter"] .shell-v2 .pd-router-advanced-body > .pd-router
   body[data-page="providerRouter"] .shell-v2 .pd-router-hero-card { padding: 15px 14px; border-radius: 13px; }
   body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics { grid-template-columns: 1fr 1fr; }
 }
+
+/* Provider Router polished compact controls */
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-card {
+  grid-template-columns: minmax(0, 1fr) 238px;
+  gap: 12px 24px;
+  padding: 16px 18px;
+  background: linear-gradient(135deg, rgba(91,140,255,0.085), rgba(255,255,255,0.02) 52%, rgba(255,255,255,0.035));
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-hero-card {
+  background: linear-gradient(135deg, rgba(91,140,255,0.09), rgba(255,255,255,0.78) 52%, rgba(255,255,255,0.94));
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions {
+  align-self: center;
+  align-content: initial;
+  grid-template-rows: 52px 36px auto;
+  gap: 7px;
+  width: 100%;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-client {
+  grid-template-rows: 12px 36px;
+  gap: 4px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-client > span {
+  line-height: 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-client .select-wrap,
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-client select,
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-client .custom-select-trigger,
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions .pd-btn {
+  width: 100%;
+  height: 36px !important;
+  min-height: 36px !important;
+  margin: 0;
+  border-radius: 10px !important;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-client .custom-select-trigger {
+  border-color: rgba(255,255,255,0.11);
+  background: rgba(255,255,255,0.055);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-hero-client .custom-select-trigger {
+  border-color: rgba(15,23,42,0.09);
+  background: rgba(255,255,255,0.7);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), 0 5px 16px rgba(74,93,128,0.05);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions .pd-btn-primary {
+  border: 1px solid rgba(111,147,247,0.42) !important;
+  background: linear-gradient(180deg, rgba(105,146,255,0.94), rgba(72,116,232,0.94)) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 7px 18px rgba(51,91,193,0.2) !important;
+}
+body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider .provider-router-pool-toggle span {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 6px;
+  background: linear-gradient(145deg, rgba(255,255,255,0.12), rgba(255,255,255,0.035));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.15), 0 4px 12px rgba(0,0,0,0.08);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider .provider-router-pool-toggle span {
+  border-color: rgba(15,23,42,0.14);
+  background: linear-gradient(145deg, rgba(255,255,255,0.92), rgba(226,232,240,0.5));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 4px 12px rgba(74,93,128,0.09);
+}
+body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle:hover span {
+  border-color: rgba(111,147,247,0.48);
+  transform: translateY(-1px);
+}
+body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle input:checked + span {
+  border-color: rgba(111,147,247,0.68);
+  background: linear-gradient(145deg, rgba(111,147,247,0.38), rgba(73,112,218,0.2));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 5px 14px rgba(65,105,210,0.2);
+}
+body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle input:checked + span::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 5px;
+  height: 9px;
+  border: solid rgba(255,255,255,0.96);
+  border-width: 0 1.8px 1.8px 0;
+  transform: rotate(43deg);
+}
+body[data-page="providerRouter"] .shell-v2 .provider-router-pool-toggle input:disabled + span {
+  opacity: 0.38;
+  filter: grayscale(0.4);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary {
+  min-width: 62px;
+  justify-content: flex-end;
+  gap: 5px;
+  line-height: 18px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input {
+  appearance: none;
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 50%;
+  background: rgba(255,255,255,0.055);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input {
+  border-color: rgba(15,23,42,0.16);
+  background: rgba(255,255,255,0.72);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input:checked {
+  border-color: rgba(111,147,247,0.72);
+  box-shadow: inset 0 0 0 3px rgba(31,41,63,0.9), inset 0 0 0 7px #79a0ff;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input:checked {
+  box-shadow: inset 0 0 0 3px rgba(255,255,255,0.95), inset 0 0 0 7px #5b8cff;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-block {
+  gap: 9px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-head {
+  padding-top: 0;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-refresh,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-reset {
+  height: 30px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: rgba(255,255,255,0.025);
+  color: var(--s2-muted);
+  font-size: 0.56rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-refresh:hover,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-reset:hover:not(:disabled) {
+  border-color: rgba(111,147,247,0.28);
+  color: var(--s2-text);
+  background: rgba(91,140,255,0.07);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) minmax(112px, 0.32fr) minmax(132px, 0.42fr) minmax(105px, 0.3fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 11px;
+  background: rgba(255,255,255,0.018);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+  border-color: rgba(15,23,42,0.07);
+  background: rgba(255,255,255,0.52);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search {
+  position: relative;
+  display: block;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search > span {
+  position: absolute;
+  z-index: 1;
+  left: 10px;
+  top: 50%;
+  color: var(--s2-faint);
+  font-size: 0.82rem;
+  transform: translateY(-53%);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input {
+  height: 30px;
+  padding: 0 10px 0 28px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .select-wrap,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter select,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .custom-select-trigger {
+  width: 100%;
+  height: 30px;
+  min-height: 30px;
+  margin: 0;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .custom-select-trigger {
+  border-radius: 8px;
+  font-size: 0.56rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-reset:disabled,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-refresh:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more {
+  position: relative;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more > summary {
+  width: 34px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.025);
+  color: var(--s2-muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  list-style: none;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more > summary::-webkit-details-marker { display: none; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more[open] > summary {
+  border-color: rgba(111,147,247,0.34);
+  color: #8badff;
+  background: rgba(91,140,255,0.09);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 7px);
+  right: 0;
+  width: 260px;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  background: rgba(26,32,45,0.88);
+  box-shadow: 0 18px 45px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
+  backdrop-filter: blur(24px) saturate(165%);
+  -webkit-backdrop-filter: blur(24px) saturate(165%);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-more-menu {
+  border-color: rgba(15,23,42,0.1);
+  background: rgba(250,252,255,0.9);
+  box-shadow: 0 18px 42px rgba(74,93,128,0.18), inset 0 1px 0 rgba(255,255,255,0.9);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more-menu button {
+  min-height: 31px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 9px;
+  background: transparent;
+  color: var(--s2-text);
+  text-align: left;
+  font-size: 0.58rem;
+  cursor: pointer;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more-menu button:hover:not(:disabled) {
+  background: rgba(91,140,255,0.1);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more-menu button.is-danger { color: #f58b92; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more-menu button:disabled { opacity: 0.38; cursor: default; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-cleanup {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  padding: 7px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-cleanup > span {
+  grid-column: 1 / -1;
+  color: var(--s2-faint);
+  font-size: 0.53rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-cleanup input {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 7px;
+  padding: 0 7px;
+  background: rgba(255,255,255,0.035);
+  color: var(--s2-text);
+  font-family: var(--font-mono-ui);
+  font-size: 0.52rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-cleanup button { background: rgba(91,140,255,0.1); }
+@media (max-width: 980px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+    grid-template-columns: minmax(190px, 1fr) repeat(3, minmax(100px, 0.45fr)) auto auto;
+  }
+}
+@media (max-width: 760px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-log-search { grid-column: 1 / -1; }
+}
+@media (max-width: 900px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions { width: min(100%, 320px); }
+}
+
+/* Provider Router screenshot corrections */
+body[data-page="providerRouter"] .shell-v2 .provider-router-page {
+  padding-top: clamp(34px, 4.2vh, 52px);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-head {
+  min-height: 62px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider {
+  grid-template-columns: 28px minmax(0, 1fr) 72px;
+  min-height: 48px;
+  padding: 7px 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary {
+  width: 72px;
+  min-width: 72px;
+  height: 24px;
+  justify-content: flex-end;
+  align-self: center;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input,
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input[type="radio"] {
+  all: unset;
+  box-sizing: border-box;
+  position: relative;
+  flex: 0 0 14px;
+  display: block;
+  width: 14px !important;
+  min-width: 14px !important;
+  max-width: 14px !important;
+  height: 14px !important;
+  min-height: 14px !important;
+  max-height: 14px !important;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 999px;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: rgba(255,255,255,0.055);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+  cursor: pointer;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input[type="radio"] {
+  border-color: rgba(15,23,42,0.16);
+  background: rgba(255,255,255,0.74);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input[type="radio"]::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 999px;
+  background: transparent;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input[type="radio"]:checked {
+  border-color: rgba(91,140,255,0.72);
+  background: rgba(91,140,255,0.12);
+  box-shadow: 0 0 0 3px rgba(91,140,255,0.08);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input[type="radio"]:checked::after {
+  background: #6f93f7;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.35);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary input[type="radio"]:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-panel[data-provider-router-panel="stats"] {
+  gap: 14px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-stat-summary {
+  gap: 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-stat-summary span {
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid rgba(255,255,255,0.07);
+  border-radius: 0;
+  background: transparent;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-stat-summary span:first-child { padding-left: 0; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-stat-summary span:last-child { border-right: 0; }
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-stat-summary span {
+  border-color: rgba(15,23,42,0.07);
+  background: transparent;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-stats-empty {
+  padding: 14px 0 10px;
+  color: var(--s2-faint);
+  text-align: center;
+  font-size: 0.62rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-toolbar {
+  border: 0;
+  background: transparent;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .custom-select-trigger,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-refresh,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-reset,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-more > summary {
+  background: rgba(255,255,255,0.025);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input,
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter .custom-select-trigger,
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-refresh,
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-reset,
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-more > summary {
+  border-color: rgba(15,23,42,0.08);
+  background: rgba(255,255,255,0.64);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.96);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-empty {
+  min-height: 70px;
+  display: grid;
+  place-items: center;
+  padding: 12px 0;
+  border-top: 1px solid rgba(255,255,255,0.055);
+  border-bottom: 1px solid rgba(255,255,255,0.055);
+  color: var(--s2-faint);
+  font-size: 0.62rem;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-empty {
+  border-color: rgba(15,23,42,0.06);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-list {
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
+  background: transparent;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-list {
+  background: transparent;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-pagination {
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-log-pagination {
+  border: 0;
+  background: transparent;
+}
+@media (max-width: 620px) {
+  body[data-page="providerRouter"] .shell-v2 .provider-router-page {
+    padding-top: 26px;
+  }
+}
