@@ -1,0 +1,80 @@
+name: Sync Release Notes
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/release-notes/v*.md'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to update, for example v1.0.67
+        required: true
+        type: string
+
+jobs:
+  sync:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            tag='${{ inputs.tag }}'
+          else
+            file=$(git diff --name-only HEAD^ HEAD -- '.github/release-notes/v*.md' | tail -n 1)
+            tag=$(basename "$file" .md)
+          fi
+          test -f ".github/release-notes/${tag}.md"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Update published release description
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        with:
+          script: |
+            const fs = require('fs');
+            const tag = process.env.RELEASE_TAG;
+            const changelog = fs.readFileSync(`.github/release-notes/${tag}.md`, 'utf8').trim();
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag
+            });
+            const body = [
+              `## EasyAIConfig ${tag}`,
+              '',
+              '### 📦 下载',
+              '| 平台 | 文件 |',
+              '|------|------|',
+              '| macOS (Apple Silicon) | `.dmg` |',
+              '| macOS (Intel) | `.dmg` |',
+              '| Windows | `.exe`（支持应用内覆盖更新） |',
+              '| Linux | `.deb` / `.AppImage` |',
+              '',
+              '### 🍎 macOS 安装说明',
+              '下载 `.dmg` 后拖入 Applications，首次打开前运行：',
+              '```bash',
+              'sudo xattr -rd com.apple.quarantine /Applications/EasyAIConfig.app',
+              '```',
+              '然后正常双击打开即可。',
+              '',
+              '### 更新日志',
+              changelog,
+            ].join('\n');
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: `EasyAIConfig ${tag}`,
+              body
+            });

@@ -31,7 +31,47 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require('fs');
             const tag = '${{ steps.get-tag.outputs.tag }}';
+            const notesPath = `.github/release-notes/${tag}.md`;
+            let changelog = '';
+            if (fs.existsSync(notesPath)) {
+              changelog = fs.readFileSync(notesPath, 'utf8').trim();
+            } else {
+              try {
+                const { data } = await github.rest.repos.generateReleaseNotes({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_name: tag,
+                  target_commitish: context.sha
+                });
+                changelog = data.body.trim();
+              } catch (error) {
+                core.warning(`Unable to generate release notes: ${error.message}`);
+                changelog = '- 本版本包含稳定性改进与问题修复。';
+              }
+            }
+            const body = [
+              `## EasyAIConfig ${tag}`,
+              '',
+              '### 📦 下载',
+              '| 平台 | 文件 |',
+              '|------|------|',
+              '| macOS (Apple Silicon) | `.dmg` |',
+              '| macOS (Intel) | `.dmg` |',
+              '| Windows | `.exe`（支持应用内覆盖更新） |',
+              '| Linux | `.deb` / `.AppImage` |',
+              '',
+              '### 🍎 macOS 安装说明',
+              '下载 `.dmg` 后拖入 Applications，首次打开前运行：',
+              '```bash',
+              'sudo xattr -rd com.apple.quarantine /Applications/EasyAIConfig.app',
+              '```',
+              '然后正常双击打开即可。',
+              '',
+              '### 更新日志',
+              changelog,
+            ].join('\n');
             let release;
             try {
               const { data } = await github.rest.repos.createRelease({
@@ -39,30 +79,7 @@ jobs:
                 repo: context.repo.repo,
                 tag_name: tag,
                 name: `EasyAIConfig ${tag}`,
-                body: [
-                  `## EasyAIConfig ${tag}`,
-                  '',
-                  '### 📦 下载',
-                  '| 平台 | 文件 |',
-                  '|------|------|',
-                  '| macOS (Apple Silicon) | `.dmg` |',
-                  '| macOS (Intel) | `.dmg` |',
-                  '| Windows | `.exe`（支持应用内覆盖更新） |',
-                  '| Linux | `.deb` / `.AppImage` |',
-                  '',
-                  '### 🍎 macOS 安装说明',
-                  '下载 `.dmg` 后拖入 Applications，首次打开前运行：',
-                  '```bash',
-                  'sudo xattr -rd com.apple.quarantine /Applications/EasyAIConfig.app',
-                  '```',
-                  '然后正常双击打开即可。',
-                  '',
-                  '### 更新日志',
-                  '- 修复 Windows 下部分启动命令的路径/引号兼容问题（Codex / Claude Code / OpenClaw）。',
-                  '- README 增加三平台下载指引与已支持功能/Roadmap 展示，信息更直观。',
-                  '- OpenClaw Dashboard 的 Provider 列表改为真实配置展示，移除占位假数据。',
-                  '- 文档视觉更新为简约风格（含新的扁平化 Logo）。',
-                ].join('\n'),
+                body,
                 draft: true,
                 prerelease: false
               });
@@ -76,7 +93,14 @@ jobs:
                 repo: context.repo.repo,
                 tag
               });
-              release = data;
+              const { data: updatedRelease } = await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: data.id,
+                name: `EasyAIConfig ${tag}`,
+                body
+              });
+              release = updatedRelease;
             }
             return release.id;
 
