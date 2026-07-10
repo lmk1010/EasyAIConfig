@@ -264,7 +264,7 @@ export function initTerminalPageState() {
       cwd: '',
       model: '',                    // '' = 默认；'custom' = modelCustom 文本
       modelCustom: '',
-      reasoningEffort: '',          // codex: '' | minimal | low | medium | high | xhigh
+      reasoningEffort: '',          // codex: '' | minimal | low | medium | high | xhigh | max | ultra
       profile: '',                  // codex 可空：--profile
       sandbox: 'bypass',            // bypass | workspace-write | read-only | none
       flags: '',                    // 额外参数
@@ -590,6 +590,9 @@ function renderLauncherPage(tp, providers) {
   // 默认模型列表（最新 → 老）；provider 模式下会从 /v1/models 拉真实列表合并到前
   const codexModelOpts = [
     { value: '', label: '默认 (账号/profile 设定)' },
+    { value: 'gpt-5.6-sol', label: 'gpt-5.6-sol · 旗舰' },
+    { value: 'gpt-5.6-terra', label: 'gpt-5.6-terra' },
+    { value: 'gpt-5.6-luna', label: 'gpt-5.6-luna' },
     { value: 'gpt-5.5', label: 'gpt-5.5' },
     { value: 'gpt-5.4', label: 'gpt-5.4' },
     { value: 'gpt-5-codex', label: 'gpt-5-codex' },
@@ -621,6 +624,8 @@ function renderLauncherPage(tp, providers) {
   ];
   const reasoningOpts = [
     { value: '', label: '默认 (跟 profile)' },
+    { value: 'ultra', label: 'ultra · 自动任务委派 (5.6 Sol/Terra)' },
+    { value: 'max', label: 'max · 最大推理 (GPT-5.6)' },
     { value: 'xhigh', label: 'xhigh · 极致推理' },
     { value: 'high', label: 'high · 深度思考' },
     { value: 'medium', label: 'medium · 平衡' },

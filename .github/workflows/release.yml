@@ -47,7 +47,7 @@ jobs:
                   '|------|------|',
                   '| macOS (Apple Silicon) | `.dmg` |',
                   '| macOS (Intel) | `.dmg` |',
-                  '| Windows | `.msi` / `.exe` |',
+                  '| Windows | `.exe`（支持应用内覆盖更新） |',
                   '| Linux | `.deb` / `.AppImage` |',
                   '',
                   '### 🍎 macOS 安装说明',
@@ -175,10 +175,9 @@ jobs:
               asset=$(find src-tauri/target/x86_64-apple-darwin/release/bundle/macos -type f -name '*.app.tar.gz' | head -n 1)
               ;;
             windows-x86_64)
-              asset=$(find src-tauri/target/release/bundle/msi -type f -name '*.msi' | head -n 1)
-              if [ -z "${asset:-}" ]; then
-                asset=$(find src-tauri/target/release/bundle/nsis -type f -name '*.exe' | head -n 1)
-              fi
+              # Windows 手动安装和应用内更新必须使用同一种安装器。
+              # 混用 MSI 与 NSIS 会在“应用和功能”中注册成两个 EasyAIConfig。
+              asset=$(find src-tauri/target/release/bundle/nsis -type f -name '*-setup.exe' | head -n 1)
               ;;
             linux-x86_64)
               asset=$(find src-tauri/target/release/bundle/appimage -type f -name '*.AppImage' | head -n 1)

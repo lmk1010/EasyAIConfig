@@ -3675,12 +3675,11 @@ function writeWindowsTerminalLauncher(cwd, commandText) {
   mkdirSync(launcherDir, { recursive: true });
   const launcherPath = path.join(launcherDir, `launch-${crypto.randomUUID()}.cmd`);
   const script = `@echo off
+chcp 65001>nul
 cd /d ${quoteWindowsCmdArg(normalizeWindowsCmdPath(cwd))}
 ${commandText}
 `;
-  const bom = Buffer.from([0xFF, 0xFE]);
-  const content = Buffer.from(script, 'utf16le');
-  writeFileSync(launcherPath, Buffer.concat([bom, content]));
+  writeFileSync(launcherPath, script, 'utf8');
   return launcherPath;
 }
 

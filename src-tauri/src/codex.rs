@@ -3726,6 +3726,10 @@ fn write_utf16le_file(path: &Path, text: &str) -> Result<(), String> {
     fs::write(path, bytes).map_err(|error| error.to_string())
 }
 
+fn write_windows_cmd_file(path: &Path, text: &str) -> Result<(), String> {
+    fs::write(path, text.as_bytes()).map_err(|error| error.to_string())
+}
+
 fn windows_launcher_dir() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir()
         .join("easy-ai-config")
@@ -3737,11 +3741,11 @@ fn windows_launcher_dir() -> Result<PathBuf, String> {
 fn write_windows_terminal_launcher(cwd: &Path, command_text: &str) -> Result<PathBuf, String> {
     let launcher_path = windows_launcher_dir()?.join(format!("launch-{}.cmd", Uuid::new_v4()));
     let script = format!(
-        "@echo off\r\ncd /d {}\r\n{}\r\n",
+        "@echo off\r\nchcp 65001>nul\r\ncd /d {}\r\n{}\r\n",
         quote_windows_cmd_arg(&normalize_windows_cmd_path(&cwd.to_string_lossy())),
         command_text
     );
-    write_utf16le_file(&launcher_path, &script)?;
+    write_windows_cmd_file(&launcher_path, &script)?;
     Ok(launcher_path)
 }
 

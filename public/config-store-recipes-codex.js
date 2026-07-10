@@ -5,8 +5,16 @@
 export const CODEX_CONFIG_RECIPES = [
   // ── Model Presets ──
   {
-    id: 'cx-model-gpt55', name: '使用 GPT-5.5', cat: '模型', desc: '切换默认模型为 Codex 当前推荐的 GPT-5.5', kw: 'gpt-5.5 model 模型 openai 推荐 latest', tool: 'codex',
-    apply: () => ({ model: 'gpt-5.5' })
+    id: 'cx-model-gpt56-sol', name: '使用 GPT-5.6 Sol', cat: '模型', desc: '切换默认模型为 GPT-5.6 Sol 旗舰模型', kw: 'gpt-5.6 sol model 模型 openai 推荐 latest 旗舰', tool: 'codex',
+    apply: () => ({ model: 'gpt-5.6-sol' })
+  },
+  {
+    id: 'cx-model-gpt56-terra', name: '使用 GPT-5.6 Terra', cat: '模型', desc: '切换默认模型为 GPT-5.6 Terra', kw: 'gpt-5.6 terra model 模型 openai', tool: 'codex',
+    apply: () => ({ model: 'gpt-5.6-terra' })
+  },
+  {
+    id: 'cx-model-gpt56-luna', name: '使用 GPT-5.6 Luna', cat: '模型', desc: '切换默认模型为 GPT-5.6 Luna', kw: 'gpt-5.6 luna model 模型 openai', tool: 'codex',
+    apply: () => ({ model: 'gpt-5.6-luna' })
   },
   {
     id: 'cx-model-gpt54-mini', name: '使用 GPT-5.4 mini', cat: '模型', desc: '切换到更快、更低成本的 GPT-5.4 mini', kw: 'gpt-5.4-mini model 模型 openai fast 快速 低成本', tool: 'codex',
@@ -18,7 +26,7 @@ export const CODEX_CONFIG_RECIPES = [
   },
   {
     id: 'cx-model-custom', name: '自定义模型', cat: '模型', desc: '设置自定义模型名称', kw: 'model 模型 自定义 custom', tool: 'codex',
-    fields: [{ key: 'model', label: '模型名称', placeholder: '如: gpt-5.5, deepseek-v4-flash' }],
+    fields: [{ key: 'model', label: '模型名称', placeholder: '如: gpt-5.6-sol, deepseek-v4-flash' }],
     apply: (v) => ({ model: v.model })
   },
   // ── Reasoning ──
@@ -33,6 +41,14 @@ export const CODEX_CONFIG_RECIPES = [
   {
     id: 'cx-reasoning-xhigh', name: '极致推理模式', cat: '推理', desc: '最高推理强度，适合最复杂的编程任务', kw: '推理 reasoning xhigh 极致 最高 最强', tool: 'codex',
     apply: () => ({ model_reasoning_effort: 'xhigh', plan_mode_reasoning_effort: 'xhigh' })
+  },
+  {
+    id: 'cx-reasoning-max', name: 'GPT-5.6 Max 推理', cat: '推理', desc: 'GPT-5.6 最大推理深度，适合最困难任务', kw: '推理 reasoning max gpt-5.6 最大', tool: 'codex',
+    apply: () => ({ model_reasoning_effort: 'max', plan_mode_reasoning_effort: 'max' })
+  },
+  {
+    id: 'cx-reasoning-ultra', name: 'GPT-5.6 Ultra 推理', cat: '推理', desc: 'GPT-5.6 Sol/Terra 的自动任务委派推理模式', kw: '推理 reasoning ultra gpt-5.6 sol terra 委派', tool: 'codex',
+    apply: () => ({ model_reasoning_effort: 'ultra', plan_mode_reasoning_effort: 'ultra' })
   },
   // ── Context Window ──
   {

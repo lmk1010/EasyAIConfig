@@ -9388,6 +9388,9 @@ function renderDashboardLoadingCard() {
 //   provider         'openai' / 'anthropic'，决定走哪套公式（见 calcModelCost）
 const CODEX_MODEL_PRICING = {
   // ── OpenAI / Codex（价来源：ccusage pricing.rs put_builtin_pricing）──
+  'gpt-5.6-sol':       { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.6 Sol' },
+  'gpt-5.6-terra':     { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.6 Terra' },
+  'gpt-5.6-luna':      { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.6 Luna' },
   'gpt-5.5':           { provider: 'openai',    input: 5.00,  output: 30.00, cached: 0.50,  label: 'GPT-5.5' },
   'gpt-5.5-pro':       { provider: 'openai',    input: 30.00, output: 180.00, cached: null, label: 'GPT-5.5 Pro' },
   'gpt-5.4-pro':       { provider: 'openai',    input: 30.00, output: 180.00, cached: null, label: 'GPT-5.4 Pro' },
@@ -10354,7 +10357,7 @@ function renderDashboardPage() {
             </div>
             <div class="db2-card-meta">${escapeHtml(appText('GPT-5.4 / GPT-5.3 Codex 检测结果'))}</div>
           </div>
-          ${renderPricingStandardsCards(codexModels, ['gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex'])}
+          ${renderPricingStandardsCards(codexModels, ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])}
         </section>
 
         <section class="db2-section db3-panel db3-panel--primary">
@@ -14565,7 +14568,10 @@ const CODEX_MODEL_PRESETS = [
   {
     label: 'OpenAI / Codex 推荐',
     options: [
-      { value: 'gpt-5.5', label: 'GPT-5.5 (推荐)' },
+      { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol (旗舰 / 推荐)' },
+      { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+      { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
+      { value: 'gpt-5.5', label: 'GPT-5.5' },
       { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
       { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark (Preview)' },
       { value: 'gpt-5.4', label: 'GPT-5.4' },
@@ -14749,6 +14755,9 @@ const CODEX_MODEL_PRESETS = [
 
 // Codex model context-window caps used by the config editor UI.
 const CODEX_MODEL_CONTEXT_WINDOWS = {
+  'gpt-5.6-sol': 272000,
+  'gpt-5.6-terra': 272000,
+  'gpt-5.6-luna': 272000,
   'gpt-5.4': 1048576,
   'gpt-5.3-codex': 272000,
   'gpt-5.2': 272000,
@@ -19173,7 +19182,7 @@ const CODEX_CONTEXT_EFFECTIVE_RATIO = 0.95;
 const CODEX_AUTO_COMPACT_LIMIT_RATIO = 0.9;
 const CODEX_APPROVAL_POLICY_VALUES = new Set(['untrusted', 'on-request', 'never']);
 const CODEX_SANDBOX_MODE_VALUES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
-const CODEX_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+const CODEX_REASONING_EFFORT_VALUES = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 const CODEX_REASONING_SUMMARY_VALUES = new Set(['auto', 'concise', 'detailed', 'none']);
 const CODEX_VERBOSITY_VALUES = new Set(['low', 'medium', 'high']);
 const CODEX_SERVICE_TIER_VALUES = new Set(['fast', 'flex']);
@@ -23744,7 +23753,10 @@ function positionProviderDropdown() {
 
 /** Default GPT models to show in the Codex model dropdown before detection. */
 const CODEX_DEFAULT_MODELS = [
-  { value: 'gpt-5.5', label: 'GPT-5.5 (推荐)' },
+  { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol (旗舰 / 推荐)' },
+  { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+  { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
+  { value: 'gpt-5.5', label: 'GPT-5.5' },
   { value: 'gpt-5.4-mini', label: 'GPT-5.4 mini (快速)' },
   { value: 'gpt-5.4', label: 'GPT-5.4' },
   { value: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark (Preview)' },
