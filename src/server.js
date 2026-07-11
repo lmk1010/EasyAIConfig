@@ -76,7 +76,7 @@ import {
 import {
   listConfigDiagnostics,
 } from './lib/config-diagnostics.js';
-import { syncCodexModelCatalog } from './lib/codex-model-catalog.js';
+import { inspectCodexModelCatalog, readCodexModelCatalog, saveCodexModelCatalog, syncCodexModelCatalog } from './lib/codex-model-catalog.js';
 import {
   listSyncTargets,
   listSyncSnapshots,
@@ -1865,6 +1865,24 @@ export async function startServer(options = {}) {
     } catch (error) {
       fail(res, error);
     }
+  });
+
+  app.get('/api/codex/model-catalog/status', async (req, res) => {
+    try {
+      ok(res, { data: await inspectCodexModelCatalog(req.query || {}) });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
+
+  app.get('/api/codex/model-catalog/content', async (req, res) => {
+    try { ok(res, { data: await readCodexModelCatalog(req.query || {}) }); }
+    catch (error) { fail(res, error); }
+  });
+
+  app.post('/api/codex/model-catalog/content', async (req, res) => {
+    try { ok(res, { data: await saveCodexModelCatalog(req.body || {}) }); }
+    catch (error) { fail(res, error); }
   });
 
   // 列表加载时一次性拉所有 provider 最近一次健康快照，画红绿灯用

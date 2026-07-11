@@ -6292,6 +6292,15 @@ async fn dispatch(
         ("/api/codex/model-catalog/sync", "POST") => {
             crate::codex_model_catalog::sync_model_catalog(body)
         }
+        ("/api/codex/model-catalog/status", "GET") => {
+            crate::codex_model_catalog::inspect_model_catalog(query)
+        }
+        ("/api/codex/model-catalog/content", "GET") => {
+            crate::codex_model_catalog::read_model_catalog(query)
+        }
+        ("/api/codex/model-catalog/content", "POST") => {
+            crate::codex_model_catalog::save_model_catalog(body)
+        }
         ("/api/codex/sessions", "GET") => list_codex_sessions(query),
         ("/api/codex/session-detail", "GET") => get_codex_session_detail(query),
         ("/api/codex/resume", "POST") => resume_codex_session(body),

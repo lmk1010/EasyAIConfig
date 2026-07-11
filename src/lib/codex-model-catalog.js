@@ -195,3 +195,49 @@ export async function syncCodexModelCatalog({ codexHome, providerKey, models } =
     restartRequired: true,
   };
 }
+
+export async function inspectCodexModelCatalog({ codexHome } = {}) {
+  const resolvedHome = path.resolve(String(codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex')).trim());
+  const homeRoot = path.resolve(os.homedir());
+  if (resolvedHome !== homeRoot && !resolvedHome.startsWith(homeRoot + path.sep)) {
+    throw new Error('codexHome 必须位于当前用户目录中');
+  }
+  const configPath = path.join(resolvedHome, 'config.toml');
+  let configText = '';
+  try { configText = await fs.readFile(configPath, 'utf8'); } catch {}
+  let configuredCatalog = '';
+  try { configuredCatalog = TOML.parse(configText).model_catalog_json || ''; } catch {}
+  const catalogPath = resolveCatalogPath(resolvedHome, configuredCatalog);
+  const catalog = catalogPath ? await readJson(catalogPath) : null;
+  return {
+    configured: Boolean(configuredCatalog),
+    exists: Boolean(catalog),
+    catalogPath,
+    configPath,
+    totalCount: Array.isArray(catalog?.models) ? catalog.models.length : 0,
+  };
+}
+
+export async function readCodexModelCatalog({ codexHome } = {}) {
+  const status = await inspectCodexModelCatalog({ codexHome });
+  if (!status.catalogPath) throw new Error('尚未配置 model_catalog_json，请先同步到 Codex');
+  if (!status.exists) throw new Error('model_catalog_json 指向的 JSON 文件不存在');
+  const content = await fs.readFile(status.catalogPath, 'utf8');
+  return { ...status, content };
+}
+
+export async function saveCodexModelCatalog({ codexHome, content } = {}) {
+  const status = await inspectCodexModelCatalog({ codexHome });
+  if (!status.catalogPath) throw new Error('尚未配置 model_catalog_json，请先同步到 Codex');
+  let catalog;
+  try { catalog = JSON.parse(String(content || '')); } catch (error) {
+    throw new Error(`JSON 格式错误: ${error.message}`);
+  }
+  if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)) throw new Error('模型目录必须是 JSON 对象');
+  if (!Array.isArray(catalog.models)) throw new Error('模型目录必须包含 models 数组');
+  const backupDir = path.join(os.homedir(), '.codex-config-ui', 'backups', `model-catalog-edit-${timestamp()}`);
+  await fs.mkdir(backupDir, { recursive: true });
+  await copyIfPresent(status.catalogPath, path.join(backupDir, path.basename(status.catalogPath)));
+  await fs.writeFile(status.catalogPath, `${JSON.stringify(catalog, null, 2)}\n`, 'utf8');
+  return { ...status, exists: true, totalCount: catalog.models.length, backupPath: backupDir };
+}

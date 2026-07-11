@@ -1039,11 +1039,11 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(appJs, /error normalized/);
   assert.match(appJs, /搜索路径、Provider 或错误/);
   assert.match(routerRenderBody, /data-provider-router-tab="\$\{esc\(tab\.key\)\}"/);
-  assert.match(routerRenderBody, /key: 'gateway', label: '网关'/);
+  assert.match(routerRenderBody, /key: 'start', label: '启动'/);
+  assert.match(routerRenderBody, /key: 'routes', label: '线路'/);
   assert.match(routerRenderBody, /key: 'logs', label: '日志'/);
-  assert.match(routerRenderBody, /const routerTabKeys = \['gateway', 'logs'\]/);
-  assert.match(routerEventsBody, /\['gateway', 'logs'\]\.includes\(tab\)/);
-  assert.doesNotMatch(routerRenderBody, /key: 'routes'/);
+  assert.match(routerRenderBody, /const routerTabKeys = \['start', 'routes', 'logs'\]/);
+  assert.match(routerEventsBody, /\['start', 'routes', 'logs'\]\.includes\(tab\)/);
   assert.doesNotMatch(routerRenderBody, /key: 'strategy'/);
   assert.doesNotMatch(routerRenderBody, /key: 'clients'/);
   assert.doesNotMatch(routerRenderBody, /key: 'runtime'/);
@@ -1078,6 +1078,13 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(tauriCodexRs, /LOCAL_ROUTER_NO_PROXY_VALUE: &str = "127\.0\.0\.1,localhost,::1"/);
   assert.match(tauriCodexRs, /codex_launch_uses_local_router/);
   assert.match(tauriCodexRs, /env\.push\(\(\s*"NO_PROXY"\.to_string\(\),\s*LOCAL_ROUTER_NO_PROXY_VALUE\.to_string\(\),\s*\)\)/);
+});
+
+test('provider router uses separate start routes and logs tabs', () => {
+  assert.match(appJs, /routerTabKeys = \['start', 'routes', 'logs'\]/);
+  assert.match(appJs, /key: 'start', label: '启动'/);
+  assert.match(appJs, /key: 'routes', label: '线路'/);
+  assert.match(appJs, /activeTab === 'start'\s*\? gatewayHero/);
 });
 
 test('asset center exposes cross-tool asset inventory and deep link actions', () => {
@@ -1684,4 +1691,10 @@ test('provider model support exposes Codex model catalog synchronization on both
   assert.match(serverJs, /\/api\/codex\/model-catalog\/sync/);
   assert.match(routesRs, /\/api\/codex\/model-catalog\/sync/);
   assert.match(libRs, /mod codex_model_catalog;/);
+  assert.match(appJs, /catalogStatus\?\.exists \? '查看 \/ 编辑' : '创建并编辑'/);
+  assert.match(appJs, /openCodexModelCatalogEditor\(codexHome, \{/);
+  assert.match(appJs, /catalogFileName = String\(catalogStatus\?\.catalogPath/);
+  assert.match(appJs, /api\('\/api\/codex\/model-catalog\/sync'/);
+  const catalogRs = readFileSync(new URL('../src-tauri/src/codex_model_catalog.rs', import.meta.url), 'utf8');
+  assert.doesNotMatch(catalogRs, /Ok\(json!\(\{ "ok": true, "data":/);
 });

@@ -176,6 +176,9 @@ const state = {
     usageModel: 'all',
     usageMetrics: null,
     usageMetricsFetchedAt: 0,
+    usageMetricsByDays: {},
+    usageMetricsLoading: false,
+    usageMetricsRequestId: 0,
     remoteUsageResult: null,
     remoteUsageFetchedAt: 0,
     remoteUsageLoading: false,
@@ -25722,9 +25725,14 @@ function handleProviderDetailClick(e) {
     state.providerDetail.usageWindow = nextWindow;
     state.providerDetail.usageModel = 'all';
     try { localStorage.setItem('easyaiconfig_pd_usage_window', nextWindow); } catch {}
+    const requestDays = getPdUsageRequestDays();
+    const cached = state.providerDetail.usageMetricsByDays?.[requestDays];
+    state.providerDetail.usageMetrics = cached?.data || null;
+    state.providerDetail.usageMetricsFetchedAt = Number(cached?.fetchedAt || 0);
+    state.providerDetail.usageMetricsLoading = !cached;
     pdLastRenderSig = '';
     renderProviderDetail({ force: true });
-    fetchDashboardMetricsForDetail(true).catch(() => {});
+    fetchDashboardMetricsForDetail(false, requestDays).catch(() => {});
     return;
   }
   const usageModelBtn = target.closest('[data-pd-usage-model]');
@@ -26006,6 +26014,9 @@ function openProviderDetail(key) {
   state.providerDetail.usageModel = 'all';
   state.providerDetail.usageMetrics = null;
   state.providerDetail.usageMetricsFetchedAt = 0;
+  state.providerDetail.usageMetricsByDays = {};
+  state.providerDetail.usageMetricsLoading = false;
+  state.providerDetail.usageMetricsRequestId = 0;
   state.providerDetail.remoteUsageResult = null;
   state.providerDetail.remoteUsageFetchedAt = 0;
   state.providerDetail.remoteUsageLoading = false;
@@ -26061,17 +26072,27 @@ function openProviderDetail(key) {
   }
 }
 
-async function fetchDashboardMetricsForDetail(force = false) {
+async function fetchDashboardMetricsForDetail(force = false, requestedDays = getPdUsageRequestDays()) {
   const expectedKey = state.providerDetail?.providerKey || '';
   const expectedTool = state.providerDetail?.tool || state.activeTool || 'codex';
   if (expectedTool !== 'codex') return;
-  // Provider 详情页自己持有一份 usage metrics，避免为了 90 天/全部筛选去污染全局 Dashboard 的时间窗。
-  const fetchedAt = Number(state.providerDetail.usageMetricsFetchedAt || 0);
+  const requestDays = Math.min(366, Math.max(1, Number(requestedDays) || 30));
+  const cached = state.providerDetail.usageMetricsByDays?.[requestDays];
+  const fetchedAt = Number(cached?.fetchedAt || 0);
   const isStale = !fetchedAt || (Date.now() - fetchedAt > 60 * 1000);
-  if (state.providerDetail?.usageMetrics && !force && !isStale) return;
+  if (cached?.data && !force && !isStale) {
+    if (getPdUsageRequestDays() === requestDays) {
+      state.providerDetail.usageMetrics = cached.data;
+      state.providerDetail.usageMetricsFetchedAt = fetchedAt;
+      state.providerDetail.usageMetricsLoading = false;
+    }
+    return;
+  }
   const row = lookupProviderDetailRow();
   const codexHome = row?.homePath || getDashboardCodexHome();
-  const requestDays = getPdUsageRequestDays();
+  const requestId = Number(state.providerDetail.usageMetricsRequestId || 0) + 1;
+  state.providerDetail.usageMetricsRequestId = requestId;
+  if (getPdUsageRequestDays() === requestDays) state.providerDetail.usageMetricsLoading = true;
   const params = new URLSearchParams({
     days: String(requestDays),
     codexHome,
@@ -26081,11 +26102,21 @@ async function fetchDashboardMetricsForDetail(force = false) {
     const json = await api(`/api/dashboard/codex-usage?${params.toString()}`, { timeoutMs: force ? 120000 : 20000 });
     if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
     if (json?.ok && json.data && json.data.totals && typeof json.data.totals === 'object') {
-      state.providerDetail.usageMetrics = { ...json.data, _providerDetailDays: requestDays };
-      state.providerDetail.usageMetricsFetchedAt = Date.now();
+      const data = { ...json.data, _providerDetailDays: requestDays };
+      const nextFetchedAt = Date.now();
+      state.providerDetail.usageMetricsByDays[requestDays] = { data, fetchedAt: nextFetchedAt };
+      if (getPdUsageRequestDays() === requestDays && state.providerDetail.usageMetricsRequestId === requestId) {
+        state.providerDetail.usageMetrics = data;
+        state.providerDetail.usageMetricsFetchedAt = nextFetchedAt;
+      }
     }
   } finally {
-    if (isCurrentProviderDetail(expectedKey, expectedTool)) renderProviderDetail({ force: true });
+    if (isCurrentProviderDetail(expectedKey, expectedTool)
+      && getPdUsageRequestDays() === requestDays
+      && state.providerDetail.usageMetricsRequestId === requestId) {
+      state.providerDetail.usageMetricsLoading = false;
+      renderProviderDetail({ force: true });
+    }
   }
 }
 
@@ -28375,8 +28406,8 @@ function ensureProviderRouterEvents() {
     if (!getProviderRouterPageTarget(target)) return;
     const routerTab = target.closest('[data-provider-router-tab]');
     if (routerTab) {
-      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'gateway').trim();
-      state.providerRouter.activeTab = ['gateway', 'logs'].includes(tab) ? tab : 'gateway';
+      const tab = String(routerTab.getAttribute('data-provider-router-tab') || 'start').trim();
+      state.providerRouter.activeTab = ['start', 'routes', 'logs'].includes(tab) ? tab : 'start';
       renderProviderRouterPage();
       if (state.providerRouter.activeTab === 'logs') {
         void fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
@@ -28784,13 +28815,14 @@ function renderProviderRouterPage() {
     : running
         ? '重启网关'
         : '启动网关';
-  const legacyTabMap = { overview: 'gateway', routes: 'gateway', strategy: 'gateway', clients: 'gateway', runtime: 'gateway', rectifier: 'gateway', stats: 'logs' };
+  const legacyTabMap = { overview: 'routes', routes: 'routes', strategy: 'routes', clients: 'routes', runtime: 'start', rectifier: 'routes', gateway: 'start', stats: 'logs' };
   const normalizedTab = legacyTabMap[state.providerRouter.activeTab] || state.providerRouter.activeTab;
-  const routerTabKeys = ['gateway', 'logs'];
-  const activeTab = routerTabKeys.includes(normalizedTab) ? normalizedTab : 'gateway';
+  const routerTabKeys = ['start', 'routes', 'logs'];
+  const activeTab = routerTabKeys.includes(normalizedTab) ? normalizedTab : 'start';
   state.providerRouter.activeTab = activeTab;
   const routerTabs = [
-    { key: 'gateway', label: '网关', meta: running ? '运行中' : '未启动' },
+    { key: 'start', label: '启动', meta: running ? '运行中' : '未启动' },
+    { key: 'routes', label: '线路', meta: selectedSummary },
     { key: 'logs', label: '日志', meta: String(stats.requests || 0) },
   ].map((tab) => `
     <button type="button" class="pd-router-tab ${activeTab === tab.key ? 'is-active' : ''}" data-provider-router-tab="${esc(tab.key)}">
@@ -29059,7 +29091,11 @@ function renderProviderRouterPage() {
       </details>
     </div>`;
   const statsPanel = renderProviderRouterStatsPanel({ loading });
-  const activePanel = activeTab === 'logs' ? statsPanel : overviewPanel;
+  const activePanel = activeTab === 'start'
+    ? gatewayHero
+    : activeTab === 'logs'
+      ? statsPanel
+      : overviewPanel;
 
   container.innerHTML = `
     <div class="pd-router provider-router-shell">
@@ -29078,7 +29114,6 @@ function renderProviderRouterPage() {
         </div>
       </header>
       ${error ? `<div class="pd-remote-alert is-bad">${esc(error)}</div>` : ''}
-      ${gatewayHero}
       <section class="pd-router-tabs-shell">
         <div class="pd-router-tabs">${routerTabs}</div>
         ${activePanel}
@@ -29206,6 +29241,7 @@ function pdComputeRenderSig(row) {
     `ebp:${pd.evalBatchProgress?.completed ?? 0}/${pd.evalBatchProgress?.total ?? 0}:${pd.evalBatchProgress?.currentLabel || ''}`,
     `ebr:${batchResultsSig}`,
     pd.usageRefreshing ? 'ur' : 'us',
+    pd.usageMetricsLoading ? 'uml' : 'umi',
     pd.remoteUsageLoading ? 'rul' : 'rui',
     pd.remoteUsageError || '',
     pd.remoteUsageResult ? `ru:${pd.remoteUsageResult.status || ''}:${pd.remoteUsageResult.providerType || ''}:${pd.remoteUsageFetchedAt || 0}` : 'run',
@@ -29691,6 +29727,21 @@ function renderPdModels(row) {
   const saved = normalizeProviderModelList((state.providerSavedModels?.[providerKey]) || []);
   const currentModel = getProviderDetailModel(row);
   const loading = state.providerDetail?.modelsLoading;
+  const catalogStatus = state.providerDetail?.modelCatalogStatus || null;
+  const catalogFileName = String(catalogStatus?.catalogPath || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  const catalogLoading = Boolean(state.providerDetail?.modelCatalogLoading);
+  if (!catalogStatus && !catalogLoading) {
+    state.providerDetail.modelCatalogLoading = true;
+    api(`/api/codex/model-catalog/status?codexHome=${encodeURIComponent(codexHome || '')}`)
+      .then((res) => {
+        if (res?.ok) state.providerDetail.modelCatalogStatus = res.data || {};
+      })
+      .catch(() => {})
+      .finally(() => {
+        state.providerDetail.modelCatalogLoading = false;
+        if (isCurrentProviderDetail(providerKey, detailTool, 'models')) renderProviderDetail({ force: true });
+      });
+  }
   // 异步首次拉 saved 列表（如果还没拉）
   if (!state.providerSavedModels || !(providerKey in state.providerSavedModels)) {
     api(`/api/provider/saved-models?providerKey=${encodeURIComponent(providerKey)}&codexHome=${encodeURIComponent(codexHome || '')}`)
@@ -29731,7 +29782,19 @@ function renderPdModels(row) {
         </div>
         <div class="pdm-bar-item pdm-bar-right">
           ${liveModels.length ? `<span class="pdm-bar-live">Live 已检测 ${liveModels.length}</span>` : '<span class="pdm-bar-none">Live 未检测</span>'}
-          <button type="button" class="pdm-link-btn" data-pd-models-refetch ${loading ? 'disabled' : ''}>${loading ? '检测中…' : '从 Provider 拉取'}</button>
+          <button type="button" class="pdm-link-btn" data-pd-models-refetch ${loading ? 'disabled' : ''}>${loading ? '刷新中…' : '刷新模型列表'}</button>
+        </div>
+      </div>
+
+      <div class="pdm-catalog-status">
+        <div class="pdm-catalog-main">
+          <span class="pdm-bar-label">Codex 模型目录</span>
+          <span class="pdm-catalog-state ${catalogStatus?.exists ? 'is-ready' : ''}">${catalogLoading ? '检查中…' : catalogStatus?.exists ? `已启用 · ${esc(String(catalogStatus.totalCount || 0))} 个模型` : catalogStatus?.configured ? '已配置，但 JSON 文件不存在' : '未配置 model_catalog_json'}</span>
+          ${catalogStatus?.catalogPath ? `<button type="button" class="pdm-catalog-path" data-pd-model-catalog-open title="${esc(catalogStatus.catalogPath)}">${esc(catalogFileName)}</button>` : ''}
+        </div>
+        <div class="pdm-catalog-actions">
+          <button type="button" class="pdm-link-btn" data-pd-model-catalog-open>${catalogStatus?.exists ? '查看 / 编辑' : '创建并编辑'}</button>
+          <button type="button" class="pdm-link-btn" data-pd-model-catalog-refresh ${catalogLoading ? 'disabled' : ''}>刷新目录状态</button>
         </div>
       </div>
 
@@ -29873,8 +29936,37 @@ async function bindPdModelsEvents() {
   }
 
   root.addEventListener('click', async (e) => {
-    const actionButton = e.target.closest('.pdm-card-actions button, [data-pd-models-clear], [data-pd-models-sync-codex]');
+    const actionButton = e.target.closest('.pdm-card-actions button, [data-pd-models-clear], [data-pd-models-sync-codex], [data-pd-model-catalog-refresh], [data-pd-model-catalog-open]');
     if (actionButton) e.stopPropagation();
+    if (e.target.closest('[data-pd-model-catalog-open]')) {
+      e.preventDefault();
+      const currentRow = lookupProviderDetailRow();
+      const currentModel = getProviderDetailModel(currentRow);
+      const savedModels = normalizeProviderModelList(state.providerSavedModels?.[providerKey] || []);
+      const liveModels = normalizeProviderModelList(state.providerDetail?.detected?.[providerKey]?.models || []);
+      await openCodexModelCatalogEditor(codexHome, {
+        providerKey,
+        models: normalizeProviderModelList([...savedModels, ...liveModels, currentModel]),
+      });
+      return;
+    }
+    const refreshCatalog = e.target.closest('[data-pd-model-catalog-refresh]');
+    if (refreshCatalog) {
+      e.preventDefault();
+      state.providerDetail.modelCatalogLoading = true;
+      renderProviderDetail({ force: true });
+      try {
+        const res = await api(`/api/codex/model-catalog/status?codexHome=${encodeURIComponent(codexHome || '')}`);
+        if (res?.ok) state.providerDetail.modelCatalogStatus = res.data || {};
+        else flash(`刷新目录状态失败: ${res?.error || '未知'}`, 'error');
+      } catch (err) {
+        flash(`刷新目录状态异常: ${err.message || err}`, 'error');
+      } finally {
+        state.providerDetail.modelCatalogLoading = false;
+        renderProviderDetail({ force: true });
+      }
+      return;
+    }
     const syncCodex = e.target.closest('[data-pd-models-sync-codex]');
     if (syncCodex) {
       e.preventDefault();
@@ -29902,6 +29994,13 @@ async function bindPdModelsEvents() {
           return;
         }
         const data = res.data || {};
+        state.providerDetail.modelCatalogStatus = {
+          configured: true,
+          exists: true,
+          catalogPath: data.catalogPath || '',
+          configPath: data.configPath || '',
+          totalCount: data.totalCount || models.length,
+        };
         flash(`已同步 ${data.addedCount || 0} 个新模型，共 ${data.totalCount || models.length} 个 · 重启 Codex 后生效`, 'success');
       } catch (err) {
         flash(`同步异常: ${err.message || err}`, 'error');
@@ -30052,6 +30151,117 @@ async function bindPdModelsEvents() {
       btn.textContent = originalText;
       btn.disabled = false;
       delete btn.dataset.busy;
+    }
+  });
+}
+
+let codexModelCatalogEditor = null;
+
+function closeCodexModelCatalogEditor() {
+  codexModelCatalogEditor?.destroy?.();
+  codexModelCatalogEditor = null;
+  document.getElementById('codexModelCatalogModal')?.remove();
+  document.body.classList.remove('model-catalog-modal-open');
+}
+
+async function openCodexModelCatalogEditor(codexHome, { providerKey = '', models = [] } = {}) {
+  closeCodexModelCatalogEditor();
+  let res;
+  try {
+    res = await api(`/api/codex/model-catalog/content?codexHome=${encodeURIComponent(codexHome || '')}`);
+  } catch (err) {
+    flash(`读取模型目录异常: ${err.message || err}`, 'error');
+    return;
+  }
+  if (!res?.ok) {
+    const initialModels = normalizeProviderModelList(models);
+    if (!initialModels.length) {
+      flash('请先添加模型或刷新模型列表，再创建 Codex 模型目录', 'warning');
+      return;
+    }
+    try {
+      const syncRes = await api('/api/codex/model-catalog/sync', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codexHome, providerKey, models: initialModels }),
+      });
+      if (!syncRes?.ok) {
+        flash(`创建模型目录失败: ${syncRes?.error || res?.error || '未知'}`, 'error');
+        return;
+      }
+      state.providerDetail.modelCatalogStatus = {
+        configured: true,
+        exists: true,
+        ...(syncRes.data || {}),
+      };
+      res = await api(`/api/codex/model-catalog/content?codexHome=${encodeURIComponent(codexHome || '')}`);
+    } catch (err) {
+      flash(`创建模型目录异常: ${err.message || err}`, 'error');
+      return;
+    }
+    if (!res?.ok) {
+      flash(`读取模型目录失败: ${res?.error || '未知'}`, 'error');
+      return;
+    }
+  }
+  const data = res.data || {};
+  const modal = document.createElement('section');
+  modal.id = 'codexModelCatalogModal';
+  modal.className = 'model-catalog-modal';
+  modal.innerHTML = `
+    <div class="model-catalog-modal-backdrop" data-model-catalog-close></div>
+    <div class="model-catalog-modal-panel" role="dialog" aria-modal="true" aria-labelledby="modelCatalogEditorTitle">
+      <header class="model-catalog-modal-head">
+        <div><div class="eyebrow">CODEX MODEL CATALOG</div><h3 id="modelCatalogEditorTitle">查看 / 编辑模型目录</h3></div>
+        <button type="button" class="model-catalog-modal-close" data-model-catalog-close aria-label="关闭">×</button>
+      </header>
+      <div class="model-catalog-modal-path" title="${escapeHtml(data.catalogPath || '')}">${escapeHtml(data.catalogPath || '')}</div>
+      <div id="modelCatalogAceEditor" class="model-catalog-editor"></div>
+      <textarea id="modelCatalogTextarea" class="hide">${escapeHtml(data.content || '')}</textarea>
+      <footer class="model-catalog-modal-actions">
+        <span class="model-catalog-modal-hint">保存前自动校验 JSON；原文件会备份。</span>
+        <button type="button" class="secondary" data-model-catalog-close>取消</button>
+        <button type="button" data-model-catalog-save>保存 JSON</button>
+      </footer>
+    </div>`;
+  document.body.appendChild(modal);
+  document.body.classList.add('model-catalog-modal-open');
+  const textarea = modal.querySelector('#modelCatalogTextarea');
+  if (window.ace) {
+    window.ace.config.set('basePath', '/vendor/ace');
+    codexModelCatalogEditor = window.ace.edit('modelCatalogAceEditor');
+    codexModelCatalogEditor.session.setMode('ace/mode/json');
+    codexModelCatalogEditor.session.setUseWorker(false);
+    codexModelCatalogEditor.session.setTabSize(2);
+    codexModelCatalogEditor.session.setUseSoftTabs(true);
+    codexModelCatalogEditor.setTheme(getRawCodeEditorTheme());
+    codexModelCatalogEditor.setOptions({ fontSize: '12px', showPrintMargin: false, wrap: false, scrollPastEnd: 0.12 });
+    codexModelCatalogEditor.setValue(data.content || '', -1);
+    requestAnimationFrame(() => codexModelCatalogEditor?.resize());
+  } else {
+    textarea.classList.remove('hide');
+  }
+  modal.addEventListener('click', async (event) => {
+    if (event.target.closest('[data-model-catalog-close]')) { closeCodexModelCatalogEditor(); return; }
+    const saveButton = event.target.closest('[data-model-catalog-save]');
+    if (!saveButton || saveButton.disabled) return;
+    const content = codexModelCatalogEditor ? codexModelCatalogEditor.getValue() : textarea.value;
+    try { JSON.parse(content); } catch (err) { flash(`JSON 格式错误: ${err.message}`, 'error'); return; }
+    saveButton.disabled = true;
+    saveButton.textContent = '保存中…';
+    try {
+      const saveRes = await api('/api/codex/model-catalog/content', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codexHome, content }),
+      });
+      if (!saveRes?.ok) { flash(`保存失败: ${saveRes?.error || '未知'}`, 'error'); return; }
+      state.providerDetail.modelCatalogStatus = saveRes.data || {};
+      flash(`模型目录已保存，共 ${saveRes.data?.totalCount || 0} 个模型；重启 Codex 后生效`, 'success');
+      closeCodexModelCatalogEditor();
+      renderProviderDetail({ force: true });
+    } catch (err) {
+      flash(`保存异常: ${err.message || err}`, 'error');
+    } finally {
+      if (saveButton.isConnected) { saveButton.disabled = false; saveButton.textContent = '保存 JSON'; }
     }
   });
 }
@@ -31150,7 +31360,8 @@ function renderPdUsage(row) {
   const usageView = normalizePdUsageView(state.providerDetail?.usageView || 'local');
   if (usageView === 'remote') return renderPdRemoteUsage(row);
   const sourceTabs = renderPdUsageSourceTabs('local', row);
-  const codexMetrics = state.providerDetail?.usageMetrics || getDashboardMetricsForTool('codex');
+  const codexMetrics = state.providerDetail?.usageMetrics
+    || (state.providerDetail?.usageMetricsLoading ? null : getDashboardMetricsForTool('codex'));
   const usageRefreshing = state.providerDetail.usageRefreshing;
   const usageWindow = getPdUsageWindow();
   if (!codexMetrics) {

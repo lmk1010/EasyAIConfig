@@ -201,7 +201,7 @@ pub(crate) fn sync_model_catalog(body: &Value) -> Result<Value, String> {
     write_text(&target_path, &catalog_text)?;
     write_text(&config_path, &update_catalog_setting(&config_text, &target_path))?;
 
-    Ok(json!({ "ok": true, "data": {
+    Ok(json!({
         "catalogPath": target_path.to_string_lossy(),
         "configPath": config_path.to_string_lossy(),
         "backupPath": backup_dir.to_string_lossy(),
@@ -209,5 +209,80 @@ pub(crate) fn sync_model_catalog(body: &Value) -> Result<Value, String> {
         "totalCount": total_count,
         "syncedModels": requested,
         "restartRequired": true
-    }}))
+    }))
+}
+
+pub(crate) fn inspect_model_catalog(query: &Value) -> Result<Value, String> {
+    let object = parse_json_object(query);
+    let codex_home_raw = get_string(&object, "codexHome");
+    let codex_home = if codex_home_raw.trim().is_empty() { default_codex_home()? } else { PathBuf::from(codex_home_raw.trim()) };
+    let home = dirs::home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
+    if !codex_home.starts_with(&home) {
+        return Err("codexHome 必须位于当前用户目录中".to_string());
+    }
+    let config_path = codex_home.join("config.toml");
+    let config_text = read_text(&config_path)?;
+    let configured_catalog = config_text.parse::<TomlValue>().ok()
+        .and_then(|value| value.get("model_catalog_json").and_then(TomlValue::as_str).map(str::to_string))
+        .unwrap_or_default();
+    let catalog_path = resolve_catalog_path(&codex_home, &configured_catalog);
+    let catalog = catalog_path.as_deref().and_then(read_json);
+    let total_count = catalog.as_ref()
+        .and_then(|value| value.get("models"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    Ok(json!({
+        "configured": !configured_catalog.is_empty(),
+        "exists": catalog.is_some(),
+        "catalogPath": catalog_path.map(|path| path.to_string_lossy().to_string()).unwrap_or_default(),
+        "configPath": config_path.to_string_lossy(),
+        "totalCount": total_count
+    }))
+}
+
+fn model_catalog_location(input: &Value) -> Result<(PathBuf, PathBuf), String> {
+    let object = parse_json_object(input);
+    let codex_home_raw = get_string(&object, "codexHome");
+    let codex_home = if codex_home_raw.trim().is_empty() { default_codex_home()? } else { PathBuf::from(codex_home_raw.trim()) };
+    let home = dirs::home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
+    if !codex_home.starts_with(&home) { return Err("codexHome 必须位于当前用户目录中".to_string()); }
+    let config_path = codex_home.join("config.toml");
+    let config_text = read_text(&config_path)?;
+    let configured_catalog = config_text.parse::<TomlValue>().ok()
+        .and_then(|value| value.get("model_catalog_json").and_then(TomlValue::as_str).map(str::to_string))
+        .unwrap_or_default();
+    let catalog_path = resolve_catalog_path(&codex_home, &configured_catalog)
+        .ok_or_else(|| "尚未配置 model_catalog_json，请先同步到 Codex".to_string())?;
+    Ok((config_path, catalog_path))
+}
+
+pub(crate) fn read_model_catalog(query: &Value) -> Result<Value, String> {
+    let (config_path, catalog_path) = model_catalog_location(query)?;
+    let content = fs::read_to_string(&catalog_path).map_err(|_| "model_catalog_json 指向的 JSON 文件不存在".to_string())?;
+    let catalog: Value = serde_json::from_str(&content).map_err(|error| format!("JSON 格式错误: {}", error))?;
+    let total_count = catalog.get("models").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+    Ok(json!({
+        "configured": true, "exists": true,
+        "catalogPath": catalog_path.to_string_lossy(), "configPath": config_path.to_string_lossy(),
+        "totalCount": total_count, "content": content
+    }))
+}
+
+pub(crate) fn save_model_catalog(body: &Value) -> Result<Value, String> {
+    let (config_path, catalog_path) = model_catalog_location(body)?;
+    let content = body.get("content").and_then(Value::as_str).unwrap_or("");
+    let catalog: Value = serde_json::from_str(content).map_err(|error| format!("JSON 格式错误: {}", error))?;
+    if !catalog.is_object() { return Err("模型目录必须是 JSON 对象".to_string()); }
+    let models = catalog.get("models").and_then(Value::as_array).ok_or_else(|| "模型目录必须包含 models 数组".to_string())?;
+    let backup_dir = app_home()?.join("backups").join(format!("model-catalog-edit-{}", timestamp()));
+    ensure_dir(&backup_dir)?;
+    backup_if_present(&catalog_path, &backup_dir.join(catalog_path.file_name().unwrap_or_default()))?;
+    let formatted = format!("{}\n", serde_json::to_string_pretty(&catalog).map_err(|error| error.to_string())?);
+    write_text(&catalog_path, &formatted)?;
+    Ok(json!({
+        "configured": true, "exists": true,
+        "catalogPath": catalog_path.to_string_lossy(), "configPath": config_path.to_string_lossy(),
+        "totalCount": models.len(), "backupPath": backup_dir.to_string_lossy()
+    }))
 }

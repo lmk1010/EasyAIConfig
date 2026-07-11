@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import TOML from '@iarna/toml';
-import { syncCodexModelCatalog } from '../src/lib/codex-model-catalog.js';
+import { inspectCodexModelCatalog, readCodexModelCatalog, saveCodexModelCatalog, syncCodexModelCatalog } from '../src/lib/codex-model-catalog.js';
 
 const GPT_54 = {
   slug: 'gpt-5.4',
@@ -71,4 +71,30 @@ test('syncCodexModelCatalog generates a valid catalog without models cache', asy
   assert.equal(catalog.models[0].slug, 'gpt-5.6-sol');
   assert.equal(catalog.models[0].context_window, 272000);
   assert.deepEqual(catalog.models[0].input_modalities, ['text', 'image']);
+});
+
+test('inspectCodexModelCatalog reports configured catalog path and model count', async (t) => {
+  const codexHome = await fs.mkdtemp(path.join(os.homedir(), '.codex-model-catalog-status-'));
+  t.after(() => fs.rm(codexHome, { recursive: true, force: true }));
+  await syncCodexModelCatalog({ codexHome, providerKey: 'demo', models: ['gpt-5.6-sol'] });
+  const status = await inspectCodexModelCatalog({ codexHome });
+  assert.equal(status.configured, true);
+  assert.equal(status.exists, true);
+  assert.equal(status.totalCount, 1);
+  assert.match(status.catalogPath, /model-catalog\.demo\.json$/);
+});
+
+test('model catalog content can be read, validated, saved, and backed up', async (t) => {
+  const codexHome = await fs.mkdtemp(path.join(os.homedir(), '.codex-model-catalog-edit-'));
+  t.after(() => fs.rm(codexHome, { recursive: true, force: true }));
+  await syncCodexModelCatalog({ codexHome, providerKey: 'demo', models: ['gpt-5.6-sol'] });
+  const before = await readCodexModelCatalog({ codexHome });
+  const catalog = JSON.parse(before.content);
+  catalog.models.push({ slug: 'custom-model' });
+  const saved = await saveCodexModelCatalog({ codexHome, content: JSON.stringify(catalog) });
+  assert.equal(saved.totalCount, 2);
+  assert.ok(saved.backupPath);
+  const after = await readCodexModelCatalog({ codexHome });
+  assert.equal(JSON.parse(after.content).models[1].slug, 'custom-model');
+  await assert.rejects(() => saveCodexModelCatalog({ codexHome, content: '{bad' }), /JSON 格式错误/);
 });

@@ -36173,6 +36173,57 @@ body[data-page="terminal"] .shell-v2 .page-stack { padding: 0 !important; margin
 }
 .pdm-bar-none { font-size: 12.5px; color: var(--muted); opacity: 0.7; }
 .pdm-bar-live { font-size: 12px; color: var(--muted); }
+.pdm-catalog-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(120,140,180,0.16);
+  border-radius: 10px;
+  background: rgba(120,140,180,0.035);
+}
+.pdm-catalog-main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+}
+.pdm-catalog-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pdm-catalog-state.is-ready { color: #16a34a; }
+.pdm-catalog-path {
+  border: 0;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: #3358ff !important;
+  opacity: 1;
+}
+.pdm-catalog-path:hover { background: transparent !important; box-shadow: none !important; text-decoration: underline; transform: none !important; }
+.pdm-catalog-actions { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+.model-catalog-modal { position: fixed; inset: 0; z-index: 10050; display: grid; place-items: center; padding: 28px; }
+.model-catalog-modal-backdrop { position: absolute; inset: 0; background: rgba(5, 8, 16, 0.58); backdrop-filter: blur(8px); }
+.model-catalog-modal-panel { position: relative; width: min(980px, 94vw); height: min(760px, 88vh); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid rgba(120,140,180,0.2); border-radius: 18px; background: var(--surface, #fff); box-shadow: 0 28px 80px rgba(0,0,0,0.28); }
+.model-catalog-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 12px; }
+.model-catalog-modal-head h3 { margin: 3px 0 0; font-size: 20px; }
+.model-catalog-modal-close { border: 0; background: transparent; color: var(--muted); font-size: 28px; line-height: 1; cursor: pointer; }
+.model-catalog-modal-path { margin: 0 20px 12px; padding: 8px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 8px; background: rgba(120,140,180,0.08); color: var(--muted); font: 11.5px var(--font-mono); }
+.model-catalog-editor { min-height: 0; margin: 0 20px; border: 1px solid rgba(120,140,180,0.18); border-radius: 10px; overflow: hidden; }
+.model-catalog-modal-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 14px 20px 18px; }
+.model-catalog-modal-hint { margin-right: auto; color: var(--muted); font-size: 11.5px; }
+body.model-catalog-modal-open { overflow: hidden; }
 
 /* 文字按钮 — 拉取 / 添加，无填充。!important 用于压制全局 button 渐变 */
 .pdm-link-btn,
@@ -44705,5 +44756,288 @@ body[data-page="providerRouter"] .shell-v2 .pd-router-log-request strong {
   body[data-page="providerRouter"] .shell-v2 .pd-router-log-search,
   body[data-page="providerRouter"] .shell-v2 .pd-router-log-filter {
     border-right: 0;
+  }
+}
+
+/* Provider Router final typography and top-control spacing */
+body[data-page="providerRouter"] .shell-v2 .provider-router-page {
+  padding-top: clamp(78px, 9vh, 102px);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-head {
+  min-height: 74px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-title-row {
+  font-size: clamp(1.45rem, 1.8vw, 1.8rem);
+  line-height: 1.2;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-head p {
+  margin-top: 8px;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-meta {
+  margin-top: 4px;
+  font-size: 0.82rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tabs {
+  grid-template-columns: repeat(3, minmax(112px, 1fr));
+  width: min(430px, 100%);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tab {
+  min-height: 40px;
+  font-size: 0.82rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tab span {
+  font-size: 0.82rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tab em {
+  font-size: 0.72rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tabs-shell {
+  gap: 18px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-status,
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-main p,
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin > span,
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin > button,
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths span,
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics span,
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-section-title p,
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider > div span,
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-primary,
+body[data-page="providerRouter"] .shell-v2 .pd-router-advanced > summary em {
+  font-size: 0.78rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin code,
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths code,
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider > div strong,
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics strong {
+  font-size: 0.88rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-section-title span {
+  font-size: 0.68rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-section-title h3 {
+  font-size: 1.08rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-main h2 {
+  font-size: clamp(1.35rem, 1.6vw, 1.65rem);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions > strong {
+  font-size: 0.94rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions > span {
+  font-size: 0.76rem;
+}
+@media (max-width: 620px) {
+  body[data-page="providerRouter"] .shell-v2 .provider-router-page { padding-top: 72px; }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-tabs { width: 100%; }
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * Provider Router — proportion polish
+ * Align typography with the rest of the workspace so the page
+ * header stays primary and the hero card feels like a card, not
+ * a second page title.
+ * ────────────────────────────────────────────────────────────*/
+body[data-page="providerRouter"] .shell-v2 .provider-router-page {
+  padding-top: clamp(52px, 6vh, 78px);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-head {
+  min-height: 0;
+  margin-bottom: 10px;
+  gap: 14px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-title-row,
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-title-row > span:last-child {
+  font-size: clamp(1.08rem, 1.55vw, 1.42rem);
+  font-weight: 720;
+  letter-spacing: -0.028em;
+  line-height: 1.2;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-title-row em {
+  font-size: 0.9em;
+  opacity: 0.5;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-head p {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--s2-muted);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-meta {
+  min-height: 26px;
+  padding: 4px 12px;
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-page-meta strong {
+  font-size: 0.66rem;
+  font-weight: 720;
+}
+
+/* Tabs */
+body[data-page="providerRouter"] .shell-v2 .pd-router-tabs-shell {
+  gap: 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tabs {
+  grid-template-columns: repeat(3, minmax(96px, 1fr));
+  width: min(360px, 100%);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tab {
+  min-height: 34px;
+  font-size: 0.7rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tab span {
+  font-size: 0.72rem;
+  font-weight: 640;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-tab em {
+  font-size: 0.62rem;
+  opacity: 0.7;
+}
+
+/* Hero card — feels like a card, not the page title */
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-card {
+  grid-template-columns: minmax(0, 1fr) 148px;
+  gap: 12px 26px;
+  padding: 18px 22px;
+  border-radius: 14px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-main {
+  gap: 6px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-status {
+  font-size: 0.62rem;
+  letter-spacing: 0.01em;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-status i {
+  width: 7px;
+  height: 7px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-status strong {
+  font-weight: 720;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-main h2 {
+  margin: 2px 0 0;
+  font-size: clamp(0.98rem, 1.15vw, 1.15rem);
+  font-weight: 720;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-main p {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+/* Endpoint strip inside hero */
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-addresses {
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin {
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 10px;
+  min-height: 26px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin > span {
+  font-size: 0.62rem;
+  color: var(--s2-muted);
+  font-weight: 640;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin code {
+  font-size: 0.72rem;
+  font-weight: 620;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-origin > button {
+  font-size: 0.62rem;
+  font-weight: 720;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths {
+  gap: 8px;
+  padding-left: 74px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths > button {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths span {
+  font-size: 0.6rem;
+  font-weight: 720;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths code {
+  font-size: 0.62rem;
+}
+
+/* Right-side power block */
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions {
+  width: 148px;
+  align-self: center;
+  justify-items: center;
+  gap: 8px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power {
+  width: 62px;
+  min-width: 62px;
+  height: 62px;
+  min-height: 62px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power svg {
+  width: 26px;
+  height: 26px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions > strong {
+  font-size: 0.78rem;
+  font-weight: 720;
+  letter-spacing: -0.01em;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions > span {
+  font-size: 0.62rem;
+  color: var(--s2-muted);
+}
+
+/* Metric row at bottom of hero */
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics {
+  padding-top: 12px;
+  gap: 0;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics > div {
+  gap: 3px;
+  padding: 0 16px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics span,
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics em {
+  font-size: 0.6rem;
+  font-weight: 620;
+  letter-spacing: 0.01em;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics strong {
+  font-size: 0.86rem;
+  font-weight: 720;
+  letter-spacing: -0.015em;
+}
+
+@media (max-width: 900px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-hero-card {
+    grid-template-columns: 1fr;
+    padding: 16px 18px;
+  }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-hero-actions {
+    width: 100%;
+    grid-template-columns: 62px auto 1fr;
+    grid-template-rows: auto;
+    justify-items: start;
+    align-items: center;
+    gap: 12px;
+  }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-protocol-paths {
+    padding-left: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
