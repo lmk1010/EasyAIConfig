@@ -1319,20 +1319,28 @@ async fn run_codex_oauth_usage_probe(
                     }
                     Err(error) => {
                         saw_auth_error = true;
-                        attempts.push(oauth_refresh_attempt("auth_error", None, &error));
+                        attempts.push(oauth_refresh_attempt(
+                            "auth_error",
+                            None,
+                            &format!("{error}；refresh token 已失效，请重新登录"),
+                        ));
+                        break;
                     }
                 }
             } else {
                 saw_auth_error = true;
+                attempts.push(endpoint_attempt(
+                    spec,
+                    "auth_error",
+                    Some(status_code),
+                    if refreshed_access_token {
+                        "刷新后的 OAuth token 仍被拒绝，请重新登录"
+                    } else {
+                        &body_message
+                    },
+                ));
+                break;
             }
-            attempts.push(endpoint_attempt(
-                spec,
-                "auth_error",
-                Some(status_code),
-                &body_message,
-            ));
-            index += 1;
-            continue;
         }
         if status_code == 404 || status_code == 405 {
             attempts.push(endpoint_attempt(
@@ -1466,7 +1474,7 @@ pub(crate) async fn query_codex_oauth_usage(body: &Value) -> Result<Value, Strin
     if outcome.saw_auth_error {
         return Ok(oauth_error_json(
             "auth_error",
-            "Codex OAuth token 无权访问官方额度接口，请重新登录或稍后再试。",
+            "Codex OAuth 登录已失效，请点击账号详情里的“重新登录”完成授权。",
             &account,
             attempts,
             &codex_home,

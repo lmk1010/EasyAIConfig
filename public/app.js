@@ -179,6 +179,7 @@ const state = {
     usageMetricsByDays: {},
     usageMetricsLoading: false,
     usageMetricsRequestId: 0,
+    oauthReloginRunning: false,
     remoteUsageResult: null,
     remoteUsageFetchedAt: 0,
     remoteUsageLoading: false,
@@ -199,6 +200,7 @@ const state = {
     evalProgressEstimateMs: 0,
     evalExpanded: { channel: false, upstream: false },
     evalCasePage: 0,
+    healthHistoryPage: 0,
     evalView: localStorage.getItem('easyaiconfig_pd_eval_view') || 'single',
     evalHistory: [],
     evalBatchSelected: {},
@@ -217,6 +219,7 @@ const state = {
     lastFetchedAt: 0,
     activeTool: 'codex',
     activeTab: 'gateway',
+    settingsPage: 'home',
     logFilter: { query: '', provider: 'all', status: 'all', tool: 'all' },
     logData: null,
     logPage: 1,
@@ -25744,6 +25747,7 @@ function handleProviderDetailClick(e) {
     return;
   }
   if (target.closest('[data-pd-switch]')) { actionPdSwitch(); return; }
+  if (target.closest('[data-pd-oauth-relogin]')) { actionPdOauthRelogin(); return; }
   if (target.closest('[data-pd-edit]')) { actionPdEdit(); return; }
   if (target.closest('[data-pd-delete]')) { actionPdDelete(); return; }
   if (target.closest('[data-pd-test]')) { actionPdRunTest(); return; }
@@ -25832,6 +25836,14 @@ function handleProviderDetailClick(e) {
   const casePageBtn = target.closest('[data-pd-case-page]');
   if (casePageBtn) {
     state.providerDetail.evalCasePage = Math.max(0, Number(casePageBtn.getAttribute('data-pd-case-page')) || 0);
+    renderProviderDetail({ force: true });
+    return;
+  }
+  const healthPageBtn = target.closest('[data-pd-health-page]');
+  if (healthPageBtn) {
+    e.preventDefault();
+    state.providerDetail.healthHistoryPage = Math.max(0, Number(healthPageBtn.getAttribute('data-pd-health-page')) || 0);
+    pdLastRenderSig = '';
     renderProviderDetail({ force: true });
     return;
   }
@@ -25998,6 +26010,7 @@ function openProviderDetail(key) {
   state.providerDetail.evalProgressEstimateMs = 0;
   state.providerDetail.evalExpanded = { channel: false, upstream: false };
   state.providerDetail.evalCasePage = 0;
+  state.providerDetail.healthHistoryPage = 0;
   state.providerDetail.evalView = normalizeProviderDetailEvalView(localStorage.getItem('easyaiconfig_pd_eval_view') || state.providerDetail.evalView || 'single');
   state.providerDetail.evalHistory = [];
   state.providerDetail.evalBatchSelected = {};
@@ -26017,6 +26030,7 @@ function openProviderDetail(key) {
   state.providerDetail.usageMetricsByDays = {};
   state.providerDetail.usageMetricsLoading = false;
   state.providerDetail.usageMetricsRequestId = 0;
+  state.providerDetail.oauthReloginRunning = false;
   state.providerDetail.remoteUsageResult = null;
   state.providerDetail.remoteUsageFetchedAt = 0;
   state.providerDetail.remoteUsageLoading = false;
@@ -28144,14 +28158,47 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
     if (!item.success) chartBuckets[bucketIndex].failed += 1;
   });
   const chartMax = Math.max(1, ...chartBuckets.map((item) => item.total));
+  const chartBaseY = 84;
+  const chartTopY = 8;
+  const chartHeight = chartBaseY - chartTopY;
   const chartBars = chartBuckets.map((item, index) => {
     const barWidth = 100 / chartBucketCount;
-    const height = item.total ? Math.max(5, (item.total / chartMax) * 76) : 2;
-    const failedHeight = item.failed ? Math.max(3, (item.failed / chartMax) * 76) : 0;
-    const x = index * barWidth + barWidth * 0.16;
-    const width = barWidth * 0.68;
-    return `<g><rect class="pd-router-chart-bar" x="${x.toFixed(2)}" y="${(88 - height).toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" rx="1.6" />${failedHeight ? `<rect class="pd-router-chart-failed" x="${x.toFixed(2)}" y="${(88 - failedHeight).toFixed(2)}" width="${width.toFixed(2)}" height="${failedHeight.toFixed(2)}" rx="1.6" />` : ''}</g>`;
+    const height = item.total ? Math.max(2.2, (item.total / chartMax) * chartHeight) : 1.4;
+    const failedHeight = item.failed ? Math.max(1.4, (item.failed / chartMax) * chartHeight) : 0;
+    const x = index * barWidth + barWidth * 0.22;
+    const width = barWidth * 0.56;
+    return `<g><rect class="pd-router-chart-bar" x="${x.toFixed(2)}" y="${(chartBaseY - height).toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}" rx="1.4" />${failedHeight ? `<rect class="pd-router-chart-failed" x="${x.toFixed(2)}" y="${(chartBaseY - failedHeight).toFixed(2)}" width="${width.toFixed(2)}" height="${failedHeight.toFixed(2)}" rx="1.4" />` : ''}</g>`;
   }).join('');
+  const chartGridLines = [0.25, 0.5, 0.75, 1].map((ratio) => {
+    const y = chartBaseY - chartHeight * ratio;
+    return `<line class="pd-router-chart-grid" x1="0" y1="${y.toFixed(2)}" x2="100" y2="${y.toFixed(2)}" />`;
+  }).join('');
+  const chartLinePoints = chartBuckets.map((item, index) => {
+    const barWidth = 100 / chartBucketCount;
+    const x = index * barWidth + barWidth * 0.5;
+    const y = chartBaseY - (item.total / chartMax) * chartHeight;
+    return [x, y];
+  });
+  const buildSmoothPath = (points) => {
+    if (points.length < 2) return '';
+    let d = `M ${points[0][0].toFixed(2)} ${points[0][1].toFixed(2)}`;
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const [x1, y1] = points[i];
+      const [x2, y2] = points[i + 1];
+      const midX = (x1 + x2) / 2;
+      d += ` C ${midX.toFixed(2)} ${y1.toFixed(2)}, ${midX.toFixed(2)} ${y2.toFixed(2)}, ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    }
+    return d;
+  };
+  const chartLinePath = buildSmoothPath(chartLinePoints);
+  const chartAreaPath = chartLinePath
+    ? `${chartLinePath} L ${chartLinePoints[chartLinePoints.length - 1][0].toFixed(2)} ${chartBaseY} L ${chartLinePoints[0][0].toFixed(2)} ${chartBaseY} Z`
+    : '';
+  const chartLineDots = chartLinePoints.map(([x, y], index) => (
+    chartBuckets[index].total
+      ? `<circle class="pd-router-chart-dot" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="0.9" />`
+      : ''
+  )).join('');
   const chartSuccesses = chartSource.filter((item) => item.success).length;
   const chartAverageLatency = chartSource.length
     ? Math.round(chartSource.reduce((sum, item) => sum + (Number(item.latencyMs) || 0), 0) / chartSource.length)
@@ -28195,8 +28242,26 @@ function renderProviderRouterStatsPanel({ loading = Boolean(state.providerRouter
           <div class="pd-router-log-chart-legend"><span><i></i>${esc(String(chartSource.length))} 请求</span><span><i></i>${esc(String(chartSuccesses))} 成功</span><span><i></i>${esc(String(chartAverageLatency))}ms 平均耗时</span></div>
         </div>
         ${chartSource.length
-          ? `<svg viewBox="0 0 100 92" preserveAspectRatio="none" role="img" aria-label="请求趋势图"><line x1="0" y1="88" x2="100" y2="88" />${chartBars}</svg>`
-          : '<div class="pd-router-log-chart-empty">开启网关并发起请求后，这里会显示实时趋势</div>'}
+          ? `<svg class="pd-router-chart-svg" viewBox="0 0 100 92" preserveAspectRatio="none" role="img" aria-label="请求趋势图">
+              <defs>
+                <linearGradient id="pdRouterChartArea" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#7ea0f8" stop-opacity="0.32" />
+                  <stop offset="100%" stop-color="#7ea0f8" stop-opacity="0" />
+                </linearGradient>
+              </defs>
+              ${chartGridLines}
+              <line class="pd-router-chart-axis" x1="0" y1="${chartBaseY}" x2="100" y2="${chartBaseY}" />
+              ${chartBars}
+              ${chartAreaPath ? `<path class="pd-router-chart-area" d="${chartAreaPath}" fill="url(#pdRouterChartArea)" />` : ''}
+              ${chartLinePath ? `<path class="pd-router-chart-line" d="${chartLinePath}" />` : ''}
+              ${chartLineDots}
+            </svg>`
+          : `<div class="pd-router-log-chart-empty">
+              <svg class="pd-router-chart-placeholder" viewBox="0 0 200 60" preserveAspectRatio="none" aria-hidden="true">
+                <path d="M0 46 C 30 24, 50 38, 70 32 S 110 12, 130 22 S 170 44, 200 30" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span>开启网关并发起请求后，这里会显示实时趋势</span>
+            </div>`}
       </section>
       <div class="pd-router-log-block">
         <div class="pd-router-log-head">
@@ -28412,6 +28477,13 @@ function ensureProviderRouterEvents() {
       if (state.providerRouter.activeTab === 'logs') {
         void fetchProviderRouterLogs({ page: state.providerRouter.logPage || 1, silent: true });
       }
+      return;
+    }
+    const settingsPageBtn = target.closest('[data-provider-router-settings-page]');
+    if (settingsPageBtn) {
+      const page = String(settingsPageBtn.getAttribute('data-provider-router-settings-page') || 'home').trim();
+      state.providerRouter.settingsPage = ['home', 'routing', 'protection', 'clients', 'protocol'].includes(page) ? page : 'home';
+      renderProviderRouterPage();
       return;
     }
     const toolBtn = target.closest('[data-provider-router-tool]');
@@ -28828,7 +28900,7 @@ function renderProviderRouterPage() {
     <button type="button" class="pd-router-tab ${activeTab === tab.key ? 'is-active' : ''}" data-provider-router-tab="${esc(tab.key)}">
       <span>${esc(tab.label)}</span><em>${esc(tab.meta)}</em>
     </button>`).join('');
-  const poolPanel = `
+  const routingPanel = `
     <div class="pd-router-panel pd-router-pool-panel">
       <div class="pd-router-pool-toolbar">
         <div class="pd-router-tool-tabs">${toolTabs}</div>
@@ -28838,73 +28910,50 @@ function renderProviderRouterPage() {
           <em>${esc(PROVIDER_ROUTER_TOOL_DEFS.length)} 个客户端入口已接入，按工具隔离 Provider 池。</em>
         </div>
       </div>
-      <div class="pd-router-strategy-bar">
+      <div class="pd-router-strategy-bar pd-router-routing-options">
         <label class="pd-router-strategy-select">
           <span>路由策略</span>
           <div class="select-wrap"><select data-provider-router-strategy ${loading ? 'disabled' : ''}>${strategyOptions}</select></div>
           <em>${esc(activeStrategyMeta.hint)}</em>
         </label>
-        <div class="pd-router-switch-field">
-          <span>余额保护</span>
-          <label class="pd-router-switch ${balanceGuardEnabled ? 'is-on' : ''}">
-            <input type="checkbox" data-provider-router-balance-guard ${balanceGuardEnabled ? 'checked' : ''} ${loading ? 'disabled' : ''} />
-            <span aria-hidden="true"></span>
-            <strong>启用</strong>
-          </label>
-        </div>
-        <label class="pd-router-threshold">
-          <span>最低百分比</span>
-          <input type="number" min="0" max="100" step="1" value="${esc(balanceMinPercent)}" data-provider-router-balance-min-percent ${loading || !balanceGuardEnabled ? 'disabled' : ''} />
-        </label>
-        <label class="pd-router-threshold">
-          <span>最低余额</span>
-          <input type="number" min="0" step="0.01" value="${esc(balanceMinAmount)}" data-provider-router-balance-min-amount ${loading || !balanceGuardEnabled ? 'disabled' : ''} />
-        </label>
-        <div class="pd-router-strategy-note">低余额自动跳过，未知余额仍可路由。</div>
-      </div>
-      <div class="pd-router-circuit-bar">
-        <div class="pd-router-switch-field">
-          <span>熔断保护</span>
-          <label class="pd-router-switch ${circuitEnabled ? 'is-on' : ''}">
-            <input type="checkbox" data-provider-router-circuit-enabled ${circuitEnabled ? 'checked' : ''} ${loading ? 'disabled' : ''} />
-            <span aria-hidden="true"></span>
-            <strong>启用</strong>
-          </label>
-        </div>
-        <label class="pd-router-threshold">
-          <span>失败阈值</span>
-          <input type="number" min="1" max="100" step="1" value="${esc(circuitSettings.failureThreshold)}" data-provider-router-circuit-failure-threshold ${loading || !circuitEnabled ? 'disabled' : ''} />
-        </label>
-        <label class="pd-router-threshold">
-          <span>恢复等待(ms)</span>
-          <input type="number" min="1000" max="3600000" step="1000" value="${esc(circuitSettings.recoveryWaitMs)}" data-provider-router-circuit-recovery-wait-ms ${loading || !circuitEnabled ? 'disabled' : ''} />
-        </label>
-        <label class="pd-router-threshold">
-          <span>半开成功</span>
-          <input type="number" min="1" max="20" step="1" value="${esc(circuitSettings.successThreshold)}" data-provider-router-circuit-success-threshold ${loading || !circuitEnabled ? 'disabled' : ''} />
-        </label>
-        <label class="pd-router-threshold">
-          <span>错误率</span>
-          <input type="number" min="0.1" max="1" step="0.05" value="${esc(circuitRateValue)}" data-provider-router-circuit-error-rate-threshold ${loading || !circuitEnabled ? 'disabled' : ''} />
-        </label>
-        <label class="pd-router-threshold">
-          <span>窗口请求</span>
-          <input type="number" min="1" max="20" step="1" value="${esc(circuitSettings.minRequests)}" data-provider-router-circuit-min-requests ${loading || !circuitEnabled ? 'disabled' : ''} />
-        </label>
-        <div class="pd-router-strategy-note">连续失败或窗口错误率达到阈值时跳过 Provider；恢复等待后进入 half-open 试探。</div>
+        <div class="pd-router-strategy-note">选择请求如何在线路之间分配；权重和主线路可在下方直接调整。</div>
       </div>
       ${candidates.length ? `
         <div class="pd-router-provider-list">
           <div class="pd-router-provider-head">
-            <span>启用</span>
-            <span>Provider</span>
-            <span>Key / 状态</span>
-            <span>权重</span>
-            <span>余额</span>
-            <span>主线</span>
+            <span>启用</span><span>Provider</span><span>Key / 状态</span><span>权重</span><span>余额</span><span>主线</span>
           </div>
           ${candidateList}
         </div>` : `<div class="pd-empty pd-empty-small">没有可用于路由的 ${esc(toolLabel)} API Key Provider。先在快速配置或连接详情里保存一个 Provider。</div>`}
+    </div>`;
+  const protectionPanel = `
+    <div class="pd-router-panel pd-router-protection-panel">
+      <div class="pd-router-simple-setting">
+        <div><strong>余额保护</strong><span>余额过低时自动跳过该线路，避免请求失败。</span></div>
+        <label class="pd-router-switch ${balanceGuardEnabled ? 'is-on' : ''}">
+          <input type="checkbox" data-provider-router-balance-guard ${balanceGuardEnabled ? 'checked' : ''} ${loading ? 'disabled' : ''} />
+          <span aria-hidden="true"></span><strong>启用</strong>
+        </label>
+      </div>
+      <div class="pd-router-simple-setting">
+        <div><strong>故障熔断</strong><span>线路连续失败时暂时停用，恢复后自动试探。</span></div>
+        <label class="pd-router-switch ${circuitEnabled ? 'is-on' : ''}">
+          <input type="checkbox" data-provider-router-circuit-enabled ${circuitEnabled ? 'checked' : ''} ${loading ? 'disabled' : ''} />
+          <span aria-hidden="true"></span><strong>启用</strong>
+        </label>
+      </div>
+      <details class="pd-router-custom-params">
+        <summary><span><strong>自定义参数</strong><em>默认值适合大多数用户</em></span><b>展开</b></summary>
+        <div class="pd-router-protection-fields">
+          <label class="pd-router-threshold"><span>最低百分比</span><input type="number" min="0" max="100" step="1" value="${esc(balanceMinPercent)}" data-provider-router-balance-min-percent ${loading || !balanceGuardEnabled ? 'disabled' : ''} /></label>
+          <label class="pd-router-threshold"><span>最低余额</span><input type="number" min="0" step="0.01" value="${esc(balanceMinAmount)}" data-provider-router-balance-min-amount ${loading || !balanceGuardEnabled ? 'disabled' : ''} /></label>
+          <label class="pd-router-threshold"><span>失败阈值</span><input type="number" min="1" max="100" step="1" value="${esc(circuitSettings.failureThreshold)}" data-provider-router-circuit-failure-threshold ${loading || !circuitEnabled ? 'disabled' : ''} /></label>
+          <label class="pd-router-threshold"><span>恢复等待(ms)</span><input type="number" min="1000" max="3600000" step="1000" value="${esc(circuitSettings.recoveryWaitMs)}" data-provider-router-circuit-recovery-wait-ms ${loading || !circuitEnabled ? 'disabled' : ''} /></label>
+          <label class="pd-router-threshold"><span>半开成功</span><input type="number" min="1" max="20" step="1" value="${esc(circuitSettings.successThreshold)}" data-provider-router-circuit-success-threshold ${loading || !circuitEnabled ? 'disabled' : ''} /></label>
+          <label class="pd-router-threshold"><span>错误率</span><input type="number" min="0.1" max="1" step="0.05" value="${esc(circuitRateValue)}" data-provider-router-circuit-error-rate-threshold ${loading || !circuitEnabled ? 'disabled' : ''} /></label>
+          <label class="pd-router-threshold"><span>窗口请求</span><input type="number" min="1" max="20" step="1" value="${esc(circuitSettings.minRequests)}" data-provider-router-circuit-min-requests ${loading || !circuitEnabled ? 'disabled' : ''} /></label>
+        </div>
+      </details>
     </div>`;
   const clientRows = tools.map((tool) => {
     const endpoint = getProviderRouterEndpoint(tool, status);
@@ -29036,6 +29085,42 @@ function renderProviderRouterPage() {
       </div>
     </div>`;
   const rectifierPanel = renderProviderRouterRectifierPanel({ loading });
+  const settingsPageKeys = ['home', 'routing', 'protection', 'clients', 'protocol'];
+  const settingsPage = settingsPageKeys.includes(state.providerRouter.settingsPage) ? state.providerRouter.settingsPage : 'home';
+  state.providerRouter.settingsPage = settingsPage;
+  const settingsHome = `
+    <section class="pd-router-settings-center">
+      <div class="pd-router-settings-heading"><div><span>ADVANCED</span><h3>设置中心</h3><p>按功能进入独立页面，常用设置保持简单，需要时再调整详细参数。</p></div></div>
+      <div class="pd-router-settings-grid">
+        <button type="button" class="pd-router-settings-card" data-provider-router-settings-page="routing">
+          <span>线路策略</span><strong>${esc(activeStrategyMeta.label)}</strong><em>${esc(selectedSummary)} 条线路 · 设置权重与主线路</em><b>进入设置 →</b>
+        </button>
+        <button type="button" class="pd-router-settings-card" data-provider-router-settings-page="protection">
+          <span>稳定保护</span><strong>${balanceGuardEnabled && circuitEnabled ? '双重保护已开启' : balanceGuardEnabled || circuitEnabled ? '部分保护已开启' : '保护未开启'}</strong><em>余额保护与故障熔断</em><b>进入设置 →</b>
+        </button>
+        <button type="button" class="pd-router-settings-card" data-provider-router-settings-page="clients">
+          <span>客户端接入</span><strong>${esc(String(tools.length))} 个客户端</strong><em>查看地址、一键写入或复制配置</em><b>进入设置 →</b>
+        </button>
+        <button type="button" class="pd-router-settings-card" data-provider-router-settings-page="protocol">
+          <span>协议工具</span><strong>响应转换预览</strong><em>调试 OpenAI 与 Anthropic 响应格式</em><b>进入设置 →</b>
+        </button>
+      </div>
+    </section>`;
+  const settingsTitles = {
+    routing: ['线路策略', '配置路由方式、Provider 权重与主线路。'],
+    protection: ['稳定保护', '用简单开关控制保护，需要时再展开自定义参数。'],
+    clients: ['客户端接入', '集中查看各客户端地址并写入配置。'],
+    protocol: ['协议工具', '预览和排查不同协议之间的响应转换。'],
+  };
+  const settingsPanels = { routing: routingPanel, protection: protectionPanel, clients: clientsPanel, protocol: rectifierPanel };
+  const settingsSubpage = settingsPage === 'home' ? settingsHome : `
+    <section class="pd-router-settings-page">
+      <header class="pd-router-settings-page-head">
+        <button type="button" data-provider-router-settings-page="home" aria-label="返回设置中心">← 返回</button>
+        <div><h3>${esc(settingsTitles[settingsPage][0])}</h3><p>${esc(settingsTitles[settingsPage][1])}</p></div>
+      </header>
+      ${settingsPanels[settingsPage]}
+    </section>`;
   const gatewayHero = `
       <section class="pd-router-hero-card ${running ? 'is-running' : ''}">
         <div class="pd-router-hero-main">
@@ -29085,10 +29170,7 @@ function renderProviderRouterPage() {
         </div>
       </section>
 
-      <details class="pd-router-advanced">
-        <summary><span><strong>高级设置</strong><em>路由策略、余额保护、熔断和客户端配置</em></span><b>展开</b></summary>
-        <div class="pd-router-advanced-body">${poolPanel}${clientsPanel}${rectifierPanel}</div>
-      </details>
+      ${settingsSubpage}
     </div>`;
   const statsPanel = renderProviderRouterStatsPanel({ loading });
   const activePanel = activeTab === 'start'
@@ -29233,6 +29315,7 @@ function pdComputeRenderSig(row) {
     pd.evalExpanded?.channel ? 'cx' : 'cc',
     pd.evalExpanded?.upstream ? 'ux' : 'uc',
     `cp:${pd.evalCasePage || 0}`,
+    `hp:${pd.healthHistoryPage || 0}`,
     `ev:${normalizeProviderDetailEvalView(pd.evalView)}`,
     Array.isArray(pd.evalHistory) ? `eh:${pd.evalHistory.length}` : 'eh:0',
     pd.evalBatchRunning ? 'ebr' : 'ebi',
@@ -29242,6 +29325,7 @@ function pdComputeRenderSig(row) {
     `ebr:${batchResultsSig}`,
     pd.usageRefreshing ? 'ur' : 'us',
     pd.usageMetricsLoading ? 'uml' : 'umi',
+    pd.oauthReloginRunning ? 'orl' : 'ori',
     pd.remoteUsageLoading ? 'rul' : 'rui',
     pd.remoteUsageError || '',
     pd.remoteUsageResult ? `ru:${pd.remoteUsageResult.status || ''}:${pd.remoteUsageResult.providerType || ''}:${pd.remoteUsageFetchedAt || 0}` : 'run',
@@ -29348,6 +29432,7 @@ function renderPdHeader(row) {
   const sucCount = Number(summary?.success || 0);
   const failCount = Number(summary?.failure || 0);
   const model = getProviderDetailModel(row);
+  const oauthReloginRunning = Boolean(state.providerDetail.oauthReloginRunning);
 
   // 右侧 live panel：状态环 + 大字号 uptime + latency mini chips
   const livePanel = `
@@ -29385,6 +29470,7 @@ function renderPdHeader(row) {
             ? '<button type="button" class="pd-chip-btn is-current" disabled><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5L6.5 12L13 4.5"/></svg>已是当前</button>'
             : '<button type="button" class="pd-chip-btn is-primary" data-pd-switch><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>切换为当前</button>'}
           ${row.mode === 'apikey' && !row.historyOnly ? '<button type="button" class="pd-chip-btn" data-pd-edit><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 13.5l3-1L13 5l-2-2-7.5 7.5z"/></svg>编辑</button>' : ''}
+          ${isCodex && isOauth ? `<button type="button" class="pd-chip-btn ${oauthReloginRunning ? 'is-busy' : ''}" data-pd-oauth-relogin ${oauthReloginRunning ? 'disabled' : ''} title="在当前账号的 CODEX_HOME 中重新执行 codex login"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5a5.5 5.5 0 1 1-5.1 3.45M2.5 2.5v3.8h3.8"/></svg>${oauthReloginRunning ? '启动登录中…' : (row.hasCredential ? '重新登录' : '完成登录')}</button>` : ''}
           <button type="button" class="pd-chip-btn" data-pd-test title="向 /models 发一次带鉴权探测，结果落进 24h 历史"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6a6 6 0 0 1 11-2.5L14 5M14 10a6 6 0 0 1-11 2.5L2 11M14 2v3h-3M2 14v-3h3"/></svg>立即重检</button>
           ${isCodex ? '<button type="button" class="pd-chip-btn" data-pd-copy-cmd title="复制带危险模式参数的 codex 启动命令到剪贴板"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="8" height="9" rx="1.2"/><path d="M11 5V3.5A1.5 1.5 0 0 0 9.5 2h-4A1.5 1.5 0 0 0 4 3.5V10"/></svg>复制命令</button>' : ''}
           ${isCodex && isCurrent ? '<button type="button" class="pd-chip-btn" data-pd-launch title="按当前 provider 启动一次 codex"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h9M9 4l4 4-4 4"/></svg>启动</button>' : ''}
@@ -32784,6 +32870,10 @@ function renderPdHealth(row) {
   const success = Number(summary.success || 0);
   const failure = Number(summary.failure || 0);
   const successRate = total > 0 ? Math.round((success / total) * 100) : null;
+  const pageSize = 20;
+  const maxPage = Math.max(0, Math.ceil(rows.length / pageSize) - 1);
+  const page = Math.min(Math.max(0, Number(state.providerDetail.healthHistoryPage || 0) || 0), maxPage);
+  const visibleRows = rows.slice(page * pageSize, page * pageSize + pageSize);
   return `
     <div class="pd-health">
       ${renderPdBatteryBar(history, 60)}
@@ -32804,18 +32894,24 @@ function renderPdHealth(row) {
       <div class="pd-section">
         <div class="pd-section-title">
           <span>探测时间轴</span>
-          <span class="pd-section-meta">${esc(String(Math.min(rows.length, 40)))} / ${esc(String(rows.length))} 条</span>
+          <span class="pd-section-meta">第 ${esc(String(page + 1))} 页 · ${esc(String(rows.length))} 条</span>
         </div>
         ${rows.length ? `
           <ol class="pd-probe-log">
-            ${rows.slice(0, 40).map((r) => `
+            ${visibleRows.map((r) => `
               <li class="${r.success ? 'is-ok' : 'is-bad'}">
                 <span class="pd-probe-when">${esc(formatRelativeTime(new Date(r.probedAt).toISOString()))}</span>
                 <span class="pd-probe-lat">${esc(fmtLatency(r.latencyMs))}</span>
                 ${r.statusCode ? `<span class="pd-probe-status">HTTP ${esc(String(r.statusCode))}</span>` : '<span class="pd-probe-status">—</span>'}
                 ${r.error ? `<span class="pd-probe-error" title="${esc(r.error)}">${esc(r.error.slice(0, 100))}</span>` : '<span class="pd-probe-error pd-probe-ok">连接正常</span>'}
               </li>`).join('')}
-          </ol>` : '<div class="pd-empty pd-empty-small">还没有探测历史。点 "测试" 或在列表上 "重检" 都会落记录。</div>'}
+          </ol>
+          ${rows.length > pageSize ? `
+            <div class="pd-case-pager">
+              <button type="button" data-pd-health-page="${esc(String(page - 1))}" ${page <= 0 ? 'disabled' : ''}>上一页</button>
+              <span>${esc(String(page + 1))} / ${esc(String(maxPage + 1))}</span>
+              <button type="button" data-pd-health-page="${esc(String(page + 1))}" ${page >= maxPage ? 'disabled' : ''}>下一页</button>
+            </div>` : ''}` : '<div class="pd-empty pd-empty-small">还没有探测历史。点 "测试" 或在列表上 "重检" 都会落记录。</div>'}
       </div>
     </div>`;
 }
@@ -32866,6 +32962,22 @@ async function actionPdSwitch() {
     await window.__chSwitchRow(row.key);
   }
   renderProviderDetail();
+}
+
+async function actionPdOauthRelogin() {
+  const row = lookupProviderDetailRow();
+  if (!row || !isCodexProviderDetail(row) || row.mode !== 'oauth') return;
+  const expectedKey = row.key;
+  const expectedTool = providerDetailTool(row);
+  state.providerDetail.oauthReloginRunning = true;
+  renderProviderDetail({ force: true });
+  try {
+    await launchCodexLogin('', '', row.homePath || getDashboardCodexHome());
+  } finally {
+    if (!isCurrentProviderDetail(expectedKey, expectedTool)) return;
+    state.providerDetail.oauthReloginRunning = false;
+    renderProviderDetail({ force: true });
+  }
 }
 
 function actionPdEdit() {
@@ -40896,6 +41008,12 @@ startToolUpdatesTimer();
     // Search
     const search = document.getElementById('chSearchInput');
     const clear = document.getElementById('chSearchClear');
+    const searchWrap = search?.closest('.ch-search');
+    searchWrap?.addEventListener('pointerdown', (event) => {
+      event.stopPropagation();
+      if (event.target === searchWrap || event.target.closest('svg')) search?.focus();
+    });
+    searchWrap?.addEventListener('click', (event) => event.stopPropagation());
     if (search) {
       search.addEventListener('input', () => {
         const s = hubState();

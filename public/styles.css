@@ -22687,6 +22687,15 @@ body[data-page="dashboard"] .sec-body {
   align-items: center;
 }
 
+.shell-v2 .ch-hero-more::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  right: 0;
+  width: 190px;
+  height: 10px;
+}
+
 .shell-v2 .ch-hero-icon {
   width: 38px;
   height: 38px;
@@ -22726,16 +22735,16 @@ body[data-page="dashboard"] .sec-body {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 80;
+  z-index: 120;
   min-width: 176px;
   padding: 6px;
   border-radius: 10px;
-  background: rgba(19, 26, 43, 0.96);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  background: #111827;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   box-shadow:
-    0 18px 40px -18px rgba(0, 0, 0, 0.58),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    0 22px 48px -16px rgba(0, 0, 0, 0.82),
+    inset 0 0 0 1px rgba(148, 163, 184, 0.2);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -22754,10 +22763,10 @@ body[data-page="dashboard"] .sec-body {
 }
 
 [data-theme="light"] .shell-v2 .ch-hero-menu-panel {
-  background: rgba(255, 255, 255, 0.98);
+  background: #ffffff;
   box-shadow:
-    0 18px 38px -22px rgba(15, 23, 42, 0.32),
-    inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+    0 22px 48px -18px rgba(15, 23, 42, 0.4),
+    inset 0 0 0 1px rgba(15, 23, 42, 0.14);
 }
 
 .shell-v2 .ch-hero-menu-item {
@@ -23039,6 +23048,7 @@ body[data-page="dashboard"] .sec-body {
   background: rgba(255, 255, 255, 0.02);
   box-shadow: inset 0 0 0 1px var(--s2-line-soft);
   transition: box-shadow 150ms ease, background 150ms ease;
+  cursor: text;
 }
 
 [data-theme="light"] .shell-v2 .ch-search {
@@ -23072,6 +23082,7 @@ body[data-page="dashboard"] .sec-body {
   font-size: 0.8rem !important;
   color: var(--s2-text) !important;
   outline: none !important;
+  cursor: text !important;
 }
 
 [data-theme="light"] .shell-v2 #chSearchInput {
@@ -45040,4 +45051,777 @@ body[data-page="providerRouter"] .shell-v2 .pd-router-hero-metrics strong {
     padding-left: 0;
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * Assets — unify with Dashboard flat aesthetic
+ * Kill the heavy glass card wrapping the head + capability list;
+ * let sections sit directly on the page background, separated by
+ * whitespace and their own section titles — same pattern as
+ * the Dashboard v3 shell (.db3-head + flat .db2-section).
+ * ────────────────────────────────────────────────────────────*/
+body[data-page="assets"] .shell-v2 .page-view[data-page="assets"] {
+  background: transparent;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .page-view[data-page="assets"] {
+  background: transparent;
+}
+
+body[data-page="assets"] .shell-v2 .asset-center-page {
+  max-width: 1320px;
+  padding: 32px 32px 64px;
+}
+
+/* Head — flat, aligned with .db3-head */
+body[data-page="assets"] .shell-v2 .asset-center-head {
+  padding: 0 4px;
+  margin-bottom: 18px;
+  border-radius: 0;
+  background: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  align-items: flex-start;
+  gap: 16px;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-center-head {
+  background: none !important;
+  box-shadow: none !important;
+}
+body[data-page="assets"] .shell-v2 .asset-center-kicker {
+  color: var(--s2-accent);
+  font-size: 0.6rem;
+  font-weight: 760;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+body[data-page="assets"] .shell-v2 .asset-center-head h2 {
+  margin: 6px 0 0;
+  font-size: clamp(1.08rem, 1.4vw, 1.28rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  color: var(--s2-text);
+}
+body[data-page="assets"] .shell-v2 .asset-center-head p {
+  max-width: 760px;
+  margin-top: 8px;
+  color: var(--s2-muted);
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+/* Header action buttons — pill style like dashboard toolbar */
+body[data-page="assets"] .shell-v2 .asset-center-actions {
+  gap: 8px;
+  padding-top: 4px;
+}
+body[data-page="assets"] .shell-v2 .asset-center-actions .tiny-btn {
+  height: 30px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--s2-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  box-shadow: none;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+body[data-page="assets"] .shell-v2 .asset-center-actions .tiny-btn:hover:not(:disabled) {
+  border-color: rgba(107, 158, 255, 0.32);
+  background: rgba(107, 158, 255, 0.08);
+  color: var(--s2-text);
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-center-actions .tiny-btn {
+  border-color: rgba(15, 23, 42, 0.09);
+  background: rgba(255, 255, 255, 0.72);
+  color: #475569;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-center-actions .tiny-btn:hover:not(:disabled) {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(239, 246, 255, 0.85);
+  color: #0f172a;
+}
+
+/* Purpose row — cleaner cards, lower contrast, less chrome */
+body[data-page="assets"] .shell-v2 .asset-purpose-row {
+  gap: 8px;
+  margin: 0 0 18px;
+}
+body[data-page="assets"] .shell-v2 .asset-purpose-item {
+  min-height: 46px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border-color: rgba(148, 163, 184, 0.1);
+  background: rgba(255, 255, 255, 0.022);
+  box-shadow: none;
+}
+body[data-page="assets"] .shell-v2 .asset-purpose-item:hover {
+  border-color: rgba(107, 158, 255, 0.22);
+  background: rgba(107, 158, 255, 0.05);
+  transform: none;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-purpose-item {
+  border-color: rgba(15, 23, 42, 0.06);
+  background: rgba(255, 255, 255, 0.6);
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-purpose-item:hover {
+  border-color: rgba(59, 130, 246, 0.22);
+  background: rgba(239, 246, 255, 0.75);
+}
+body[data-page="assets"] .shell-v2 .asset-purpose-item strong {
+  font-size: 0.72rem;
+  font-weight: 720;
+}
+body[data-page="assets"] .shell-v2 .asset-purpose-item span {
+  font-size: 0.62rem;
+  font-weight: 500;
+  color: var(--s2-muted);
+}
+body[data-page="assets"] .shell-v2 .asset-purpose-item em {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: transparent;
+  color: var(--s2-faint);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-purpose-item em {
+  border-color: rgba(15, 23, 42, 0.09);
+  background: transparent;
+  color: #64748b;
+}
+
+/* Tool capability section — section-title style, flat rows */
+body[data-page="assets"] .shell-v2 .asset-capability-list {
+  margin: 8px 0 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-head {
+  min-height: 0;
+  padding: 6px 4px 10px;
+  border-bottom: 0;
+  background: transparent;
+  gap: 12px;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-head > div:first-child {
+  gap: 3px;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-head strong {
+  font-size: 0.78rem;
+  font-weight: 720;
+  letter-spacing: -0.005em;
+  color: var(--s2-text);
+}
+body[data-page="assets"] .shell-v2 .asset-capability-head span {
+  font-size: 0.66rem;
+  color: var(--s2-muted);
+  line-height: 1.5;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-summary {
+  gap: 6px;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-summary span {
+  min-height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--s2-muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-summary span {
+  border-color: rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.6);
+  color: #475569;
+}
+
+/* Table body — flat rows, only dividers, no outer container */
+body[data-page="assets"] .shell-v2 .asset-capability-table {
+  border: 1px solid rgba(148, 163, 184, 0.09);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.014);
+  overflow: hidden;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-table {
+  border-color: rgba(15, 23, 42, 0.07);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+body[data-page="assets"] .shell-v2 .asset-capability-row {
+  min-height: 62px;
+  padding: 10px 16px;
+  border-bottom-color: rgba(148, 163, 184, 0.08);
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-row {
+  border-bottom-color: rgba(15, 23, 42, 0.06);
+}
+body[data-page="assets"] .shell-v2 .asset-capability-row.is-head {
+  min-height: 30px;
+  padding: 0 16px;
+  background: rgba(148, 163, 184, 0.05);
+  color: var(--s2-faint);
+  font-size: 0.56rem;
+  font-weight: 720;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-row.is-head {
+  background: rgba(15, 23, 42, 0.035);
+}
+body[data-page="assets"] .shell-v2 .asset-capability-row:not(.is-head):hover {
+  background: rgba(107, 158, 255, 0.045);
+}
+body[data-page="assets"] .shell-v2 .asset-capability-identity strong {
+  font-size: 0.74rem;
+  font-weight: 720;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-identity em {
+  font-size: 0.6rem;
+  color: var(--s2-faint);
+}
+body[data-page="assets"] .shell-v2 .asset-capability-boundary strong {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  white-space: normal;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-boundary span {
+  font-size: 0.6rem;
+  color: var(--s2-muted);
+  white-space: normal;
+  line-height: 1.45;
+}
+
+/* Asset chips (2 Prompt, 80 会话 etc.) — softer, less saturated */
+body[data-page="assets"] .shell-v2 .asset-capability-assets span:not(.asset-capability-none) {
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 8px;
+  border-color: rgba(94, 234, 212, 0.18);
+  background: rgba(45, 212, 191, 0.05);
+}
+body[data-page="assets"] .shell-v2 .asset-capability-assets strong {
+  font-size: 0.62rem;
+  color: #7ee7d1;
+  font-weight: 780;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-assets em {
+  font-size: 0.56rem;
+  color: var(--s2-muted);
+  font-weight: 640;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-assets span:not(.asset-capability-none) {
+  border-color: rgba(20, 184, 166, 0.24);
+  background: rgba(20, 184, 166, 0.08);
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-assets strong {
+  color: #0f766e;
+}
+
+/* "等待检测" / "CLI 安装" / "本地用量" empty chip in "读到的资产" column */
+body[data-page="assets"] .shell-v2 .asset-capability-none {
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border-color: rgba(148, 163, 184, 0.16);
+  background: transparent;
+  font-size: 0.6rem;
+  font-weight: 680;
+  color: var(--s2-faint);
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-none {
+  border-color: rgba(15, 23, 42, 0.09);
+  color: #94a3b8;
+}
+
+/* Row action buttons (配置 / 导入 / etc.) */
+body[data-page="assets"] .shell-v2 .asset-capability-actions .asset-inline-btn {
+  min-width: 56px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font-size: 0.68rem;
+  font-weight: 720;
+  box-shadow: none;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-actions .asset-inline-btn:not(.primary) {
+  border: 1px solid rgba(107, 158, 255, 0.28);
+  background: transparent;
+  color: #7ba2ff;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-actions .asset-inline-btn:not(.primary):hover:not(:disabled) {
+  border-color: rgba(107, 158, 255, 0.55);
+  background: rgba(107, 158, 255, 0.08);
+  color: #a4c1ff;
+}
+body[data-page="assets"] .shell-v2 .asset-capability-actions .asset-inline-btn.primary {
+  background: linear-gradient(180deg, #5f85ff, #3867f6);
+  color: #fff;
+  border: 0;
+  box-shadow: 0 6px 14px rgba(56, 103, 246, 0.22);
+}
+body[data-page="assets"] .shell-v2 .asset-capability-actions .asset-inline-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-actions .asset-inline-btn:not(.primary) {
+  border-color: rgba(59, 130, 246, 0.32);
+  color: #2563eb;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-capability-actions .asset-inline-btn:not(.primary):hover:not(:disabled) {
+  border-color: rgba(59, 130, 246, 0.6);
+  background: rgba(239, 246, 255, 0.9);
+}
+
+/* Tabs and tab-panel below — align padding + softer chrome */
+body[data-page="assets"] .shell-v2 .asset-tab-panel {
+  border: 1px solid rgba(148, 163, 184, 0.09);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-tab-panel {
+  border-color: rgba(15, 23, 42, 0.07);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+body[data-page="assets"] .shell-v2 .asset-tabs {
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(255, 255, 255, 0.028);
+  box-shadow: none;
+  border-radius: 10px;
+}
+[data-theme="light"] body[data-page="assets"] .shell-v2 .asset-tabs {
+  border-color: rgba(15, 23, 42, 0.07);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+body[data-page="assets"] .shell-v2 .asset-loading-strip {
+  padding: 8px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.06);
+  color: var(--s2-muted);
+  font-size: 0.68rem;
+  margin-bottom: 12px;
+}
+
+/* Squeeze capability table on narrow widths */
+@media (max-width: 1080px) {
+  body[data-page="assets"] .shell-v2 .asset-capability-row {
+    min-width: 880px;
+  }
+}
+
+/* Provider Router log search uses the toolbar as its only visual container. */
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input:hover,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input:focus,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input:focus-visible,
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-search input:disabled {
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Provider Router settings center */
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-center,
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page {
+  display: grid;
+  gap: 16px;
+  padding-top: 4px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-heading,
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-heading span {
+  color: var(--s2-muted);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-heading h3,
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page-head h3 {
+  margin: 3px 0 0;
+  color: var(--s2-text);
+  font-size: 1.08rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-heading p,
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page-head p {
+  margin: 4px 0 0;
+  color: var(--s2-muted);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card {
+  min-width: 0;
+  min-height: 128px;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 7px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255,255,255,0.075);
+  border-radius: 12px;
+  color: var(--s2-text);
+  background: rgba(255,255,255,0.018);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card {
+  border-color: rgba(15,23,42,0.08);
+  background: rgba(255,255,255,0.5);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card:hover {
+  border-color: rgba(94,234,212,0.28);
+  background: rgba(94,234,212,0.035);
+  transform: translateY(-1px);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card > span {
+  color: var(--s2-muted);
+  font-size: 0.72rem;
+  font-weight: 680;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card > strong { font-size: 0.94rem; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card > em {
+  color: var(--s2-muted);
+  font-size: 0.74rem;
+  font-style: normal;
+  line-height: 1.45;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card > b {
+  margin-top: 5px;
+  color: var(--s2-accent, #5eead4);
+  font-size: 0.72rem;
+  font-weight: 720;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page-head > button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 9px;
+  color: var(--s2-text);
+  background: transparent;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page-head > button { border-color: rgba(15,23,42,0.1); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page > .pd-router-panel,
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page > .pd-router-tab-content {
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,0.065);
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page > .pd-router-panel,
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page > .pd-router-tab-content { border-color: rgba(15,23,42,0.075); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-routing-options { grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1fr); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 68px;
+  padding: 12px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-simple-setting { border-bottom-color: rgba(15,23,42,0.07); }
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-setting > div { display: grid; gap: 5px; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-setting > div strong { color: var(--s2-text); font-size: 0.86rem; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-setting > div span { color: var(--s2-muted); font-size: 0.74rem; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params { margin-top: 4px; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params > summary {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params > summary::-webkit-details-marker { display: none; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params > summary span { display: grid; gap: 3px; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params > summary strong { color: var(--s2-text); font-size: 0.8rem; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params > summary em,
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params > summary b { color: var(--s2-muted); font-size: 0.7rem; font-style: normal; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params[open] > summary b { font-size: 0; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-custom-params[open] > summary b::after { content: '收起'; font-size: 0.7rem; }
+body[data-page="providerRouter"] .shell-v2 .pd-router-protection-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  gap: 10px;
+  padding-top: 10px;
+}
+@media (max-width: 820px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-settings-grid { grid-template-columns: 1fr; }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-protection-fields { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-routing-options { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-settings-page-head { align-items: flex-start; }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-protection-fields { grid-template-columns: 1fr; }
+  body[data-page="providerRouter"] .shell-v2 .pd-router-simple-setting { align-items: flex-start; }
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * Provider Router — power button motion + polish
+ * Animated ring pulse when running, ripple on click, spinner
+ * during busy state, and a soft breathing halo at rest.
+ * ────────────────────────────────────────────────────────────*/
+body[data-page="providerRouter"] .shell-v2 .pd-router-power {
+  overflow: visible;
+  transition:
+    transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    border-color 220ms ease,
+    background 260ms ease,
+    box-shadow 260ms ease,
+    color 220ms ease;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power::before,
+body[data-page="providerRouter"] .shell-v2 .pd-router-power::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+/* Soft outer halo — visible in both states */
+body[data-page="providerRouter"] .shell-v2 .pd-router-power::before {
+  z-index: 0;
+  transform: scale(1);
+  opacity: 0.5;
+  background: radial-gradient(circle at center, rgba(126,160,248,0.28), transparent 68%);
+  filter: blur(2px);
+  transition: background 260ms ease, opacity 260ms ease, transform 260ms ease;
+}
+/* Icon layered above pseudo elements */
+body[data-page="providerRouter"] .shell-v2 .pd-router-power svg {
+  position: relative;
+  z-index: 2;
+  transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1), stroke 220ms ease;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power:hover:not(:disabled) svg {
+  transform: scale(1.08);
+}
+/* Ripple / click press */
+body[data-page="providerRouter"] .shell-v2 .pd-router-power::after {
+  z-index: 1;
+  border: 1.5px solid transparent;
+  transform: scale(1);
+  opacity: 0;
+  transition: transform 320ms ease, opacity 320ms ease, border-color 320ms ease;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power:active:not(:disabled) {
+  transform: scale(0.94);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power:active:not(:disabled)::after {
+  transform: scale(1.55);
+  border-color: rgba(126,160,248,0.35);
+  opacity: 0;
+  transition-duration: 480ms;
+}
+/* Running state: green pulse ring + breathing halo */
+body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-on::before {
+  background: radial-gradient(circle at center, rgba(66,207,158,0.36), transparent 68%);
+  opacity: 0.9;
+  animation: pd-router-power-breath 2400ms ease-in-out infinite;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-on::after {
+  border: 1.5px solid rgba(66,207,158,0.55);
+  opacity: 1;
+  animation: pd-router-power-ring 2200ms ease-out infinite;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-on {
+  animation: pd-router-power-in 480ms cubic-bezier(0.34, 1.56, 0.64, 1) 1;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-on svg {
+  filter: drop-shadow(0 0 6px rgba(66,207,158,0.55));
+}
+/* Busy state: spinning arc */
+body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-busy {
+  cursor: progress;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-busy::after {
+  border-top-color: rgba(126,160,248,0.9);
+  border-right-color: rgba(126,160,248,0.35);
+  border-bottom-color: transparent;
+  border-left-color: transparent;
+  opacity: 1;
+  animation: pd-router-power-spin 900ms linear infinite;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-busy svg {
+  opacity: 0.55;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-on::before {
+  background: radial-gradient(circle at center, rgba(16,185,129,0.32), transparent 68%);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-power.is-on::after {
+  border-color: rgba(16,185,129,0.55);
+}
+/* Idle breathing when the button is enabled but off */
+body[data-page="providerRouter"] .shell-v2 .pd-router-power:not(.is-on):not(:disabled)::before {
+  animation: pd-router-power-breath 3400ms ease-in-out infinite;
+}
+@keyframes pd-router-power-breath {
+  0%, 100% { transform: scale(1); opacity: 0.55; }
+  50% { transform: scale(1.14); opacity: 0.92; }
+}
+@keyframes pd-router-power-ring {
+  0% { transform: scale(1); opacity: 0.9; }
+  70% { transform: scale(1.55); opacity: 0; }
+  100% { transform: scale(1.55); opacity: 0; }
+}
+@keyframes pd-router-power-in {
+  0% { transform: scale(0.86); }
+  55% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+@keyframes pd-router-power-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body[data-page="providerRouter"] .shell-v2 .pd-router-power,
+  body[data-page="providerRouter"] .shell-v2 .pd-router-power::before,
+  body[data-page="providerRouter"] .shell-v2 .pd-router-power::after,
+  body[data-page="providerRouter"] .shell-v2 .pd-router-power svg {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * Provider Router — request trend chart polish
+ * Combined bars + smoothed line + area gradient, subtle grid,
+ * refined empty state.
+ * ────────────────────────────────────────────────────────────*/
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart {
+  min-height: 168px;
+  padding: 16px 18px 12px;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-svg {
+  height: 108px;
+  overflow: visible;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-grid {
+  stroke: rgba(255,255,255,0.05);
+  stroke-width: 0.35;
+  stroke-dasharray: 1.4 1.6;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-chart-grid {
+  stroke: rgba(15,23,42,0.06);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-axis {
+  stroke: rgba(255,255,255,0.11);
+  stroke-width: 0.45;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-chart-axis {
+  stroke: rgba(15,23,42,0.12);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-bar {
+  fill: rgba(126,160,248,0.45);
+  transition: fill 200ms ease;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-failed {
+  fill: rgba(239,110,116,0.82);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-line {
+  fill: none;
+  stroke: #7ea0f8;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 1px 2px rgba(91,140,255,0.35));
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-dot {
+  fill: #fff;
+  stroke: #7ea0f8;
+  stroke-width: 0.35;
+  vector-effect: non-scaling-stroke;
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-chart-dot {
+  fill: #fff;
+  stroke: #4c7cf2;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-log-chart-empty {
+  min-height: 96px;
+  display: grid;
+  grid-template-columns: 1fr;
+  justify-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--s2-faint);
+  font-size: 0.68rem;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-chart-placeholder {
+  width: min(220px, 60%);
+  height: 44px;
+  opacity: 0.35;
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * Provider Router — routes tab refinement
+ * Slight hover lift, cleaner primary row highlight.
+ * ────────────────────────────────────────────────────────────*/
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider {
+  transition: background 180ms ease, box-shadow 220ms ease;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider:hover {
+  background: rgba(126,160,248,0.05);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider:hover {
+  background: rgba(91,140,255,0.055);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-simple-provider.is-primary {
+  background: linear-gradient(90deg, rgba(91,140,255,0.11), rgba(91,140,255,0.02) 78%);
+  box-shadow: inset 3px 0 0 rgba(91,140,255,0.78);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card {
+  transition:
+    border-color 200ms ease,
+    background 200ms ease,
+    transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 220ms ease;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 26px rgba(51,91,193,0.09);
+}
+[data-theme="light"] body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card:hover {
+  box-shadow: 0 14px 30px rgba(74,93,128,0.09);
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card > b {
+  transition: transform 220ms ease, color 220ms ease;
+}
+body[data-page="providerRouter"] .shell-v2 .pd-router-settings-card:hover > b {
+  transform: translateX(3px);
 }

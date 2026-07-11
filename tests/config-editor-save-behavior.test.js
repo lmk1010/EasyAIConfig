@@ -641,6 +641,8 @@ test('provider detail usage separates local and remote relay statistics', () => 
   assert.match(codexOauthUsageRs, /id_token/);
   assert.match(codexOauthUsageRs, /refresh_token/);
   assert.match(codexOauthUsageRs, /refresh_codex_oauth_tokens/);
+  assert.match(codexOauthUsageRs, /refresh token 已失效，请重新登录/);
+  assert.match(codexOauthUsageRs, /账号详情里的“重新登录”/);
   assert.match(codexOauthUsageRs, /fiveHour/);
   assert.match(codexOauthUsageRs, /weekly/);
   assert.match(codexOauthUsageRs, /review/);
@@ -829,8 +831,14 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(routerRenderBody, /\/v1\/chat\/completions/);
   assert.match(routerRenderBody, /\/v1\/messages/);
   assert.match(routerRenderBody, /data-provider-router-primary-select/);
-  assert.match(routerRenderBody, /pd-router-advanced/);
-  assert.match(routerRenderBody, /高级设置/);
+  assert.match(routerRenderBody, /pd-router-settings-center/);
+  assert.match(routerRenderBody, /设置中心/);
+  assert.match(routerRenderBody, /data-provider-router-settings-page="routing"/);
+  assert.match(routerRenderBody, /data-provider-router-settings-page="protection"/);
+  assert.match(routerRenderBody, /data-provider-router-settings-page="clients"/);
+  assert.match(routerRenderBody, /data-provider-router-settings-page="protocol"/);
+  assert.match(routerEventsBody, /data-provider-router-settings-page/);
+  assert.match(routerRenderBody, /pd-router-custom-params/);
   assert.match(routerRenderBody, /pd-router-clients-content/);
   assert.match(routerRenderBody, /pd-router-client-table/);
   assert.match(routerRenderBody, /const clientRows = tools\.map/);
@@ -893,7 +901,7 @@ test('provider router is a standalone local API-key gateway page', () => {
   assert.match(appJs, /PROVIDER_ROUTER_CIRCUIT_LS/);
   assert.match(appJs, /function ensureProviderRouterCircuitState/);
   assert.match(appJs, /function getProviderRouterCircuitSettings/);
-  assert.match(appJs, /熔断保护/);
+  assert.match(appJs, /故障熔断/);
   assert.match(appJs, /circuitState/);
   assert.match(appJs, /circuitBreakerEnabled/);
   assert.match(appJs, /data-provider-router-circuit-enabled/);
@@ -1408,6 +1416,15 @@ test('Codex OAuth actions warn once per hour on risky outbound IP', () => {
   assert.match(addBody, /await confirmOauthIpRiskBeforeRequest\('新增 Codex OAuth 账号'\)/);
   assert.match(addBody, /openUpdateDialog/);
   assert.match(switchBody, /confirmOauthIpRiskBeforeRequest\('切换 Codex OAuth 账号'\)/);
+});
+
+test('Codex OAuth provider detail exposes account-scoped relogin', () => {
+  const headerBody = sliceAnyFunction(appJs, 'renderPdHeader', 'renderPdTab');
+  const reloginBody = sliceAnyFunction(appJs, 'actionPdOauthRelogin', 'actionPdEdit');
+
+  assert.match(headerBody, /data-pd-oauth-relogin/);
+  assert.match(headerBody, /重新登录/);
+  assert.match(reloginBody, /launchCodexLogin\('', '', row\.homePath \|\| getDashboardCodexHome\(\)\)/);
 });
 
 test('provider detail pricing avoids silent primary-model fallback', () => {
