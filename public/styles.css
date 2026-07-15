@@ -22119,6 +22119,11 @@ body[data-page="dashboard"] .sec-body {
   min-width: 0;
 }
 
+.shell-v2 .model-select-row > .custom-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .shell-v2 .model-refresh-btn {
   flex: 0 0 auto !important;
   width: 36px !important;
@@ -22148,6 +22153,88 @@ body[data-page="dashboard"] .sec-body {
 .shell-v2 .model-refresh-btn svg {
   width: 14px !important;
   height: 14px !important;
+}
+
+.shell-v2 #genericModelControl,
+.shell-v2 .claude-model-control,
+.shell-v2 .claude-model-panel {
+  width: 100%;
+  min-width: 0;
+}
+
+.shell-v2 .claude-model-control {
+  display: grid;
+  gap: 10px;
+}
+
+.shell-v2 .claude-model-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.08);
+  box-shadow: inset 0 0 0 1px var(--s2-line-soft);
+}
+
+.shell-v2 .claude-model-tab {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--s2-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 32px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.shell-v2 .claude-model-tab:hover {
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--s2-text);
+  transform: none;
+}
+
+.shell-v2 .claude-model-tab.active {
+  background: rgba(37, 99, 235, 0.16);
+  color: #8bb8ff;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.28);
+}
+
+.shell-v2 .claude-model-panel {
+  display: grid;
+  gap: 0;
+}
+
+.shell-v2 .claude-model-panel > input {
+  width: 100%;
+}
+
+.shell-v2 .claude-model-current {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--s2-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-theme="light"] .shell-v2 .claude-model-tabs {
+  background: rgba(15, 23, 42, 0.045);
+}
+
+[data-theme="light"] .shell-v2 .claude-model-tab.active {
+  background: rgba(37, 99, 235, 0.11);
+  color: #1d4ed8;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
 }
 
 /* Primary action row — secondary action on the left, save + launch grouped on the right */

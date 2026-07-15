@@ -7,9 +7,10 @@ use toml::Value as TomlValue;
 
 use crate::codex::find_codex_binary_with_options;
 use crate::provider::{
-    detect_saved_provider, find_provider_entry_by_base_url, flatten_auth_json, get_string,
-    infer_env_key, infer_provider_label, infer_provider_seed, normalize_base_url,
-    reveal_provider_api_key, slugify_provider_key, summarize_providers,
+    allocate_unique_env_key, allocate_unique_provider_key, collect_occupied_env_keys,
+    detect_saved_provider, flatten_auth_json, get_string, infer_env_key, infer_provider_label,
+    infer_provider_seed, list_provider_keys, normalize_base_url, reveal_provider_api_key,
+    slugify_provider_key, summarize_providers,
 };
 use crate::provider_eval::run_model_authenticity_eval;
 use crate::{
@@ -1048,36 +1049,52 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
     let original_env = env.clone();
     let base_url = normalize_base_url(&get_string(&object, "baseUrl"))?;
     let api_key = get_string(&object, "apiKey");
-    let provider_key = slugify_provider_key(&{
-        let input = get_string(&object, "providerKey");
-        if input.is_empty() {
-            infer_provider_seed(&base_url)
-        } else {
-            input
-        }
+    let requested_provider_key_raw = get_string(&object, "providerKey");
+    let preferred_provider_key = slugify_provider_key(&if requested_provider_key_raw.is_empty() {
+        infer_provider_seed(&base_url)
+    } else {
+        requested_provider_key_raw.clone()
     });
     let model = get_string(&object, "model");
     let approval_policy = get_string(&object, "approvalPolicy");
     let sandbox_mode = get_string(&object, "sandboxMode");
     let reasoning_effort = get_string(&object, "reasoningEffort");
 
-    // 通过 base_url 找已有 provider —— 用户改 URL / 重命名 providerKey 后，
-    // 同一个 provider 不应该在 TOML 里残留旧条目。这里在还没把 config 借为
-    // mut 之前先拷出 matched，避免与下面 mut 借用冲突。
-    let matched_entry = find_provider_entry_by_base_url(&config, &base_url);
-
+    // Same Base URL may host multiple API keys as independent providers.
+    // Only update an existing provider when the requested providerKey already exists.
     if !config.is_object() {
         config = json!({});
     }
-    let config_object = config.as_object_mut().expect("config object");
-    let current_provider = config_object
+    let force_new_provider = object
+        .get("createNew")
+        .and_then(Value::as_bool)
+        .or_else(|| object.get("forceNewProvider").and_then(Value::as_bool))
+        .unwrap_or(false);
+    let existing_provider_keys = list_provider_keys(&config);
+    let requested_exists = !requested_provider_key_raw.trim().is_empty()
+        && existing_provider_keys.iter().any(|key| key == &preferred_provider_key)
+        && !force_new_provider;
+    let provider_key = if requested_exists {
+        preferred_provider_key.clone()
+    } else {
+        allocate_unique_provider_key(
+            &preferred_provider_key,
+            &existing_provider_keys,
+            if force_new_provider {
+                ""
+            } else {
+                preferred_provider_key.as_str()
+            },
+        )
+    };
+    let current_provider = config
         .get("model_providers")
         .and_then(Value::as_object)
         .and_then(|providers| providers.get(&provider_key))
         .and_then(Value::as_object)
         .cloned()
-        .or_else(|| matched_entry.as_ref().map(|(_, item)| item.clone()))
         .unwrap_or_default();
+    let occupied_env_keys = collect_occupied_env_keys(&config, &env, &provider_key);
 
     let provider_label = {
         let input = get_string(&object, "providerLabel");
@@ -1089,7 +1106,7 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
             infer_provider_label(&base_url, &provider_key)
         }
     };
-    let env_key = {
+    let requested_env_key = {
         let input = get_string(&object, "envKey");
         if !input.is_empty() {
             input
@@ -1099,6 +1116,12 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
             infer_env_key(&provider_key)
         }
     };
+    let env_key = allocate_unique_env_key(
+        &infer_env_key(&provider_key),
+        &occupied_env_keys,
+        &requested_env_key,
+    );
+    let config_object = config.as_object_mut().expect("config object");
 
     // 是否在保存时同时把 model_provider 切到这条新 provider。默认 false：
     // 前端拿到 needsActivation:true 后弹"确认切换"，确认后才再发一次带
@@ -1148,27 +1171,10 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
     }
     providers_object.insert(provider_key.clone(), Value::Object(next_provider));
 
-    // 收集要从 .env 清掉的旧 env_key（与 Node 端逻辑保持一致）。
+    // 只清理当前 provider 自己改掉的 env_key。
+    // 同 URL 的其他 provider 视为独立条目，永不自动删除。
     let mut obsolete_env_keys: Vec<String> = Vec::new();
     let mut hints: Vec<Value> = Vec::new();
-    if let Some((matched_key, matched_provider)) = matched_entry.as_ref() {
-        if matched_key != &provider_key {
-            let old_env_key = matched_provider
-                .get("env_key")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if !old_env_key.is_empty() && old_env_key != env_key {
-                obsolete_env_keys.push(old_env_key);
-            }
-            providers_object.remove(matched_key);
-            hints.push(json!({
-        "code": "provider_key_replaced",
-        "message": format!("已替换旧 provider「{}」为「{}」（同一 Base URL）", matched_key, provider_key),
-      }));
-        }
-    }
     let prev_env_key_for_key = current_provider
         .get("env_key")
         .and_then(Value::as_str)
@@ -1177,6 +1183,17 @@ pub(crate) fn save_config(body: &Value) -> Result<Value, String> {
         .to_string();
     if !prev_env_key_for_key.is_empty() && prev_env_key_for_key != env_key {
         obsolete_env_keys.push(prev_env_key_for_key);
+    }
+    if !requested_exists && provider_key != preferred_provider_key {
+        hints.push(json!({
+          "code": "provider_key_allocated",
+          "message": format!("同 Base URL 已有其他 Provider，已新建「{}」以保存这份 Key", provider_key),
+          "detail": {
+            "preferredProviderKey": preferred_provider_key,
+            "savedProviderKey": provider_key,
+            "baseUrl": base_url,
+          }
+        }));
     }
 
     if !api_key.trim().is_empty() && !env_key.trim().is_empty() {

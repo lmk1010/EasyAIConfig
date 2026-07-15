@@ -293,7 +293,7 @@ function looksLikeClaudeModel(model = '') {
 
 function sanitizeClaudeLauncherModel(model = '') {
   const value = String(model || '').trim();
-  return looksLikeClaudeModel(value) ? value : '';
+  return value === 'custom' ? '' : value;
 }
 
 export async function renderTerminalPage() {
@@ -523,6 +523,8 @@ async function fetchProviderModels(providerKey, tool) {
           providerKey,
           baseUrl: selected.baseUrl || provider.baseUrl || '',
           apiKey: provider.authToken || provider.apiKey || selected.authToken || selected.apiKey || '',
+          protocol: 'anthropic',
+          credentialType: (provider.authToken || selected.authToken) ? 'auth_token' : 'api_key',
           timeoutMs: 15000,
         }),
       })
@@ -614,7 +616,7 @@ function renderLauncherPage(tp, providers) {
     { value: 'custom', label: '自定义…' },
   ];
   // 从 provider 拉到的真实模型（如果有）— 拼到前面
-  const liveModels = (tp.providerModels?.[tp.launcher.providerKey] || []).filter((model) => isCodex || looksLikeClaudeModel(model));
+  const liveModels = (tp.providerModels?.[tp.launcher.providerKey] || []).filter(Boolean);
   const liveOpts = liveModels.map((m) => ({ value: m, label: m, hint: '来自 provider' }));
   const baseOpts = isCodex ? codexModelOpts : claudeModelOpts;
   // 去重：live 命中的从 baseOpts 中去掉

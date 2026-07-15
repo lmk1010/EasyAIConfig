@@ -927,24 +927,72 @@
                       <button id="detectBtn" class="secondary fit-btn">检测模型</button>
                     </div>
 
-                    <label class="field field-wide model-field">
+                    <div class="field field-wide model-field">
                       <span>当前默认模型</span>
-                      <div class="model-select-row">
-                        <div class="select-wrap" style="flex:1;min-width:0">
-                          <select id="modelSelect" data-empty-placeholder="true">
-                            <option value="">选择默认模型</option>
-                          </select>
+                      <div id="genericModelControl">
+                        <div class="model-select-row">
+                          <div class="select-wrap" style="flex:1;min-width:0">
+                            <select id="modelSelect" data-empty-placeholder="true">
+                              <option value="">选择默认模型</option>
+                            </select>
+                          </div>
+                          <button id="modelRefreshBtn" type="button" class="secondary model-refresh-btn"
+                            title="测试并获取模型列表" aria-label="测试并获取模型列表">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3" />
+                            </svg>
+                          </button>
                         </div>
-                        <button id="modelRefreshBtn" type="button" class="secondary model-refresh-btn"
-                          title="测试并获取模型列表" aria-label="测试并获取模型列表">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3" />
-                          </svg>
-                        </button>
+                        <small class="field-hint model-fetch-hint">刷新会测试 URL / Key，并把可用模型放进下拉框。</small>
                       </div>
-                      <small class="field-hint model-fetch-hint">刷新会测试 URL / Key，并把可用模型放进下拉框。</small>
-                    </label>
+
+                      <div id="claudeModelControl" class="claude-model-control hide">
+                        <div class="claude-model-tabs" role="tablist" aria-label="Claude 模型来源">
+                          <button type="button" class="claude-model-tab" role="tab"
+                            data-claude-model-mode="auto">自动获取</button>
+                          <button type="button" class="claude-model-tab" role="tab"
+                            data-claude-model-mode="preset">内置预设</button>
+                          <button type="button" class="claude-model-tab" role="tab"
+                            data-claude-model-mode="manual">手动输入</button>
+                        </div>
+
+                        <div class="claude-model-panel" data-claude-model-panel="auto" role="tabpanel">
+                          <div class="model-select-row">
+                            <div class="select-wrap" style="flex:1;min-width:0">
+                              <select id="claudeAutoModelSelect" data-empty-placeholder="true">
+                                <option value="">刷新后选择 Provider 模型</option>
+                              </select>
+                            </div>
+                            <button id="claudeModelRefreshBtn" type="button" class="secondary model-refresh-btn visible"
+                              title="测试连接并重新获取 Provider 模型" aria-label="测试连接并重新获取 Provider 模型">
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 12a9 9 0 0 1-15.36 6.36L3 21M3 12a9 9 0 0 1 15.36-6.36L21 3" />
+                              </svg>
+                            </button>
+                          </div>
+                          <small id="claudeAutoModelHint" class="field-hint model-fetch-hint">点击刷新，从当前 Provider 获取模型。</small>
+                        </div>
+
+                        <div class="claude-model-panel hide" data-claude-model-panel="preset" role="tabpanel">
+                          <div class="select-wrap">
+                            <select id="claudePresetModelSelect" data-empty-placeholder="true">
+                              <option value="">选择内置预设模型</option>
+                            </select>
+                          </div>
+                          <small class="field-hint model-fetch-hint">这里只显示应用内置的 Claude 模型别名和预设。</small>
+                        </div>
+
+                        <div class="claude-model-panel hide" data-claude-model-panel="manual" role="tabpanel">
+                          <input id="claudeManualModelInput" type="text"
+                            placeholder="输入任意模型 ID，例如 grok-4.5" autocomplete="off" />
+                          <small class="field-hint model-fetch-hint">支持输入 Provider 的任意模型 ID，不限制为 Claude 命名。</small>
+                        </div>
+
+                        <div id="claudeModelCurrent" class="claude-model-current">当前配置：由 Claude Code 决定</div>
+                      </div>
+                    </div>
 
                   </div>
 
@@ -1734,7 +1782,7 @@
                       <div class="section-head slim-head">
                         <div>
                           <div class="section-title">Provider 列表</div>
-                          <div class="section-copy">已发现配置、连通性与快速载入。</div>
+                          <div class="section-copy">已发现配置、连通性与快速载入。同 URL 可建多个 Provider，分别保存不同 API Key。</div>
                         </div>
                         <button id="refreshBtn" class="secondary tiny-btn">↻ 刷新</button>
                       </div>

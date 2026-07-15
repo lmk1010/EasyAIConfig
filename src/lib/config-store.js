@@ -3279,11 +3279,67 @@ function inferProviderSeed(baseUrl) {
   }
 }
 
+// Legacy helper: early save logic merged providers by Base URL.
+// Same URL can now keep multiple keys as independent providers; keep for diagnostics only.
 function findProviderEntryByBaseUrl(config, baseUrl) {
   const normalizedBaseUrl = String(baseUrl || '').trim();
   return Object.entries(config?.model_providers || {}).find(([, provider]) => {
     return String(provider?.base_url || '').trim() === normalizedBaseUrl;
   }) || null;
+}
+
+function listProviderKeys(config = {}) {
+  return Object.keys(config?.model_providers || {}).filter(Boolean);
+}
+
+function allocateUniqueProviderKey(baseKey, existingKeys = [], preferredKey = '') {
+  const occupied = new Set(
+    (Array.isArray(existingKeys) ? existingKeys : [])
+      .map((key) => String(key || '').trim())
+      .filter(Boolean),
+  );
+  const preferredRaw = String(preferredKey || '').trim();
+  const preferred = preferredRaw ? slugifyProviderKey(preferredRaw) : '';
+  if (preferred && !occupied.has(preferred)) return preferred;
+
+  const seed = slugifyProviderKey(baseKey || preferred || 'custom') || 'custom';
+  if (!occupied.has(seed)) return seed;
+
+  let index = 2;
+  while (occupied.has(`${seed}-${index}`)) index += 1;
+  return `${seed}-${index}`;
+}
+
+function allocateUniqueEnvKey(baseEnvKey, existingEnvKeys = [], preferredEnvKey = '') {
+  const occupied = new Set(
+    (Array.isArray(existingEnvKeys) ? existingEnvKeys : [])
+      .map((key) => String(key || '').trim())
+      .filter(Boolean),
+  );
+  const preferred = String(preferredEnvKey || '').trim();
+  if (preferred && !occupied.has(preferred)) return preferred;
+
+  const seedRaw = String(baseEnvKey || preferred || 'CUSTOM_API_KEY').trim() || 'CUSTOM_API_KEY';
+  const seed = /_API_KEY$/i.test(seedRaw) ? seedRaw : `${seedRaw}_API_KEY`;
+  if (!occupied.has(seed)) return seed;
+
+  const prefix = seed.replace(/_API_KEY$/i, '');
+  let index = 2;
+  while (occupied.has(`${prefix}_${index}_API_KEY`)) index += 1;
+  return `${prefix}_${index}_API_KEY`;
+}
+
+function collectOccupiedEnvKeys(config = {}, env = {}, excludeProviderKey = '') {
+  // Only keys claimed by other providers. Do not treat the whole .env map as
+  // occupied — the current provider's own key would always look like a collision.
+  void env;
+  const occupied = new Set();
+  for (const [key, provider] of Object.entries(config?.model_providers || {})) {
+    if (excludeProviderKey && key === excludeProviderKey) continue;
+    const envKey = String(provider?.env_key || '').trim();
+    if (envKey) occupied.add(envKey);
+  }
+  return [...occupied];
 }
 
 function inferProviderLabel(baseUrl, providerKey) {
@@ -4898,19 +4954,36 @@ export async function saveConfig(payload) {
   const baseUrl = normalizeBaseUrl(payload.baseUrl);
   const apiKey = String(payload.apiKey || '').trim();
   const inferredProviderKey = slugifyProviderKey(inferProviderSeed(baseUrl));
-  const requestedProviderKey = slugifyProviderKey(payload.providerKey || inferredProviderKey);
+  const requestedProviderKeyRaw = String(payload.providerKey || '').trim();
+  const requestedProviderKey = slugifyProviderKey(requestedProviderKeyRaw || inferredProviderKey);
   const legacyProviderKey = slugifyProviderKey(legacyInferProviderSeed(baseUrl));
-  const providerKey = requestedProviderKey === legacyProviderKey && requestedProviderKey !== inferredProviderKey
-    ? inferredProviderKey
-    : requestedProviderKey;
-  const matchedProviderEntry = findProviderEntryByBaseUrl(config, baseUrl);
-  const matchedProviderKey = matchedProviderEntry?.[0] || '';
-  const matchedProvider = matchedProviderEntry?.[1] || {};
-  const currentProvider = config.model_providers?.[providerKey]
-    || (matchedProviderKey && matchedProviderKey !== providerKey ? matchedProvider : {})
-    || {};
+  const preferredProviderKey = requestedProviderKeyRaw
+    ? (
+      requestedProviderKey === legacyProviderKey && requestedProviderKey !== inferredProviderKey
+        ? inferredProviderKey
+        : requestedProviderKey
+    )
+    : inferredProviderKey;
+  // Same Base URL can own multiple providers (different API keys). Never merge by URL.
+  // Only update an existing provider when the requested providerKey already exists
+  // and the caller is not forcing a brand-new entry.
+  const forceNewProvider = Boolean(payload.createNew || payload.forceNewProvider);
+  const existingProviderKeys = listProviderKeys(config);
+  const requestedExists = Boolean(requestedProviderKeyRaw)
+    && Object.prototype.hasOwnProperty.call(config.model_providers || {}, preferredProviderKey)
+    && !forceNewProvider;
+  const providerKey = requestedExists
+    ? preferredProviderKey
+    : allocateUniqueProviderKey(
+      preferredProviderKey || inferredProviderKey,
+      existingProviderKeys,
+      forceNewProvider ? '' : preferredProviderKey,
+    );
+  const currentProvider = config.model_providers?.[providerKey] || {};
   const providerLabel = String(payload.providerLabel || currentProvider.name || inferProviderLabel(baseUrl, providerKey)).trim() || providerKey;
-  const envKey = String(payload.envKey || currentProvider.env_key || inferEnvKey(providerKey)).trim();
+  const requestedEnvKey = String(payload.envKey || currentProvider.env_key || inferEnvKey(providerKey)).trim();
+  const occupiedEnvKeys = collectOccupiedEnvKeys(config, env, providerKey);
+  const envKey = allocateUniqueEnvKey(inferEnvKey(providerKey), occupiedEnvKeys, requestedEnvKey);
   const model = String(payload.model || '').trim();
   const approvalPolicy = String(payload.approvalPolicy || '').trim();
   const sandboxMode = String(payload.sandboxMode || '').trim();
@@ -4965,23 +5038,23 @@ export async function saveConfig(payload) {
   }
   config.model_providers[providerKey] = nextProvider;
 
-  // 收集所有要被废弃 / 替换的旧 env_key，准备从 .env 清理掉。
-  // 触发条件：
-  //   1. 同 URL 匹配到旧 providerKey 且 != 新 providerKey，旧 provider 整条被删；
-  //   2. 当前 providerKey 改名了 env_key（例如改 URL 推断变成新名字）。
+  // 只清理当前 provider 自己改掉的 env_key。
+  // 同 URL 的其他 provider 视为独立条目，永不自动删除。
   const obsoleteEnvKeys = new Set();
-  if (matchedProviderKey && matchedProviderKey !== providerKey) {
-    const oldEnvKey = String(matchedProvider?.env_key || '').trim();
-    if (oldEnvKey && oldEnvKey !== envKey) obsoleteEnvKeys.add(oldEnvKey);
-    delete config.model_providers[matchedProviderKey];
-    hints.push({
-      code: 'provider_key_replaced',
-      message: `已替换旧 provider「${matchedProviderKey}」为「${providerKey}」（同一 Base URL）`,
-    });
-  }
   const prevEnvKeyForKey = String(currentProvider?.env_key || '').trim();
   if (prevEnvKeyForKey && prevEnvKeyForKey !== envKey) {
     obsoleteEnvKeys.add(prevEnvKeyForKey);
+  }
+  if (!requestedExists && providerKey !== preferredProviderKey) {
+    hints.push({
+      code: 'provider_key_allocated',
+      message: `同 Base URL 已有其他 Provider，已新建「${providerKey}」以保存这份 Key`,
+      detail: {
+        preferredProviderKey,
+        savedProviderKey: providerKey,
+        baseUrl,
+      },
+    });
   }
 
   if (apiKey && envKey) {

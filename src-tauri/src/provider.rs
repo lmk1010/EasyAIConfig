@@ -1,6 +1,6 @@
 use reqwest::header::{
-    HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE,
-    PRAGMA, USER_AGENT,
+    HeaderMap, HeaderName, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, CACHE_CONTROL,
+    CONTENT_TYPE, PRAGMA, USER_AGENT,
 };
 use reqwest::Client;
 use serde_json::{json, Map, Value};
@@ -121,8 +121,9 @@ pub(crate) fn infer_env_key(provider_key: &str) -> String {
 }
 
 /// 在已有 `model_providers` 表里按 base_url（已规范化）找命中条目。
-/// 用于 save_config 检测「用户只改了 URL/重命名 providerKey，实际指向的还是
-/// 同一个 provider」的场景，避免在 TOML 里产生孤儿条目。
+/// 历史兼容：早期 save 逻辑会按 URL 合并 provider。现在同 URL 可并存多 key，
+/// 新逻辑不再用它做替换；仅保留给只读/诊断场景复用。
+#[allow(dead_code)]
 pub(crate) fn find_provider_entry_by_base_url(
     config: &Value,
     base_url: &str,
@@ -147,6 +148,134 @@ pub(crate) fn find_provider_entry_by_base_url(
         }
     }
     None
+}
+
+pub(crate) fn list_provider_keys(config: &Value) -> Vec<String> {
+    config
+        .get("model_providers")
+        .and_then(Value::as_object)
+        .map(|providers| providers.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+pub(crate) fn allocate_unique_provider_key(
+    base_key: &str,
+    existing_keys: &[String],
+    preferred_key: &str,
+) -> String {
+    let occupied: std::collections::HashSet<String> = existing_keys
+        .iter()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+        .collect();
+    // Empty preferred means "ignore preferred"; do not slugify("") -> "custom".
+    let preferred = if preferred_key.trim().is_empty() {
+        String::new()
+    } else {
+        slugify_provider_key(preferred_key)
+    };
+    if !preferred.is_empty() && !occupied.contains(&preferred) {
+        return preferred;
+    }
+    let seed_source = if base_key.trim().is_empty() {
+        if preferred.is_empty() {
+            "custom"
+        } else {
+            preferred.as_str()
+        }
+    } else {
+        base_key
+    };
+    let seed = slugify_provider_key(seed_source);
+    let seed = if seed.is_empty() {
+        "custom".to_string()
+    } else {
+        seed
+    };
+    if !occupied.contains(&seed) {
+        return seed;
+    }
+    let mut index = 2;
+    loop {
+        let candidate = format!("{seed}-{index}");
+        if !occupied.contains(&candidate) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+pub(crate) fn allocate_unique_env_key(
+    base_env_key: &str,
+    existing_env_keys: &[String],
+    preferred_env_key: &str,
+) -> String {
+    let occupied: std::collections::HashSet<String> = existing_env_keys
+        .iter()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+        .collect();
+    let preferred = preferred_env_key.trim().to_string();
+    if !preferred.is_empty() && !occupied.contains(&preferred) {
+        return preferred;
+    }
+    let seed_raw = if base_env_key.trim().is_empty() {
+        if preferred.is_empty() {
+            "CUSTOM_API_KEY".to_string()
+        } else {
+            preferred.clone()
+        }
+    } else {
+        base_env_key.trim().to_string()
+    };
+    let seed = if seed_raw.to_ascii_uppercase().ends_with("_API_KEY") {
+        seed_raw
+    } else {
+        format!("{seed_raw}_API_KEY")
+    };
+    if !occupied.contains(&seed) {
+        return seed;
+    }
+    let prefix = seed
+        .trim_end_matches("_API_KEY")
+        .trim_end_matches("_api_key")
+        .to_string();
+    let mut index = 2;
+    loop {
+        let candidate = format!("{prefix}_{index}_API_KEY");
+        if !occupied.contains(&candidate) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+pub(crate) fn collect_occupied_env_keys(
+    config: &Value,
+    _env: &std::collections::BTreeMap<String, String>,
+    exclude_provider_key: &str,
+) -> Vec<String> {
+    // Only keys claimed by other providers. Do not treat the whole .env map as
+    // occupied — the current provider's own key would always look like a collision.
+    let mut occupied: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(providers) = config.get("model_providers").and_then(Value::as_object) {
+        for (key, provider) in providers.iter() {
+            if !exclude_provider_key.is_empty() && key == exclude_provider_key {
+                continue;
+            }
+            if let Some(env_key) = provider
+                .as_object()
+                .and_then(|item| item.get("env_key"))
+                .and_then(Value::as_str)
+            {
+                let env_key = env_key.trim();
+                if !env_key.is_empty() {
+                    occupied.insert(env_key.to_string());
+                }
+            }
+        }
+    }
+    occupied.into_iter().collect()
 }
 
 fn normalize_token(value: &str) -> String {
@@ -616,10 +745,113 @@ fn summarize_models(model_ids: Vec<String>) -> Value {
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProviderProbeProtocol {
+    OpenAi,
+    Anthropic,
+}
+
+fn normalize_probe_protocol(value: &str) -> ProviderProbeProtocol {
+    match value.trim().to_lowercase().replace('_', "-").as_str() {
+        "anthropic" | "anthropic-messages" | "messages" => ProviderProbeProtocol::Anthropic,
+        _ => ProviderProbeProtocol::OpenAi,
+    }
+}
+
+fn provider_models_endpoint(base_url: &str, protocol: ProviderProbeProtocol) -> String {
+    let base = base_url.trim_end_matches('/');
+    if protocol == ProviderProbeProtocol::Anthropic {
+        if base.to_lowercase().ends_with("/v1") {
+            format!("{base}/models")
+        } else {
+            format!("{base}/v1/models")
+        }
+    } else {
+        format!("{base}/models")
+    }
+}
+
+fn build_probe_headers(
+    api_key: &str,
+    protocol: ProviderProbeProtocol,
+    credential_type: &str,
+) -> Result<HeaderMap, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/json, text/plain, */*"),
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static("Mozilla/5.0 EasyAIConfig/0.1"),
+    );
+    headers.insert(
+        ACCEPT_LANGUAGE,
+        HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
+    );
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+
+    let secret = api_key.trim();
+    if protocol == ProviderProbeProtocol::Anthropic {
+        headers.insert(
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static("2023-06-01"),
+        );
+        if credential_type.trim().eq_ignore_ascii_case("auth_token") {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {secret}"))
+                    .map_err(|error| error.to_string())?,
+            );
+        } else {
+            headers.insert(
+                HeaderName::from_static("x-api-key"),
+                HeaderValue::from_str(secret).map_err(|error| error.to_string())?,
+            );
+        }
+    } else {
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {secret}"))
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(headers)
+}
+
+fn extract_provider_model_ids(payload: &Value) -> Vec<String> {
+    let mut model_ids = Vec::new();
+    let mut append = |items: &[Value]| {
+        for item in items {
+            if let Some(id) = item
+                .as_str()
+                .or_else(|| item.get("id").and_then(Value::as_str))
+            {
+                model_ids.push(id.to_string());
+            }
+        }
+    };
+    if let Some(data) = payload.get("data").and_then(Value::as_array) {
+        append(data);
+    }
+    if let Some(models) = payload.get("models").and_then(Value::as_array) {
+        append(models);
+    }
+    if let Some(items) = payload.as_array() {
+        append(items);
+    }
+    model_ids
+}
+
 pub(crate) async fn detect_provider(body: &Value) -> Result<Value, String> {
     let object = parse_json_object(body);
     let normalized_base_url = normalize_base_url(&get_string(&object, "baseUrl"))?;
     let api_key = get_string(&object, "apiKey");
+    let protocol = normalize_probe_protocol(&get_string(&object, "protocol"));
+    let credential_type = get_string(&object, "credentialType");
+    let endpoint = provider_models_endpoint(&normalized_base_url, protocol);
     let timeout_ms = object
         .get("timeoutMs")
         .and_then(Value::as_u64)
@@ -637,37 +869,13 @@ pub(crate) async fn detect_provider(body: &Value) -> Result<Value, String> {
     let probe_codex_home = get_string(&object, "codexHome");
     let probe_started_at = std::time::Instant::now();
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        ACCEPT,
-        HeaderValue::from_static("application/json, text/plain, */*"),
-    );
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_static("Mozilla/5.0 EasyAIConfig/0.1"),
-    );
-    headers.insert(
-        ACCEPT_LANGUAGE,
-        HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
-    );
-    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", api_key.trim()))
-            .map_err(|error| error.to_string())?,
-    );
+    let headers = build_probe_headers(&api_key, protocol, &credential_type)?;
 
     let client = Client::builder()
         .timeout(Duration::from_millis(timeout_ms))
         .build()
         .map_err(|error| error.to_string())?;
-    let send_result = client
-        .get(format!("{normalized_base_url}/models"))
-        .headers(headers)
-        .send()
-        .await;
+    let send_result = client.get(&endpoint).headers(headers).send().await;
     let response = match send_result {
         Ok(resp) => resp,
         Err(error) => {
@@ -722,18 +930,21 @@ pub(crate) async fn detect_provider(body: &Value) -> Result<Value, String> {
         return Err(err);
     }
 
-    let model_ids = payload
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|item| {
-            item.get("id")
-                .and_then(Value::as_str)
-                .map(|text| text.to_string())
-        })
-        .collect::<Vec<_>>();
+    let model_ids = extract_provider_model_ids(&payload);
+    if model_ids.is_empty() {
+        let elapsed = probe_started_at.elapsed().as_millis() as u64;
+        let err = "检测失败：响应不包含模型列表".to_string();
+        crate::provider_health::record_probe(
+            &probe_provider_key,
+            &probe_codex_home,
+            Some(&normalized_base_url),
+            false,
+            Some(elapsed),
+            Some(status.as_u16()),
+            Some(&err),
+        );
+        return Err(err);
+    }
 
     let summary = summarize_models(model_ids);
     let elapsed = probe_started_at.elapsed().as_millis() as u64;
@@ -748,11 +959,72 @@ pub(crate) async fn detect_provider(body: &Value) -> Result<Value, String> {
     );
     Ok(json!({
       "baseUrl": normalized_base_url,
+      "protocol": if protocol == ProviderProbeProtocol::Anthropic { "anthropic" } else { "openai" },
       "status": "ok",
       "latencyMs": elapsed,
+      "statusCode": status.as_u16(),
       "models": summary.get("models").cloned().unwrap_or_else(|| json!([])),
       "supportsGpt": summary.get("supportsGpt").cloned().unwrap_or_else(|| json!(false)),
       "recommendedModel": summary.get("recommendedModel").cloned().unwrap_or(Value::Null),
       "raw": payload,
     }))
+}
+
+#[cfg(test)]
+mod provider_probe_tests {
+    use super::*;
+
+    #[test]
+    fn anthropic_models_endpoint_adds_v1_once() {
+        assert_eq!(
+            provider_models_endpoint("https://example.com", ProviderProbeProtocol::Anthropic),
+            "https://example.com/v1/models"
+        );
+        assert_eq!(
+            provider_models_endpoint("https://example.com/v1", ProviderProbeProtocol::Anthropic),
+            "https://example.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn anthropic_headers_follow_credential_type() {
+        let api_key_headers =
+            build_probe_headers("sk-test", ProviderProbeProtocol::Anthropic, "api_key").unwrap();
+        assert_eq!(
+            api_key_headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("sk-test")
+        );
+        assert_eq!(
+            api_key_headers
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("2023-06-01")
+        );
+        assert!(api_key_headers.get(AUTHORIZATION).is_none());
+
+        let token_headers =
+            build_probe_headers("token-test", ProviderProbeProtocol::Anthropic, "auth_token")
+                .unwrap();
+        assert_eq!(
+            token_headers
+                .get(AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer token-test")
+        );
+        assert!(token_headers.get("x-api-key").is_none());
+    }
+
+    #[test]
+    fn provider_model_ids_accept_openai_and_anthropic_shapes() {
+        assert_eq!(
+            extract_provider_model_ids(&json!({ "data": [{ "id": "grok-4.5" }] })),
+            vec!["grok-4.5".to_string()]
+        );
+        assert_eq!(
+            extract_provider_model_ids(&json!({ "models": ["claude-sonnet-4-6"] })),
+            vec!["claude-sonnet-4-6".to_string()]
+        );
+    }
 }

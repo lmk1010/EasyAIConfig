@@ -71,6 +71,8 @@ const state = {
   projectBinding: null,
   providerSecrets: {},
   claudeSelectedProviderKey: '',
+  claudeModelMode: '',
+  claudeModelValue: null,
   claudeProviderDetailKey: '',
   openCodeProviderDetailKey: '',
   openCodeProviderSearch: '',
@@ -84,6 +86,7 @@ const state = {
     hasStored: false,
     revealed: false,
     dirty: false,
+    forceNewProvider: false,
   },
   providerDropdownOpen: false,
   advancedOpen: false,
@@ -4651,6 +4654,7 @@ function setActiveTool(toolId) {
   _saveCurrentToolForm();
 
   state.activeTool = toolId;
+  syncClaudeQuickModelVisibility();
   updateToolSelector();
 
   const rememberedPage = state.toolLastPage[toolId] || 'quick';
@@ -4884,7 +4888,152 @@ function looksLikeClaudeModel(model = '') {
 
 function sanitizeClaudeModelValue(model = '') {
   const value = String(model || '').trim();
-  return looksLikeClaudeModel(value) ? value : '';
+  return value === '__custom__' ? '' : value;
+}
+
+function getClaudeQuickModelValue() {
+  if (state.claudeModelValue !== null) {
+    return sanitizeClaudeModelValue(state.claudeModelValue);
+  }
+  return sanitizeClaudeModelValue(
+    state.claudeCodeState?.model
+    || state.claudeCodeState?.settings?.model
+    || '',
+  );
+}
+
+function setClaudeCanonicalModelValue(modelValue = '') {
+  const modelSelect = el('modelSelect');
+  const model = sanitizeClaudeModelValue(modelValue);
+  state.claudeModelValue = model;
+  if (!modelSelect) return model;
+
+  if (model && ![...modelSelect.options].some((option) => normalizeClaudeModelKey(option.value) === normalizeClaudeModelKey(model))) {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model;
+    option.dataset.claudeCanonical = 'true';
+    modelSelect.appendChild(option);
+  }
+  modelSelect.value = model;
+
+  const cache = _getToolFormCache('claudecode', true);
+  cache.modelHtml = modelSelect.innerHTML;
+  cache.modelValue = model;
+  return model;
+}
+
+function getClaudeLiveModels(providerKey = '') {
+  const resolvedProviderKey = normalizeProviderKey(
+    providerKey
+    || el('claudeProviderKeyInput')?.value?.trim()
+    || state.claudeSelectedProviderKey
+    || inferClaudeProviderKey(el('baseUrlInput')?.value || ''),
+  );
+  return dedupeClaudeModels(state.claudeProviderModels?.[resolvedProviderKey]?.models || []);
+}
+
+function isClaudeAliasModel(model = '') {
+  const key = normalizeClaudeModelKey(model);
+  return Boolean(key) && CLAUDE_MODEL_ALIASES.some((item) => normalizeClaudeModelKey(item.value) === key);
+}
+
+function inferClaudeModelMode(model = '', liveModels = []) {
+  const key = normalizeClaudeModelKey(model);
+  if (key && liveModels.some((item) => normalizeClaudeModelKey(item) === key)) return 'auto';
+  if (key && (isClaudeAliasModel(model) || isClaudePresetModel(model))) return 'preset';
+  if (key) return 'manual';
+  return liveModels.length ? 'auto' : 'preset';
+}
+
+function updateClaudeModelCurrentLabel(modelValue = getClaudeQuickModelValue()) {
+  const current = el('claudeModelCurrent');
+  if (!current) return;
+  const model = sanitizeClaudeModelValue(modelValue);
+  current.textContent = model ? `当前配置：${model}` : '当前配置：由 Claude Code 决定';
+  current.title = model;
+}
+
+function setClaudeModelMode(mode = 'preset', { focus = false } = {}) {
+  const nextMode = ['auto', 'preset', 'manual'].includes(mode) ? mode : 'preset';
+  state.claudeModelMode = nextMode;
+  document.querySelectorAll('[data-claude-model-mode]').forEach((button) => {
+    const active = button.dataset.claudeModelMode === nextMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll('[data-claude-model-panel]').forEach((panel) => {
+    panel.classList.toggle('hide', panel.dataset.claudeModelPanel !== nextMode);
+  });
+  if (focus) {
+    const target = nextMode === 'manual'
+      ? el('claudeManualModelInput')
+      : nextMode === 'auto'
+        ? el('claudeAutoModelSelect')?._customSelect?.container?.querySelector('.custom-select-trigger')
+        : el('claudePresetModelSelect')?._customSelect?.container?.querySelector('.custom-select-trigger');
+    target?.focus?.();
+  }
+}
+
+function syncClaudeQuickModelVisibility() {
+  const isClaudeCode = state.activeTool === 'claudecode';
+  el('genericModelControl')?.classList.toggle('hide', isClaudeCode);
+  el('claudeModelControl')?.classList.toggle('hide', !isClaudeCode);
+}
+
+function renderClaudeQuickModelControl({
+  modelValue = getClaudeQuickModelValue(),
+  liveModels = getClaudeLiveModels(),
+  mode = '',
+} = {}) {
+  const model = setClaudeCanonicalModelValue(modelValue);
+  const live = dedupeClaudeModels(liveModels);
+  const liveSelect = el('claudeAutoModelSelect');
+  const presetSelect = el('claudePresetModelSelect');
+  const manualInput = el('claudeManualModelInput');
+
+  if (liveSelect) {
+    let html = `<option value="">${live.length ? `选择 Provider 返回的模型 (${live.length})` : '刷新后选择 Provider 模型'}</option>`;
+    html += live.map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+    liveSelect.innerHTML = html;
+    liveSelect.disabled = !live.length;
+    if (model && live.some((item) => normalizeClaudeModelKey(item) === normalizeClaudeModelKey(model))) {
+      liveSelect.value = model;
+    } else {
+      liveSelect.value = '';
+    }
+  }
+
+  if (presetSelect) {
+    let html = '<option value="">选择内置预设模型</option>';
+    html += '<optgroup label="模型别名">';
+    html += CLAUDE_MODEL_ALIASES
+      .map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`)
+      .join('');
+    html += '</optgroup><optgroup label="Claude 预设模型 ID">';
+    html += dedupeClaudeModels(CLAUDE_MODEL_PRESETS)
+      .map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`)
+      .join('');
+    html += '</optgroup>';
+    presetSelect.innerHTML = html;
+    if (model && (isClaudeAliasModel(model) || isClaudePresetModel(model))) {
+      presetSelect.value = model;
+    } else {
+      presetSelect.value = '';
+    }
+  }
+
+  if (manualInput && document.activeElement !== manualInput) manualInput.value = model;
+  const autoHint = el('claudeAutoModelHint');
+  if (autoHint) {
+    autoHint.textContent = live.length
+      ? `当前 Provider 已获取 ${live.length} 个模型，此列表不包含内置预设。`
+      : '点击刷新，从当前 Provider 获取模型。';
+  }
+  updateClaudeModelCurrentLabel(model);
+  setClaudeModelMode(mode || state.claudeModelMode || inferClaudeModelMode(model, live));
+  if (window.refreshCustomSelects) window.refreshCustomSelects();
 }
 
 function isClaudePresetModel(model = '') {
@@ -5036,6 +5185,10 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
       }
       modelSelect.value = cleanModel || '';
     }
+    renderClaudeQuickModelControl({
+      modelValue: sanitizeClaudeModelValue(data.model || data.settings?.model || ''),
+      liveModels: getClaudeLiveModels(activeProviderKey),
+    });
 
     const cache = _getToolFormCache('claudecode', true);
 
@@ -5074,6 +5227,17 @@ async function loadClaudeCodeQuickState({ force = false, cacheOnly = false, usag
         apiKeyInput.value = '';
         cache.apiKey = '';
       }
+    }
+
+    const cachedModels = state.claudeProviderModels?.[activeProviderKey];
+    if (
+      cachedModels?.models?.length
+      && normalizeClaudeBaseUrl(cachedModels.baseUrl || '') === normalizeClaudeBaseUrl(activeProviderBaseUrl || 'https://api.anthropic.com')
+    ) {
+      mergeModelsIntoClaudeDropdown(cachedModels.models, {
+        providerKey: activeProviderKey,
+        baseUrl: activeProviderBaseUrl || 'https://api.anthropic.com',
+      });
     }
 
     renderCurrentConfig();
@@ -6047,6 +6211,7 @@ function applyQuickInstallState({
   showCodexAuthBlock = false,
 } = {}) {
   if (state.activeTool !== toolId) return;
+  syncClaudeQuickModelVisibility();
   const baseUrlField = el('baseUrlInput')?.closest('.field');
   const apiKeyField = el('apiKeyInput')?.closest('.field');
   const detectField = el('detectBtn')?.closest('.field');
@@ -6134,6 +6299,7 @@ function applyClaudeCodeQuickInstallState(data = state.claudeCodeState || {}) {
     showApiKey: true,
     showDetect: false,
     showModel: true,
+    showModelRefreshBtn: true,
     showOauthBtn: true,
     showProviderKey: true,
   });
@@ -7883,10 +8049,16 @@ function bindOnboardModelConfigEvents() {
       if (statusEl) statusEl.textContent = '正在连接...';
 
       try {
+        const isClaudeProvider = omc.selectedProviderKind === 'claudecode';
         const json = await api('/api/provider/test', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ baseUrl: baseUrl, apiKey: apiKeyVal }),
+          body: JSON.stringify({
+            baseUrl,
+            apiKey: apiKeyVal,
+            protocol: isClaudeProvider ? 'anthropic' : 'openai',
+            credentialType: 'api_key',
+          }),
           timeoutMs: 18000,
         });
         if (!json.ok) { if (statusEl) statusEl.textContent = json.error || '检测失败'; return; }
@@ -15680,11 +15852,40 @@ function setApiKeyFieldState(provider) {
     inferred: Boolean(provider?.inferred),
     revealed: false,
     dirty: false,
+    forceNewProvider: false,
   };
   input.type = 'password';
   input.value = '';
   input.placeholder = state.apiKeyField.maskedValue || 'sk-...';
   syncApiKeyToggle();
+}
+
+function beginNewCodexProviderDraft(baseUrl = '') {
+  const input = el('apiKeyInput');
+  const nextBaseUrl = normalizeBaseUrl(baseUrl || el('baseUrlInput')?.value || '');
+  if (el('baseUrlInput') && nextBaseUrl) el('baseUrlInput').value = nextBaseUrl;
+  state.apiKeyField = {
+    providerKey: '',
+    baseUrl: nextBaseUrl,
+    maskedValue: '',
+    actualValue: '',
+    hasStored: false,
+    inferred: false,
+    revealed: false,
+    dirty: false,
+    forceNewProvider: true,
+  };
+  if (input) {
+    input.type = 'password';
+    input.value = '';
+    input.placeholder = 'sk-...（同 URL 可再保存一份新 Key）';
+  }
+  syncApiKeyToggle();
+  if (el('detectionMeta')) {
+    el('detectionMeta').textContent = nextBaseUrl
+      ? `新建 Provider：可与已有「${nextBaseUrl}」并存多份 Key`
+      : '新建 Provider：填写 URL 与 API Key 后保存';
+  }
 }
 
 function currentApiKeyContext() {
@@ -22056,7 +22257,7 @@ function buildClaudeCodeSettingsFromFields({
 
   const rawModelValue = fromConfigEditor
     ? readClaudeModelControl('ccCfgModelSelect', 'ccCfgModelCustom')
-    : (el('modelSelect')?.value?.trim() || '');
+    : getClaudeQuickModelValue();
   const modelValue = sanitizeClaudeModelValue(rawModelValue);
   if (modelValue) settings.model = modelValue;
   else delete settings.model;
@@ -22911,28 +23112,13 @@ function fillFromClaudeProvider(provider) {
   state.claudeSelectedProviderKey = provider.key || '';
   const providerKeyInput = el('claudeProviderKeyInput');
   if (providerKeyInput) providerKeyInput.value = provider.key || '';
-  const modelSelect = el('modelSelect');
-  if (modelSelect) {
-    const modelValue = sanitizeClaudeModelValue(provider.model || '');
-    if (!modelValue) {
-      modelSelect.value = '';
-    } else {
-      let found = false;
-      for (const option of modelSelect.options) {
-        if (option.value === modelValue) {
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        const option = document.createElement('option');
-        option.value = modelValue;
-        option.textContent = modelValue;
-        modelSelect.appendChild(option);
-      }
-      modelSelect.value = modelValue;
-    }
-  }
+  const modelValue = sanitizeClaudeModelValue(provider.model || '');
+  const liveModels = getClaudeLiveModels(provider.key);
+  renderClaudeQuickModelControl({
+    modelValue,
+    liveModels,
+    mode: inferClaudeModelMode(modelValue, liveModels),
+  });
   const baseUrlInput = el('baseUrlInput');
   if (baseUrlInput) baseUrlInput.value = provider.baseUrl || '';
   const apiKeyInput = el('apiKeyInput');
@@ -23160,6 +23346,9 @@ async function testClaudeProviderConnectivity(provider, { delayMs = 420 } = {}) 
     body: JSON.stringify({
       baseUrl,
       apiKey: secret,
+      protocol: 'anthropic',
+      credentialType: provider.authToken ? 'auth_token' : 'api_key',
+      providerKey: provider.key,
       timeoutMs: 10000,
     }),
     timeoutMs: 12000,
@@ -23177,6 +23366,12 @@ async function testClaudeProviderConnectivity(provider, { delayMs = 420 } = {}) 
     at: Date.now(),
     baseUrl,
   };
+  if (
+    state.activeTool === 'claudecode'
+    && (state.claudeSelectedProviderKey === provider.key || el('claudeProviderKeyInput')?.value?.trim() === provider.key)
+  ) {
+    mergeModelsIntoClaudeDropdown(models, { providerKey: provider.key, baseUrl });
+  }
   return { ok: true, data: { ...(json.data || {}), models: dedupeClaudeModels(models) } };
 }
 
@@ -23202,39 +23397,66 @@ function pickRecommendedModel(models = [], fallback = '') {
   return ranked[0] || fallback || '';
 }
 
+function allocateCodexProviderKey(baseKey = '', existingKeys = []) {
+  const occupied = new Set(
+    (Array.isArray(existingKeys) ? existingKeys : [])
+      .map((key) => String(key || '').trim())
+      .filter(Boolean),
+  );
+  const seed = normalizeProviderKey(baseKey) || 'custom';
+  if (!occupied.has(seed)) return seed;
+  let index = 2;
+  while (occupied.has(`${seed}-${index}`)) index += 1;
+  return `${seed}-${index}`;
+}
+
+function allocateCodexEnvKey(baseEnvKey = '', existingEnvKeys = []) {
+  const occupied = new Set(
+    (Array.isArray(existingEnvKeys) ? existingEnvKeys : [])
+      .map((key) => String(key || '').trim())
+      .filter(Boolean),
+  );
+  const seedRaw = String(baseEnvKey || 'CUSTOM_API_KEY').trim() || 'CUSTOM_API_KEY';
+  const seed = /_API_KEY$/i.test(seedRaw) ? seedRaw : `${seedRaw}_API_KEY`;
+  if (!occupied.has(seed)) return seed;
+  const prefix = seed.replace(/_API_KEY$/i, '');
+  let index = 2;
+  while (occupied.has(`${prefix}_${index}_API_KEY`)) index += 1;
+  return `${prefix}_${index}_API_KEY`;
+}
+
 function resolveCodexProviderForSave(baseUrl) {
   const normalized = normalizeBaseUrl(baseUrl);
   const providers = Array.isArray(state.current?.providers) ? state.current.providers : [];
+  const existingKeys = providers.map((item) => item.key).filter(Boolean);
+  const existingEnvKeys = providers.map((item) => item.envKey).filter(Boolean);
   const cachedProviderKey = String(state.apiKeyField?.providerKey || '').trim();
-  const cachedBaseUrl = normalizeBaseUrl(state.apiKeyField?.baseUrl || '');
+  const forceNewProvider = Boolean(state.apiKeyField?.forceNewProvider);
 
+  // Only update an existing provider when the form is bound to that provider.
+  // Same Base URL alone must never collapse multiple keys into one entry.
   const cachedProvider = cachedProviderKey
     ? providers.find((item) => item.key === cachedProviderKey)
     : null;
-  if (cachedProvider && cachedBaseUrl && cachedBaseUrl === normalized) {
+  if (cachedProvider && !cachedProvider.historyOnly && !forceNewProvider) {
     return {
       providerKey: cachedProvider.key,
       providerLabel: String(cachedProvider.name || ''),
       envKey: String(cachedProvider.envKey || ''),
-      reuseExisting: !cachedProvider.inferred && !cachedProvider.historyOnly,
+      reuseExisting: !cachedProvider.inferred,
     };
   }
 
-  const matchedByBaseUrl = providers.find((item) => normalizeBaseUrl(item.baseUrl || '') === normalized);
-  if (matchedByBaseUrl) {
-    return {
-      providerKey: matchedByBaseUrl.key,
-      providerLabel: String(matchedByBaseUrl.name || ''),
-      envKey: String(matchedByBaseUrl.envKey || ''),
-      reuseExisting: !matchedByBaseUrl.inferred && !matchedByBaseUrl.historyOnly,
-    };
-  }
-
-  const providerKey = inferProviderKey(normalized);
+  const seedKey = inferProviderKey(normalized);
+  const sameUrlCount = providers.filter((item) => normalizeBaseUrl(item.baseUrl || '') === normalized && !item.historyOnly).length;
+  const providerKey = allocateCodexProviderKey(seedKey, existingKeys);
+  const envKey = allocateCodexEnvKey(inferEnvKey(providerKey), existingEnvKeys);
+  const baseLabel = inferProviderLabel(normalized);
+  const providerLabel = sameUrlCount > 0 ? `${baseLabel} ${sameUrlCount + 1}` : baseLabel;
   return {
     providerKey,
-    providerLabel: inferProviderLabel(normalized),
-    envKey: inferEnvKey(providerKey),
+    providerLabel,
+    envKey,
     reuseExisting: false,
   };
 }
@@ -23267,6 +23489,10 @@ function currentPayload() {
   if (!provider.reuseExisting) {
     payload.providerLabel = provider.providerLabel;
     payload.envKey = provider.envKey;
+    if (state.apiKeyField?.forceNewProvider) {
+      payload.createNew = true;
+      payload.forceNewProvider = true;
+    }
   }
   return payload;
 }
@@ -23398,7 +23624,7 @@ function renderCurrentConfig() {
       renderQuickRailSupportPanel();
       return;
     }
-    const model = sanitizeClaudeModelValue(cc?.model || el('modelSelect')?.value || '') || '未选择模型';
+    const model = getClaudeQuickModelValue() || '未选择模型';
     const login = cc?.login || {};
     const providers = getClaudeProviderProfiles(cc);
     const activeProvider = providers.find((provider) => provider.key === state.claudeSelectedProviderKey)
@@ -24172,6 +24398,7 @@ function renderProviders() {
       <div class="provider-actions-row">
         <button class="secondary tiny-btn" data-load-provider="${escapeHtml(provider.key)}">切换</button>
         <button class="secondary tiny-btn" data-check-provider="${escapeHtml(provider.key)}">检测</button>
+        <button class="secondary tiny-btn" data-clone-provider="${escapeHtml(provider.key)}" title="同 URL 再建一份 Provider（另一把 Key）">同URL新建</button>
         <button class="secondary tiny-btn ${isBound ? 'is-bound' : ''}" data-bind-provider="${escapeHtml(provider.key)}" data-bind-action="${bindBtnAction}" title="${escapeHtml(bindTip)}">${bindBtnLabel}</button>
       </div>
     </div>
@@ -25304,6 +25531,38 @@ function _getDetectParams() {
       payload: null,
     };
   }
+  if (state.activeTool === 'claudecode') {
+    const providerKey = normalizeProviderKey(
+      el('claudeProviderKeyInput')?.value?.trim()
+      || state.claudeSelectedProviderKey
+      || '',
+    );
+    const providers = getClaudeProviderProfiles(state.claudeCodeState);
+    const byKey = providerKey ? providers.find((provider) => provider.key === providerKey) : null;
+    const byBaseUrl = baseUrl
+      ? providers.find((provider) => normalizeClaudeBaseUrl(provider.baseUrl || '') === baseUrl)
+      : null;
+    const provider = byKey && (
+      !baseUrl
+      || normalizeClaudeBaseUrl(byKey.baseUrl || '') === baseUrl
+      || (isClaudeOfficialProvider(byKey) && /api\.anthropic\.com/i.test(baseUrl))
+    )
+      ? byKey
+      : byBaseUrl;
+    const credentialType = provider?.authToken ? 'auth_token' : 'api_key';
+    const storedSecret = credentialType === 'auth_token'
+      ? String(provider?.authToken || '').trim()
+      : String(provider?.apiKey || '').trim();
+    return {
+      baseUrl: baseUrl || normalizeClaudeBaseUrl(provider?.baseUrl || '') || (apiKey || storedSecret ? 'https://api.anthropic.com' : ''),
+      apiKey: apiKey || storedSecret,
+      useStored: false,
+      payload: null,
+      providerKey: provider?.key || providerKey,
+      protocol: 'anthropic',
+      credentialType,
+    };
+  }
   const storedKey = state.openClawQuickConfig?.apiKey || '';
   return { baseUrl, apiKey: apiKey || storedKey, useStored: false, payload: null };
 }
@@ -25327,7 +25586,13 @@ async function detectModels() {
         providerKey: params.payload.providerKey,
         timeoutMs: 18000,
       }
-      : { baseUrl: params.baseUrl, apiKey: params.apiKey }),
+      : {
+        baseUrl: params.baseUrl,
+        apiKey: params.apiKey,
+        protocol: params.protocol,
+        credentialType: params.credentialType,
+        providerKey: params.providerKey,
+      }),
     timeoutMs: 18000,
   });
   setBusy('detectBtn', false);
@@ -25350,6 +25615,8 @@ async function detectModels() {
     _mergeModelsIntoOpenClawDropdown(models);
   } else if (state.activeTool === 'opencode') {
     mergeModelsIntoOpenCodeDropdown(models);
+  } else if (state.activeTool === 'claudecode') {
+    mergeModelsIntoClaudeDropdown(models, params);
   } else {
     state.detected.recommendedModel = pickRecommendedModel(models, json.data.recommendedModel);
     renderModelOptions(models, state.detected.recommendedModel);
@@ -25359,13 +25626,13 @@ async function detectModels() {
 }
 
 /**
- * Silently try to auto-fetch models from the base URL's /models endpoint.
- * Works for both Codex and OpenClaw. Does not show error flashes on failure.
+ * Silently try to auto-fetch models from the provider's protocol-specific models endpoint.
+ * Does not show error flashes on failure.
  */
 let _autoFetchAbort = null;
 async function tryAutoFetchModels(options = {}) {
   const manual = Boolean(options.manual);
-  if (state.activeTool !== 'codex' && state.activeTool !== 'opencode' && state.activeTool !== 'openclaw') return false;
+  if (!['codex', 'claudecode', 'opencode', 'openclaw'].includes(state.activeTool)) return false;
   const params = _getDetectParams();
   if (!params.baseUrl || (!params.apiKey && !params.useStored)) return false;
 
@@ -25388,7 +25655,13 @@ async function tryAutoFetchModels(options = {}) {
           providerKey: params.payload.providerKey,
           timeoutMs: 10000,
         }
-        : { baseUrl: params.baseUrl, apiKey: params.apiKey }),
+        : {
+          baseUrl: params.baseUrl,
+          apiKey: params.apiKey,
+          protocol: params.protocol,
+          credentialType: params.credentialType,
+          providerKey: params.providerKey,
+        }),
       timeoutMs: 10000,
       signal: _autoFetchAbort.signal,
     });
@@ -25401,6 +25674,10 @@ async function tryAutoFetchModels(options = {}) {
     const models = json.data.models || [];
     if (state.activeTool === 'openclaw') {
       _mergeModelsIntoOpenClawDropdown(models);
+    } else if (state.activeTool === 'opencode') {
+      mergeModelsIntoOpenCodeDropdown(models);
+    } else if (state.activeTool === 'claudecode') {
+      mergeModelsIntoClaudeDropdown(models, params);
     } else {
       state.detected.recommendedModel = pickRecommendedModel(models, json.data.recommendedModel);
       renderModelOptions(models, state.detected.recommendedModel);
@@ -25416,6 +25693,42 @@ async function tryAutoFetchModels(options = {}) {
     if (manual) flash(message || '获取模型失败', 'error');
     return false;
   }
+}
+
+function mergeModelsIntoClaudeDropdown(fetchedModels = [], {
+  providerKey = '',
+  baseUrl = '',
+} = {}) {
+  const models = dedupeClaudeModels(fetchedModels);
+  if (!models.length) return false;
+
+  const currentValue = sanitizeClaudeModelValue(
+    getClaudeQuickModelValue()
+    || getClaudeProviderByKey(providerKey)?.model
+    || state.claudeCodeState?.model
+    || state.claudeCodeState?.settings?.model
+    || '',
+  );
+
+  const resolvedProviderKey = normalizeProviderKey(
+    providerKey
+    || el('claudeProviderKeyInput')?.value?.trim()
+    || state.claudeSelectedProviderKey
+    || inferClaudeProviderKey(baseUrl),
+  );
+  if (resolvedProviderKey) {
+    state.claudeProviderModels[resolvedProviderKey] = {
+      models,
+      at: Date.now(),
+      baseUrl: normalizeClaudeBaseUrl(baseUrl || el('baseUrlInput')?.value || '') || 'https://api.anthropic.com',
+    };
+  }
+  renderClaudeQuickModelControl({
+    modelValue: currentValue,
+    liveModels: models,
+    mode: 'auto',
+  });
+  return true;
 }
 
 /**
@@ -34050,6 +34363,12 @@ async function saveConfigOnly() {
   const savedKey = String(saved.data?.savedProviderKey || '').trim();
   const isStillNotActive = Boolean(saved.data?.needsActivation);
   const configPath = saved.data?.paths?.configPath || state.current?.configPath || '';
+  const allocatedHint = Array.isArray(saved.data?.hints)
+    ? saved.data.hints.find((item) => item?.code === 'provider_key_allocated')
+    : null;
+  if (allocatedHint?.message) {
+    flash(allocatedHint.message, 'success');
+  }
   if (isStillNotActive && savedKey) {
     flashCodexSavedNeedsRestart(
       saved,
@@ -34057,6 +34376,11 @@ async function saveConfigOnly() {
     );
   } else {
     flashCodexSavedNeedsRestart(saved);
+  }
+  // After creating a new same-URL provider, bind form to the saved one so later edits update it.
+  if (savedKey) {
+    state.apiKeyField.providerKey = savedKey;
+    state.apiKeyField.forceNewProvider = false;
   }
   const savedBaseUrl = String(saved.data?.baseUrl || '').trim();
   if (savedBaseUrl) {
@@ -34151,7 +34475,7 @@ async function saveOpenClawConfigOnly() {
 }
 
 async function saveClaudeCodeConfigOnly() {
-  const model = el('modelSelect')?.value || '';
+  const model = getClaudeQuickModelValue();
   const apiKey = el('apiKeyInput')?.value?.trim() || '';
   const baseUrl = el('baseUrlInput')?.value?.trim() || '';
 
@@ -35552,10 +35876,16 @@ async function wizardDetectModels() {
   setBusy('wizardDetectBtn', true, '检测中…');
 
   try {
+    const isClaudeProvider = state.wizardSelectedTool === 'claudecode';
     const json = await api('/api/provider/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseUrl, apiKey }),
+      body: JSON.stringify({
+        baseUrl,
+        apiKey,
+        protocol: isClaudeProvider ? 'anthropic' : 'openai',
+        credentialType: 'api_key',
+      }),
       timeoutMs: 18000,
     });
     setBusy('wizardDetectBtn', false);
@@ -35673,6 +36003,7 @@ async function wizardSaveAndComplete() {
         hasStored: true,
         revealed: false,
         dirty: false,
+        forceNewProvider: false,
       };
       el('apiKeyInput').value = '';
       el('apiKeyInput').type = 'password';
@@ -35708,7 +36039,7 @@ function bindEvents() {
       _markCurrentToolFieldDirty('baseUrl', value);
     }
     applyDerivedMeta(false);
-    if ((state.activeTool === 'codex' || state.activeTool === 'opencode' || state.activeTool === 'openclaw') && value) {
+    if (['codex', 'claudecode', 'opencode', 'openclaw'].includes(state.activeTool) && value) {
       tryAutoFetchModels();
     }
   });
@@ -35776,28 +36107,69 @@ function bindEvents() {
   el('modelBrowseSearch')?.addEventListener('input', () => renderModelBrowseBody());
   el('modelBrowseSaveBtn')?.addEventListener('click', () => saveModelBrowseSelection());
 
-  // Model refresh button (inline, next to model select)
-  el('modelRefreshBtn')?.addEventListener('click', async () => {
+  const refreshProviderModels = (buttonId) => {
     const params = _getDetectParams();
     if (!params.baseUrl) {
       flash('请先填写 Base URL', 'error');
-      return;
+      return false;
     }
     if (!params.apiKey && !params.useStored) {
       flash('请填写 API Key 后再刷新模型列表', 'error');
-      return;
+      return false;
     }
-    const btn = el('modelRefreshBtn');
+    const btn = el(buttonId);
     btn?.classList.add('spinning');
     tryAutoFetchModels({ manual: true }).finally(() => {
       btn?.classList.remove('spinning');
     });
+    return true;
+  };
+
+  // Model refresh buttons (generic tools and Claude's live-model tab)
+  el('modelRefreshBtn')?.addEventListener('click', () => refreshProviderModels('modelRefreshBtn'));
+  el('claudeModelRefreshBtn')?.addEventListener('click', () => refreshProviderModels('claudeModelRefreshBtn'));
+
+  el('claudeModelControl')?.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-claude-model-mode]');
+    if (!tab) return;
+    const mode = tab.dataset.claudeModelMode || 'preset';
+    setClaudeModelMode(mode, { focus: mode === 'manual' });
+    if (mode === 'auto' && !getClaudeLiveModels().length) {
+      const params = _getDetectParams();
+      if (params.baseUrl && (params.apiKey || params.useStored)) refreshProviderModels('claudeModelRefreshBtn');
+    }
+  });
+  el('claudeAutoModelSelect')?.addEventListener('change', (event) => {
+    const model = setClaudeCanonicalModelValue(event.target.value);
+    if (el('claudeManualModelInput')) el('claudeManualModelInput').value = model;
+    updateClaudeModelCurrentLabel(model);
+    _markCurrentToolFieldDirty('modelValue', model);
+    renderCurrentConfig();
+  });
+  el('claudePresetModelSelect')?.addEventListener('change', (event) => {
+    const model = setClaudeCanonicalModelValue(event.target.value);
+    if (el('claudeManualModelInput')) el('claudeManualModelInput').value = model;
+    updateClaudeModelCurrentLabel(model);
+    _markCurrentToolFieldDirty('modelValue', model);
+    renderCurrentConfig();
+  });
+  el('claudeManualModelInput')?.addEventListener('input', (event) => {
+    const model = setClaudeCanonicalModelValue(event.target.value);
+    updateClaudeModelCurrentLabel(model);
+    _markCurrentToolFieldDirty('modelValue', model);
+    renderCurrentConfig();
+  });
+  el('claudeManualModelInput')?.addEventListener('blur', (event) => {
+    const model = sanitizeClaudeModelValue(event.target.value);
+    event.target.value = model;
+    setClaudeCanonicalModelValue(model);
+    updateClaudeModelCurrentLabel(model);
   });
 
-  // Auto-fetch models when model select is opened (for OpenClaw / OpenCode)
+  // Auto-fetch models when the model select is opened.
   let _lastModelFetch = 0;
   el('modelSelect')?.addEventListener('mousedown', () => {
-    if (state.activeTool !== 'openclaw' && state.activeTool !== 'opencode') return;
+    if (!['claudecode', 'openclaw', 'opencode'].includes(state.activeTool)) return;
     const now = Date.now();
     if (now - _lastModelFetch < 5000) return; // Debounce: skip if fetched < 5s ago
     _lastModelFetch = now;
@@ -36357,6 +36729,17 @@ function bindEvents() {
       const result = await testCodexProviderConnectivity(provider, { delayMs: 420 });
       if (!result.ok) flash(result.error || '检测失败', 'error');
       else flash(`Provider「${provider.name || provider.key}」已连通`, 'success');
+      return;
+    }
+    const cloneBtn = event.target.closest('[data-clone-provider]');
+    if (cloneBtn) {
+      const providerKey = cloneBtn.dataset.cloneProvider;
+      const provider = (state.current?.providers || []).find((item) => item.key === providerKey);
+      if (!provider) return;
+      beginNewCodexProviderDraft(provider.baseUrl || '');
+      state.metaDirty = true;
+      renderCurrentConfig();
+      flash(`已准备新建「${provider.baseUrl || provider.key}」的另一份 Key，填写后点保存`, 'info');
       return;
     }
     const bindBtn = event.target.closest('[data-bind-provider]');
@@ -39635,8 +40018,13 @@ startToolUpdatesTimer();
       if (s) s.editingKey = '';
       const urlEl = document.getElementById('baseUrlInput');
       const keyEl = document.getElementById('apiKeyInput');
+      const providerKeyEl = document.getElementById('claudeProviderKeyInput');
       if (urlEl) urlEl.value = '';
       if (keyEl) keyEl.value = '';
+      if (activeTool === 'claudecode') {
+        if (providerKeyEl) providerKeyEl.value = '';
+        if (s) s.claudeSelectedProviderKey = '';
+      }
       setTimeout(() => urlEl && urlEl.focus(), 260);
     } else if (title) {
       title.textContent = '编辑 Provider';
@@ -40483,6 +40871,21 @@ startToolUpdatesTimer();
           }
         } catch (err) {
           console.warn('[ch] detect failed', err);
+        }
+        return;
+      }
+    }
+    if (tool === 'claudecode') {
+      const profiles = typeof getClaudeProviderProfiles === 'function' ? getClaudeProviderProfiles(s.claudeCodeState) : [];
+      const provider = (profiles || []).find((item) => item.key === key);
+      if (provider && typeof testClaudeProviderConnectivity === 'function') {
+        try {
+          const result = await testClaudeProviderConnectivity(provider);
+          if (result && result.ok === false && result.error && typeof flash === 'function') {
+            flash(result.error, 'warning');
+          }
+        } catch (err) {
+          console.warn('[ch] Claude detect failed', err);
         }
         return;
       }

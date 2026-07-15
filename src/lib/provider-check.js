@@ -71,16 +71,43 @@ function summarizeModels(modelIds) {
   };
 }
 
-function buildHeaders(apiKey) {
-  return {
+function normalizeProbeProtocol(protocol = '') {
+  const value = String(protocol || '').trim().toLowerCase().replace(/_/g, '-');
+  return value === 'anthropic' || value === 'anthropic-messages' || value === 'messages'
+    ? 'anthropic'
+    : 'openai';
+}
+
+function modelsEndpoint(baseUrl, protocol) {
+  if (protocol === 'anthropic') {
+    return baseUrl.toLowerCase().endsWith('/v1')
+      ? `${baseUrl}/models`
+      : `${baseUrl}/v1/models`;
+  }
+  return `${baseUrl}/models`;
+}
+
+function buildHeaders(apiKey, protocol = 'openai', credentialType = 'api_key') {
+  const headers = {
     Accept: 'application/json, text/plain, */*',
-    Authorization: `Bearer ${String(apiKey || '').trim()}`,
     'Content-Type': 'application/json',
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) CodexConfigUI/0.1',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     'Cache-Control': 'no-cache',
     Pragma: 'no-cache',
   };
+  const secret = String(apiKey || '').trim();
+  if (protocol === 'anthropic') {
+    headers['anthropic-version'] = '2023-06-01';
+    if (String(credentialType || '').trim().toLowerCase() === 'auth_token') {
+      headers.Authorization = `Bearer ${secret}`;
+    } else {
+      headers['x-api-key'] = secret;
+    }
+  } else {
+    headers.Authorization = `Bearer ${secret}`;
+  }
+  return headers;
 }
 
 const TLS_ERROR_CODES = new Set([
@@ -187,8 +214,16 @@ function attachDiag(error, diag) {
   return wrapped;
 }
 
-export async function detectProvider({ baseUrl, apiKey, timeoutMs = 15000 }) {
+export async function detectProvider({
+  baseUrl,
+  apiKey,
+  timeoutMs = 15000,
+  protocol: protocolHint = 'openai',
+  credentialType = 'api_key',
+}) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  const protocol = normalizeProbeProtocol(protocolHint);
+  const endpoint = modelsEndpoint(normalizedBaseUrl, protocol);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
   const startedAt = Date.now();
@@ -196,9 +231,9 @@ export async function detectProvider({ baseUrl, apiKey, timeoutMs = 15000 }) {
   try {
     let response;
     try {
-      response = await fetch(`${normalizedBaseUrl}/models`, {
+      response = await fetch(endpoint, {
         method: 'GET',
-        headers: buildHeaders(apiKey),
+        headers: buildHeaders(apiKey, protocol, credentialType),
         signal: controller.signal,
       });
     } catch (networkError) {
@@ -249,7 +284,7 @@ export async function detectProvider({ baseUrl, apiKey, timeoutMs = 15000 }) {
     if (!modelIds.length) {
       throw attachDiag(new Error('检测失败：响应不包含模型列表'), {
         stage: 'body',
-        hint: '/models 返回了 200 但 body 里没有模型数组。可能是中转站的伪 OK，或路径不对（试试不带 /v1）。',
+        hint: `${new URL(endpoint).pathname} 返回了 200 但 body 里没有模型数组。可能是中转站的伪 OK，或模型列表格式不兼容。`,
         errorMessage: '响应缺少 models 数组',
         latencyMs,
         statusCode: response.status,
@@ -258,6 +293,7 @@ export async function detectProvider({ baseUrl, apiKey, timeoutMs = 15000 }) {
 
     return {
       baseUrl: normalizedBaseUrl,
+      protocol,
       status: 'ok',
       stage: 'ok',
       latencyMs,
