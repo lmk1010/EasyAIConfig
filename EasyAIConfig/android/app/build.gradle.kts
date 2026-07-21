@@ -8,8 +8,7 @@ plugins {
 android {
     namespace = "com.easyaiconfig.easy_ai_config"
     compileSdk = flutter.compileSdkVersion
-    // 插件（mobile_scanner / shared_preferences）要求 NDK 27，取更高版本（向后兼容）
-    ndkVersion = "27.0.12077973"
+    // 不写死 NDK，交给 Flutter / CI 默认版本，避免 CI 缺具体 NDK 号失败
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

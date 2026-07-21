@@ -46650,3 +46650,93 @@ body[data-page="systemSettings"] #openSystemSettingsBtn {
     grid-template-columns: 1fr;
   }
 }
+
+/* systemSettings: same 2-col shell as about (hide secondary, no sec-collapsed) */
+body[data-page="systemSettings"] .desktop-layout.shell-v2 {
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) !important;
+}
+
+body[data-page="systemSettings"] .shell-secondary {
+  display: none !important;
+}
+
+body[data-page="systemSettings"] .shell-v2 .workspace {
+  grid-column: 2 !important;
+}
+
+/* APK download CTA — user-facing, not JSON */
+.apk-download-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 16px;
+  border: 1px solid rgba(37, 99, 235, 0.28);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(14, 165, 233, 0.08));
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.apk-download-btn:hover {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(14, 165, 233, 0.12));
+}
+
+.apk-download-btn-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.apk-download-btn-main strong {
+  color: var(--text, #0f172a);
+  font-size: 0.95rem;
+  font-weight: 720;
+}
+
+.apk-download-btn-main small {
+  color: var(--muted, rgba(15, 23, 42, 0.58));
+  font-size: 0.75rem;
+}
+
+.apk-download-btn-go {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.apk-desktop-links {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.about-page .about-apk-btn {
+  background: rgba(37, 99, 235, 0.12) !important;
+  color: #1d4ed8 !important;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.28) !important;
+}
+
+.about-page .about-apk-btn em {
+  font-style: normal;
+  opacity: 0.75;
+  margin-left: 4px;
+}
+
+[data-theme="dark"] .apk-download-btn-main strong,
+body:not([data-theme="light"]) .apk-download-btn-main strong {
+  color: #eef4ff;
+}
+
+[data-theme="dark"] .apk-download-btn-main small,
+body:not([data-theme="light"]) .apk-download-btn-main small {
+  color: rgba(226, 233, 247, 0.58);
+}

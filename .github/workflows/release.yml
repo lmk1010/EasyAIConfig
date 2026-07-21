@@ -274,6 +274,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -286,8 +287,12 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.32.5'
           channel: stable
           cache: true
+
+      - name: Accept Android licenses
+        run: yes | flutter doctor --android-licenses || true
 
       - name: Build release APK
         working-directory: EasyAIConfig
@@ -302,6 +307,7 @@ jobs:
           ls -lah ../dist/apk
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: apk-android
@@ -313,6 +319,7 @@ jobs:
     permissions:
       contents: write
     needs: [create-release, build-tauri, build-apk]
+    if: always() && needs.create-release.result == 'success' && needs.build-tauri.result == 'success'
     env:
       CF_R2_ACCOUNT_ID: ${{ secrets.CF_R2_ACCOUNT_ID }}
       CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
@@ -369,6 +376,7 @@ jobs:
 
       - name: Download APK artifact
         if: steps.r2.outputs.enabled == 'true'
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           path: dist/r2
@@ -452,6 +460,7 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     needs: [create-release, build-tauri, build-apk, publish-r2]
+    if: always() && needs.create-release.result == 'success' && needs.publish-r2.result == 'success'
     steps:
       - name: Publish release
         uses: actions/github-script@v7

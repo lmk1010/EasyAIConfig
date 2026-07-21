@@ -2831,6 +2831,11 @@ function ensureRemoteStyles() {
     .ea-remote-port label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:5px}
     .ea-remote-port input{font-variant-numeric:tabular-nums}
     .ea-remote-apk{font-size:11.5px;color:var(--muted);text-align:center;margin:8px 0 2px}
+    .ea-remote-apk-card{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;margin:0 0 14px;border:1px solid var(--line);border-radius:12px;background:var(--bg-input)}
+    .ea-remote-apk-copy{min-width:0}
+    .ea-remote-apk-copy b{display:block;font-size:14px;font-weight:700;color:var(--text)}
+    .ea-remote-apk-copy span{display:block;margin-top:3px;font-size:12px;color:var(--muted);line-height:1.45}
+    .ea-remote-apk-btn{flex:0 0 auto;white-space:nowrap}
     .ea-remote-error{font-size:12px;color:#e0564f;background:rgba(224,86,79,.08);border:1px solid rgba(224,86,79,.25);border-radius:10px;padding:9px 11px;margin:8px 0;display:flex;align-items:center;justify-content:space-between;gap:8px}
     .ea-remote-error button{background:transparent!important;border:1px solid rgba(224,86,79,.4)!important;color:#e0564f!important;border-radius:8px!important;height:auto!important;padding:4px 10px!important;font-size:11px;cursor:pointer;box-shadow:none!important}
     .ea-remote-switch{position:relative;width:44px!important;height:26px!important;border-radius:999px!important;border:none!important;background:var(--bg-hover)!important;cursor:pointer;flex:0 0 auto;padding:0!important;box-shadow:none!important;transition:background .18s}
@@ -2979,6 +2984,13 @@ function remoteBodyMarkup(s, opts = {}) {
 
   const statusBlock = `
     ${__eaRemoteError ? `<div class="ea-remote-error"><span>⚠ ${esc(__eaRemoteError)}</span><button data-rmt="refresh">重试</button></div>` : ''}
+    <div class="ea-remote-apk-card">
+      <div class="ea-remote-apk-copy">
+        <b>还没装手机 App？</b>
+        <span>先下载 Android APK 安装，再扫码连接本机。</span>
+      </div>
+      <button class="ea-remote-btn ea-remote-apk-btn" data-rmt="download-apk" type="button">下载 APK</button>
+    </div>
     <div class="ea-remote-toggle">
       <div><b>本机远程服务</b><span class="st">${enabled ? `运行中 · 端口 ${esc(String(s.port || ''))} <span class="ea-remote-live"><span class="dot"></span>实时</span>` : '已关闭'}</span></div>
       <div class="ea-remote-status-actions">
@@ -3330,6 +3342,15 @@ async function handleRemoteAction(action, el) {
   // Tab 切换：纯前端，不受 busy 限制
   if (action === 'tab-wifi') { __eaRemoteTab = 'wifi'; renderRemotePanel(); return; }
   if (action === 'tab-vps') { __eaRemoteTab = 'vps'; renderRemotePanel(); return; }
+  if (action === 'download-apk') {
+    const url = typeof window.androidApkDownloadUrl === 'function'
+      ? window.androidApkDownloadUrl()
+      : 'https://download.cursorxyz.it.com/EasyAIConfig_1.0.74.apk';
+    if (typeof window.openExternalUrl === 'function') void window.openExternalUrl(url);
+    else window.open(url, '_blank');
+    flash('正在打开 APK 下载…', 'info');
+    return;
+  }
   if (__eaRemoteBusy && action !== 'refresh') return; // 有请求在飞，忽略重复点击
   if (action === 'refresh') { __eaRemoteError = ''; await refreshRemoteStatus(); return; }
   if (action === 'pick-ip' || action === 'manual-ip') {
