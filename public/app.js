@@ -19097,11 +19097,16 @@ function currentAppVersionForDownload() {
 }
 
 function androidApkDownloadUrl(feed = state.appDownloadFeed) {
-  const platforms = feed?.platforms && typeof feed.platforms === 'object' ? feed.platforms : {};
-  for (const key of ['android-arm64', 'android']) {
-    const hit = platforms[key];
-    if (hit && typeof hit === 'object' && hit.url) {
-      return normalizeAppDownloadUrl(hit.url);
+  const buckets = [
+    feed?.mobile && typeof feed.mobile === 'object' ? feed.mobile : null,
+    feed?.platforms && typeof feed.platforms === 'object' ? feed.platforms : null,
+  ].filter(Boolean);
+  for (const platforms of buckets) {
+    for (const key of ['android-arm64', 'android']) {
+      const hit = platforms[key];
+      if (hit && typeof hit === 'object' && hit.url) {
+        return normalizeAppDownloadUrl(hit.url);
+      }
     }
   }
   const version = String(feed?.version || currentAppVersionForDownload()).replace(/^v/, '');
@@ -19139,7 +19144,10 @@ function normalizeAppDownloadUrl(url = '') {
 }
 
 function aboutDownloadEntriesFromFeed(feed = {}) {
-  const platforms = feed.platforms && typeof feed.platforms === 'object' ? feed.platforms : {};
+  const platforms = {
+    ...(feed.platforms && typeof feed.platforms === 'object' ? feed.platforms : {}),
+    ...(feed.mobile && typeof feed.mobile === 'object' ? feed.mobile : {}),
+  };
   const current = detectDesktopUpdaterPlatform();
   const version = String(feed?.version || currentAppVersionForDownload()).replace(/^v/, '');
   const catalog = [
@@ -19320,6 +19328,9 @@ function populateAboutPanel() {
     status.className = 'about-status about-status-update';
   } else if (info.networkBlocked) {
     status.textContent = info.statusMessage || '更新源暂时不可用，可改用下方安装包下载。';
+    status.className = 'about-status about-status-error';
+  } else if (info.error || info.statusMessage) {
+    status.textContent = info.statusMessage || info.error || '检查更新失败';
     status.className = 'about-status about-status-error';
   } else if (info.enabled) {
     status.textContent = '已是最新';

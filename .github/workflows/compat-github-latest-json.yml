@@ -1,7 +1,8 @@
 name: Compat GitHub latest.json
 
-# 旧版客户端只查 GitHub releases/latest/download/latest.json。
-# 本工作流把 R2 上的清单同步挂到最新 GitHub Release（几 KB，安装包仍走 R2）。
+# 1) 把 R2 的 latest.json 修成 Tauri 可解析格式（android 移出 platforms）
+# 2) 同步挂到 GitHub Release，兼容只查 GitHub 的旧客户端
+# 3) 若配置了 R2 secrets，同时回写修正后的清单到 R2
 on:
   workflow_dispatch:
   push:
@@ -12,22 +13,55 @@ on:
 
 env:
   R2_LATEST_URL: https://download.cursorxyz.it.com/latest.json
+  R2_PUBLIC_BASE: https://download.cursorxyz.it.com
 
 jobs:
   upload:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      CF_R2_ACCOUNT_ID: ${{ secrets.CF_R2_ACCOUNT_ID }}
+      CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+      CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+      CF_R2_BUCKET: ${{ secrets.CF_R2_BUCKET }}
+      CF_R2_PUBLIC_BASE_URL: ${{ secrets.CF_R2_PUBLIC_BASE_URL }}
+      CF_R2_ENDPOINT: https://${{ secrets.CF_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
     steps:
-      - name: Fetch latest.json from R2
+      - name: Fetch and normalize latest.json
         run: |
           set -euo pipefail
-          curl -fsSL "$R2_LATEST_URL" -o latest.json
+          curl -fsSL "$R2_LATEST_URL" -o latest.raw.json
           python3 - <<'PY'
           import json
-          data = json.load(open('latest.json', encoding='utf-8'))
-          print('version:', data.get('version'))
-          print('platforms:', ', '.join((data.get('platforms') or {}).keys()))
+          from pathlib import Path
+          raw = json.loads(Path('latest.raw.json').read_text(encoding='utf-8'))
+          platforms = raw.get('platforms') if isinstance(raw.get('platforms'), dict) else {}
+          mobile = raw.get('mobile') if isinstance(raw.get('mobile'), dict) else {}
+          clean_platforms = {}
+          for key, value in platforms.items():
+            if not isinstance(value, dict):
+              continue
+            if key.startswith('android'):
+              mobile[key] = value
+              continue
+            if value.get('url') and value.get('signature'):
+              clean_platforms[key] = {
+                  'url': value['url'],
+                  'signature': value['signature'],
+              }
+          fixed = {
+              'version': raw.get('version'),
+              'notes': raw.get('notes') or '',
+              'pub_date': raw.get('pub_date'),
+              'platforms': clean_platforms,
+          }
+          if mobile:
+              fixed['mobile'] = mobile
+          Path('latest.json').write_text(json.dumps(fixed, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+          print('version:', fixed.get('version'))
+          print('platforms:', ', '.join(clean_platforms.keys()))
+          print('mobile:', ', '.join(mobile.keys()))
           PY
 
       - name: Resolve latest release
@@ -50,7 +84,6 @@ jobs:
           RELEASE_TAG: ${{ steps.rel.outputs.tag }}
         run: |
           set -euo pipefail
-          # 删掉旧的同名资产，避免 422 already_exists
           mapfile -t old_ids < <(
             gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" \
               --jq '.[] | select(.name=="latest.json") | .id' || true
@@ -60,9 +93,7 @@ jobs:
             echo "delete asset $asset_id"
             gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
           done
-
           upload_url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .upload_url | sed 's/{?name,label}//')"
-          echo "upload_url=$upload_url"
           curl -fsSL \
             -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -70,6 +101,23 @@ jobs:
             -H "Content-Type: application/json" \
             --data-binary @latest.json \
             "${upload_url}?name=latest.json"
+          echo "GitHub OK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json"
 
-          echo "uploaded: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json"
-          curl -fsSIL "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/latest.json" | head -n 15
+      - name: Mirror fixed latest.json to R2
+        if: ${{ env.CF_R2_ACCOUNT_ID != '' && env.CF_R2_ACCESS_KEY_ID != '' && env.CF_R2_SECRET_ACCESS_KEY != '' && env.CF_R2_BUCKET != '' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          base="${CF_R2_PUBLIC_BASE_URL:-$R2_PUBLIC_BASE}"
+          base="${base%/}"
+          aws s3 cp latest.json "s3://${CF_R2_BUCKET}/latest.json" \
+            --endpoint-url "${CF_R2_ENDPOINT}" \
+            --cache-control 'no-store, no-cache, must-revalidate, max-age=0' \
+            --content-type 'application/json'
+          echo "R2 OK: ${base}/latest.json"

@@ -415,6 +415,8 @@ jobs:
                   'url': f"{base}/{item['asset']}",
               }
 
+          # Android 不能放进 platforms：Tauri updater 要求每项都有 signature，
+          # 否则整个 latest.json 反序列化失败，旧客户端会误显示「已是最新」。
           apk_name = f'EasyAIConfig_{version}.apk'
           apk_path = Path('dist/r2') / apk_name
           sha_path = Path('dist/r2') / f'{apk_name}.sha256'
@@ -423,10 +425,12 @@ jobs:
               entry = {'url': f'{base}/{apk_name}'}
               if sha:
                   entry['sha256'] = sha
-              latest['platforms']['android-arm64'] = entry
-              latest['platforms']['android'] = entry
+              latest['mobile'] = {
+                  'android-arm64': entry,
+                  'android': entry,
+              }
           else:
-              print('warning: APK not found, skipping android platform')
+              print('warning: APK not found, skipping mobile section')
 
           Path('dist/r2/latest.json').write_text(
               json.dumps(latest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
