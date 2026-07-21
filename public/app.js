@@ -18908,12 +18908,14 @@ function setPage(page = 'quick') {
   el('themeToggleBtn')?.classList.toggle('hide', page === 'dashboard');
 
   // Render tasks page on navigate
+  const noSecondaryPages = new Set(['about', 'systemSettings', 'assets', 'providerRouter']);
   if (page === 'terminal') {
     // 终端页依赖二级栏会话列表，进入时自动展开侧栏
     document.body.classList.remove('sec-collapsed');
+  } else if (noSecondaryPages.has(page)) {
+    // 这些页用 2 列壳层；若保留 sec-collapsed，工作区会被塞进 0 宽中间栏
+    document.body.classList.remove('sec-collapsed');
   }
-  // about / systemSettings 已用 CSS 隐藏二级栏；不要再加 sec-collapsed，
-  // 否则 3 列 + grid-column:2 会把工作区塞进 0 宽中间栏，整页空白。
   if (page !== 'dashboard') stopDashboardAutoRefresh();
   if (page !== 'console') disposeEmbeddedTerminalInstance();
   if (page !== 'terminal' && typeof window.disposeTerminalInstances === 'function') {
@@ -19091,7 +19093,7 @@ const APP_UPDATE_FEED_URL = `${APP_DOWNLOAD_BASE}/latest.json`;
 function currentAppVersionForDownload() {
   const fromUpdate = String(state.appUpdate?.currentVersion || '').trim();
   const fromFeed = String(state.appDownloadFeed?.version || '').trim();
-  return fromFeed || fromUpdate || '1.0.74';
+  return fromFeed || fromUpdate || '1.0.75';
 }
 
 function androidApkDownloadUrl(feed = state.appDownloadFeed) {
@@ -19172,11 +19174,12 @@ function aboutDownloadEntriesFromFeed(feed = {}) {
 }
 
 function renderAboutDownloadLinks(feed) {
-  const targets = [
-    { box: el('aboutDownloadLinks'), hint: el('aboutDownloadHint'), mode: 'about' },
-    { box: el('sysDownloadLinks'), hint: el('sysDownloadHint'), mode: 'sys' },
-  ].filter((item) => item.box);
-  if (!targets.length) return;
+  const aboutBox = el('aboutDownloadLinks');
+  const aboutHint = el('aboutDownloadHint');
+  const sysBox = el('sysDownloadLinks');
+  const sysHint = el('sysDownloadHint');
+  const sysApkBtn = el('sysApkDownloadBtn');
+  if (!aboutBox && !sysBox && !sysApkBtn) return;
 
   const version = String(feed?.version || currentAppVersionForDownload()).replace(/^v/, '');
   const entries = aboutDownloadEntriesFromFeed(feed || {});
@@ -19186,34 +19189,52 @@ function renderAboutDownloadLinks(feed) {
     url: androidApkDownloadUrl(feed),
   };
   const desktop = entries.filter((item) => item.key !== 'android-arm64');
-  const hintText = `手机安装 APK 后，在「手机远程」页扫码即可控制本机。当前版本 v${version}`;
 
-  const apkHtml = `
-    <button type="button" class="apk-download-btn" data-external-url="${escapeHtml(apk.url)}">
-      <span class="apk-download-btn-main">
-        <strong>下载 Android APK</strong>
-        <small>手机安装包 · v${escapeHtml(version)}</small>
-      </span>
-      <span class="apk-download-btn-go">下载</span>
+  const linkCard = (opts) => `
+    <button type="button" class="about-link-card${opts.current ? ' is-current-platform' : ''}" data-external-url="${escapeHtml(opts.url)}">
+      ${opts.icon}
+      <span class="about-link-title">${escapeHtml(opts.title)}</span>
+      <small>${escapeHtml(opts.meta)}</small>
     </button>`;
-  const desktopHtml = desktop.length
-    ? `<div class="apk-desktop-links">${desktop.map((item) => `
-      <button type="button" class="about-link-card${item.current ? ' is-current-platform' : ''}" data-external-url="${escapeHtml(item.url)}">
-        <span class="about-link-title">${escapeHtml(item.title)}${item.current ? ' · 本机' : ''}</span>
-        <small>${escapeHtml(item.meta)}</small>
-      </button>`).join('')}</div>`
-    : '';
 
-  for (const target of targets) {
-    if (target.hint) target.hint.textContent = hintText;
-    target.box.innerHTML = apkHtml + (target.mode === 'about' ? desktopHtml : desktopHtml);
-    bindAboutDownloadClicks(target.box);
+  const desktopIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>`;
+
+  const aboutDesktopHtml = desktop.map((item) => linkCard({
+    url: item.url,
+    title: `${item.title}${item.current ? ' · 本机' : ''}`,
+    meta: item.meta,
+    current: item.current,
+    icon: desktopIcon,
+  })).join('');
+
+  const sysLinksHtml = aboutDesktopHtml;
+
+  if (aboutHint) {
+    aboutHint.textContent = desktop.length
+      ? `手机包请点右上「下载 APK」。也可下载其他平台安装包 · v${version}`
+      : `点右上「下载 APK」获取安装包，装好后到「手机远程」扫码控制本机 · v${version}`;
+  }
+  if (aboutBox) {
+    aboutBox.innerHTML = aboutDesktopHtml;
+    aboutBox.hidden = !desktop.length;
+    if (desktop.length) bindAboutDownloadClicks(aboutBox);
+  }
+  if (sysHint) sysHint.textContent = `装好后到「手机远程」扫码控制本机 · v${version}`;
+  if (sysBox) {
+    sysBox.innerHTML = sysLinksHtml;
+    sysBox.hidden = !desktop.length;
+    if (desktop.length) bindAboutDownloadClicks(sysBox);
   }
 
   const heroBtn = el('aboutApkDownloadBtn');
   if (heroBtn) {
     heroBtn.dataset.externalUrl = apk.url;
     const ver = el('aboutApkDownloadVer');
+    if (ver) ver.textContent = `v${version}`;
+  }
+  if (sysApkBtn) {
+    sysApkBtn.dataset.externalUrl = apk.url;
+    const ver = el('sysApkDownloadVer');
     if (ver) ver.textContent = `v${version}`;
   }
 }
@@ -38524,7 +38545,14 @@ function bindEvents() {
     const btn = el('aboutApkDownloadBtn');
     const url = btn?.getAttribute('data-external-url')
       || (typeof androidApkDownloadUrl === 'function' ? androidApkDownloadUrl() : '')
-      || 'https://download.cursorxyz.it.com/EasyAIConfig_1.0.74.apk';
+      || 'https://download.cursorxyz.it.com/EasyAIConfig_1.0.75.apk';
+    void openExternalUrl(url);
+  });
+  el('sysApkDownloadBtn')?.addEventListener('click', () => {
+    const btn = el('sysApkDownloadBtn');
+    const url = btn?.getAttribute('data-external-url')
+      || (typeof androidApkDownloadUrl === 'function' ? androidApkDownloadUrl() : '')
+      || 'https://download.cursorxyz.it.com/EasyAIConfig_1.0.75.apk';
     void openExternalUrl(url);
   });
   el('aboutFeedbackBtn')?.addEventListener('click', () => {

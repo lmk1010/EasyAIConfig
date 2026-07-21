@@ -14218,13 +14218,24 @@ button.about-link-card {
 
 .about-page .about-update-actions {
   position: relative;
+  display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
   margin-top: 16px;
+}
+
+.about-page .about-update-actions > .about-update-btn {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
 }
 
 .about-page .about-update-btn {
   justify-content: center;
+  width: auto;
+  flex: 0 0 auto;
   min-height: 34px;
   padding: 0 14px;
   border-radius: 8px;
@@ -14343,12 +14354,12 @@ button.about-link-card {
 
 .about-content-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(210px, 0.42fr) minmax(300px, 0.58fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(200px, 0.9fr) minmax(240px, 1fr);
   grid-template-rows: auto auto;
   grid-template-areas:
     "trust actions info"
-    "flow flow flow";
-  gap: 32px clamp(30px, 4vw, 52px);
+    "phone flow flow";
+  gap: 28px clamp(24px, 3.5vw, 44px);
   align-items: start;
   min-height: 0;
   padding-top: 28px;
@@ -14382,8 +14393,108 @@ button.about-link-card {
   grid-area: trust;
 }
 
+.about-downloads-panel {
+  grid-area: phone;
+  max-width: none;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .about-update-flow {
   grid-area: flow;
+  padding-top: 4px;
+  padding-left: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* 项目入口 / 下载列表：竖排链接行，禁止挤成竖排字 */
+.about-page .about-links {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 0;
+  justify-content: stretch;
+  align-items: stretch;
+}
+
+.about-page .about-link-card {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-areas:
+    "icon title"
+    "icon meta";
+  align-items: center;
+  justify-content: start;
+  column-gap: 10px;
+  row-gap: 2px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 0;
+  border-bottom: 0;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  color: rgba(232, 238, 248, 0.82);
+  font-size: inherit;
+  font-weight: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.about-page .about-link-card:hover {
+  background: rgba(141, 192, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(141, 192, 255, 0.22);
+  color: var(--s2-accent, #8dc0ff);
+  transform: none;
+}
+
+.about-page .about-link-card svg {
+  grid-area: icon;
+  width: 18px;
+  height: 18px;
+  opacity: 0.78;
+  transition: opacity 0.18s ease;
+}
+
+.about-page .about-link-card:hover svg {
+  opacity: 1;
+}
+
+.about-page .about-link-title {
+  grid-area: title;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-align: left;
+  writing-mode: horizontal-tb;
+}
+
+.about-page .about-link-card small {
+  grid-area: meta;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(226, 233, 247, 0.56);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  text-align: left;
+  writing-mode: horizontal-tb;
+}
+
+.about-download-hint {
+  margin: 0 0 12px;
+  max-width: 42ch;
+  color: rgba(226, 233, 247, 0.62);
+  font-size: 0.84rem;
+  line-height: 1.55;
 }
 
 .about-section-head {
@@ -14478,78 +14589,36 @@ button.about-link-card {
   min-width: 0;
 }
 
-.about-download-hint {
-  margin: 0 0 12px;
-  color: rgba(226, 233, 247, 0.62);
-  font-size: 0.84rem;
-  line-height: 1.55;
-}
-
 .about-page .about-link-card.is-current-platform .about-link-title {
   color: rgba(255, 255, 255, 0.95);
 }
 
 [data-theme="light"] .about-download-hint {
-  color: rgba(40, 48, 64, 0.62);
+  color: #475569;
 }
 
-
-.about-page .about-link-card {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  grid-template-areas:
-    "icon title"
-    "icon meta";
-  align-items: center;
-  justify-content: start;
-  column-gap: 10px;
-  row-gap: 3px;
-  min-width: 0;
-  min-height: 38px;
-  padding: 0;
-  border-radius: 0;
-  border-bottom: 0;
-  background: transparent;
-  box-shadow: none;
-  color: rgba(232, 238, 248, 0.78);
-  font-size: inherit;
-  font-weight: inherit;
-  text-align: left;
+[data-theme="light"] .about-page .about-link-card {
+  color: #334155;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
 }
 
-.about-page .about-link-card:hover {
-  background: transparent;
-  box-shadow: none;
-  color: var(--s2-accent, #8dc0ff);
-  transform: none;
+[data-theme="light"] .about-page .about-link-card:hover {
+  background: rgba(37, 99, 235, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
+  color: #1d4ed8;
 }
 
-.about-page .about-link-card svg {
-  grid-area: icon;
-  opacity: 0.78;
-  transition: opacity 0.18s ease;
+[data-theme="light"] .about-page .about-link-card small {
+  color: #64748b;
 }
 
-.about-page .about-link-card:hover svg {
-  opacity: 1;
+[data-theme="light"] .about-downloads-panel,
+[data-theme="light"] .about-update-flow {
+  border-top-color: rgba(15, 23, 42, 0.08);
 }
 
-.about-link-title {
-  grid-area: title;
-  min-width: 0;
-  color: inherit;
-  font-size: 0.78rem;
-  font-weight: 650;
-  text-align: left;
-}
-
-.about-link-card small {
-  grid-area: meta;
-  max-width: 100%;
-  color: rgba(226, 233, 247, 0.56);
-  font-size: 0.66rem;
-  line-height: 1.35;
-  text-align: left;
+[data-theme="light"] .about-update-flow {
+  border-left-color: rgba(15, 23, 42, 0.1);
 }
 
 .about-link-card-static {
@@ -14913,14 +14982,31 @@ button.about-link-card {
   .about-content-grid {
     grid-template-rows: none;
     grid-template-areas:
+      "trust"
       "actions"
       "info"
-      "trust"
+      "phone"
       "flow";
+    gap: 22px;
+  }
+
+  .about-actions-panel,
+  .about-credits,
+  .about-update-flow {
+    padding-left: 0;
+    border-left: 0;
+    padding-top: 16px;
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+  }
+
+  .about-downloads-panel {
+    max-width: none;
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
   }
 
   .about-page .about-update-actions {
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .about-page .about-update-progress-meta,
@@ -46448,26 +46534,35 @@ body[data-page="remote"] .shell-v2 .page-stack {
   padding-right: 20px !important;
 }
 
-/* ── System settings compact redesign ── */
+/* ── System settings: align with About page components ── */
 body[data-page="systemSettings"] .sys-page {
   display: grid;
-  gap: 10px;
-  max-width: 720px;
+  gap: 18px;
+  max-width: 560px;
   margin: 0;
-  padding: 2px 0 20px;
+  padding: 8px 0 28px;
 }
 
 body[data-page="systemSettings"] .sys-panel {
-  border-radius: 10px;
-  padding: 10px 12px;
+  padding: 14px 0 0;
+  border-radius: 0;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
   box-shadow: none;
 }
 
+body[data-page="systemSettings"] .sys-panel:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
 body[data-page="systemSettings"] .sys-section-label {
-  color: rgba(141, 192, 255, 0.72);
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  margin: 0 0 12px;
+  color: var(--s2-accent, #8dc0ff);
+  font-size: 0.62rem;
+  font-weight: 760;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   line-height: 1.2;
 }
@@ -46477,120 +46572,232 @@ body[data-page="systemSettings"] .sys-panel-head-inline {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
 }
 
-body[data-page="systemSettings"] .sys-hint {
-  margin: 0 0 8px;
-  color: rgba(226, 233, 247, 0.55);
+body[data-page="systemSettings"] .sys-panel-head-inline .sys-section-label {
+  margin: 0;
+}
+
+body[data-page="systemSettings"] .sys-setting-copy .sys-hint {
+  margin: 4px 0 0;
+  max-width: 36ch;
+  color: rgba(226, 233, 247, 0.56);
   font-size: 0.72rem;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
+body[data-page="systemSettings"] .sys-download-action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(141, 192, 255, 0.14);
+  color: #b3d5ff;
+  box-shadow: inset 0 0 0 1px rgba(141, 192, 255, 0.22);
+  font-size: 0.74rem;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+body[data-page="systemSettings"] .sys-download-action em {
+  font-style: normal;
+  opacity: 0.72;
+}
+
+body[data-page="systemSettings"] .sys-download-action:hover {
+  background: rgba(141, 192, 255, 0.2);
+}
+
+body[data-page="systemSettings"] .sys-links {
+  margin-top: 10px;
+}
+
+body[data-page="systemSettings"] .sys-links,
 body[data-page="systemSettings"] .sys-download-links {
   display: grid;
-  gap: 6px;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  max-width: 420px;
 }
 
-body[data-page="systemSettings"] .sys-download-links .about-link-card,
-body[data-page="systemSettings"] .sys-download-card {
-  display: flex;
+body[data-page="systemSettings"] .sys-links .about-link-card,
+body[data-page="systemSettings"] .sys-download-links .about-link-card {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-areas:
+    "icon title"
+    "icon meta";
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  column-gap: 10px;
+  row-gap: 2px;
   width: 100%;
-  min-height: 34px;
-  padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-  color: inherit;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  color: rgba(232, 238, 248, 0.82);
   text-align: left;
   cursor: pointer;
 }
 
-body[data-page="systemSettings"] .sys-download-links .about-link-card:hover,
-body[data-page="systemSettings"] .sys-download-card:hover {
-  border-color: rgba(141, 192, 255, 0.28);
-  background: rgba(141, 192, 255, 0.06);
+body[data-page="systemSettings"] .sys-links .about-link-card:hover,
+body[data-page="systemSettings"] .sys-download-links .about-link-card:hover {
+  background: rgba(141, 192, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(141, 192, 255, 0.22);
+  color: var(--s2-accent, #8dc0ff);
 }
 
+body[data-page="systemSettings"] .sys-links .about-link-card svg,
+body[data-page="systemSettings"] .sys-download-links .about-link-card svg {
+  grid-area: icon;
+  width: 18px;
+  height: 18px;
+  opacity: 0.78;
+}
+
+body[data-page="systemSettings"] .sys-links .about-link-title,
 body[data-page="systemSettings"] .sys-download-links .about-link-title {
-  color: var(--text);
-  font-size: 0.78rem;
+  grid-area: title;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  font-size: 0.82rem;
   font-weight: 650;
 }
 
+body[data-page="systemSettings"] .sys-links .about-link-card small,
 body[data-page="systemSettings"] .sys-download-links .about-link-card small {
-  color: rgba(226, 233, 247, 0.5);
-  font-size: 0.68rem;
+  grid-area: meta;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  color: rgba(226, 233, 247, 0.56);
+  font-size: 0.68rem;
+}
+
+body[data-page="systemSettings"] .sys-setting-list {
+  display: grid;
+  gap: 0;
 }
 
 body[data-page="systemSettings"] .sys-setting-row {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 8px 0;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+body[data-page="systemSettings"] .sys-setting-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 body[data-page="systemSettings"] .sys-setting-row:first-child {
-  padding-top: 6px;
+  padding-top: 0;
 }
 
 body[data-page="systemSettings"] .sys-setting-copy h4 {
-  font-size: 0.8rem;
+  margin: 0;
+  color: var(--text, rgba(232, 238, 248, 0.92));
+  font-size: 0.88rem;
   font-weight: 650;
 }
 
 body[data-page="systemSettings"] .sys-theme-modes {
+  display: inline-flex;
   gap: 2px;
   padding: 2px;
   border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 body[data-page="systemSettings"] .sys-theme-btn {
-  min-width: 44px;
-  height: 24px;
-  padding: 0 8px;
+  min-width: 48px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
   border-radius: 6px;
-  font-size: 0.7rem;
+  background: transparent;
+  color: rgba(226, 233, 247, 0.72);
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+body[data-page="systemSettings"] .sys-theme-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+body[data-page="systemSettings"] .sys-theme-btn.active {
+  background: rgba(141, 192, 255, 0.16);
+  color: #b3d5ff;
 }
 
 body[data-page="systemSettings"] .sys-language-modes .sys-theme-btn {
-  min-width: 58px;
+  min-width: 64px;
 }
 
 body[data-page="systemSettings"] .sys-actions-end {
   display: flex;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 body[data-page="systemSettings"] .sys-actions .tiny-btn,
 body[data-page="systemSettings"] .sys-panel-head-inline .tiny-btn {
-  min-height: 26px;
-  height: 26px;
-  padding: 0 8px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
   border-radius: 7px;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
 }
 
 body[data-page="systemSettings"] .sys-storage-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
   margin: 0;
-  border-radius: 8px;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 body[data-page="systemSettings"] .sys-storage-summary-row {
-  min-height: 48px;
-  padding: 8px 10px;
-  font-size: 0.68rem;
-  gap: 2px;
+  display: grid;
+  gap: 4px;
+  min-height: 64px;
+  padding: 12px 14px;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.72rem;
+  color: rgba(226, 233, 247, 0.58);
+}
+
+body[data-page="systemSettings"] .sys-storage-summary-row:last-child {
+  border-right: 0;
 }
 
 body[data-page="systemSettings"] .sys-storage-summary-row strong {
-  font-size: 0.84rem;
+  color: var(--text, rgba(246, 249, 255, 0.92));
+  font-size: 0.92rem;
+  font-weight: 700;
 }
 
 body[data-page="systemSettings"] .workspace-topbar > div:first-child p,
@@ -46606,48 +46813,112 @@ body[data-page="systemSettings"] #openSystemSettingsBtn {
   display: none !important;
 }
 
+[data-theme="light"] body[data-page="systemSettings"] .sys-panel {
+  border-top-color: rgba(15, 23, 42, 0.08);
+  background: transparent;
+}
+
 [data-theme="light"] body[data-page="systemSettings"] .sys-section-label {
-  color: rgba(37, 99, 235, 0.7);
+  color: #2563eb;
 }
 
 [data-theme="light"] body[data-page="systemSettings"] .sys-hint,
-[data-theme="light"] body[data-page="systemSettings"] .sys-download-links .about-link-card small {
-  color: rgba(15, 23, 42, 0.55);
+[data-theme="light"] body[data-page="systemSettings"] .sys-setting-copy .sys-hint,
+[data-theme="light"] body[data-page="systemSettings"] .sys-links .about-link-card small,
+[data-theme="light"] body[data-page="systemSettings"] .sys-download-links .about-link-card small,
+[data-theme="light"] body[data-page="systemSettings"] .sys-storage-summary-row {
+  color: #475569;
 }
 
-[data-theme="light"] body[data-page="systemSettings"] .sys-download-links .about-link-card,
-[data-theme="light"] body[data-page="systemSettings"] .sys-download-card {
-  background: rgba(248, 250, 252, 0.9);
-  border-color: rgba(148, 163, 184, 0.18);
+[data-theme="light"] body[data-page="systemSettings"] .sys-download-action {
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
 }
 
-[data-theme="light"] body[data-page="systemSettings"] .sys-download-links .about-link-title {
+[data-theme="light"] body[data-page="systemSettings"] .sys-download-action:hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+[data-theme="light"] body[data-page="systemSettings"] .sys-setting-copy h4,
+[data-theme="light"] body[data-page="systemSettings"] .sys-links .about-link-title,
+[data-theme="light"] body[data-page="systemSettings"] .sys-download-links .about-link-title,
+[data-theme="light"] body[data-page="systemSettings"] .sys-storage-summary-row strong {
   color: #0f172a;
 }
 
-[data-theme="light"] body[data-page="systemSettings"] .sys-download-links .about-link-card:hover,
-[data-theme="light"] body[data-page="systemSettings"] .sys-download-card:hover {
-  border-color: rgba(37, 99, 235, 0.28);
-  background: rgba(37, 99, 235, 0.05);
+[data-theme="light"] body[data-page="systemSettings"] .sys-links .about-link-card,
+[data-theme="light"] body[data-page="systemSettings"] .sys-download-links .about-link-card {
+  color: #334155;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="light"] body[data-page="systemSettings"] .sys-links .about-link-card:hover,
+[data-theme="light"] body[data-page="systemSettings"] .sys-download-links .about-link-card:hover {
+  background: rgba(37, 99, 235, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
+  color: #1d4ed8;
+}
+
+[data-theme="light"] body[data-page="systemSettings"] .sys-theme-modes {
+  background: rgba(15, 23, 42, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="light"] body[data-page="systemSettings"] .sys-theme-btn {
+  color: #64748b;
+}
+
+[data-theme="light"] body[data-page="systemSettings"] .sys-theme-btn.active {
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+}
+
+[data-theme="light"] body[data-page="systemSettings"] .sys-setting-row {
+  border-bottom-color: rgba(15, 23, 42, 0.06);
+}
+
+[data-theme="light"] body[data-page="systemSettings"] .sys-storage-summary {
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="light"] body[data-page="systemSettings"] .sys-storage-summary-row {
+  border-right-color: rgba(15, 23, 42, 0.06);
 }
 
 @media (max-width: 720px) {
+  body[data-page="systemSettings"] .sys-page {
+    max-width: none;
+    gap: 16px;
+  }
+
+  body[data-page="systemSettings"] .sys-links,
+  body[data-page="systemSettings"] .sys-download-links {
+    max-width: none;
+  }
+
+  body[data-page="systemSettings"] .sys-setting-row {
+    grid-template-columns: 1fr;
+    justify-items: start;
+    gap: 8px;
+  }
+
   body[data-page="systemSettings"] .sys-storage-summary {
     grid-template-columns: 1fr;
   }
 
   body[data-page="systemSettings"] .sys-storage-summary-row {
     border-right: 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    min-height: 42px;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+    min-height: 52px;
   }
 
   body[data-page="systemSettings"] .sys-storage-summary-row:last-child {
     border-bottom: 0;
   }
 
-  body[data-page="systemSettings"] .sys-setting-row {
-    grid-template-columns: 1fr;
+  body[data-page="systemSettings"] .sys-actions-end {
+    justify-content: flex-start;
   }
 }
 
@@ -46664,18 +46935,19 @@ body[data-page="systemSettings"] .shell-v2 .workspace {
   grid-column: 2 !important;
 }
 
-/* APK download CTA — user-facing, not JSON */
+/* APK download CTA — system settings only; about page uses link rows */
 .apk-download-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
   width: 100%;
-  min-height: 56px;
-  padding: 12px 16px;
+  max-width: 420px;
+  min-height: 48px;
+  padding: 12px 14px;
   border: 1px solid rgba(37, 99, 235, 0.28);
   border-radius: 12px;
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(14, 165, 233, 0.08));
+  background: rgba(37, 99, 235, 0.08);
   color: inherit;
   text-align: left;
   cursor: pointer;
@@ -46720,14 +46992,12 @@ body[data-page="systemSettings"] .shell-v2 .workspace {
 }
 
 .about-page .about-apk-btn {
-  background: rgba(37, 99, 235, 0.12) !important;
-  color: #1d4ed8 !important;
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.28) !important;
+  white-space: nowrap;
 }
 
 .about-page .about-apk-btn em {
   font-style: normal;
-  opacity: 0.75;
+  opacity: 0.72;
   margin-left: 4px;
 }
 
@@ -46739,4 +47009,50 @@ body:not([data-theme="light"]) .apk-download-btn-main strong {
 [data-theme="dark"] .apk-download-btn-main small,
 body:not([data-theme="light"]) .apk-download-btn-main small {
   color: rgba(226, 233, 247, 0.58);
+}
+
+
+/* shell: about/systemSettings 2-col must beat sec-collapsed */
+body[data-page="about"].sec-collapsed .desktop-layout.shell-v2,
+body[data-page="systemSettings"].sec-collapsed .desktop-layout.shell-v2,
+body[data-page="about"] .desktop-layout.shell-v2,
+body[data-page="systemSettings"] .desktop-layout.shell-v2 {
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) !important;
+}
+body[data-page="about"].sec-collapsed .shell-secondary,
+body[data-page="systemSettings"].sec-collapsed .shell-secondary,
+body[data-page="about"] .shell-secondary,
+body[data-page="systemSettings"] .shell-secondary {
+  display: none !important;
+}
+body[data-page="about"].sec-collapsed .shell-v2 .workspace,
+body[data-page="systemSettings"].sec-collapsed .shell-v2 .workspace,
+body[data-page="about"] .shell-v2 .workspace,
+body[data-page="systemSettings"] .shell-v2 .workspace {
+  grid-column: 2 !important;
+}
+
+/* light theme: about secondary text must stay readable */
+[data-theme="light"] .about-download-hint {
+  color: #475569 !important;
+}
+[data-theme="light"] .apk-download-btn-main strong {
+  color: #0f172a;
+}
+[data-theme="light"] .apk-download-btn-main small {
+  color: #475569;
+}
+[data-theme="light"] .about-page .about-version,
+[data-theme="light"] .about-page .about-status,
+[data-theme="light"] .about-credit-row span,
+[data-theme="light"] .about-trust-summary p,
+[data-theme="light"] .about-link-card small,
+[data-theme="light"] .about-flow-item small {
+  color: #475569 !important;
+}
+[data-theme="light"] .about-page .about-app-name,
+[data-theme="light"] .about-section-head strong,
+[data-theme="light"] .about-credit-row strong,
+[data-theme="light"] .about-link-title {
+  color: #0f172a !important;
 }

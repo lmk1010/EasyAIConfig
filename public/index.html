@@ -1297,26 +1297,31 @@
                       <span>立即更新</span>
                     </button>
                     <button id="aboutApkDownloadBtn" class="about-update-btn about-apk-btn" type="button"
-                      data-external-url="https://download.cursorxyz.it.com/EasyAIConfig_1.0.74.apk">
+                      data-external-url="https://download.cursorxyz.it.com/EasyAIConfig_1.0.75.apk">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="7" y="2" width="10" height="20" rx="2" />
                         <path d="M11 18h2" />
                       </svg>
-                      <span>下载手机 APK <em id="aboutApkDownloadVer">v1.0.74</em></span>
+                      <span>下载 APK <em id="aboutApkDownloadVer">v1.0.75</em></span>
                     </button>
                   </div>
                 </div>
               </div>
 
               <div class="about-content-grid">
-                <section class="about-section about-downloads-panel">
+                <section class="about-section about-trust-summary">
                   <div class="about-section-head">
-                    <span>PHONE APP</span>
-                    <strong>手机 App 下载</strong>
+                    <span>TRANSPARENCY</span>
+                    <strong>开源透明</strong>
                   </div>
-                  <p class="about-download-hint" id="aboutDownloadHint">一键下载 Android 安装包，装好后扫码远程控制本机。</p>
-                  <div class="about-links" id="aboutDownloadLinks"></div>
+                  <p>EasyAIConfig 专注本地配置管理。默认不内置遥测 SDK，不做用户行为分析，不向项目服务器上传 API Key 或配置内容。</p>
+                  <div class="about-trust-points">
+                    <span>配置留在本机</span>
+                    <span>无遥测 SDK</span>
+                    <span>无行为分析</span>
+                    <span>关键流程可审计</span>
+                  </div>
                 </section>
 
                 <section class="about-section about-actions-panel">
@@ -1325,34 +1330,34 @@
                     <strong>项目入口</strong>
                   </div>
                   <div class="about-links">
-                  <a class="about-link-card" href="https://github.com/lmk1010/EasyAIConfig" target="_blank" rel="noopener">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                      stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                      <path
-                        d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 0 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
-                    </svg>
-                    <span class="about-link-title">GitHub</span>
-                    <small>源码仓库</small>
-                  </a>
-                  <button class="about-link-card" id="aboutFeedbackBtn" type="button">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                      stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                      <circle cx="12" cy="12" r="10" />
-                      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                      <circle cx="12" cy="17" r=".5" fill="currentColor" />
-                    </svg>
-                    <span class="about-link-title">反馈</span>
-                    <small>提交 Issue</small>
-                  </button>
-                  <button class="about-link-card" id="aboutTrustBtn" type="button">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                      stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M12 3 19 6v5c0 4.4-2.8 8.4-7 10-4.2-1.6-7-5.6-7-10V6l7-3z" />
-                      <path d="M9 12l2 2 4-5" />
-                    </svg>
-                    <span class="about-link-title">查看说明</span>
-                    <small>开源与隐私</small>
-                  </button>
+                    <a class="about-link-card" href="https://github.com/lmk1010/EasyAIConfig" target="_blank" rel="noopener">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path
+                          d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 0 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                      </svg>
+                      <span class="about-link-title">GitHub</span>
+                      <small>源码仓库</small>
+                    </a>
+                    <button class="about-link-card" id="aboutFeedbackBtn" type="button">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                        <circle cx="12" cy="17" r=".5" fill="currentColor" />
+                      </svg>
+                      <span class="about-link-title">反馈</span>
+                      <small>提交 Issue</small>
+                    </button>
+                    <button class="about-link-card" id="aboutTrustBtn" type="button">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 3 19 6v5c0 4.4-2.8 8.4-7 10-4.2-1.6-7-5.6-7-10V6l7-3z" />
+                        <path d="M9 12l2 2 4-5" />
+                      </svg>
+                      <span class="about-link-title">查看说明</span>
+                      <small>开源与隐私</small>
+                    </button>
                   </div>
                 </section>
 
@@ -1367,18 +1372,13 @@
                       target="_blank" rel="noopener">github.com/lmk1010/EasyAIConfig</a></div>
                 </section>
 
-                <section class="about-section about-trust-summary">
+                <section class="about-section about-downloads-panel">
                   <div class="about-section-head">
-                    <span>TRANSPARENCY</span>
-                    <strong>开源透明</strong>
+                    <span>PHONE APP</span>
+                    <strong>手机 App</strong>
                   </div>
-                  <p>EasyAIConfig 专注本地配置管理。默认不内置遥测 SDK，不做用户行为分析，不向项目服务器上传 API Key 或配置内容。</p>
-                  <div class="about-trust-points">
-                    <span>配置留在本机</span>
-                    <span>无遥测 SDK</span>
-                    <span>无行为分析</span>
-                    <span>关键流程可审计</span>
-                  </div>
+                  <p class="about-download-hint" id="aboutDownloadHint">装好 APK 后，到「手机远程」扫码即可控制本机。</p>
+                  <div class="about-links" id="aboutDownloadLinks"></div>
                 </section>
 
                 <section class="about-section about-update-flow">
@@ -1462,11 +1462,20 @@
               </section>
 
               <section class="sys-panel">
-                <div class="sys-panel-head sys-panel-head-inline">
-                  <div class="sys-section-label">手机 App</div>
+                <div class="sys-section-label">手机 App</div>
+                <div class="sys-setting-list">
+                  <div class="sys-setting-row">
+                    <div class="sys-setting-copy">
+                      <h4>Android APK</h4>
+                      <p class="sys-hint" id="sysDownloadHint">装好后到「手机远程」扫码控制本机</p>
+                    </div>
+                    <button id="sysApkDownloadBtn" class="sys-download-action" type="button"
+                      data-external-url="https://download.cursorxyz.it.com/EasyAIConfig_1.0.75.apk">
+                      下载 <em id="sysApkDownloadVer">v1.0.75</em>
+                    </button>
+                  </div>
                 </div>
-                <p class="sys-hint" id="sysDownloadHint">下载 Android APK，安装后扫码即可远程控制。</p>
-                <div class="sys-download-links" id="sysDownloadLinks"></div>
+                <div class="sys-links" id="sysDownloadLinks" hidden></div>
               </section>
 
               <section class="sys-panel">
