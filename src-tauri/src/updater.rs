@@ -104,23 +104,107 @@ fn updater_endpoint() -> String {
 }
 
 fn github_latest_json_endpoint(repository: &str) -> String {
+    if repository.trim().is_empty() {
+        return String::new();
+    }
     format!("https://github.com/{repository}/releases/latest/download/latest.json")
 }
 
+fn normalize_updater_endpoint(raw: &str) -> Option<String> {
+    let line = raw
+        .lines()
+        .map(str::trim)
+        .find(|item| !item.is_empty() && !item.starts_with('#'))
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches('/');
+    if line.is_empty() {
+        return None;
+    }
+    if line.ends_with("latest.json") {
+        Some(line.to_string())
+    } else {
+        Some(format!("{line}/latest.json"))
+    }
+}
+
+fn push_endpoint(endpoints: &mut Vec<String>, candidate: impl Into<String>) {
+    let Some(endpoint) = normalize_updater_endpoint(&candidate.into()) else {
+        return;
+    };
+    if !endpoints.iter().any(|existing| existing == &endpoint) {
+        endpoints.push(endpoint);
+    }
+}
+
+fn conf_file_updater_endpoints() -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(include_str!("../tauri.conf.json")) else {
+        return Vec::new();
+    };
+    value
+        .pointer("/plugins/updater/endpoints")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(normalize_updater_endpoint)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn runtime_updater_endpoints() -> Vec<String> {
+    let Ok(home) = crate::app_home() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for name in ["updater-endpoint", "updater-endpoint.txt"] {
+        let path = home.join(name);
+        if let Ok(text) = std::fs::read_to_string(path) {
+            for line in text.lines() {
+                push_endpoint(&mut out, line);
+            }
+        }
+    }
+    out
+}
+
+/// 更新源优先级：编译期 R2 / 运行时覆盖 / tauri.conf 非 GitHub / GitHub 兜底。
+/// 绝不能只打 GitHub：国内网络常失败，且我们已有 Cloudflare R2 latest.json。
 fn updater_endpoints() -> Vec<String> {
+    let mut preferred = Vec::new();
+    let mut github_fallback = Vec::new();
+
     let explicit = updater_runtime_var(
         "EASYAICONFIG_UPDATER_ENDPOINT",
         option_env!("EASYAICONFIG_UPDATER_ENDPOINT"),
     );
-    let github = github_latest_json_endpoint(&updater_repository());
-    let mut endpoints = Vec::new();
-    if !explicit.is_empty() {
-        endpoints.push(explicit);
+    push_endpoint(&mut preferred, explicit);
+
+    for endpoint in runtime_updater_endpoints() {
+        if is_github_update_endpoint(&endpoint) {
+            push_endpoint(&mut github_fallback, endpoint);
+        } else {
+            push_endpoint(&mut preferred, endpoint);
+        }
     }
-    if !github.is_empty() && !endpoints.iter().any(|value| value == &github) {
-        endpoints.push(github);
+
+    for endpoint in conf_file_updater_endpoints() {
+        if is_github_update_endpoint(&endpoint) {
+            push_endpoint(&mut github_fallback, endpoint);
+        } else {
+            push_endpoint(&mut preferred, endpoint);
+        }
     }
-    endpoints
+
+    push_endpoint(
+        &mut github_fallback,
+        github_latest_json_endpoint(&updater_repository()),
+    );
+
+    preferred.extend(github_fallback);
+    preferred
 }
 
 fn updater_config_state(app: &tauri::AppHandle) -> Value {

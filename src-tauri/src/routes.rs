@@ -39,6 +39,7 @@ use crate::claudecode_oauth_profiles::{
     switch_claudecode_oauth_profile,
 };
 use crate::codex_oauth_usage::query_codex_oauth_usage;
+use crate::cursor_usage::query_cursor_local_usage;
 use crate::network::{
     get_network_latency, get_network_status, list_network_ip_history, refresh_network_status,
 };
@@ -6101,7 +6102,7 @@ SECRET_TOKEN = "do-not-expose"
     }
 }
 
-async fn dispatch(
+pub(crate) async fn dispatch(
     app: tauri::AppHandle,
     path: &str,
     method: &str,
@@ -6282,6 +6283,8 @@ async fn dispatch(
         ("/api/provider/probe-summary", "GET") => crate::provider_health::get_probe_summary(query),
         ("/api/tray/refresh", "POST") => crate::tray::refresh_menu(&app, body),
         ("/api/terminal/token-snapshot", "GET") => crate::terminal::terminal_token_snapshot(query),
+        ("/api/terminal/codex-picker", "GET") => crate::terminal::terminal_codex_picker(query),
+        ("/api/terminal/list-dir", "GET") => crate::terminal::terminal_list_dir(query),
         ("/api/terminal/persisted", "GET") => crate::terminal_persist::list_persisted(query),
         ("/api/terminal/persist", "POST") => crate::terminal_persist::persist_session(body),
         ("/api/terminal/forget", "POST") => crate::terminal_persist::forget_session(body),
@@ -6452,6 +6455,22 @@ async fn dispatch(
         ("/api/terminal/write", "POST") => terminal_write(body),
         ("/api/terminal/resize", "POST") => terminal_resize(body),
         ("/api/terminal/close", "POST") => terminal_close(body),
+        ("/api/terminal/upload", "POST") => crate::terminal::terminal_upload(body),
+        ("/api/terminal/timeline", "GET") => crate::terminal::terminal_timeline(query),
+
+        // ─── Codex app-server 桥（手机 Timeline 低延迟路径）──────────
+        ("/api/codex/thread/start", "POST") => crate::codex_app_server::api_thread_start(body),
+        ("/api/codex/thread/resume", "POST") => crate::codex_app_server::api_thread_resume(body),
+        ("/api/codex/turn/start", "POST") => crate::codex_app_server::api_turn_start(body),
+        ("/api/codex/turn/interrupt", "POST") => crate::codex_app_server::api_turn_interrupt(body),
+        ("/api/codex/approval", "POST") => crate::codex_app_server::api_approval(body),
+        ("/api/codex/models", "GET") => crate::codex_app_server::api_models(query),
+        ("/api/codex/thread/settings", "POST") => crate::codex_app_server::api_thread_settings(body),
+        ("/api/codex/rate-limits", "GET") => crate::codex_app_server::api_rate_limits(query),
+        ("/api/codex/session", "GET") => crate::codex_app_server::api_session_get(query),
+        ("/api/codex/list", "GET") => crate::codex_app_server::api_list(query),
+        ("/api/codex/close", "POST") => crate::codex_app_server::api_close(body),
+
         ("/api/shell-integration/status", "GET") => shell_integration_status(query),
         ("/api/shell-integration/enable", "POST") => enable_shell_integration(body),
         ("/api/shell-integration/disable", "POST") => disable_shell_integration(body),
@@ -6459,6 +6478,7 @@ async fn dispatch(
         ("/api/system/process-kill", "POST") => kill_process(body),
         ("/api/codex/session-stats", "GET") => codex_session_stats(query),
         ("/api/claudecode/local-usage", "GET") => claudecode_local_usage(query),
+        ("/api/cursor/local-usage", "GET") => query_cursor_local_usage(query),
         ("/api/app/update", "GET") => get_app_update_info(app).await,
         ("/api/app/update", "POST") => install_app_update(app).await,
         ("/api/app/update/progress", "GET") => get_app_update_progress(),
@@ -6470,6 +6490,21 @@ async fn dispatch(
         ("/api/project-bindings", "GET") => crate::project_bindings::list_project_bindings(query),
         ("/api/project-binding/summary", "GET") => {
             crate::project_bindings::summarize_binding_for_cwd(query)
+        }
+
+        // ─── 手机端远程访问（LAN / SSH 中转）────────────────────────
+        ("/api/remote/status", "GET") => crate::remote_server::remote_status(query),
+        ("/api/remote/start", "POST") => crate::remote_server::remote_start(body),
+        ("/api/remote/stop", "POST") => crate::remote_server::remote_stop(body),
+        ("/api/remote/tunnel/start", "POST") => crate::remote_server::tunnel_start(body),
+        ("/api/remote/tunnel/stop", "POST") => crate::remote_server::tunnel_stop(body),
+        ("/api/remote/autostart", "POST") => crate::remote_server::remote_set_autostart(body),
+        ("/api/remote/set-ip", "POST") => crate::remote_server::remote_set_ip(body),
+        ("/api/remote/tunnel/check", "POST") => {
+            let b = body.clone();
+            tokio::task::spawn_blocking(move || crate::remote_server::tunnel_check(&b))
+                .await
+                .map_err(|e| format!("spawn_blocking error: {}", e))?
         }
 
         _ => Err(format!("Unsupported request: {method} {path}")),

@@ -5,8 +5,24 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EasyAIConfig</title>
-  <link rel="stylesheet" href="/styles.css?v=20260703a" />
+  <link rel="stylesheet" href="/styles.css?v=20260721-channel" />
   <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
+
+<script>
+(function(){
+  var VER='20260721-channel';
+  try {
+    if (localStorage.getItem('ea_asset_ver') !== VER) {
+      localStorage.setItem('ea_asset_ver', VER);
+      if (!sessionStorage.getItem('ea_asset_reloaded_'+VER)) {
+        sessionStorage.setItem('ea_asset_reloaded_'+VER, '1');
+        location.reload(true);
+      }
+    }
+  } catch (e) {}
+})();
+</script>
+
 </head>
 
 <body>
@@ -40,6 +56,12 @@
               <path d="M8 12l2 2 4-4" />
               <circle cx="6" cy="5.5" r="0.5" fill="currentColor"/>
               <circle cx="8" cy="5.5" r="0.5" fill="currentColor"/>
+            </svg>
+          </button>
+          <button type="button" class="rail-btn" data-page-target="remote" data-tip="手机远程" aria-label="手机远程">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="7" y="2" width="10" height="20" rx="2.5" />
+              <path d="M11 18h2" />
             </svg>
           </button>
           <button type="button" class="rail-btn" data-page-target="dashboard" data-tip="数据看板" aria-label="数据看板">
@@ -111,10 +133,20 @@
 
       <aside class="shell-secondary">
         <div class="sec-drag" data-tauri-drag-region></div>
+        <button id="secondaryExpandBtn" class="sec-expand-btn" type="button" title="展开侧栏" aria-label="展开侧栏">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </button>
         <div class="sec-head">
           <div class="sec-eyebrow" id="secondaryEyebrow">QUICK SETUP</div>
           <div class="sec-title-row">
             <div class="sec-title" id="secondaryTitle">一键配置</div>
+            <button id="secondaryCollapseBtn" class="topbar-icon-btn sec-collapse-btn" type="button" title="收起侧栏" aria-label="收起侧栏">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15 6l-6 6 6 6" />
+              </svg>
+            </button>
             <button id="secondaryThemeToggleBtn" class="topbar-icon-btn sec-theme-btn hide" title="切换主题" data-theme-pref="auto" data-role="theme-toggle" aria-label="切换主题">
               <svg class="theme-ico-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -482,6 +514,19 @@
                 </span>
                 <span class="sec-chev" aria-hidden="true">›</span>
               </button>
+              <button type="button" class="sec-item" data-console-rail-tool="cursor" style="--accent-a:#cfd6e4;--accent-b:#5b6b85">
+                <span class="sec-ico">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" opacity="0.5" />
+                    <path d="M12 12l8-4.5M12 12v9M12 12L4 7.5" />
+                  </svg>
+                </span>
+                <span class="sec-text">
+                  <span class="sec-name">Cursor</span>
+                  <span class="sec-subtitle">编辑器本地用量</span>
+                </span>
+                <span class="sec-chev" aria-hidden="true">›</span>
+              </button>
               <button type="button" class="sec-item" data-console-rail-tool="claude-desktop" style="--accent-a:#ffd7b8;--accent-b:#c76b42">
                 <span class="sec-ico">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -581,6 +626,13 @@
               <span class="sec-group-meta" id="eaTermSecCount">0</span>
             </div>
             <div class="sec-list" id="eaTermSecList"></div>
+          </div>
+          <div class="sec-group" data-sec-for="remote" style="display:none">
+            <div class="sec-group-head">
+              <span class="sec-group-label">已连接手机</span>
+              <span class="sec-group-meta" id="eaRemoteSecCount">0 在线</span>
+            </div>
+            <div class="sec-list" id="eaRemoteSecList"></div>
           </div>
           <div class="sec-group" data-sec-for="__fallback">
             <div class="sec-fallback">
@@ -1125,6 +1177,12 @@
             </div>
           </section>
 
+          <section class="page-view" data-page="remote">
+            <div class="ea-remote-root" id="eaRemotePage">
+              <!-- Rendered by renderRemotePage() -->
+            </div>
+          </section>
+
           <section class="page-view" data-page="dashboard">
             <div class="dashboard-page" id="dashboardPage"></div>
           </section>
@@ -1243,6 +1301,15 @@
               </div>
 
               <div class="about-content-grid">
+                <section class="about-section about-downloads-panel">
+                  <div class="about-section-head">
+                    <span>DOWNLOAD</span>
+                    <strong>安装包下载（R2）</strong>
+                  </div>
+                  <p class="about-download-hint" id="aboutDownloadHint">正在读取更新清单…</p>
+                  <div class="about-links" id="aboutDownloadLinks"></div>
+                </section>
+
                 <section class="about-section about-actions-panel">
                   <div class="about-section-head">
                     <span>PROJECT</span>
@@ -1256,7 +1323,7 @@
                         d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 0 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
                     </svg>
                     <span class="about-link-title">GitHub</span>
-                    <small>源码 / Releases</small>
+                    <small>源码仓库</small>
                   </a>
                   <button class="about-link-card" id="aboutFeedbackBtn" type="button">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1360,18 +1427,12 @@
 
           <section class="page-view" data-page="systemSettings">
             <div class="sys-page">
-              <section class="sys-panel sys-preferences-panel">
-                <div class="sys-panel-head">
-                  <div>
-                    <div class="sys-panel-kicker">Preferences</div>
-                    <h3>偏好设置</h3>
-                  </div>
-                </div>
+              <section class="sys-panel">
+                <div class="sys-section-label">界面</div>
                 <div class="sys-setting-list">
                   <div class="sys-setting-row">
                     <div class="sys-setting-copy">
-                      <h4>外观模式</h4>
-                      <p>切换浅色 / 深色 / 自动模式（自动模式按时间切换）。</p>
+                      <h4>外观</h4>
                     </div>
                     <div class="sys-theme-modes" id="sysThemeModes">
                       <button class="sys-theme-btn" data-sys-theme="auto" type="button">自动</button>
@@ -1379,11 +1440,9 @@
                       <button class="sys-theme-btn" data-sys-theme="dark" type="button">深色</button>
                     </div>
                   </div>
-
                   <div class="sys-setting-row">
                     <div class="sys-setting-copy">
-                      <h4>界面语言</h4>
-                      <p>切换中文 / English，设置会保存在本机。</p>
+                      <h4>语言</h4>
                     </div>
                     <div class="sys-theme-modes sys-language-modes" id="sysLanguageModes">
                       <button class="sys-theme-btn" data-sys-language="zh-CN" type="button">中文</button>
@@ -1393,86 +1452,43 @@
                 </div>
               </section>
 
-              <div class="sys-layout">
-                <section class="sys-panel sys-storage-section">
-                  <div class="sys-panel-head">
-                    <div>
-                      <div class="sys-panel-kicker">Storage</div>
-                      <h3>存储占用</h3>
-                    </div>
-                    <div class="sys-actions sys-panel-actions">
-                      <button id="sysRefreshStorageBtn" class="secondary tiny-btn" type="button">刷新占用</button>
-                    </div>
-                  </div>
-                  <div class="sys-storage-summary">
-                    <div class="sys-storage-summary-row">
-                      <span>本地占用</span>
-                      <strong id="sysStorageLocalTotal">-</strong>
-                      <span>文件 <strong id="sysStorageLocalFiles">-</strong></span>
-                    </div>
-                    <div class="sys-storage-summary-row">
-                      <span>第三方编程工具占用</span>
-                      <strong id="sysStorageToolsTotal">-</strong>
-                      <span>文件 <strong id="sysStorageToolsFiles">-</strong></span>
-                    </div>
-                    <div class="sys-storage-summary-row">
-                      <span>界面缓存</span>
-                      <strong id="sysLocalStorageUsage">-</strong>
-                      <span>localStorage</span>
-                    </div>
-                  </div>
-                  <div class="sys-storage-cleanup">
-                    <span class="sys-storage-cleanup-label">清理操作</span>
-                    <div class="sys-actions">
-                      <button id="sysClearCacheBtn" class="secondary tiny-btn" type="button">清理缓存</button>
-                      <button id="sysClearBackupsBtn" class="secondary tiny-btn" type="button">清理备份</button>
-                      <button id="sysClearUiCacheBtn" class="secondary tiny-btn" type="button">清理界面缓存</button>
-                    </div>
-                  </div>
-                  <div class="sys-storage-split">
-                    <section class="sys-storage-group">
-                      <div class="sys-storage-group-title">本地占用</div>
-                      <div id="sysStorageLocalList" class="sys-storage-list"></div>
-                    </section>
-                    <section class="sys-storage-group">
-                      <div class="sys-storage-group-title">第三方编程工具占用</div>
-                      <div id="sysStorageToolsList" class="sys-storage-list"></div>
-                    </section>
-                  </div>
-                </section>
+              <section class="sys-panel">
+                <div class="sys-panel-head sys-panel-head-inline">
+                  <div class="sys-section-label">安装包</div>
+                  <button id="sysRefreshDownloadsBtn" class="secondary tiny-btn" type="button">刷新</button>
+                </div>
+                <p class="sys-hint" id="sysDownloadHint">读取更新清单…</p>
+                <div class="sys-download-links" id="sysDownloadLinks"></div>
+              </section>
 
-                <section class="sys-panel sys-management-panel">
-                  <div class="sys-panel-head">
-                    <div>
-                      <div class="sys-panel-kicker">Management</div>
-                      <h3>常用操作</h3>
-                    </div>
+              <section class="sys-panel">
+                <div class="sys-panel-head sys-panel-head-inline">
+                  <div class="sys-section-label">存储</div>
+                  <button id="sysRefreshStorageBtn" class="secondary tiny-btn" type="button">刷新</button>
+                </div>
+                <div class="sys-storage-summary">
+                  <div class="sys-storage-summary-row">
+                    <span>本地</span>
+                    <strong id="sysStorageLocalTotal">-</strong>
+                    <span><strong id="sysStorageLocalFiles">-</strong> 文件</span>
                   </div>
-                  <div class="sys-management-group">
-                    <div class="sys-setting-copy">
-                      <h4>工具卸载</h4>
-                      <p>卸载当前通过本应用安装的 CLI 工具（Codex / Claude Code / OpenClaw）。</p>
-                    </div>
-                    <div class="sys-actions">
-                      <button id="sysUninstallCodexBtn" class="secondary tiny-btn" type="button">卸载 Codex</button>
-                      <button id="sysUninstallClaudeBtn" class="secondary tiny-btn" type="button">卸载 Claude Code</button>
-                      <button id="sysUninstallOpenClawBtn" class="secondary tiny-btn" type="button">卸载 OpenClaw</button>
-                      <button id="sysUninstallAllToolsBtn" class="secondary tiny-btn danger" type="button">全部卸载</button>
-                    </div>
+                  <div class="sys-storage-summary-row">
+                    <span>CLI 工具</span>
+                    <strong id="sysStorageToolsTotal">-</strong>
+                    <span><strong id="sysStorageToolsFiles">-</strong> 文件</span>
                   </div>
-
-                  <div class="sys-management-group">
-                    <div class="sys-setting-copy">
-                      <h4>应用管理</h4>
-                      <p>EasyAIConfig 需要在系统应用管理里卸载；问题反馈直接跳转 Issue 页面。</p>
-                    </div>
-                    <div class="sys-actions">
-                      <button id="sysOpenUninstallEntryBtn" class="secondary tiny-btn" type="button">打开系统卸载入口</button>
-                      <button id="sysOpenIssueBtn" class="secondary tiny-btn" type="button">问题反馈（Issue）</button>
-                    </div>
+                  <div class="sys-storage-summary-row">
+                    <span>界面缓存</span>
+                    <strong id="sysLocalStorageUsage">-</strong>
+                    <span>localStorage</span>
                   </div>
-                </section>
-              </div>
+                </div>
+                <div class="sys-actions sys-actions-end">
+                  <button id="sysClearCacheBtn" class="secondary tiny-btn" type="button">清理缓存</button>
+                  <button id="sysClearBackupsBtn" class="secondary tiny-btn" type="button">清理备份</button>
+                  <button id="sysClearUiCacheBtn" class="secondary tiny-btn" type="button">清理界面缓存</button>
+                </div>
+              </section>
             </div>
           </section>
 
@@ -4244,8 +4260,8 @@
   </main>
   <script src="/i18n.js?v=20260703a"></script>
   <script src="/vendor/ace/ace.js"></script>
-  <script type="module" src="/app.js?v=20260703a"></script>
-  <script type="module" src="/terminal-page.js"></script>
+  <script type="module" src="/app.js?v=20260721-channel"></script>
+  <script type="module" src="/terminal-page.js?v=20260721-channel"></script>
   <!-- ═══ Recipe Input Form Modal ═══ -->
   <div id="ocRecipeFormModal" class="oc-recipe-modal hide">
     <div class="oc-recipe-modal-backdrop"></div>

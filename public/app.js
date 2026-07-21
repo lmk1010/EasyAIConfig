@@ -104,6 +104,7 @@ const state = {
   updateDialogLocked: false,
   aboutOpen: false,
   aboutTimer: null,
+  appDownloadFeed: null,
   activePage: 'quick',
   // Setup Wizard
   wizardOpen: false,
@@ -606,14 +607,14 @@ const TOOL_CAPABILITY_MATRIX = [
   {
     id: 'cursor',
     name: 'Cursor',
-    stage: '目录接入',
-    stageKind: 'catalog',
+    stage: '已接本地用量',
+    stageKind: 'extension',
     config: 'readonly',
     router: 'import',
-    usage: 'none',
-    sessions: 'none',
+    usage: 'full',
+    sessions: 'readonly',
     assets: 'readonly',
-    note: '编辑器设置和扩展资产先只读检测，账号密钥不直接读取',
+    note: '本地只读解析 state.vscdb 会话/模型/消息用量；账号密钥不读取，不联网',
   },
   {
     id: 'windsurf',
@@ -9062,13 +9063,14 @@ const PAGE_META = {
   providers: { eyebrow: 'Providers', title: 'Provider 与备份', subtitle: '集中查看已发现配置、检测状态与历史备份。' },
   console: { eyebrow: 'Console', title: '运行控制台', subtitle: '集中查看 Codex、Claude Code、OpenClaw 的运行状态、异常检测与快速修复入口。' },
   terminal: { eyebrow: 'Terminal', title: '内置终端', subtitle: '一站启动 codex / claude code，多会话 tab、token 实时监控与命令面板。' },
+  remote: { eyebrow: 'Remote', title: '手机远程', subtitle: '同 WiFi 扫码直连，跨网走 VPS 中转。' },
   dashboard: { eyebrow: 'Dashboard', title: '数据看板', subtitle: '只展示已验证本地数据源：Codex、Claude Code、OpenCode。' },
   assets: { eyebrow: 'Assets', title: '资产中心', subtitle: '把可配置、可迁移、仅安装入口分开；用量只统计已验证本地来源。' },
   providerRouter: { eyebrow: 'Router', title: '自动路由网关', subtitle: '启动本地 OpenAI-compatible 网关，按 provider 池做请求级路由。' },
   tools: { eyebrow: 'Tools', title: '工具安装与管理', subtitle: '安装、更新或卸载 AI 编程工具。' },
   tasks: { eyebrow: 'Tasks', title: '任务管理', subtitle: '查看当前进行中和历史安装任务。' },
   about: { eyebrow: 'About', title: '关于 EasyAIConfig', subtitle: '本地优先、开源透明的 AI 工具配置中心。' },
-  systemSettings: { eyebrow: 'System', title: '系统设置', subtitle: '管理界面模式、存储占用、缓存清理与卸载操作。' },
+  systemSettings: { eyebrow: 'System', title: '系统设置', subtitle: '' },
   configEditor: { eyebrow: 'Current Config', title: '配置编辑', subtitle: '表单编辑 + 原始配置，选择工具后搜索预设方案快速配置。' },
 };
 
@@ -9077,12 +9079,14 @@ const TOOL_CONSOLE_META = {
   claudecode: { label: 'Claude Code', actionLabel: 'Claude Code' },
   opencode: { label: 'OpenCode', actionLabel: 'OpenCode' },
   openclaw: { label: 'OpenClaw', actionLabel: 'OpenClaw' },
+  cursor: { label: 'Cursor', actionLabel: 'Cursor' },
 };
 
 const DASHBOARD_USAGE_TOOL_DEFS = [
   { key: 'codex', label: 'Codex', subtitle: 'OpenAI Codex 本地用量', accentA: '#ffd0a8', accentB: '#ff8c5a', kind: 'native' },
   { key: 'claudecode', label: 'Claude Code', subtitle: 'Anthropic 本地用量', accentA: '#ffc69a', accentB: '#e07a3f', kind: 'native' },
   { key: 'opencode', label: 'OpenCode', subtitle: 'SQLite / 本地用量', accentA: '#cbd7ff', accentB: '#6b86ff', kind: 'native' },
+  { key: 'cursor', label: 'Cursor', subtitle: '本地会话 / 代码采纳', accentA: '#cfd6e4', accentB: '#5b6b85', kind: 'cursor' },
   { key: 'gemini', label: 'Gemini CLI', subtitle: '~/.gemini/tmp usage', accentA: '#b9f3d0', accentB: '#22a06b', kind: 'local' },
   { key: 'qwen-code', label: 'Qwen Code', subtitle: '~/.qwen/projects chats', accentA: '#b7e2ff', accentB: '#1677ff', kind: 'local' },
   { key: 'kimi', label: 'Kimi', subtitle: '~/.kimi wire logs', accentA: '#e5d4ff', accentB: '#8b5cf6', kind: 'local' },
@@ -9210,9 +9214,13 @@ function isDashboardUsageTool(tool = '') {
   return DASHBOARD_USAGE_TOOL_KEYS.has(normalizeToolCatalogId(tool || ''));
 }
 
+function isCursorDashboardTool(tool = '') {
+  return normalizeToolCatalogId(tool || '') === 'cursor';
+}
+
 function isGenericUsageDashboardTool(tool = '') {
   const normalized = normalizeToolCatalogId(tool || '');
-  return isDashboardUsageTool(normalized) && !isApiDashboardTool(normalized) && normalized !== 'claudecode';
+  return isDashboardUsageTool(normalized) && !isApiDashboardTool(normalized) && normalized !== 'claudecode' && normalized !== 'cursor';
 }
 
 function renderDashboardToolRail() {
@@ -10452,6 +10460,261 @@ function renderGenericUsageDashboard(tool = '', metrics = null, win = getDashboa
     </div>`;
 }
 
+function renderCursorDashboard(root) {
+  if (!root) return;
+  const esc = escapeHtml;
+  const u = window.__consoleV3.cursorUsage;
+  if (el('pageTitle')) el('pageTitle').textContent = appText('数据看板');
+  if (!state.cursorDash) state.cursorDash = { model: 'all', days: 30 };
+  const filter = state.cursorDash;
+
+  // 冷启动才等扫描；已有历史数据则先展示、陈旧(>2min)时后台静默刷新
+  if (!u) {
+    if (!window.__consoleV3.cursorUsageLoading) loadConsoleCursorUsage();
+  } else if (!window.__consoleV3.cursorUsageLoading && (Date.now() - (window.__consoleV3.cursorUsageSavedAt || 0) > 120000)) {
+    loadConsoleCursorUsage({ silent: true });
+  }
+
+  const refreshBtn = `<button type="button" class="dashboard-refresh-btn" data-dashboard-refresh><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>${esc(appText('刷新'))}</button>`;
+
+  if (!u) {
+    if (el('pageSubtitle')) el('pageSubtitle').textContent = 'Cursor · ' + appText('正在读取本地 state.vscdb…');
+    root.innerHTML = `<div class="dashboard-shell"><section class="dashboard-card dashboard-panel span-12"><div class="dashboard-empty-note">${esc(appText('正在读取 Cursor 本地数据…'))}</div></section></div>`;
+    return;
+  }
+  if (u.supported === false || u.status === 'not_found') {
+    if (el('pageSubtitle')) el('pageSubtitle').textContent = 'Cursor · ' + appText('未找到本地数据');
+    root.innerHTML = `<div class="dashboard-shell">
+      <div class="db3-toolbar db3-toolbar--page"><div class="db3-toolbar-status"></div><div style="display:flex;gap:8px">${refreshBtn}</div></div>
+      <section class="dashboard-card dashboard-panel span-12"><div class="dashboard-empty-note">${esc(u.message || '未找到 Cursor 本地数据（state.vscdb）。')}</div></section>
+    </div>`;
+    return;
+  }
+
+  const t = u.totals || {};
+  const acc = u.account || {};
+  const ct = u.codeTracking || null;
+  const est = u.estimate || null;
+  const lastUpdated = formatDashboardUpdatedAt(u.generatedAt) || appText('统计已完成');
+  if (el('pageSubtitle')) el('pageSubtitle').textContent = `Cursor · ${appText('本地估算')} · ${lastUpdated}`;
+
+  const num = (v) => Number(v || 0).toLocaleString();
+  const fmtTok = (v) => (Number(v || 0) > 0 ? formatDashboardMetric(Number(v || 0)) : '0');
+  const fmtUsd = (v) => '$' + Number(v || 0).toFixed(2);
+  const title = (txt) => `<div style="font-weight:600;font-size:13px;margin:0 0 10px;color:var(--text,#1c2430)">${esc(appText(txt))}</div>`;
+  const statCard = (label, val, sub = '') => `<div class="dashboard-stat-card"><div class="dashboard-stat-label">${esc(appText(label))}</div><div class="dashboard-stat-value">${esc(String(val))}</div>${sub ? `<div class="dashboard-stat-sub">${esc(appText(sub))}</div>` : ''}</div>`;
+
+  const accBits = [];
+  if (acc.email) accBits.push(esc(acc.email));
+  if (acc.plan) accBits.push(esc(String(acc.plan).toUpperCase()));
+  if (acc.subscriptionStatus) accBits.push(esc(acc.subscriptionStatus));
+
+  // ── 估算聚合（按 模型 + 时间窗口 客户端筛选） ──
+  const allSessions = (est && Array.isArray(est.sessions)) ? est.sessions : [];
+  const modelOptions = Array.from(new Set(allSessions.map((s) => s.model).filter(Boolean))).sort();
+  const cutoff = filter.days > 0 ? new Date(Date.now() - filter.days * 86400000).toISOString().slice(0, 10) : '';
+  const fsessions = allSessions.filter((s) => (filter.model === 'all' || s.model === filter.model) && (!cutoff || (s.date && s.date >= cutoff)));
+  const agg = { input: 0, cacheRead: 0, output: 0, cost: 0, requests: 0, sessions: 0 };
+  const byModel = {};
+  const byDay = {};
+  for (const s of fsessions) {
+    agg.input += Number(s.input || 0); agg.cacheRead += Number(s.cacheRead || 0); agg.output += Number(s.output || 0);
+    agg.cost += Number(s.costUsd || 0); agg.requests += Number(s.requests || 0); agg.sessions += 1;
+    const m = byModel[s.model] || (byModel[s.model] = { model: s.model, input: 0, cacheRead: 0, output: 0, cost: 0, requests: 0 });
+    m.input += Number(s.input || 0); m.cacheRead += Number(s.cacheRead || 0); m.output += Number(s.output || 0); m.cost += Number(s.costUsd || 0); m.requests += Number(s.requests || 0);
+    if (s.date) { const d = byDay[s.date] || (byDay[s.date] = { date: s.date, total: 0, cost: 0 }); d.total += Number(s.input || 0) + Number(s.cacheRead || 0) + Number(s.output || 0); d.cost += Number(s.costUsd || 0); }
+  }
+  const estModels = Object.values(byModel).sort((a, b) => (b.input + b.cacheRead + b.output) - (a.input + a.cacheRead + a.output));
+  const estDaily = Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date));
+  const estTotalTokens = agg.input + agg.cacheRead + agg.output;
+  const hasEstimate = est && allSessions.length > 0;
+
+  // ── 折线图（每日累计 token 估算） ──
+  const trendSvg = (daily) => {
+    if (!daily.length) return `<div class="dashboard-empty-note">${esc(appText('暂无趋势数据'))}</div>`;
+    const vals = daily.map((d) => Number(d.total || 0));
+    const max = Math.max(1, ...vals);
+    const n = daily.length;
+    const W = 100, H = 34;
+    const pts = daily.map((d, i) => [n > 1 ? (i / (n - 1)) * W : 0, H - (Number(d.total || 0) / max) * H]);
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' ');
+    const area = `M0,${H} ` + pts.map((p) => `L${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' ') + ` L${W},${H} Z`;
+    return `<div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:130px;display:block">
+        <defs><linearGradient id="curTrendG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b8cff" stop-opacity="0.30"/><stop offset="1" stop-color="#5b8cff" stop-opacity="0"/></linearGradient></defs>
+        <path d="${area}" fill="url(#curTrendG)"/>
+        <path d="${line}" fill="none" stroke="#5b8cff" stroke-width="1" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted,#6b7787);margin-top:4px"><span>${esc(daily[0].date)}</span><span>${esc(appText('峰值'))} ${esc(formatDashboardMetric(max))}</span><span>${esc(daily[daily.length - 1].date)}</span></div>
+    </div>`;
+  };
+
+  // ── 筛选（模型 + 时间窗口）：复用 db2-period 药丸下拉，和 Codex/Claude 完全一致 ──
+  const dayLabels = { 1: '近 1 天', 7: '近 7 天', 30: '近 30 天', 90: '近 90 天', 0: '全部' };
+  const truncLabel = (s, n = 18) => (String(s).length > n ? String(s).slice(0, n) + '…' : String(s));
+  const modelTriggerLabel = filter.model === 'all' ? appText('全部模型') : truncLabel(formatModelLabel(filter.model) || filter.model);
+  const daysTriggerLabel = appText(dayLabels[Number(filter.days)] || '近 30 天');
+  const chevron = '<svg width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l3 3 3-3"/></svg>';
+  const pill = (which, triggerLabel, options) => `
+    <span class="db2-period-wrap">
+      <div class="db2-period-dropdown" data-cursor-dd="${which}">
+        <button type="button" class="db2-period-trigger" data-cursor-dd-trigger>${esc(triggerLabel)}${chevron}</button>
+        <div class="db2-period-menu">
+          <div class="db2-period-presets" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+            ${options.map(([val, lab, active]) => `<button type="button" class="db2-period-option ${active ? 'active' : ''}" data-cursor-dd-value="${esc(String(val))}">${esc(lab)}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+    </span>`;
+  const modelOpts = [['all', appText('全部模型'), filter.model === 'all'], ...modelOptions.map((m) => [m, formatModelLabel(m) || m, filter.model === m])];
+  const daysOpts = [[7, appText('近 7 天'), Number(filter.days) === 7], [30, appText('近 30 天'), Number(filter.days) === 30], [90, appText('近 90 天'), Number(filter.days) === 90], [1, appText('近 1 天'), Number(filter.days) === 1], [0, appText('全部'), Number(filter.days) === 0]];
+  const filterPills = pill('model', modelTriggerLabel, modelOpts) + pill('days', daysTriggerLabel, daysOpts);
+
+  // ── Hero（估算口径的累计 token / 输出 / 费用 / 请求） ──
+  const heroStats = hasEstimate ? [
+    { value: fmtTok(estTotalTokens), label: '累计 Token（估算）', emph: true },
+    { value: fmtTok(agg.output), label: '输出 Token（估算）' },
+    { value: fmtUsd(agg.cost), label: '预估费用', emph: true },
+    { value: num(agg.requests), label: '请求次数（估算）' },
+  ] : [
+    { value: num(t.sessions), label: '本地会话', emph: true },
+    { value: num(t.messages), label: '消息数' },
+    { value: fmtTok(t.contextTokens), label: '上下文 Token（本地）', emph: true },
+    { value: num(t.week), label: '近 7 天会话' },
+  ];
+  const heroHtml = `<section class="db3-hero"><div class="db3-hero-stats">${heroStats.map((s) => `<div class="db3-hero-stat ${s.emph ? 'db3-hero-stat-emph' : ''}"><div class="db3-hero-value">${esc(String(s.value))}</div><div class="db3-hero-label">${esc(appText(s.label))}</div></div>`).join('')}</div></section>`;
+
+  // ── token 结构分解 ──
+  const breakdownHtml = hasEstimate ? `<section class="dashboard-card dashboard-panel span-12">
+    ${title('Token 结构（估算）')}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px">
+      ${statCard('输入（首次发送）', fmtTok(agg.input))}
+      ${statCard('缓存读取（每轮重发）', fmtTok(agg.cacheRead))}
+      ${statCard('输出', fmtTok(agg.output))}
+      ${statCard('本地会话', num(agg.sessions))}
+      ${statCard('上下文 Token（本地实测）', fmtTok(t.contextTokens))}
+    </div>
+  </section>` : '';
+
+  // ── 趋势折线图 ──
+  const trendHtml = hasEstimate ? `<section class="dashboard-card dashboard-panel span-12">
+    ${title('Token 用量趋势（估算 · 按会话活动日归集）')}
+    ${trendSvg(estDaily)}
+  </section>` : '';
+
+  // ── 按模型计费表 ──
+  const tableGrid = 'display:grid;grid-template-columns:1.7fr .7fr 1fr 1fr .9fr 1fr;gap:8px;align-items:center';
+  const tableHead = `<div style="${tableGrid};font-size:11px;color:var(--muted,#6b7787);padding-bottom:6px"><span>${esc(appText('模型'))}</span><span style="text-align:right">${esc(appText('请求'))}</span><span style="text-align:right">${esc(appText('输入'))}</span><span style="text-align:right">${esc(appText('缓存读取'))}</span><span style="text-align:right">${esc(appText('输出'))}</span><span style="text-align:right">${esc(appText('预估费用'))}</span></div>`;
+  const tableRows = estModels.map((m) => `<div style="${tableGrid};font-size:12px;padding:7px 0;border-top:1px solid rgba(120,130,150,.12)">
+      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(m.model)}">${esc(formatModelLabel(m.model) || m.model)}</span>
+      <span style="text-align:right;color:var(--muted,#6b7787)">${esc(num(m.requests))}</span>
+      <span style="text-align:right">${esc(fmtTok(m.input))}</span>
+      <span style="text-align:right">${esc(fmtTok(m.cacheRead))}</span>
+      <span style="text-align:right">${esc(fmtTok(m.output))}</span>
+      <span style="text-align:right;font-weight:600">${esc(fmtUsd(m.cost))}</span>
+    </div>`).join('');
+  const tableTotal = `<div style="${tableGrid};font-size:12px;padding:8px 0;border-top:2px solid rgba(120,130,150,.22);font-weight:600">
+      <span>${esc(appText('合计'))}</span>
+      <span style="text-align:right">${esc(num(agg.requests))}</span>
+      <span style="text-align:right">${esc(fmtTok(agg.input))}</span>
+      <span style="text-align:right">${esc(fmtTok(agg.cacheRead))}</span>
+      <span style="text-align:right">${esc(fmtTok(agg.output))}</span>
+      <span style="text-align:right">${esc(fmtUsd(agg.cost))}</span>
+    </div>`;
+  const tableHtml = hasEstimate ? `<section class="dashboard-card dashboard-panel span-12">
+    ${title('模型计费明细（本地估算 · 单位 USD）')}
+    ${estModels.length ? tableHead + tableRows + tableTotal : `<div class="dashboard-empty-note">${esc(appText('当前筛选无数据'))}</div>`}
+  </section>` : '';
+
+  // ── 代码采纳（真实本地记录） ──
+  let codeHtml = '';
+  if (ct && ct.totals) {
+    const ctt = ct.totals;
+    const accepted = Number(ctt.acceptedLines || 0);
+    const suggested = Number(ctt.suggestedLines || 0);
+    const daily = Array.isArray(ct.daily) ? ct.daily : [];
+    const dailyHtml = daily.length ? `<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">${daily.slice(-14).map((d) => {
+      const a = Number(d.acceptedLines || 0);
+      const s = Number(d.suggestedLines || 0);
+      const w = Math.max(a, s) > 0 ? Math.round((a / Math.max(a, s)) * 100) : 0;
+      return `<div style="display:flex;align-items:center;gap:8px;font-size:12px"><span style="width:88px;color:var(--muted,#6b7787)">${esc(d.date)}</span><span style="flex:1;height:8px;border-radius:4px;background:rgba(120,130,150,.15);overflow:hidden"><span style="display:block;height:100%;width:${w}%;background:linear-gradient(90deg,#22c55e,#0891b2)"></span></span><span style="min-width:160px;text-align:right;color:var(--muted,#6b7787)">${esc(appText('采纳'))} ${a.toLocaleString()} / ${esc(appText('建议'))} ${s.toLocaleString()}</span></div>`;
+    }).join('')}</div>` : '';
+    codeHtml = `<section class="dashboard-card dashboard-panel span-12">
+      ${title('代码采纳（本地真实记录 · aiCodeTracking）')}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px">
+        ${statCard('采纳代码行', accepted.toLocaleString())}
+        ${statCard('建议代码行', suggested.toLocaleString())}
+        ${statCard('Composer 采纳', Number(ctt.composerAcceptedLines || 0).toLocaleString())}
+        ${statCard('Tab 采纳', Number(ctt.tabAcceptedLines || 0).toLocaleString())}
+      </div>
+      ${dailyHtml}
+    </section>`;
+  }
+
+  // ── 最近会话 ──
+  const recent = Array.isArray(u.recent) ? u.recent : [];
+  const recentHtml = `<section class="dashboard-card dashboard-panel span-12">
+    ${title('最近会话')}
+    ${recent.length ? `<div style="display:flex;flex-direction:column;gap:8px">${recent.map((r) => {
+      const modelLabel = formatModelLabel(r.model);
+      const name = (r.name || '').trim() || '(未命名会话)';
+      const mode = (r.mode || '').trim();
+      const rc = Number(r.contextTokens || 0);
+      const ctxLabel = rc > 0 ? ` · ${formatDashboardMetric(rc)} tok` : '';
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid rgba(120,130,150,.14);border-radius:10px">
+        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(name)}</div>
+        <div style="font-size:11.5px;color:var(--muted,#6b7787);margin-top:2px">${modelLabel ? `<span>${esc(modelLabel)}</span> · ` : ''}${mode ? `<span>${esc(mode)}</span> · ` : ''}${esc(String(r.messageCount || 0))} ${esc(appText('条'))}${esc(ctxLabel)} · ${esc(formatRelativeTime(r.lastActiveAt))}</div></div>
+      </div>`;
+    }).join('')}</div>` : `<div class="dashboard-empty-note">${esc(appText('暂无会话'))}</div>`}
+  </section>`;
+
+  root.innerHTML = `
+    <div class="dashboard-shell">
+      <div class="db3-toolbar db3-toolbar--page">
+        <div class="db3-toolbar-status"><span class="dashboard-fetch-state">${esc('Cursor ' + appText('本地估算') + ' · ' + lastUpdated)}</span>${window.__consoleV3.cursorUsageLoading ? `<span class="dashboard-fetch-state" style="opacity:.7">· ${esc(appText('刷新中…'))}</span>` : ''}${accBits.length ? `<span class="dashboard-fetch-state" style="opacity:.75">${accBits.join(' · ')}</span>` : ''}</div>
+        <div class="db3-toolbar-actions">${filterPills}${refreshBtn}</div>
+      </div>
+      <div class="cursor-est-banner">${esc(appText('本地估算 · Cursor 不保存逐条 token/账单，按“每轮重发上下文”累计并按公开定价估算，仅数量级参考，实际以 cursor.com 为准。'))}</div>
+      ${heroHtml}
+      <div class="dashboard-grid dashboard-grid-single" style="margin-top:14px">
+        ${breakdownHtml}
+        ${trendHtml}
+        ${tableHtml}
+        ${codeHtml}
+        ${recentHtml}
+      </div>
+    </div>`;
+
+  root.querySelectorAll('[data-cursor-dd]').forEach((dd) => {
+    const key = dd.getAttribute('data-cursor-dd') === 'days' ? 'days' : 'model';
+    dd.querySelector('[data-cursor-dd-trigger]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !dd.classList.contains('open');
+      root.querySelectorAll('[data-cursor-dd]').forEach((other) => other.classList.remove('open'));
+      if (willOpen) {
+        dd.classList.add('open');
+        setTimeout(() => {
+          const onDoc = (ev) => {
+            if (!dd.contains(ev.target)) {
+              dd.classList.remove('open');
+              document.removeEventListener('click', onDoc);
+            }
+          };
+          document.addEventListener('click', onDoc);
+        }, 0);
+      }
+    });
+    dd.querySelectorAll('[data-cursor-dd-value]').forEach((opt) => {
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const raw = opt.getAttribute('data-cursor-dd-value');
+        state.cursorDash[key] = key === 'days' ? Number(raw) : raw;
+        renderDashboardPage();
+      });
+    });
+  });
+}
+
 function renderDashboardPage() {
   const root = el('dashboardPage');
   if (!root) return;
@@ -10463,6 +10726,10 @@ function renderDashboardPage() {
   const win = getDashboardWindow();
   let dashboardTool = getDashboardToolDef(state.dashboardTool)?.key || 'codex';
   state.dashboardTool = dashboardTool;
+  if (dashboardTool === 'cursor') {
+    renderCursorDashboard(root);
+    return;
+  }
   const dashboardDef = getDashboardToolDef(dashboardTool) || DASHBOARD_USAGE_TOOL_DEFS[0];
   const toolLabel = dashboardDef.label;
   const codexMetricsRaw = getDashboardMetricsForTool('codex', win) || { totals: { input: 0, cachedInput: 0, output: 0, reasoning: 0, total: 0 }, daily: [], providers: [], sessions: [], models: [] };
@@ -11698,6 +11965,10 @@ function renderDashboardStackChart(items = []) {
 
 async function refreshDashboardData({ force = false, silent = false, tool = state.dashboardTool || 'codex' } = {}) {
   tool = getDashboardToolDef(tool)?.key || 'codex';
+  if (isCursorDashboardTool(tool)) {
+    await loadConsoleCursorUsage({ force });
+    return;
+  }
   const isGenericUsage = isGenericUsageDashboardTool(tool);
   if (!isApiDashboardTool(tool) && !isGenericUsage) return;
   const win = getDashboardWindow();
@@ -12416,6 +12687,7 @@ window.__consoleV3 = window.__consoleV3 || {
   procsLoading: {},
   codexStats: null,       // { total, today, week, latestMtime, recent, modelDistribution }
   claudeUsage: null,      // { messagesInWindow, windowFirstMessageAt, recent, ... }
+  cursorUsage: null,      // { account, totals, modelDistribution, recent, ... } 本地 state.vscdb
   // 会话详情展开：哪一行当前展开，以及已 fetch 过的 detail 缓存
   expandedSession: null,  // { tool, sessionId }
   sessionDetails: {},     // { '<tool>:<sessionId>': { loading, error, data } }
@@ -12794,6 +13066,35 @@ async function loadConsoleClaudeUsage() {
   if (state.activePage === 'console' && state.consoleTool === 'claudecode') renderToolConsole();
 }
 
+function rerenderCursorSurfaces() {
+  if (state.activePage === 'console' && state.consoleTool === 'cursor') renderToolConsole();
+  if (state.activePage === 'dashboard' && (state.dashboardTool || '') === 'cursor') renderDashboardPage();
+}
+
+// 持久化在后端 SQLite（~/.codex-config-ui/cache/cursor_usage.db），指纹未变则秒回；
+// 前端只做会话内内存缓存 + stale-while-revalidate，不落 localStorage（与其他工具一致）。
+async function loadConsoleCursorUsage({ silent = false, force = false } = {}) {
+  if (window.__consoleV3.cursorUsageLoading) return;
+  window.__consoleV3.cursorUsageLoading = true;
+  if (!silent) rerenderCursorSurfaces(); // 展示“刷新中”角标（有缓存时不挡内容）
+  try {
+    const url = '/api/cursor/local-usage' + (force ? '?force=1' : '');
+    const res = await api(url, { method: 'GET', timeoutMs: 40000 });
+    if (res?.ok && res.data) {
+      window.__consoleV3.cursorUsage = res.data;
+      window.__consoleV3.cursorUsageSavedAt = Date.now();
+    } else if (!window.__consoleV3.cursorUsage && res?.data) {
+      window.__consoleV3.cursorUsage = res.data;
+    }
+    // 请求失败但已有内存缓存：保留旧数据，不清空
+  } catch (_) {
+    // 保留缓存
+  } finally {
+    window.__consoleV3.cursorUsageLoading = false;
+  }
+  rerenderCursorSurfaces();
+}
+
 async function primeConsoleV3(tool) {
   // Fire in parallel; each updates render-on-arrival.
   if (!window.__appSettings.loaded) loadAppSettings();
@@ -12803,6 +13104,10 @@ async function primeConsoleV3(tool) {
   if (!window.__consoleV3.procsByTool[tool]) loadConsoleProcs(tool);
   if (tool === 'codex' && !window.__consoleV3.codexStats) loadConsoleCodexStats();
   if (tool === 'claudecode' && !window.__consoleV3.claudeUsage) loadConsoleClaudeUsage();
+  if (tool === 'cursor') {
+    if (!window.__consoleV3.cursorUsage) loadConsoleCursorUsage();
+    else if (Date.now() - (window.__consoleV3.cursorUsageSavedAt || 0) > 120000) loadConsoleCursorUsage({ silent: true });
+  }
 }
 
 function invalidateConsoleV3Tool(tool, { usage = true, procs = true } = {}) {
@@ -12811,6 +13116,7 @@ function invalidateConsoleV3Tool(tool, { usage = true, procs = true } = {}) {
   if (!usage) return;
   if (tool === 'codex') window.__consoleV3.codexStats = null;
   if (tool === 'claudecode') window.__consoleV3.claudeUsage = null;
+  if (tool === 'cursor') window.__consoleV3.cursorUsage = null;
 }
 
 function hasEmbeddedTerminalSupport() {
@@ -13726,6 +14032,89 @@ function renderConsoleV3Usage(tool) {
     return;
   }
 
+  if (tool === 'cursor') {
+    const u = window.__consoleV3.cursorUsage;
+    if (!u) {
+      el.innerHTML = `${cv3SectionHead(CV3_ICONS.clock, 'Cursor 本地用量')}<div class="cv3-proc-empty">读取 Cursor state.vscdb 中…</div>`;
+      return;
+    }
+    const refreshBtn = '<button type="button" class="cv3-link-btn" data-console-v3-refresh-usage>刷新</button>';
+    if (u.supported === false || u.status === 'not_found') {
+      el.innerHTML = `${cv3SectionHead(CV3_ICONS.clock, 'Cursor 本地用量', { extras: refreshBtn })}<div class="cv3-proc-empty">${esc(u.message || '未找到 Cursor 本地数据（state.vscdb）。')}</div>`;
+      return;
+    }
+    const t = u.totals || {};
+    const acc = u.account || {};
+    const accBits = [];
+    if (acc.email) accBits.push(esc(acc.email));
+    if (acc.plan) accBits.push(esc(String(acc.plan).toUpperCase()));
+    if (acc.subscriptionStatus) accBits.push(esc(acc.subscriptionStatus));
+    const accLine = accBits.length ? `<div class="cv3-usage-note">账号 · ${accBits.join(' · ')}</div>` : '';
+
+    const dist = Array.isArray(u.modelDistribution) ? u.modelDistribution : [];
+    const distHtml = dist.length ? `
+      <div class="cv3-session-dist">
+        <span class="cv3-session-dist-label">模型分布</span>
+        ${dist.map((d) => `<span class="cv3-session-dist-chip">${esc(formatModelLabel(d.model) || d.model)} <em>${esc(String(d.count))}</em></span>`).join('')}
+      </div>` : '';
+
+    const recent = Array.isArray(u.recent) ? u.recent : [];
+    const recentHtml = recent.length ? `
+      <div class="cv3-session-list">
+        ${recent.map((r) => {
+          const modelLabel = formatModelLabel(r.model);
+          const title = (r.name || '').trim() || '(未命名会话)';
+          const modeLabel = (r.mode || '').trim();
+          const costLabel = (typeof r.costUsd === 'number') ? `$${r.costUsd.toFixed(2)}` : '';
+          return `
+          <div class="cv3-session-row cv3-session-row-static">
+            <div class="cv3-session-row-main">
+              <div class="cv3-session-title">${esc(title)}</div>
+              <div class="cv3-session-meta">
+                ${modelLabel ? `<span class="cv3-session-chip">${esc(modelLabel)}</span>` : ''}
+                ${modeLabel ? `<span class="cv3-session-chip">${esc(modeLabel)}</span>` : ''}
+                <span class="cv3-session-count">${esc(String(r.messageCount || 0))} 条</span>
+                ${costLabel ? `<span class="cv3-session-count">${esc(costLabel)}</span>` : ''}
+                <span class="cv3-session-when">${esc(formatRelativeTime(r.lastActiveAt))}</span>
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : '<div class="cv3-proc-empty">暂无会话</div>';
+
+    const costNote = (t.costRecorded && typeof t.costUsd === 'number')
+      ? `<div class="cv3-usage-note">本地记录花费 $${esc(t.costUsd.toFixed(2))}（Cursor 多数会话不在本地记账，以官网账单为准）。</div>`
+      : '';
+
+    el.innerHTML = `
+      ${cv3SectionHead(CV3_ICONS.clock, 'Cursor 本地用量', { extras: refreshBtn })}
+      ${accLine}
+      <div class="cv3-usage-grid">
+        <div class="cv3-usage-cell">
+          <div class="cv3-usage-label">会话总数</div>
+          <div class="cv3-usage-value">${esc(String(t.sessions || 0))}</div>
+        </div>
+        <div class="cv3-usage-cell">
+          <div class="cv3-usage-label">近 24h</div>
+          <div class="cv3-usage-value">${esc(String(t.today || 0))}</div>
+        </div>
+        <div class="cv3-usage-cell">
+          <div class="cv3-usage-label">近 7 天</div>
+          <div class="cv3-usage-value">${esc(String(t.week || 0))}</div>
+        </div>
+        <div class="cv3-usage-cell">
+          <div class="cv3-usage-label">消息数</div>
+          <div class="cv3-usage-value">${esc(String(t.messages || 0))}</div>
+        </div>
+      </div>
+      ${distHtml}
+      <div class="cv3-session-head">最近会话</div>
+      ${recentHtml}
+      ${costNote}
+      <div class="cv3-usage-note">⚠ 只读解析本机 Cursor state.vscdb，未联网；跨机 / 网页端用量不计入。</div>`;
+    return;
+  }
+
   // Other tools: just hide
   el.innerHTML = '';
 }
@@ -13869,6 +14258,38 @@ function buildConsoleV2Model(tool) {
       issues,
       providers: [],
       canLaunch: installed,
+    };
+  }
+
+  if (tool === 'cursor') {
+    const u = window.__consoleV3.cursorUsage || {};
+    const acc = u.account || {};
+    const totals = u.totals || {};
+    const notFound = u.supported === false || u.status === 'not_found';
+    const email = acc.email || '';
+    const plan = acc.plan || '';
+    const meta = [
+      { label: '账号', value: email || '未检测到登录' },
+      { label: '会员', value: plan ? String(plan).toUpperCase() : '—' },
+      { label: '本地会话', value: notFound ? '—' : String(totals.sessions ?? 0) },
+      { label: '数据源', code: 'globalStorage/state.vscdb' },
+    ];
+    return {
+      tool,
+      toolLabel: 'Cursor',
+      hero: {
+        name: email || 'Cursor（本地）',
+        baseUrl: 'Cursor 本地用量 · 只读解析 state.vscdb',
+        mode: '',
+        model: '',
+        plan: plan || '',
+        healthTxt: notFound ? '无本地数据' : '本地已读',
+        healthCls: notFound ? 'muted' : 'ok',
+      },
+      meta,
+      issues: [],
+      providers: [],
+      canLaunch: false,
     };
   }
 
@@ -16311,9 +16732,9 @@ const ASSET_CENTER_TOOL_DEFS = [
     label: 'Cursor',
     lane: 'Editor',
     group: 'desktop',
-    anchor: '官方下载 / 编辑器入口',
-    support: '只读检测',
-    boundary: '保留官方入口；未确认稳定本地用量结构，不进入数据看板。',
+    anchor: '官方下载 / 本地用量',
+    support: '本地用量',
+    boundary: '保留官方入口；本地只读解析 state.vscdb 的会话/模型/消息用量（不联网、不读账号密钥）。',
     installItemId: 'cursor-ide',
     manualUrl: CURSOR_DOWNLOAD_URL,
     primaryTab: 'import',
@@ -18435,7 +18856,7 @@ const SECONDARY_META = {
   tools:          { sub: '安装、更新或卸载已接入的 AI 编程工具。' },
   tasks:          { sub: '查看当前进行中和历史的安装/更新任务。' },
   about:          { sub: '本地优先、开源透明的 AI 工具配置中心。' },
-  systemSettings: { sub: '界面主题、存储占用与缓存清理。' },
+  systemSettings: { sub: '外观、语言、安装包与存储。' },
 };
 
 function syncSecondaryPanel(page, meta) {
@@ -18487,6 +18908,16 @@ function setPage(page = 'quick') {
   el('themeToggleBtn')?.classList.toggle('hide', page === 'dashboard');
 
   // Render tasks page on navigate
+  if (page === 'terminal') {
+    // 终端页依赖二级栏会话列表，进入时自动展开侧栏
+    document.body.classList.remove('sec-collapsed');
+  } else if (page === 'systemSettings' || page === 'about') {
+    document.body.classList.add('sec-collapsed');
+  } else {
+    try {
+      document.body.classList.toggle('sec-collapsed', localStorage.getItem('ea_sec_collapsed') === '1');
+    } catch (_) {}
+  }
   if (page !== 'dashboard') stopDashboardAutoRefresh();
   if (page !== 'console') disposeEmbeddedTerminalInstance();
   if (page !== 'terminal' && typeof window.disposeTerminalInstances === 'function') {
@@ -18504,6 +18935,20 @@ function setPage(page = 'quick') {
     try {
       if (typeof window.renderTerminalPage === 'function') {
         Promise.resolve(window.renderTerminalPage()).catch(() => {});
+      }
+    } catch (_) {}
+  }
+  if (page === 'remote') {
+    try {
+      window.state = state;
+      window.api = api;
+      window.flash = flash;
+      window.escapeHtml = escapeHtml;
+      window.openExternalUrl = openExternalUrl;
+    } catch (_) {}
+    try {
+      if (typeof window.renderRemotePage === 'function') {
+        Promise.resolve(window.renderRemotePage()).catch(() => {});
       }
     } catch (_) {}
   }
@@ -18644,6 +19089,151 @@ function renderAboutUpdateProgress() {
   meta.textContent = '下载完成，正在安装…';
 }
 
+const APP_DOWNLOAD_BASE = 'https://download.cursorxyz.it.com';
+const APP_UPDATE_FEED_URL = `${APP_DOWNLOAD_BASE}/latest.json`;
+
+function detectDesktopUpdaterPlatform() {
+  const ua = String(navigator.userAgent || '').toLowerCase();
+  const platform = String(navigator.platform || '').toLowerCase();
+  if (platform.includes('mac') || ua.includes('mac os')) {
+    return (ua.includes('arm') || ua.includes('aarch64')) ? 'darwin-aarch64' : 'darwin-x86_64';
+  }
+  if (platform.includes('win') || ua.includes('windows')) return 'windows-x86_64';
+  if (platform.includes('linux') || ua.includes('linux')) return 'linux-x86_64';
+  return '';
+}
+
+function normalizeAppDownloadUrl(url = '') {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host === 'download.betternanobanana.com'
+      || host === 'download.cursorxyz.it.com'
+      || host.endsWith('.r2.cloudflarestorage.com')
+    ) {
+      return `${APP_DOWNLOAD_BASE}${parsed.pathname}${parsed.search}`;
+    }
+  } catch (_) {
+    // fall through
+  }
+  return raw;
+}
+
+function aboutDownloadEntriesFromFeed(feed = {}) {
+  const platforms = feed.platforms && typeof feed.platforms === 'object' ? feed.platforms : {};
+  const current = detectDesktopUpdaterPlatform();
+  const catalog = [
+    { key: 'darwin-aarch64', title: 'macOS Apple Silicon', meta: '更新包 .app.tar.gz' },
+    { key: 'darwin-x86_64', title: 'macOS Intel', meta: '更新包 .app.tar.gz' },
+    { key: 'windows-x86_64', title: 'Windows', meta: '安装器 .exe' },
+    { key: 'linux-x86_64', title: 'Linux', meta: 'AppImage' },
+    { key: 'android-arm64', title: 'Android APK', meta: '手机安装包', altKeys: ['android'] },
+  ];
+  const entries = [];
+  for (const item of catalog) {
+    const keys = [item.key, ...(item.altKeys || [])];
+    let url = '';
+    for (const key of keys) {
+      const hit = platforms[key];
+      if (hit && typeof hit === 'object' && hit.url) {
+        url = normalizeAppDownloadUrl(hit.url);
+        break;
+      }
+    }
+    if (!url) continue;
+    entries.push({
+      ...item,
+      url,
+      current: item.key === current,
+    });
+  }
+  return entries;
+}
+
+function renderAboutDownloadLinks(feed) {
+  const targets = [
+    { box: el('aboutDownloadLinks'), hint: el('aboutDownloadHint') },
+    { box: el('sysDownloadLinks'), hint: el('sysDownloadHint') },
+  ].filter((item) => item.box);
+  if (!targets.length) return;
+
+  const version = String(feed?.version || '').trim();
+  const entries = aboutDownloadEntriesFromFeed(feed || {});
+  const feedCard = `
+    <button type="button" class="about-link-card" data-external-url="${escapeHtml(APP_UPDATE_FEED_URL)}">
+      <span class="about-link-title">更新清单 latest.json</span>
+      <small>桌面端 / APK 下载地址总表</small>
+    </button>`;
+  const emptyHint = '暂未读到安装包清单。可打开 latest.json 查看。';
+  const okHint = version
+    ? `当前分发版本 v${version} · ${APP_DOWNLOAD_BASE}`
+    : `下载源 ${APP_DOWNLOAD_BASE}`;
+  const html = entries.length
+    ? entries.map((item) => `
+    <button type="button" class="about-link-card${item.current ? ' is-current-platform' : ''}" data-external-url="${escapeHtml(item.url)}">
+      <span class="about-link-title">${escapeHtml(item.title)}${item.current ? ' · 本机' : ''}</span>
+      <small>${escapeHtml(version ? `${item.meta} · v${version}` : item.meta)}</small>
+    </button>
+  `).join('') + feedCard
+    : feedCard;
+
+  for (const target of targets) {
+    if (target.hint) target.hint.textContent = entries.length ? okHint : emptyHint;
+    target.box.innerHTML = html;
+    bindAboutDownloadClicks(target.box);
+  }
+}
+
+function bindAboutDownloadClicks(box) {
+  if (!box || box._downloadBound) return;
+  box._downloadBound = true;
+  box.addEventListener('click', (event) => {
+    const card = event.target.closest('[data-external-url]');
+    if (!card) return;
+    event.preventDefault();
+    void openExternalUrl(card.getAttribute('data-external-url') || '');
+  });
+}
+
+async function loadAboutDownloadFeed({ force = false } = {}) {
+  const hints = [el('aboutDownloadHint'), el('sysDownloadHint')].filter(Boolean);
+  if (!force && state.appDownloadFeed) {
+    renderAboutDownloadLinks(state.appDownloadFeed);
+    return state.appDownloadFeed;
+  }
+  hints.forEach((hint) => {
+    hint.textContent = '正在读取更新清单…';
+  });
+  try {
+    const res = await fetch(APP_UPDATE_FEED_URL, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const feed = await res.json();
+    state.appDownloadFeed = feed && typeof feed === 'object' ? feed : {};
+    renderAboutDownloadLinks(state.appDownloadFeed);
+    return state.appDownloadFeed;
+  } catch (error) {
+    const message = `读取失败：${error?.message || error}。可稍后重试或直接打开清单。`;
+    hints.forEach((hint) => {
+      hint.textContent = message;
+    });
+    renderAboutDownloadLinks({});
+    return null;
+  }
+}
+
+function manualAppDownloadUrl() {
+  const feed = state.appDownloadFeed || {};
+  const current = detectDesktopUpdaterPlatform();
+  const platforms = feed.platforms && typeof feed.platforms === 'object' ? feed.platforms : {};
+  const hit = current && platforms[current] && platforms[current].url
+    ? normalizeAppDownloadUrl(platforms[current].url)
+    : '';
+  return hit || APP_UPDATE_FEED_URL;
+}
+
 function populateAboutPanel() {
   const info = state.appUpdate || {};
   const appVersion = info.currentVersion || '1.0.0';
@@ -18666,8 +19256,8 @@ function populateAboutPanel() {
     const errMsg = progress.error || '更新失败';
     const isSigOrNet = /签名|signature|verify|网络|network|dns|timeout|connect/i.test(errMsg);
     if (isSigOrNet) {
-      const repo = info.repository || 'lmk1010/EasyAIConfig';
-      status.innerHTML = `${escapeHtml(errMsg)} <a href="https://github.com/${escapeHtml(repo)}/releases/latest" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;margin-left:6px;white-space:nowrap">手动下载</a>`;
+      const url = escapeHtml(manualAppDownloadUrl());
+      status.innerHTML = `${escapeHtml(errMsg)} <a href="${url}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;margin-left:6px;white-space:nowrap">手动下载</a>`;
     } else {
       status.textContent = errMsg;
     }
@@ -18676,7 +19266,7 @@ function populateAboutPanel() {
     status.textContent = `可更新到 v${info.version || '-'}`;
     status.className = 'about-status about-status-update';
   } else if (info.networkBlocked) {
-    status.textContent = info.statusMessage || '你的网络可能无法访问 GitHub 更新源，暂时无法检查更新。';
+    status.textContent = info.statusMessage || '更新源暂时不可用，可改用下方安装包下载。';
     status.className = 'about-status about-status-error';
   } else if (info.enabled) {
     status.textContent = '已是最新';
@@ -18688,8 +19278,9 @@ function populateAboutPanel() {
   renderAboutUpdateProgress();
   syncAboutUpdateActions();
   el('aboutRepo').textContent = info.repository || '-';
-  el('aboutEndpoint').textContent = info.endpoint || '-';
+  el('aboutEndpoint').textContent = info.endpoint || APP_UPDATE_FEED_URL;
   el('aboutPubkeyStatus').textContent = info.publicKeyConfigured ? '已配置' : '未配置';
+  void loadAboutDownloadFeed();
 }
 
 function setAboutTrustOpen(open = false) {
@@ -18743,8 +19334,6 @@ function renderSystemStorageState() {
     localUsage.textContent = formatBytes(localUsageBytes);
   }
 
-  const localList = el('sysStorageLocalList');
-  const toolsList = el('sysStorageToolsList');
   const localTotal = el('sysStorageLocalTotal');
   const localFiles = el('sysStorageLocalFiles');
   const toolsTotal = el('sysStorageToolsTotal');
@@ -18760,53 +19349,16 @@ function renderSystemStorageState() {
   const toolBytes = toolEntries.reduce((sum, item) => sum + Number(item.bytes || 0), 0);
   const toolFileCount = toolEntries.reduce((sum, item) => sum + Number(item.fileCount || 0), 0);
 
-  if (localTotal) localTotal.textContent = formatBytes(localBytes);
-  if (localFiles) localFiles.textContent = Number(localFileCount).toLocaleString('en-US');
-  if (toolsTotal) toolsTotal.textContent = formatBytes(toolBytes);
-  if (toolsFiles) toolsFiles.textContent = Number(toolFileCount).toLocaleString('en-US');
-
-  if (!localList || !toolsList) return;
-  if (!entries.length) {
-    const text = state.systemStorageLoading ? '读取中...' : '暂未读取存储信息';
-    localList.innerHTML = `
-      <div class="sys-storage-row">
-        <span class="sys-storage-main"><span class="sys-storage-name">${text}</span></span>
-        <strong class="sys-storage-size">-</strong>
-      </div>`;
-    toolsList.innerHTML = `
-      <div class="sys-storage-row">
-        <span class="sys-storage-main"><span class="sys-storage-name">${text}</span></span>
-        <strong class="sys-storage-size">-</strong>
-      </div>`;
-    return;
-  }
-
-  const uiRow = {
-    label: '界面缓存 (localStorage)',
-    path: 'browser://localStorage',
-    bytes: localUsageBytes,
-  };
-  const renderStorageRow = (item = {}) => `
-    <div class="sys-storage-row">
-      <span class="sys-storage-main">
-        <span class="sys-storage-name">${escapeHtml(item.label || item.key || '-')}</span>
-        <code class="sys-storage-path">${escapeHtml(item.path || '-')}</code>
-      </span>
-      <strong class="sys-storage-size">${escapeHtml(formatBytes(item.bytes || 0))}</strong>
-    </div>
-  `;
-
-  localList.innerHTML = [uiRow, ...localEntries].map(renderStorageRow).join('');
-  toolsList.innerHTML = toolEntries.map(renderStorageRow).join('') || `
-    <div class="sys-storage-row">
-      <span class="sys-storage-main"><span class="sys-storage-name">暂无第三方工具数据</span></span>
-      <strong class="sys-storage-size">-</strong>
-    </div>`;
+  if (localTotal) localTotal.textContent = state.systemStorageLoading && !entries.length ? '…' : formatBytes(localBytes);
+  if (localFiles) localFiles.textContent = state.systemStorageLoading && !entries.length ? '-' : Number(localFileCount).toLocaleString('en-US');
+  if (toolsTotal) toolsTotal.textContent = state.systemStorageLoading && !entries.length ? '…' : formatBytes(toolBytes);
+  if (toolsFiles) toolsFiles.textContent = state.systemStorageLoading && !entries.length ? '-' : Number(toolFileCount).toLocaleString('en-US');
 }
 
 function renderSystemSettingsPage() {
   syncSystemThemeButtons();
   renderSystemStorageState();
+  void loadAboutDownloadFeed();
 }
 
 async function openExternalUrl(url) {
@@ -25461,8 +26013,7 @@ async function handleAppUpdate(buttonId = 'appUpdateBtn', { skipConfirm = false 
     populateAboutPanel();
     const isSignatureError = /签名|signature|verify/i.test(errorText);
     const isNetworkError = /网络|network|dns|timeout|timed out|connect|reset|tls|certificate/i.test(errorText);
-    const repo = info.repository || 'lmk1010/EasyAIConfig';
-    const releaseUrl = `https://github.com/${repo}/releases/latest`;
+    const releaseUrl = manualAppDownloadUrl();
     if (isSignatureError || isNetworkError) {
       const hint = isSignatureError
         ? '更新包在下载过程中可能被损坏（网络不稳定），导致签名校验失败。'
@@ -25475,8 +26026,8 @@ async function handleAppUpdate(buttonId = 'appUpdateBtn', { skipConfirm = false 
           <div style="background:var(--bg-inset,rgba(255,255,255,.04));border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.7;color:var(--text-tertiary);word-break:break-all">${escapeHtml(errorText)}</div>
           <div style="display:flex;flex-direction:column;gap:8px">
             <div style="font-weight:600;color:var(--text-primary)">建议操作：</div>
-            <div style="color:var(--text-secondary);line-height:1.6">1. 点击「重试更新」再试一次（有时换个时间段网络会恢复）</div>
-            <div style="color:var(--text-secondary);line-height:1.6">2. 或直接从 GitHub Releases 手动下载最新 .dmg 安装包覆盖安装</div>
+            <div style="color:var(--text-secondary);line-height:1.6">1. 点击「重试更新」再试一次</div>
+            <div style="color:var(--text-secondary);line-height:1.6">2. 或从 R2 手动下载安装包覆盖安装（关于页也有下载入口）</div>
           </div>
         </div>`,
         confirmText: '重试更新',
@@ -37369,6 +37920,11 @@ function bindEvents() {
           try { await refreshDashboardData({ tool }); } catch (_) {}
           state.dashboardLoading = false;
         }
+      } else if (isCursorDashboardTool(tool)) {
+        if (!window.__consoleV3.cursorUsage) {
+          renderDashboardPage();
+          try { await loadConsoleCursorUsage(); } catch (_) {}
+        }
       }
       renderDashboardPage();
     });
@@ -37432,6 +37988,7 @@ function bindEvents() {
         const tool = state.consoleTool || 'codex';
         if (tool === 'claudecode') { window.__consoleV3.claudeUsage = null; loadConsoleClaudeUsage(); }
         else if (tool === 'codex') { window.__consoleV3.codexStats = null; loadConsoleCodexStats(); }
+        else if (tool === 'cursor') { loadConsoleCursorUsage({ force: true }); }
         return;
       }
       if (t.closest('[data-codex-sessions-migrate]')) {
@@ -37964,6 +38521,11 @@ function bindEvents() {
     setBusy('sysRefreshStorageBtn', true, '刷新中...');
     await loadSystemStorageState();
     setBusy('sysRefreshStorageBtn', false);
+  });
+  el('sysRefreshDownloadsBtn')?.addEventListener('click', async () => {
+    setBusy('sysRefreshDownloadsBtn', true, '刷新中...');
+    await loadAboutDownloadFeed({ force: true });
+    setBusy('sysRefreshDownloadsBtn', false);
   });
   el('sysClearCacheBtn')?.addEventListener('click', async () => {
     const confirmed = window.confirm('确认清理应用缓存吗？');
@@ -41527,6 +42089,21 @@ startToolUpdatesTimer();
       loadClaudeCodeOauthProfiles(),
     ]);
   }
+
+  function initSecondaryCollapse() {
+    const KEY = 'ea_sec_collapsed';
+    const apply = (on) => {
+      document.body.classList.toggle('sec-collapsed', !!on);
+      try { localStorage.setItem(KEY, on ? '1' : '0'); } catch (_) {}
+    };
+    try { if (localStorage.getItem(KEY) === '1') apply(true); } catch (_) {}
+    document.getElementById('secondaryCollapseBtn')?.addEventListener('click', () => apply(true));
+    document.getElementById('secondaryExpandBtn')?.addEventListener('click', () => apply(false));
+  }
+
+  // ES modules are deferred: DOM is usually already ready when this runs,
+  // so always init collapse bindings (don't only register on DOMContentLoaded).
+  try { initSecondaryCollapse(); } catch (_) {}
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initialLoad);

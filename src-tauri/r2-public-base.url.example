@@ -1,0 +1,5 @@
+# 把本文件复制为 r2-public-base.url，填入 Cloudflare R2 的公开下载根地址（不要末尾 /）
+# 与 GitHub Actions Secret CF_R2_PUBLIC_BASE_URL 相同，例如：
+# https://download.cursorxyz.it.com
+#
+# 本地 cargo/tauri 构建会把它编译进 EASYAICONFIG_UPDATER_ENDPOINT，优先于 GitHub。

@@ -377,6 +377,8 @@ mod codex;
 mod codex_model_catalog;
 mod codex_oauth_usage;
 mod config;
+mod cursor_usage;
+mod codex_app_server;
 mod network;
 mod oauth_profiles;
 mod processes;
@@ -388,6 +390,7 @@ mod provider_models;
 mod provider_remote_usage;
 mod provider_remote_usage_cache;
 mod provider_router;
+mod remote_server;
 mod routes;
 mod shell_integration;
 mod terminal;
@@ -450,6 +453,12 @@ pub fn run() {
             }
             // 让 terminal 模块拿到 AppHandle 以便 reader 线程 emit 推流事件
             terminal::install(&app.handle());
+            // 手机端远程服务同样需要 AppHandle 来复用 dispatch()
+            remote_server::install(&app.handle());
+            // 若上次开启过远程/隧道，开机自动恢复（token 持久化 → 手机免重配对）
+            std::thread::spawn(remote_server::restore_on_launch);
+            // 常驻会话：重连上次仍在 tmux 里存活的 codex/claude 会话
+            std::thread::spawn(terminal::restore_tmux_sessions);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![backend_request])

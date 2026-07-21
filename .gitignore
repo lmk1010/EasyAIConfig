@@ -24,7 +24,10 @@ src-tauri/WixTools/
 *.secret
 .codex/
 .claude/
+# Optional: copy from r2-public-base.url.example（公开 CDN 根地址，非密钥）
+src-tauri/r2-public-base.url
 
 # Local upstream source drops
 opencode-1.3.0/
 opencode-1.3.0.zip
+codex-rust-v0.143.0/

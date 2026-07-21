@@ -16,7 +16,7 @@
 
 - `CF_R2_BUCKET`：R2 bucket 名称
 - `CF_R2_PUBLIC_BASE_URL`：公开下载地址，不带结尾 `/`
-  - 例：`https://download.example.com/easyaiconfig`
+  - 例：`https://download.cursorxyz.it.com`
 
 ## GitHub Secrets
 
@@ -53,6 +53,33 @@
 
 发布后检查：
 
-- `https://你的域名/latest.json`
-- `latest.json` 里的 `platforms.*.url` 是否也是你的域名
-- 应用内更新检查是否命中 R2 地址
+- `https://download.cursorxyz.it.com/latest.json`
+- `latest.json` 里的 `platforms.*.url` 是否都是该域名
+- `platforms.android-arm64`（APK）是否存在
+- 应用内更新 / 手机设置页「检查更新」是否命中 R2
+
+## GitHub Release 策略
+
+打 `v*` tag 后，Release 流水线会：
+
+1. 构建桌面端（不上传安装包到 GitHub，避免占空间）
+2. 构建 Android APK
+3. 全部同步到 R2，并写 `latest.json`
+4. GitHub Release 只保留说明 + R2 下载链接
+
+请将 Secret `CF_R2_PUBLIC_BASE_URL` 设为：
+
+`https://download.cursorxyz.it.com`
+
+## 本地开发也要走 R2
+
+```bash
+cp src-tauri/r2-public-base.url.example src-tauri/r2-public-base.url
+# 内容：https://download.cursorxyz.it.com
+```
+
+或运行时：
+
+```bash
+echo 'https://download.cursorxyz.it.com' > ~/.codex-config-ui/updater-endpoint
+```

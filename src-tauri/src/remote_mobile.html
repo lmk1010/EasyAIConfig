@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0e14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>EasyAIConfig 远程</title>
+  <link rel="stylesheet" href="/vendor/xterm/xterm.css" />
+  <style>
+    :root { --bg:#0b0e14; --panel:#141a24; --panel2:#1b2331; --line:#242f40; --text:#e6ecf5; --muted:#8a97ab; --accent:#5b8cff; --accent2:#ff8c5a; --ok:#42d392; --off:#e0564f; }
+    * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+    body { display:flex; flex-direction:column; overflow:hidden; padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
+    .topbar { display:flex; align-items:center; gap:8px; padding:10px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+    .brand { font-weight:700; font-size:15px; letter-spacing:.3px; }
+    .brand small { color:var(--muted); font-weight:500; font-size:11px; margin-left:4px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--off); box-shadow:0 0 8px currentColor; color:var(--off); }
+    .dot.on { background:var(--ok); color:var(--ok); }
+    .spacer { flex:1; }
+    .iconbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:9px; padding:7px 11px; font-size:13px; }
+    .sessions { display:flex; gap:8px; padding:10px 12px; overflow-x:auto; background:var(--panel); border-bottom:1px solid var(--line); scrollbar-width:none; }
+    .sessions::-webkit-scrollbar { display:none; }
+    .chip { flex:0 0 auto; display:flex; flex-direction:column; gap:2px; padding:8px 12px; background:var(--panel2); border:1px solid var(--line); border-radius:11px; min-width:112px; }
+    .chip.active { border-color:var(--accent); background:#1a2740; }
+    .chip .t { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; }
+    .chip .s { font-size:11px; color:var(--muted); display:flex; align-items:center; gap:5px; }
+    .chip .s .dt { width:6px; height:6px; border-radius:50%; background:var(--off); }
+    .chip .s .dt.on { background:var(--ok); }
+    #term { flex:1; min-height:0; padding:6px 4px 4px; background:var(--bg); }
+    .xterm { height:100%; }
+    .empty { flex:1; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:14px; text-align:center; padding:24px; }
+    .keys { display:flex; gap:6px; padding:8px 10px; overflow-x:auto; background:var(--panel); border-top:1px solid var(--line); scrollbar-width:none; }
+    .keys::-webkit-scrollbar { display:none; }
+    .key { flex:0 0 auto; background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:9px; padding:9px 12px; font-size:13px; font-weight:600; min-width:46px; }
+    .key.wide { min-width:64px; }
+    .key.accent { border-color:var(--accent); color:#cddcff; }
+    .inputbar { display:flex; gap:8px; padding:10px 12px calc(10px + env(safe-area-inset-bottom)); background:var(--panel); border-top:1px solid var(--line); }
+    .inputbar input { flex:1; background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:11px; padding:12px 14px; font-size:16px; outline:none; }
+    .inputbar input:focus { border-color:var(--accent); }
+    .imgbtn { background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:11px; padding:0 12px; font-size:18px; }
+    .send { background:linear-gradient(135deg,var(--accent),#3a6dff); border:none; color:#fff; font-weight:700; border-radius:11px; padding:0 18px; font-size:15px; }
+    .toast { position:fixed; left:50%; bottom:88px; transform:translateX(-50%); background:#0f1622; border:1px solid var(--line); color:var(--text); padding:9px 16px; border-radius:12px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:50; max-width:86%; }
+    .toast.show { opacity:1; }
+    .gate { position:fixed; inset:0; background:var(--bg); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:28px; text-align:center; z-index:100; }
+    .gate h1 { font-size:19px; margin:0; }
+    .gate p { color:var(--muted); font-size:13px; margin:0; line-height:1.6; }
+    .gate input { width:100%; max-width:320px; background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:11px; padding:12px 14px; font-size:15px; text-align:center; }
+    .gate button { background:linear-gradient(135deg,var(--accent),#3a6dff); border:none; color:#fff; font-weight:700; border-radius:11px; padding:12px 28px; font-size:15px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="dot" id="statusDot"></span>
+    <span class="brand">EasyAIConfig<small id="statusText">连接中…</small></span>
+    <span class="spacer"></span>
+    <button class="iconbtn" id="refreshBtn">刷新</button>
+  </div>
+  <div class="sessions" id="sessions"></div>
+  <div id="term"></div>
+  <div class="empty" id="emptyView" style="display:none">选择上方一个会话查看，或在电脑端新建会话后点「刷新」</div>
+  <div class="keys" id="keys">
+    <button class="key accent" data-send="\r">↵ Enter</button>
+    <button class="key" data-send="y\r">y</button>
+    <button class="key" data-send="n\r">n</button>
+    <button class="key" data-send="\u001b">Esc</button>
+    <button class="key" data-send="\u0003">^C</button>
+    <button class="key" data-send="\u001b[A">↑</button>
+    <button class="key" data-send="\u001b[B">↓</button>
+    <button class="key wide" data-send="\t">Tab</button>
+  </div>
+  <div class="inputbar">
+    <button class="imgbtn" id="imgBtn" title="发送图片">📷</button>
+    <input type="file" id="imgInput" accept="image/*" style="display:none" />
+    <input id="cmdInput" placeholder="输入内容发送到当前会话…" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+    <button class="send" id="sendBtn">发送</button>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <div class="gate" id="gate" style="display:none">
+    <h1>需要配对令牌</h1>
+    <p>请在电脑端「远程访问」页面扫码进入，<br/>或手动粘贴 token 后连接。</p>
+    <input id="gateToken" placeholder="粘贴 token" />
+    <button id="gateBtn">连接</button>
+  </div>
+
+  <script type="module">
+    import { Terminal } from '/vendor/xterm/xterm.mjs';
+    import { FitAddon } from '/vendor/xterm/addon-fit.mjs';
+
+    const qs = new URLSearchParams(location.search);
+    const hash = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    let TOKEN = hash.get('t') || qs.get('token') || localStorage.getItem('ea_remote_token') || '';
+    if (TOKEN) localStorage.setItem('ea_remote_token', TOKEN);
+
+    const $ = (id) => document.getElementById(id);
+    const toast = (msg) => { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 1800); };
+
+    async function api(path, opts = {}) {
+      const headers = Object.assign({ 'x-remote-token': TOKEN }, opts.headers || {});
+      const sep = path.includes('?') ? '&' : '?';
+      const url = path + sep + 'token=' + encodeURIComponent(TOKEN);
+      try {
+        const res = await fetch(url, Object.assign({}, opts, { headers, cache: 'no-store' }));
+        if (res.status === 401) { showGate(); return { ok: false, error: '未授权' }; }
+        return await res.json();
+      } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+    }
+
+    function showGate() {
+      $('gate').style.display = 'flex';
+      $('gateBtn').onclick = () => {
+        const v = $('gateToken').value.trim();
+        if (!v) return;
+        TOKEN = v; localStorage.setItem('ea_remote_token', v);
+        $('gate').style.display = 'none';
+        boot();
+      };
+    }
+
+    // ---- terminal ----
+    let term, fit;
+    const state = { sessions: [], active: '', cursor: 0, poll: 0, es: null, polling: false, lastData: 0 };
+
+    function ensureTerm() {
+      if (term) return;
+      term = new Terminal({
+        cursorBlink: true, fontSize: 13, scrollback: 5000,
+        fontFamily: 'Menlo, Consolas, "PingFang SC", monospace',
+        theme: { background: '#0b0e14', foreground: '#e6ecf5', cursor: '#8dbdff' },
+        allowProposedApi: true,
+      });
+      fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open($('term'));
+      setTimeout(() => doFit(), 60);
+      term.onData((d) => { if (state.active) sendData(d); });
+      window.addEventListener('resize', doFit);
+      window.addEventListener('orientationchange', () => setTimeout(doFit, 200));
+    }
+    function doFit() { try { fit && fit.fit(); if (state.active) notifyResize(); } catch (_) {} }
+
+    async function notifyResize() {
+      if (!term || !state.active) return;
+      await api('/api/terminal/resize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: state.active, cols: term.cols, rows: term.rows }) });
+    }
+
+    async function loadSessions() {
+      const res = await api('/api/terminal/list');
+      if (res && res.ok) {
+        $('statusDot').classList.add('on');
+        $('statusText').textContent = '已连接';
+        state.sessions = (res.data && res.data.rows || []).map((r) => ({
+          id: r.sessionId || r.id, tool: r.tool, title: r.title || r.commandPreview || (r.sessionId || '').slice(0, 8), running: !!r.running,
+        }));
+        renderSessions();
+        if (!state.active && state.sessions[0]) selectSession(state.sessions[0].id);
+        if (!state.sessions.length) { $('emptyView').style.display = 'flex'; $('term').style.display = 'none'; }
+      } else {
+        $('statusDot').classList.remove('on');
+        $('statusText').textContent = '离线';
+      }
+    }
+
+    function renderSessions() {
+      const el = $('sessions');
+      el.innerHTML = state.sessions.map((s) => `
+        <button class="chip ${s.id === state.active ? 'active' : ''}" data-id="${s.id}">
+          <span class="t">${escapeHtml(s.title)}</span>
+          <span class="s"><span class="dt ${s.running ? 'on' : ''}"></span>${s.tool === 'codex' ? 'Codex' : s.tool === 'claudecode' ? 'Claude' : (s.tool || 'shell')}${s.running ? '' : ' · 退出'}</span>
+        </button>`).join('');
+      el.querySelectorAll('[data-id]').forEach((b) => b.onclick = () => selectSession(b.dataset.id));
+    }
+
+    async function selectSession(id) {
+      if (state.active === id) return;
+      state.active = id; state.cursor = 0;
+      $('emptyView').style.display = 'none'; $('term').style.display = 'block';
+      ensureTerm();
+      term.reset();
+      renderSessions();
+      doFit();
+      await pump(true);   // 先回灌历史拿到起始 cursor
+      openStream();       // 再开 SSE 实时流（失败自动回退轮询）
+    }
+
+    // ---- SSE 实时流：EventSource 推送，替代 900ms 轮询；出错则回退轮询 ----
+    function closeStream() {
+      if (state.es) { try { state.es.close(); } catch (_) {} state.es = null; }
+    }
+
+    function openStream() {
+      if (!state.active) return;
+      closeStream();
+      stopPumpPolling();
+      const sid = state.active;
+      const url = `/api/terminal/stream?sessionId=${encodeURIComponent(sid)}&cursor=${state.cursor}&token=${encodeURIComponent(TOKEN)}`;
+      let es;
+      try { es = new EventSource(url); } catch (_) { startPumpPolling(); return; }
+      state.es = es;
+      es.onmessage = (e) => {
+        if (state.active !== sid) return; // 已切换会话，忽略旧流
+        let j; try { j = JSON.parse(e.data); } catch (_) { return; }
+        if (j && typeof j.data === 'string') {
+          term.write(j.data);
+          if (typeof j.cursor === 'number') state.cursor = j.cursor;
+        }
+      };
+      es.addEventListener('exit', () => {
+        const sess = state.sessions.find((s) => s.id === sid);
+        if (sess) { sess.running = false; renderSessions(); }
+        closeStream(); // 会话结束，不再重连
+      });
+      es.onerror = () => {
+        // EventSource 默认会用同一 URL（固定 cursor）自动重连 → 会重复灌历史；
+        // 这里主动关掉它，改用带最新 cursor 的轮询兜底，既不重复也不漏。
+        closeStream();
+        if (state.active === sid) startPumpPolling();
+      };
+    }
+
+    async function pump(reset) {
+      if (!state.active) return;
+      const res = await api(`/api/terminal/read?sessionId=${encodeURIComponent(state.active)}&cursor=${reset ? 0 : state.cursor}`);
+      if (res && res.ok && res.data) {
+        const data = res.data.data || '';
+        if (data) term.write(data);
+        if (typeof res.data.cursor === 'number') state.cursor = res.data.cursor;
+        const sess = state.sessions.find((s) => s.id === state.active);
+        if (sess && res.data.session) { sess.running = !!res.data.session.running; }
+      }
+    }
+
+    async function sendData(d) {
+      await api('/api/terminal/write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: state.active, data: d }) });
+      // 流模式下回显由 SSE 推回；仅轮询兜底时快速回读降低延迟，避免重复写。
+      if (state.polling) setTimeout(() => pump(false), 60);
+    }
+
+    function escapeHtml(v) { return String(v == null ? '' : v).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])); }
+
+    // key bar
+    function decodeSeq(s) {
+      return s.replace(/\\r/g, '\r').replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+              .replace(/\\u001b/g, '\x1b').replace(/\\u0003/g, '\x03');
+    }
+    $('keys').querySelectorAll('[data-send]').forEach((b) => {
+      b.onclick = () => {
+        if (!state.active) { toast('先选择一个会话'); return; }
+        sendData(decodeSeq(b.dataset.send));
+      };
+    });
+
+    // ---- 图片发送：上传到桌面 uploads/，把返回的绝对路径填进输入框 ----
+    $('imgBtn').onclick = () => {
+      if (!state.active) { toast('先选择一个会话'); return; }
+      $('imgInput').click();
+    };
+    $('imgInput').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      if (!state.active) { toast('先选择一个会话'); return; }
+      toast('上传中…');
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result);
+          r.onerror = () => reject(new Error('读取失败'));
+          r.readAsDataURL(file);
+        });
+        const res = await api('/api/terminal/upload', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: file.name, dataBase64: String(dataUrl) }),
+        });
+        if (res && res.ok && res.data && res.data.path) {
+          const inp = $('cmdInput');
+          inp.value = (inp.value ? inp.value + ' ' : '') + res.data.path + ' ';
+          inp.focus();
+          toast('图片已上传，路径已填入');
+        } else {
+          toast('上传失败: ' + ((res && res.error) || '未知'));
+        }
+      } catch (err) {
+        toast('上传失败: ' + ((err && err.message) || err));
+      }
+    });
+
+    $('sendBtn').onclick = submit;
+    $('cmdInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    function submit() {
+      const inp = $('cmdInput');
+      const v = inp.value;
+      if (!state.active) { toast('先选择一个会话'); return; }
+      sendData(v + '\r');
+      inp.value = '';
+    }
+
+    $('refreshBtn').onclick = () => { loadSessions(); if (state.active && state.polling) pump(false); };
+
+    // 900ms 轮询兜底（SSE 不可用时启用）；会话列表刷新常驻。
+    function startPumpPolling() {
+      if (state.polling) return;
+      state.polling = true;
+      if (state.poll) clearInterval(state.poll);
+      state.poll = setInterval(() => { if (state.active) pump(false); }, 900);
+      pump(false);
+    }
+    function stopPumpPolling() {
+      state.polling = false;
+      if (state.poll) { clearInterval(state.poll); state.poll = 0; }
+    }
+    function startSessionRefresh() {
+      setInterval(loadSessions, 5000);
+    }
+
+    async function boot() {
+      if (!TOKEN) { showGate(); return; }
+      await loadSessions();
+      startSessionRefresh();
+      // clean token out of the URL bar (keep in storage)
+      if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    }
+    boot();
+  </script>
+</body>
+</html>

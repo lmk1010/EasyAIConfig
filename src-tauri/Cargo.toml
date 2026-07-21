@@ -1,6 +1,6 @@
 [package]
 name = "easy_ai_config"
-version = "1.0.72"
+version = "1.0.73"
 description = "EasyAIConfig desktop app"
 authors = ["EasyAIConfig Contributors"]
 license = "MIT"
@@ -15,7 +15,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.5.6", features = [] }
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+local-ip-address = "0.6"
 dirs = "6"
 log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "socks"] }
@@ -25,7 +27,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 portable-pty = "0.8"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 uuid = { version = "1", features = ["v4"] }
+vt100 = "0.15"
 tauri = { version = "2.10.3", features = ["macos-private-api", "tray-icon", "image-png"] }
 tokio = { version = "1", features = ["rt"] }
 tauri-plugin-dialog = "2"
