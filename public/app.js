@@ -36894,6 +36894,10 @@ function bindEvents() {
       flash(info.statusMessage || '你的网络可能无法访问 GitHub 更新源，暂时无法检查更新。', 'error');
       return;
     }
+    if (info.error) {
+      flash(info.statusMessage || info.error || '检查更新失败', 'error');
+      return;
+    }
     if (info.available) {
       return handleAppUpdate();
     }
