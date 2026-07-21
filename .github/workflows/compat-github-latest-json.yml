@@ -30,12 +30,46 @@ jobs:
           print('platforms:', ', '.join((data.get('platforms') or {}).keys()))
           PY
 
-      - name: Upload to latest GitHub Release
+      - name: Resolve latest release
+        id: rel
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
-          echo "target release: $tag"
-          gh release upload "$tag" latest.json --clobber
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" > /tmp/release.json
+          tag="$(python3 -c 'import json;print(json.load(open("/tmp/release.json"))["tag_name"])')"
+          rid="$(python3 -c 'import json;print(json.load(open("/tmp/release.json"))["id"])')"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_id=$rid" >> "$GITHUB_OUTPUT"
+          echo "target release: $tag ($rid)"
+
+      - name: Replace latest.json asset on GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.rel.outputs.release_id }}
+          RELEASE_TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # 删掉旧的同名资产，避免 422 already_exists
+          mapfile -t old_ids < <(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" \
+              --jq '.[] | select(.name=="latest.json") | .id' || true
+          )
+          for asset_id in "${old_ids[@]:-}"; do
+            [ -n "${asset_id}" ] || continue
+            echo "delete asset $asset_id"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+          done
+
+          upload_url="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --jq .upload_url | sed 's/{?name,label}//')"
+          echo "upload_url=$upload_url"
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "${upload_url}?name=latest.json"
+
           echo "uploaded: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json"
+          curl -fsSIL "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/latest.json" | head -n 15
