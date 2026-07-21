@@ -59,12 +59,13 @@ jobs:
             const body = [
               `## EasyAIConfig ${tag}`,
               '',
-              '> 安装包与更新源托管在 Cloudflare R2（GitHub Release 仅保留说明，不占仓库空间）。',
+              '> 安装包托管在 Cloudflare R2；GitHub Release 额外上传 `latest.json`，兼容只查 GitHub 的旧版客户端。',
               '',
-              '### 📦 下载（R2）',
+              '### 📦 下载',
               `| 平台 | 链接 |`,
               `|------|------|`,
-              `| 更新清单 | ${base}/latest.json |`,
+              `| 更新清单（R2） | ${base}/latest.json |`,
+              `| 更新清单（GitHub 兼容） | https://github.com/${context.repo.owner}/${context.repo.repo}/releases/latest/download/latest.json |`,
               `| Android APK | ${base}/EasyAIConfig_${ver}.apk |`,
               `| macOS Apple Silicon | 见 latest.json → darwin-aarch64 |`,
               `| macOS Intel | 见 latest.json → darwin-x86_64 |`,
@@ -454,6 +455,19 @@ jobs:
             --content-type 'application/json'
           echo "R2 updater endpoint: ${base}/latest.json"
           echo "APK: ${base}/EasyAIConfig_${RELEASE_TAG#v}.apk"
+
+      - name: Upload latest.json to GitHub Release (compat old clients)
+        if: steps.r2.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/r2/latest.json
+          # 旧版客户端（如 1.0.68）只查 GitHub releases/latest/download/latest.json
+          # 这里只挂清单（几 KB），安装包 URL 仍指向 R2，不占仓库空间
+          gh release upload "${RELEASE_TAG}" dist/r2/latest.json --clobber
+          echo "GitHub updater endpoint: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json"
 
   publish-release:
     permissions:

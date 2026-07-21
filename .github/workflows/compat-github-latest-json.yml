@@ -1,0 +1,41 @@
+name: Compat GitHub latest.json
+
+# 旧版客户端只查 GitHub releases/latest/download/latest.json。
+# 本工作流把 R2 上的清单同步挂到最新 GitHub Release（几 KB，安装包仍走 R2）。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compat-github-latest-json.yml'
+      - '.github/workflows/release.yml'
+
+env:
+  R2_LATEST_URL: https://download.cursorxyz.it.com/latest.json
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch latest.json from R2
+        run: |
+          set -euo pipefail
+          curl -fsSL "$R2_LATEST_URL" -o latest.json
+          python3 - <<'PY'
+          import json
+          data = json.load(open('latest.json', encoding='utf-8'))
+          print('version:', data.get('version'))
+          print('platforms:', ', '.join((data.get('platforms') or {}).keys()))
+          PY
+
+      - name: Upload to latest GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          echo "target release: $tag"
+          gh release upload "$tag" latest.json --clobber
+          echo "uploaded: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json"
