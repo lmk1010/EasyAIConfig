@@ -868,16 +868,8 @@ function renderTermSidebar() {
     // Shell / 自定义：终端图标
     return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>';
   };
-<<<<<<< HEAD
   const toolLabel = (tool) => tool === 'codex' ? 'Codex' : (tool === 'claudecode' || tool === 'claude') ? 'Claude Code' : (tool || 'Shell');
-=======
-  const toolLabel = (tool) => {
-    if (tool === 'codex') return 'Codex';
-    if (tool === 'claudecode') return 'Claude Code';
-    return tool || 'Shell';
-  };
   const viewHint = (s) => (s.kind === 'agent' || s.view === 'timeline') ? ' · timeline' : '';
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   // 顶部的 "+ 新建会话" 卡片永远在
   const newSessionRow = `
     <button type="button" class="sec-item sec-item-new" data-eat-launcher-toggle title="新建会话 (⌘T)">
@@ -917,14 +909,13 @@ function renderTermSidebar() {
     const metaText = metaParts.join(' · ');
     const toolTip = `${toolLabel(s.tool)} · ${sessTitle}`;
     return `
-<<<<<<< HEAD
       <div class="sec-item sec-item-session ${isActive ? 'active' : ''}" style="${toolAccent(s.tool)}">
         <button type="button" class="sec-main" data-eat-sec-tab="${esc(s.id)}" title="切换到 ${esc(toolTip)} · 双击标题可重命名">
           <span class="sec-ico ${brand ? 'sec-ico-brand' : ''}" title="${esc(toolLabel(s.tool))}">${toolIcon(s.tool)}</span>
           <span class="sec-text">
             <span class="sec-name" data-eat-sec-name="${esc(s.id)}">${esc(sessTitle)}</span>
             <span class="sec-meta">
-              <span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>${metaText ? `<span class="sec-meta-dim">${esc(metaText)}</span>` : ''}${flagsHtml(s)}
+              <span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>${metaText ? `<span class="sec-meta-dim">${esc(metaText)}</span>` : ''}${flagsHtml(s)}${viewHint(s) ? `<span class="sec-flag sec-flag-timeline" title="Agent Timeline 视图">Timeline</span>` : ''}
             </span>
           </span>
         </button>
@@ -977,17 +968,6 @@ function renderTermSidebar() {
         <div class="sec-group-label sec-group-label--time">${esc(g.label)}<span class="sec-group-count">${g.items.length}</span></div>
         ${g.items.map(renderRow).join('')}
       `).join('');
-=======
-      <button type="button" class="sec-item ${isActive ? 'active' : ''}" data-eat-sec-tab="${esc(s.id)}" style="${toolAccent(s.tool)}">
-        <span class="sec-ico">${toolIcon(s.tool)}</span>
-        <span class="sec-text">
-          <span class="sec-name">${esc(s.title || s.command || s.id.slice(0,8))}</span>
-          <span class="sec-subtitle"><span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>${esc(toolLabel(s.tool))}${viewHint(s)}${s.running ? '' : ' · 已退出'}</span>
-        </span>
-        <span class="sec-chev" aria-hidden="true">›</span>
-      </button>`;
-  }).join('');
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   listEl.innerHTML = newSessionRow + sessionRows;
   // 状态栏的实时用量也同步刷新
   renderTermStatus();
@@ -1225,15 +1205,14 @@ export async function renderTerminalPage() {
             `}
             <button type="button" class="ea-term-ghost-btn-secondary" data-eat-forget="${escapeHtml(activeSess.id)}">忘掉这个会话</button>
           </div>
-<<<<<<< HEAD
         ` : activeSess?.bridge ? `
           <div class="ea-term-bridge-panel" style="position:relative;top:auto;left:auto;right:auto;margin:24px 16px;pointer-events:auto;">
             <strong>快速通道会话</strong>
             <span>此会话走 app-server（手机 Timeline）。桌面内置终端不能挂载其 TUI，请在手机 App 里查看与操作。</span>
             <em>通道：快速 · app-server</em>
           </div>
-        ` : `<div class="ea-term-host" id="eaTermHost"></div>`)}
-        ${!showLauncher && !showGhost && !activeSess?.bridge && activeSess?.bootPhase === 'starting' ? `
+        ` : (isAgentView ? renderAgentTimeline(tp, activeSess) : `<div class="ea-term-host" id="eaTermHost"></div>`))}
+        ${!showLauncher && !showGhost && !activeSess?.bridge && !isAgentView && activeSess?.bootPhase === 'starting' ? `
           <div class="ea-term-boot-banner" role="status">
             <strong>模型加载中</strong>
             <span>Codex 正在完成 SessionConfigured（TUI 会显示 model: loading）。就绪前首句可能进排队，请稍候。</span>
@@ -1241,25 +1220,16 @@ export async function renderTerminalPage() {
           </div>
         ` : ''}
         ${renderStatusBar(tp)}
-=======
-        ` : (isAgentView ? renderAgentTimeline(tp, activeSess) : `<div class="ea-term-host" id="eaTermHost"></div>`))}
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
       </div>
     </div>
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
   `;
 
   bindEvents(host);
-<<<<<<< HEAD
   bindStatusChipInteractions(host);
-  // ghost / launcher / bridge 时不挂 xterm
+  // ghost / launcher / bridge / agent timeline 时不挂 xterm
   const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
-  if (active && !active._ghost && !active.bridge && !tp.launcherOpen) {
-=======
-  // ghost / launcher / agent timeline 时不挂 xterm
-  const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
-  if (active && !active._ghost && !tp.launcherOpen && !(active.kind === 'agent' || active.view === 'timeline')) {
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
+  if (active && !active._ghost && !active.bridge && !tp.launcherOpen && !(active.kind === 'agent' || active.view === 'timeline')) {
     mountTerminal(active.id);
   }
   if (active && (active.kind === 'agent' || active.view === 'timeline') && !active._ghost && !tp.launcherOpen) {
@@ -1868,16 +1838,13 @@ function normalizeSession(s) {
     persistent: Boolean(s.persistent),
     running: Boolean(s.running),
     exitCode: s.exitCode ?? null,
-<<<<<<< HEAD
     bridge: Boolean(s.bridge),
-=======
     kind: s.kind || (s.view === 'timeline' ? 'agent' : 'pty'),
     view: s.view || (s.kind === 'agent' ? 'timeline' : 'raw'),
     model: s.model || '',
     permissionMode: s.permissionMode || '',
     claudeSessionId: s.claudeSessionId || '',
     eventCount: s.eventCount || 0,
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   };
 }
 
@@ -1975,7 +1942,6 @@ function onClick(e) {
   const t = e.target;
   if (!(t instanceof Element)) return;
   const tp = getState().terminalPage;
-<<<<<<< HEAD
   if (t.closest('[data-eat-status-close]')) {
     setStatusMenuOpen(false);
     return;
@@ -1994,7 +1960,6 @@ function onClick(e) {
     renderTerminalPage();
     return;
   }
-=======
 
   // Agent timeline interactions
   const agentSend = t.closest('[data-eat-agent-send]');
@@ -2038,7 +2003,6 @@ function onClick(e) {
     return;
   }
 
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   if (t.closest('[data-eat-spawn]')) { spawnSession(); return; }
   if (t.closest('[data-eat-tab-new]')) {
     tp.launcherOpen = !tp.launcherOpen;
@@ -2480,54 +2444,13 @@ async function spawnSession() {
   args.push(...rawFlags);
   const title = `${bin}${args.length ? ' ' + args[0] : ''}`;
   const commandPreview = [bin, ...args].join(' ');
-<<<<<<< HEAD
-  const spawnSize = measureTerminalSpawnSize();
-  tp.starting = true;
-  renderTerminalPage();
-  try {
-    // 后端期望 program + args，不是 command 数组
-    const res = await api('/api/terminal/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        tool: tp.launcher.tool,
-        program: bin,
-        args,
-        cwd: tp.launcher.cwd || '',
-        env: officialEnv || undefined,
-        title,
-        commandPreview,
-        cols: spawnSize.cols,
-        rows: spawnSize.rows,
-      }),
-    });
-    if (res?.ok && res.data?.terminalSession) {
-      const session = normalizeSession(res.data.terminalSession);
-      // 记下原始 spawn 参数 — 给 [重启] 用
-      session.program = bin;
-      session.args = args;
-      session.tool = tp.launcher.tool;
-      session.cwd = tp.launcher.cwd || session.cwd || '';
-      if (isCodex) session.bootPhase = 'starting';
-      // 记下本次 provider — 状态栏展示 + 语义化
-      session.providerKey = (!isOfficial && tp.launcher.providerKey && !tp.launcher.providerKey.startsWith('__')) ? tp.launcher.providerKey : '';
-      session.providerName = isOfficial ? '官方登录' : (selectedProvider?.name || '');
-      tp.sessions.unshift(session);
-      tp.activeSessionId = session.id;
-      tp.launcherOpen = false; // 启动后自动收 popover
-      persistOneSession(session);
-      // 记住「该项目目录 → 该 provider」，下次同目录启动自动预选（勾选时才写）
-      if (tp.launcher.rememberBinding && !isOfficial && tp.launcher.providerKey && !tp.launcher.providerKey.startsWith('__')) {
-        rememberProjectBinding(tp.launcher.cwd, tp.launcher.tool, tp.launcher.providerKey);
-      }
-      flash(`已启动 ${bin}`, 'success');
-=======
   const useAgentTimeline = !isCodex && (tp.launcher.viewMode || 'timeline') === 'timeline';
   if (useAgentTimeline && (tp.launcher.permissionMode || '') === 'bypassPermissions') {
     if (!window.confirm('bypassPermissions 会跳过全部权限检查，等同高危模式。确认继续？')) {
       return;
     }
   }
+  const spawnSize = measureTerminalSpawnSize();
   tp.starting = true;
   renderTerminalPage();
   try {
@@ -2567,7 +2490,6 @@ async function spawnSession() {
       } else {
         flash(`启动失败: ${res?.error || '未知'}`, 'error');
       }
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
     } else {
       // 后端期望 program + args，不是 command 数组
       const res = await api('/api/terminal/create', {
@@ -2581,8 +2503,8 @@ async function spawnSession() {
           env: officialEnv || undefined,
           title,
           commandPreview,
-          cols: 120,
-          rows: 32,
+          cols: spawnSize.cols,
+          rows: spawnSize.rows,
         }),
       });
       if (res?.ok && res.data?.terminalSession) {
@@ -2594,10 +2516,18 @@ async function spawnSession() {
         session.cwd = tp.launcher.cwd || session.cwd || '';
         session.kind = 'pty';
         session.view = 'raw';
+        if (isCodex) session.bootPhase = 'starting';
+        // 记下本次 provider — 状态栏展示 + 语义化
+        session.providerKey = (!isOfficial && tp.launcher.providerKey && !tp.launcher.providerKey.startsWith('__')) ? tp.launcher.providerKey : '';
+        session.providerName = isOfficial ? '官方登录' : (selectedProvider?.name || '');
         tp.sessions.unshift(session);
         tp.activeSessionId = session.id;
         tp.launcherOpen = false; // 启动后自动收 popover
         persistOneSession(session);
+        // 记住「该项目目录 → 该 provider」，下次同目录启动自动预选（勾选时才写）
+        if (tp.launcher.rememberBinding && !isOfficial && tp.launcher.providerKey && !tp.launcher.providerKey.startsWith('__')) {
+          rememberProjectBinding(tp.launcher.cwd, tp.launcher.tool, tp.launcher.providerKey);
+        }
         flash(`已启动 ${bin}`, 'success');
       } else {
         flash(`启动失败: ${res?.error || '未知'}`, 'error');
@@ -2702,32 +2632,8 @@ async function restartGhostSession(sessionId) {
   if (!ghost) return;
   const bin = ghost.program || (ghost.tool === 'codex' ? 'codex' : ghost.tool === 'claudecode' ? 'claude' : 'codex');
   const args = Array.isArray(ghost.args) ? ghost.args : [];
-<<<<<<< HEAD
   const spawnSize = measureTerminalSpawnSize();
   // 直接调 spawn 接口（绕过 launcher 表单）
-  try {
-    const res = await api('/api/terminal/create', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        tool: ghost.tool, program: bin, args,
-        cwd: ghost.cwd || '', title: ghost.title || bin,
-        commandPreview: ghost.command || [bin, ...args].join(' '),
-        cols: spawnSize.cols, rows: spawnSize.rows,
-      }),
-    });
-    if (res?.ok && res.data?.terminalSession) {
-      const fresh = normalizeSession(res.data.terminalSession);
-      fresh.program = bin; fresh.args = args; fresh.tool = ghost.tool; fresh.cwd = ghost.cwd;
-      // 替换 ghost
-      const idx = tp.sessions.findIndex((s) => s.id === sessionId);
-      if (idx >= 0) tp.sessions[idx] = fresh;
-      else tp.sessions.unshift(fresh);
-      tp.activeSessionId = fresh.id;
-      // SQLite 里把旧 ghost id 删了再写新 id（活的 session id 跟着）
-      forgetPersistedSession(sessionId);
-      persistOneSession(fresh);
-      flash('已重启会话', 'success');
-=======
   try {
     if (ghost.kind === 'agent' || ghost.view === 'timeline') {
       const res = await api('/api/agent/create', {
@@ -2765,7 +2671,6 @@ async function restartGhostSession(sessionId) {
       } else {
         flash(`重启失败: ${res?.error || '未知'}`, 'error');
       }
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
     } else {
       const res = await api('/api/terminal/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2773,7 +2678,7 @@ async function restartGhostSession(sessionId) {
           tool: ghost.tool, program: bin, args,
           cwd: ghost.cwd || '', title: ghost.title || bin,
           commandPreview: ghost.command || [bin, ...args].join(' '),
-          cols: 120, rows: 32,
+          cols: spawnSize.cols, rows: spawnSize.rows,
         }),
       });
       if (res?.ok && res.data?.terminalSession) {
@@ -2917,14 +2822,6 @@ async function closeSession(sessionId) {
   const tp = getState().terminalPage;
   const sess = tp.sessions.find((s) => s.id === sessionId);
   try {
-<<<<<<< HEAD
-    await api('/api/terminal/close', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // remove:true → 同时从 Rust session map 删除，避免已关闭会话堆积泄漏
-      body: JSON.stringify({ sessionId, remove: true }),
-    });
-=======
     if (sess && (sess.kind === 'agent' || sess.view === 'timeline')) {
       await api('/api/agent/close', {
         method: 'POST',
@@ -2935,10 +2832,10 @@ async function closeSession(sessionId) {
       await api('/api/terminal/close', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId }),
+        // remove:true → 同时从 Rust session map 删除，避免已关闭会话堆积泄漏
+        body: JSON.stringify({ sessionId, remove: true }),
       });
     }
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   } catch (_) {}
   // 拆 instance
   const inst = tp.instances[sessionId];

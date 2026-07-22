@@ -37507,7 +37507,6 @@ button#modelRefreshBtn {
   padding-right: 28px !important;
 }
 
-<<<<<<< HEAD
 .shell-v2 .ch-so-body .model-fetch-hint {
   margin-top: 7px;
   color: var(--s2-muted);
@@ -47057,7 +47056,7 @@ body[data-page="systemSettings"] .shell-v2 .workspace {
 [data-theme="light"] .about-link-title {
   color: #0f172a !important;
 }
-=======
+
 
 /* ─── Claude Agent Timeline (ea-agent-*) ─────────────────────────── */
 .shell-v2 .ea-agent-shell {
@@ -47315,4 +47314,3 @@ body[data-page="systemSettings"] .shell-v2 .workspace {
 .shell-v2 .ea-agent-send:hover:not(:disabled) {
   filter: brightness(1.06);
 }
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)

@@ -41,6 +41,7 @@ const REMOTE_API_ALLOW: &[&str] = &[
     "/api/terminal/stream",
     "/api/codex/",
     "/api/claude/",
+    "/api/agent/",
     "/api/state",
     "/api/sessions/inventory",
     "/api/claudecode/state",

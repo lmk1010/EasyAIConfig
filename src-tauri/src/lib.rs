@@ -420,7 +420,6 @@ fn emit_asset_deep_link_opened(app: &tauri::AppHandle, urls: Vec<String>, source
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-<<<<<<< HEAD
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -456,6 +455,8 @@ pub fn run() {
             }
             // 让 terminal 模块拿到 AppHandle 以便 reader 线程 emit 推流事件
             terminal::install(&app.handle());
+            // Timeline / agent 会话模块同样需要 AppHandle 推流
+            agent_session::install(&app.handle());
             // 手机端远程服务同样需要 AppHandle 来复用 dispatch()
             remote_server::install(&app.handle());
             // 若上次开启过远程/隧道，开机自动恢复（token 持久化 → 手机免重配对）
@@ -467,22 +468,4 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![backend_request])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-=======
-  tauri::Builder::default()
-    .plugin(tauri_plugin_dialog::init())
-    .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
-    .plugin(tauri_plugin_updater::Builder::new().build())
-    .setup(|app| {
-      if let Err(err) = tray::install(&app.handle()) {
-        log::warn!("tray install failed: {err}");
-      }
-      // 让 terminal / agent_session 模块拿到 AppHandle 以便 reader 线程 emit 推流事件
-      terminal::install(&app.handle());
-      agent_session::install(&app.handle());
-      Ok(())
-    })
-    .invoke_handler(tauri::generate_handler![backend_request])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
->>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
 }
