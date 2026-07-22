@@ -12877,7 +12877,7 @@ async function loadConsoleProcs(tool) {
 }
 
 // 会话详情：从 detail map 里拿出当前会话的状态，render 折叠面板。
-// Codex 有 /api/codex/session-detail 真接口；Claude 暂无后端，渲染已知字段。
+// Codex: /api/codex/session-detail；Claude Agent: /api/agent/transcript（有则显示事件流）。
 function renderSessionDetailPanel(tool, sessionId, fallbackRow = null) {
   const key = `${tool}:${sessionId}`;
   const entry = window.__consoleV3.sessionDetails[key] || {};
@@ -12885,7 +12885,7 @@ function renderSessionDetailPanel(tool, sessionId, fallbackRow = null) {
   if (entry.loading) {
     return `<div class="cv3-session-detail"><div class="cv3-session-detail-loading">读取会话内容…</div></div>`;
   }
-  if (entry.error) {
+  if (entry.error && tool === 'codex') {
     return `<div class="cv3-session-detail"><div class="cv3-session-detail-error">读取失败：${esc(entry.error)}</div></div>`;
   }
   const data = entry.data;
@@ -12895,6 +12895,29 @@ function renderSessionDetailPanel(tool, sessionId, fallbackRow = null) {
   if (tool === 'claudecode') {
     const r = fallbackRow || {};
     const projDisplay = r.project ? String(r.project).replace(/^-+/, '').replace(/-+/g, '/') : '';
+    const agentEvents = Array.isArray(data?.events) ? data.events : [];
+    const recent = agentEvents.slice(-20).reverse();
+    const eventsHtml = recent.length ? recent.map((env) => {
+      const type = String(env.type || '').trim();
+      const payload = env.payload || {};
+      let preview = '';
+      if (type === 'timeline.item') preview = `${payload.role || ''}: ${payload.text || ''}`;
+      else if (type === 'tool') preview = `${payload.phase || ''} ${payload.summary || payload.name || ''}`;
+      else if (type === 'permission') preview = `permission ${payload.toolName || ''} ${payload.status || 'pending'}`;
+      else if (type === 'status') preview = `${payload.state || ''}${payload.subtype ? ' · ' + payload.subtype : ''}`;
+      else if (type === 'mode') preview = `MODE → ${payload.permissionMode || ''}`;
+      else preview = type;
+      preview = String(preview || '').trim().slice(0, 240);
+      return `
+        <div class="cv3-session-event">
+          <div class="cv3-session-event-meta">
+            <span>#${esc(String(env.seq || ''))}</span>
+            <span>${esc(type)}</span>
+            ${env.ts ? `<span>${esc(formatRelativeTime(new Date(env.ts).toISOString()))}</span>` : ''}
+          </div>
+          ${preview ? `<div class="cv3-session-event-body">${esc(preview)}</div>` : ''}
+        </div>`;
+    }).join('') : '';
     return `
       <div class="cv3-session-detail">
         <div class="cv3-session-detail-grid">
@@ -12904,11 +12927,18 @@ function renderSessionDetailPanel(tool, sessionId, fallbackRow = null) {
           ${r.startedAt ? `<div class="cv3-session-detail-row"><span>起始</span><code>${esc(formatRelativeTime(r.startedAt))}</code></div>` : ''}
           ${r.lastActiveAt ? `<div class="cv3-session-detail-row"><span>最近</span><code>${esc(formatRelativeTime(r.lastActiveAt))}</code></div>` : ''}
           ${r.path ? `<div class="cv3-session-detail-row"><span>文件</span><code class="cv3-session-detail-path">${esc(r.path)}</code></div>` : ''}
+          ${data?.source ? `<div class="cv3-session-detail-row"><span>来源</span><code>${esc(data.source)}</code></div>` : ''}
         </div>
         <div class="cv3-session-detail-firstmsg">
           <span class="cv3-session-detail-firstmsg-label">首句</span>
           <p>${esc((r.firstMessage || '').trim() || '（无用户消息）')}</p>
         </div>
+        ${eventsHtml ? `
+          <div class="cv3-session-detail-events">
+            <div class="cv3-session-detail-events-head">Agent 事件（最近 ${recent.length} 条，倒序）</div>
+            ${eventsHtml}
+          </div>
+        ` : (entry.error ? `<div class="cv3-session-detail-empty">暂无 Agent transcript（${esc(entry.error)}）</div>` : '')}
       </div>`;
   }
   // Codex
@@ -12946,6 +12976,29 @@ function renderSessionDetailPanel(tool, sessionId, fallbackRow = null) {
         ${eventsHtml}
       </div>
     </div>`;
+}
+
+async function fetchClaudeAgentTranscript(sessionId) {
+  const key = `claudecode:${sessionId}`;
+  window.__consoleV3.sessionDetails[key] = { loading: true };
+  if (state.activePage === 'console') renderToolConsole();
+  try {
+    const res = await api(`/api/agent/transcript?sessionId=${encodeURIComponent(sessionId)}`);
+    if (res?.ok && res.data) {
+      window.__consoleV3.sessionDetails[key] = { loading: false, data: res.data };
+    } else {
+      window.__consoleV3.sessionDetails[key] = {
+        loading: false,
+        error: res?.error || '暂无 Agent transcript（仅 Timeline 会话会落盘）',
+      };
+    }
+  } catch (error) {
+    window.__consoleV3.sessionDetails[key] = {
+      loading: false,
+      error: error?.message || String(error),
+    };
+  }
+  if (state.activePage === 'console') renderToolConsole();
 }
 
 async function fetchCodexSessionDetail(sessionId, filePath) {
@@ -38077,6 +38130,12 @@ function bindEvents() {
           const cacheKey = `codex:${sessionId}`;
           if (!window.__consoleV3.sessionDetails[cacheKey]?.data) {
             fetchCodexSessionDetail(sessionId, filePath);
+          }
+        }
+        if (!isSame && rowTool === 'claudecode') {
+          const cacheKey = `claudecode:${sessionId}`;
+          if (!window.__consoleV3.sessionDetails[cacheKey]?.data) {
+            fetchClaudeAgentTranscript(sessionId);
           }
         }
         renderToolConsole();

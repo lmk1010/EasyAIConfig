@@ -265,8 +265,456 @@ async function installTermEventListeners() {
       inst.term.write(`\r\n\x1b[31m[已退出${exitCode != null ? ` · code ${exitCode}` : ''}]\x1b[0m\r\n`);
     }
   });
+  await listen('agent-event', (event) => {
+    applyAgentEnvelope(event.payload || {});
+  });
 }
 installTermEventListeners().catch(() => {});
+
+// ─── Agent Timeline (Claude stream-json) ─────────────────────────────
+
+const PERM_MODE_LABELS = {
+  manual: 'manual',
+  acceptEdits: 'acceptEdits',
+  auto: 'auto',
+  plan: 'plan',
+  dontAsk: 'dontAsk',
+  bypassPermissions: 'bypass',
+};
+
+function ensureAgentFields(sess) {
+  if (!sess) return sess;
+  if (!Array.isArray(sess.timeline)) sess.timeline = [];
+  if (!Array.isArray(sess.pendingPermissions)) sess.pendingPermissions = [];
+  if (typeof sess.streamingText !== 'string') sess.streamingText = '';
+  if (typeof sess.agentCursor !== 'number') sess.agentCursor = 0;
+  return sess;
+}
+
+function applyAgentEnvelope(env) {
+  if (!env || !env.sessionId) return;
+  const tp = getState()?.terminalPage;
+  if (!tp) {
+    window.__eaPendingAgentEvents = window.__eaPendingAgentEvents || [];
+    window.__eaPendingAgentEvents.push(env);
+    return;
+  }
+  let sess = tp.sessions.find((s) => s.id === env.sessionId);
+  if (!sess) {
+    window.__eaPendingAgentEvents = window.__eaPendingAgentEvents || [];
+    window.__eaPendingAgentEvents.push(env);
+    return;
+  }
+  ensureAgentFields(sess);
+  const typ = env.type || '';
+  const p = env.payload || {};
+  if (typeof env.seq === 'number' && env.seq > (sess.agentCursor || 0)) {
+    sess.agentCursor = env.seq;
+  }
+  if (typ === 'timeline.item') {
+    // 结束流式缓冲
+    if (sess.streamingText && p.role === 'assistant') {
+      sess.timeline.push({ kind: 'text', role: 'assistant', text: sess.streamingText, ts: env.ts });
+      sess.streamingText = '';
+    }
+    // 避免 local user 与 replay 双写：若最后一条同 role+text 则跳过
+    const last = sess.timeline[sess.timeline.length - 1];
+    if (!(last && last.kind === 'text' && last.role === p.role && last.text === p.text && p.local)) {
+      if (!(p.local && last && last.kind === 'text' && last.role === 'user' && last.text === p.text)) {
+        sess.timeline.push({
+          kind: 'text',
+          role: p.role || 'assistant',
+          text: p.text || '',
+          ts: env.ts,
+          local: !!p.local,
+        });
+      }
+    }
+  } else if (typ === 'timeline.delta') {
+    sess.streamingText = (sess.streamingText || '') + (p.text || '');
+  } else if (typ === 'tool') {
+    if (p.phase === 'start') {
+      sess.timeline.push({
+        kind: 'tool',
+        phase: 'start',
+        name: p.name || 'Tool',
+        summary: p.summary || p.name || 'Tool',
+        toolUseId: p.toolUseId || '',
+        input: p.input || {},
+        ts: env.ts,
+        expanded: false,
+      });
+    } else if (p.phase === 'result') {
+      // 挂到对应 tool start
+      const item = [...sess.timeline].reverse().find(
+        (it) => it.kind === 'tool' && it.phase === 'start' && (!p.toolUseId || it.toolUseId === p.toolUseId),
+      );
+      if (item) {
+        item.phase = 'done';
+        item.preview = p.preview || '';
+        item.isError = !!p.isError;
+      } else {
+        sess.timeline.push({
+          kind: 'tool',
+          phase: 'done',
+          name: 'Tool',
+          summary: p.preview || 'tool result',
+          preview: p.preview || '',
+          isError: !!p.isError,
+          ts: env.ts,
+        });
+      }
+    }
+  } else if (typ === 'permission') {
+    if (p.resolved) {
+      sess.pendingPermissions = (sess.pendingPermissions || []).filter(
+        (x) => x.requestId !== p.requestId,
+      );
+      sess.timeline.push({
+        kind: 'permission_resolved',
+        requestId: p.requestId,
+        status: p.status,
+        ts: env.ts,
+      });
+    } else {
+      const exists = (sess.pendingPermissions || []).some((x) => x.requestId === p.requestId);
+      if (!exists) {
+        sess.pendingPermissions.push({
+          requestId: p.requestId,
+          toolName: p.toolName,
+          summary: p.summary,
+          input: p.input,
+          toolUseId: p.toolUseId,
+        });
+      }
+      sess.timeline.push({
+        kind: 'permission',
+        requestId: p.requestId,
+        toolName: p.toolName,
+        summary: p.summary,
+        ts: env.ts,
+      });
+    }
+  } else if (typ === 'mode') {
+    if (p.permissionMode) sess.permissionMode = p.permissionMode;
+    sess.timeline.push({
+      kind: 'mode',
+      permissionMode: p.permissionMode,
+      source: p.source,
+      ts: env.ts,
+    });
+  } else if (typ === 'status') {
+    if (p.state === 'exited' || p.state === 'closed') {
+      sess.running = false;
+      if (p.exitCode != null) sess.exitCode = p.exitCode;
+    }
+    if (p.state === 'completed' || p.state === 'error' || p.state === 'system' || p.state === 'started' || p.state === 'interrupt_requested' || p.state === 'exited' || p.state === 'closed') {
+      sess.timeline.push({
+        kind: 'status',
+        state: p.state,
+        subtype: p.subtype || '',
+        message: p.message || p.result || '',
+        ts: env.ts,
+      });
+    }
+    // flush streaming on turn end
+    if (p.state === 'completed' || p.state === 'error') {
+      if (sess.streamingText) {
+        sess.timeline.push({ kind: 'text', role: 'assistant', text: sess.streamingText, ts: env.ts });
+        sess.streamingText = '';
+      }
+    }
+  } else if (typ === 'usage') {
+    // Anthropic usage shape varies; map loosely
+    const input = Number(p.input_tokens || p.input || 0);
+    const output = Number(p.output_tokens || p.output || 0);
+    const cacheRead = Number(p.cache_read_input_tokens || p.cached || 0);
+    sess.tokens = {
+      input,
+      cached: cacheRead,
+      output,
+      reasoning: 0,
+      total: input + output,
+      contextWindow: Number(p.contextWindow || sess.tokens?.contextWindow || 0),
+    };
+  } else if (typ === 'raw') {
+    // keep quiet unless debugging
+  }
+
+  // 节流 UI 刷新
+  if (!sess._agentRaf) {
+    sess._agentRaf = requestAnimationFrame(() => {
+      sess._agentRaf = 0;
+      if (getState()?.activePage === 'terminal' && tp.activeSessionId === sess.id && !tp.launcherOpen) {
+        refreshAgentTimelineDom(sess);
+      }
+      renderTermStatus();
+      renderTermSidebar();
+    });
+  }
+}
+
+function renderAgentTimeline(tp, sess) {
+  ensureAgentFields(sess);
+  const esc = escapeHtml;
+  const mode = sess.permissionMode || 'manual';
+  const modes = ['manual', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'];
+  const modeBtns = modes.map((m) =>
+    `<button type="button" class="ea-agent-mode-btn ${m === mode ? 'is-on' : ''}" data-eat-agent-mode="${esc(m)}" ${!sess.running ? 'disabled' : ''}>${esc(PERM_MODE_LABELS[m] || m)}</button>`,
+  ).join('');
+
+  const pending = (sess.pendingPermissions || []).map((perm) => `
+    <div class="ea-agent-perm" data-request-id="${esc(perm.requestId)}">
+      <div class="ea-agent-perm-head">
+        <strong>权限请求</strong>
+        <code>${esc(perm.toolName || 'Tool')}</code>
+      </div>
+      <div class="ea-agent-perm-summary">${esc(perm.summary || '')}</div>
+      <div class="ea-agent-perm-actions">
+        <button type="button" class="ea-agent-perm-allow" data-eat-agent-perm="allow" data-request-id="${esc(perm.requestId)}">允许</button>
+        <button type="button" class="ea-agent-perm-deny" data-eat-agent-perm="deny" data-request-id="${esc(perm.requestId)}">拒绝</button>
+      </div>
+    </div>
+  `).join('');
+
+  const items = (sess.timeline || []).map((it, idx) => renderTimelineItem(it, idx)).join('');
+  const streaming = sess.streamingText
+    ? `<div class="ea-agent-item ea-agent-item-assistant ea-agent-streaming">
+        <div class="ea-agent-item-meta">assistant · streaming</div>
+        <div class="ea-agent-item-body">${esc(sess.streamingText)}</div>
+      </div>`
+    : '';
+
+  return `
+    <div class="ea-agent-shell" data-session-id="${esc(sess.id)}">
+      <div class="ea-agent-toolbar">
+        <div class="ea-agent-modes" title="Permission MODE（热切换尽力而为）">${modeBtns}</div>
+        <div class="ea-agent-toolbar-actions">
+          <button type="button" class="ea-term-mini-btn" data-eat-agent-interrupt ${!sess.running ? 'disabled' : ''} title="中断当前回合">中断</button>
+        </div>
+      </div>
+      ${pending ? `<div class="ea-agent-perms">${pending}</div>` : ''}
+      <div class="ea-agent-timeline" id="eaAgentTimeline">
+        ${items || '<div class="ea-agent-empty">发送一条消息开始 · Claude stream-json 事件将显示在这里</div>'}
+        ${streaming}
+      </div>
+      <div class="ea-agent-composer">
+        <textarea class="ea-agent-input" id="eaAgentInput" rows="2" placeholder="${sess.running ? '输入消息，Enter 发送 · Shift+Enter 换行' : '会话已结束'}" ${!sess.running ? 'disabled' : ''}></textarea>
+        <button type="button" class="ea-agent-send" data-eat-agent-send ${!sess.running ? 'disabled' : ''}>发送</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderTimelineItem(it, idx) {
+  const esc = escapeHtml;
+  if (!it) return '';
+  if (it.kind === 'text') {
+    const role = it.role || 'assistant';
+    return `
+      <div class="ea-agent-item ea-agent-item-${esc(role)}" data-idx="${idx}">
+        <div class="ea-agent-item-meta">${esc(role)}</div>
+        <div class="ea-agent-item-body">${esc(it.text || '')}</div>
+      </div>`;
+  }
+  if (it.kind === 'tool') {
+    const open = it.expanded ? 'is-open' : '';
+    return `
+      <div class="ea-agent-item ea-agent-item-tool ${it.isError ? 'is-error' : ''} ${open}" data-idx="${idx}">
+        <button type="button" class="ea-agent-tool-head" data-eat-agent-tool-toggle="${idx}">
+          <span class="ea-agent-tool-dot"></span>
+          <span class="ea-agent-tool-summary">${esc(it.summary || it.name || 'Tool')}</span>
+          <span class="ea-agent-tool-phase">${esc(it.phase === 'done' ? (it.isError ? 'error' : 'done') : 'running')}</span>
+        </button>
+        ${it.expanded ? `<pre class="ea-agent-tool-body">${esc(JSON.stringify(it.input || {}, null, 2))}${it.preview ? `\n---\n${esc(it.preview)}` : ''}</pre>` : ''}
+      </div>`;
+  }
+  if (it.kind === 'permission') {
+    return `
+      <div class="ea-agent-item ea-agent-item-perm" data-idx="${idx}">
+        <div class="ea-agent-item-meta">permission · pending</div>
+        <div class="ea-agent-item-body">${esc(it.toolName || '')} · ${esc(it.summary || '')}</div>
+      </div>`;
+  }
+  if (it.kind === 'permission_resolved') {
+    return `
+      <div class="ea-agent-item ea-agent-item-perm-done" data-idx="${idx}">
+        <div class="ea-agent-item-meta">permission · ${esc(it.status || '')}</div>
+      </div>`;
+  }
+  if (it.kind === 'mode') {
+    return `
+      <div class="ea-agent-item ea-agent-item-status" data-idx="${idx}">
+        <div class="ea-agent-item-meta">MODE → ${esc(it.permissionMode || '')}</div>
+      </div>`;
+  }
+  if (it.kind === 'status') {
+    return `
+      <div class="ea-agent-item ea-agent-item-status" data-idx="${idx}">
+        <div class="ea-agent-item-meta">${esc(it.state || 'status')}${it.subtype ? ' · ' + esc(it.subtype) : ''}</div>
+        ${it.message ? `<div class="ea-agent-item-body muted">${esc(typeof it.message === 'string' ? it.message : JSON.stringify(it.message))}</div>` : ''}
+      </div>`;
+  }
+  return '';
+}
+
+function refreshAgentTimelineDom(sess) {
+  const root = document.getElementById('eaAgentTimeline');
+  if (!root) return;
+  ensureAgentFields(sess);
+  const items = (sess.timeline || []).map((it, idx) => renderTimelineItem(it, idx)).join('');
+  const streaming = sess.streamingText
+    ? `<div class="ea-agent-item ea-agent-item-assistant ea-agent-streaming">
+        <div class="ea-agent-item-meta">assistant · streaming</div>
+        <div class="ea-agent-item-body">${escapeHtml(sess.streamingText)}</div>
+      </div>`
+    : '';
+  const atBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 80;
+  root.innerHTML = (items || '<div class="ea-agent-empty">发送一条消息开始 · Claude stream-json 事件将显示在这里</div>') + streaming;
+  if (atBottom) root.scrollTop = root.scrollHeight;
+  // 刷新权限条
+  const shell = root.closest('.ea-agent-shell');
+  if (shell) {
+    let permsEl = shell.querySelector('.ea-agent-perms');
+    const pendingHtml = (sess.pendingPermissions || []).map((perm) => `
+      <div class="ea-agent-perm" data-request-id="${escapeHtml(perm.requestId)}">
+        <div class="ea-agent-perm-head">
+          <strong>权限请求</strong>
+          <code>${escapeHtml(perm.toolName || 'Tool')}</code>
+        </div>
+        <div class="ea-agent-perm-summary">${escapeHtml(perm.summary || '')}</div>
+        <div class="ea-agent-perm-actions">
+          <button type="button" class="ea-agent-perm-allow" data-eat-agent-perm="allow" data-request-id="${escapeHtml(perm.requestId)}">允许</button>
+          <button type="button" class="ea-agent-perm-deny" data-eat-agent-perm="deny" data-request-id="${escapeHtml(perm.requestId)}">拒绝</button>
+        </div>
+      </div>
+    `).join('');
+    if (pendingHtml) {
+      if (!permsEl) {
+        permsEl = document.createElement('div');
+        permsEl.className = 'ea-agent-perms';
+        root.parentElement.insertBefore(permsEl, root);
+      }
+      permsEl.innerHTML = pendingHtml;
+    } else if (permsEl) {
+      permsEl.remove();
+    }
+  }
+}
+
+async function mountAgentSession(sessionId) {
+  const tp = getState()?.terminalPage;
+  if (!tp) return;
+  const sess = tp.sessions.find((s) => s.id === sessionId);
+  if (!sess) return;
+  ensureAgentFields(sess);
+  // 回放 backlog
+  try {
+    const res = await api(`/api/agent/read?sessionId=${encodeURIComponent(sessionId)}&cursor=0`);
+    const events = res?.ok && Array.isArray(res.data?.events)
+      ? res.data.events
+      : (Array.isArray(res?.events) ? res.events : []);
+    // 重建 timeline（避免重复 push：清空后重放）
+    if (events.length && (sess.timeline.length === 0 || events.length > sess.agentCursor)) {
+      sess.timeline = [];
+      sess.pendingPermissions = [];
+      sess.streamingText = '';
+      for (const env of events) applyAgentEnvelope(env);
+    }
+    if (res?.data?.session) {
+      Object.assign(sess, {
+        running: res.data.session.running,
+        permissionMode: res.data.session.permissionMode || sess.permissionMode,
+        claudeSessionId: res.data.session.claudeSessionId || sess.claudeSessionId,
+      });
+    }
+  } catch (_) {}
+  // 消费 pending 队列
+  const pending = window.__eaPendingAgentEvents || [];
+  if (pending.length) {
+    window.__eaPendingAgentEvents = pending.filter((e) => {
+      if (e.sessionId === sessionId) {
+        applyAgentEnvelope(e);
+        return false;
+      }
+      return true;
+    });
+  }
+  refreshAgentTimelineDom(sess);
+  const input = document.getElementById('eaAgentInput');
+  if (input) {
+    try { input.focus(); } catch (_) {}
+  }
+}
+
+async function agentSendPrompt(sessionId, text) {
+  const tp = getState()?.terminalPage;
+  const sess = tp?.sessions.find((s) => s.id === sessionId);
+  if (!sess || !text.trim()) return;
+  ensureAgentFields(sess);
+  try {
+    const res = await api('/api/agent/prompt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, text: text.trim() }),
+    });
+    if (!res?.ok) {
+      flash(`发送失败: ${res?.error || '未知'}`, 'error');
+    }
+  } catch (err) {
+    flash(`发送异常: ${err.message || err}`, 'error');
+  }
+}
+
+async function agentRespondPermission(sessionId, requestId, behavior) {
+  try {
+    const res = await api('/api/agent/permission', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, requestId, behavior }),
+    });
+    if (!res?.ok) flash(`权限响应失败: ${res?.error || '未知'}`, 'error');
+  } catch (err) {
+    flash(`权限响应异常: ${err.message || err}`, 'error');
+  }
+}
+
+async function agentSetMode(sessionId, permissionMode) {
+  if (permissionMode === 'bypassPermissions') {
+    if (!window.confirm('切换到 bypassPermissions 将跳过权限检查，确认？')) return;
+  }
+  try {
+    const res = await api('/api/agent/set-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, permissionMode }),
+    });
+    if (!res?.ok) flash(`MODE 切换失败: ${res?.error || '未知'}`, 'error');
+    else {
+      const tp = getState()?.terminalPage;
+      const sess = tp?.sessions.find((s) => s.id === sessionId);
+      if (sess) sess.permissionMode = permissionMode;
+      flash(`MODE → ${permissionMode}`, 'success');
+      renderTerminalPage();
+    }
+  } catch (err) {
+    flash(`MODE 异常: ${err.message || err}`, 'error');
+  }
+}
+
+async function agentInterrupt(sessionId) {
+  try {
+    await api('/api/agent/interrupt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+    flash('已请求中断', 'info');
+  } catch (err) {
+    flash(`中断失败: ${err.message || err}`, 'error');
+  }
+}
+
 function api(path, opts) { return window.api(path, opts); }
 function flash(msg, type) { return typeof window.flash === 'function' ? window.flash(msg, type) : console.log(`[flash:${type || ''}] ${msg}`); }
 function escapeHtml(v) { return typeof window.escapeHtml === 'function' ? window.escapeHtml(v) : String(v ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c] || c)); }
@@ -420,7 +868,16 @@ function renderTermSidebar() {
     // Shell / 自定义：终端图标
     return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>';
   };
+<<<<<<< HEAD
   const toolLabel = (tool) => tool === 'codex' ? 'Codex' : (tool === 'claudecode' || tool === 'claude') ? 'Claude Code' : (tool || 'Shell');
+=======
+  const toolLabel = (tool) => {
+    if (tool === 'codex') return 'Codex';
+    if (tool === 'claudecode') return 'Claude Code';
+    return tool || 'Shell';
+  };
+  const viewHint = (s) => (s.kind === 'agent' || s.view === 'timeline') ? ' · timeline' : '';
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   // 顶部的 "+ 新建会话" 卡片永远在
   const newSessionRow = `
     <button type="button" class="sec-item sec-item-new" data-eat-launcher-toggle title="新建会话 (⌘T)">
@@ -460,6 +917,7 @@ function renderTermSidebar() {
     const metaText = metaParts.join(' · ');
     const toolTip = `${toolLabel(s.tool)} · ${sessTitle}`;
     return `
+<<<<<<< HEAD
       <div class="sec-item sec-item-session ${isActive ? 'active' : ''}" style="${toolAccent(s.tool)}">
         <button type="button" class="sec-main" data-eat-sec-tab="${esc(s.id)}" title="切换到 ${esc(toolTip)} · 双击标题可重命名">
           <span class="sec-ico ${brand ? 'sec-ico-brand' : ''}" title="${esc(toolLabel(s.tool))}">${toolIcon(s.tool)}</span>
@@ -519,6 +977,17 @@ function renderTermSidebar() {
         <div class="sec-group-label sec-group-label--time">${esc(g.label)}<span class="sec-group-count">${g.items.length}</span></div>
         ${g.items.map(renderRow).join('')}
       `).join('');
+=======
+      <button type="button" class="sec-item ${isActive ? 'active' : ''}" data-eat-sec-tab="${esc(s.id)}" style="${toolAccent(s.tool)}">
+        <span class="sec-ico">${toolIcon(s.tool)}</span>
+        <span class="sec-text">
+          <span class="sec-name">${esc(s.title || s.command || s.id.slice(0,8))}</span>
+          <span class="sec-subtitle"><span class="ea-term-sec-dot ${s.running ? 'is-on' : 'is-off'}"></span>${esc(toolLabel(s.tool))}${viewHint(s)}${s.running ? '' : ' · 已退出'}</span>
+        </span>
+        <span class="sec-chev" aria-hidden="true">›</span>
+      </button>`;
+  }).join('');
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   listEl.innerHTML = newSessionRow + sessionRows;
   // 状态栏的实时用量也同步刷新
   renderTermStatus();
@@ -561,6 +1030,9 @@ export function initTerminalPageState() {
       reasoningEffort: '',          // codex: '' | minimal | low | medium | high | xhigh | max | ultra
       profile: '',                  // codex 可空：--profile
       sandbox: 'bypass',            // bypass | workspace-write | read-only | none
+      // Claude: timeline = stream-json Agent Session；raw = 交互式 TUI PTY
+      viewMode: 'timeline',
+      permissionMode: 'manual',    // manual | acceptEdits | auto | plan | dontAsk | bypassPermissions
       flags: '',                    // 额外参数
       moreOpen: false,
       rememberBinding: lsGet(LS.rememberBinding, '1') !== '0', // 记住「项目→provider」默认（可取消）
@@ -656,6 +1128,28 @@ export async function renderTerminalPage() {
           tp.sessions.push(row);
         }
       }
+      // 合并活着的 Agent Session（stream-json）
+      try {
+        const ares = await api('/api/agent/list');
+        const arows = ares?.ok && Array.isArray(ares.data?.rows)
+          ? ares.data.rows
+          : (Array.isArray(ares?.rows) ? ares.rows : []);
+        for (const raw of arows) {
+          const row = normalizeSession(raw);
+          row.kind = 'agent';
+          row.view = 'timeline';
+          liveIds.add(row.id);
+          const existing = tp.sessions.find((s) => s.id === row.id);
+          if (existing) Object.assign(existing, row, { _ghost: false });
+          else {
+            row.timeline = [];
+            row.pendingPermissions = [];
+            row.streamingText = '';
+            row.agentCursor = 0;
+            tp.sessions.push(row);
+          }
+        }
+      } catch (_) {}
       // 不在 live 里的标 ghost（上次的会话，PTY 已死，需要重启）
       for (const s of tp.sessions) {
         if (!liveIds.has(s.id)) { s.running = false; s._ghost = true; }
@@ -678,10 +1172,11 @@ export async function renderTerminalPage() {
     tp.launcher.providerKey = active?.key || allProviders[0]?.key || '';
   }
 
-  // canvas 三态：launcher 表单 / ghost 会话提示 / 活动 xterm
+  // canvas 三态：launcher 表单 / ghost 会话提示 / 活动 xterm 或 agent timeline
   const activeSess = tp.sessions.find((s) => s.id === tp.activeSessionId);
   const showLauncher = !!tp.launcherOpen;
   const showGhost = !showLauncher && activeSess?._ghost;
+  const isAgentView = !showLauncher && !showGhost && activeSess && (activeSess.kind === 'agent' || activeSess.view === 'timeline');
   // launcher 打开 + codex + official → 异步拉账号列表（30s 缓存自动）
   if (showLauncher && tp.launcher.tool === 'codex' && tp.launcher.source === 'official') {
     loadOfficialProfiles();
@@ -717,6 +1212,7 @@ export async function renderTerminalPage() {
               <code>${escapeHtml(activeSess.command || activeSess.title || activeSess.program || 'codex')}</code><br>
               <span class="muted">cwd: ${escapeHtml(activeSess.cwd || '~')}</span>
               ${activeSess.codexSessionId ? `<br><span class="muted">codex session: ${escapeHtml(activeSess.codexSessionId.slice(0, 8))}…</span>` : ''}
+              ${activeSess.claudeSessionId ? `<br><span class="muted">claude session: ${escapeHtml(String(activeSess.claudeSessionId).slice(0, 8))}…</span>` : ''}
             </div>
             ${activeSess.tool === 'codex' && activeSess.codexSessionId ? `
               <button type="button" class="ea-term-ghost-btn" data-eat-resume="${escapeHtml(activeSess.id)}" title="codex resume — 继承上次完整上下文">▶ 接着上次对话继续</button>
@@ -729,6 +1225,7 @@ export async function renderTerminalPage() {
             `}
             <button type="button" class="ea-term-ghost-btn-secondary" data-eat-forget="${escapeHtml(activeSess.id)}">忘掉这个会话</button>
           </div>
+<<<<<<< HEAD
         ` : activeSess?.bridge ? `
           <div class="ea-term-bridge-panel" style="position:relative;top:auto;left:auto;right:auto;margin:24px 16px;pointer-events:auto;">
             <strong>快速通道会话</strong>
@@ -744,17 +1241,29 @@ export async function renderTerminalPage() {
           </div>
         ` : ''}
         ${renderStatusBar(tp)}
+=======
+        ` : (isAgentView ? renderAgentTimeline(tp, activeSess) : `<div class="ea-term-host" id="eaTermHost"></div>`))}
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
       </div>
     </div>
     ${tp.paletteOpen ? renderPalette(tp, allProviders) : ''}
   `;
 
   bindEvents(host);
+<<<<<<< HEAD
   bindStatusChipInteractions(host);
   // ghost / launcher / bridge 时不挂 xterm
   const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
   if (active && !active._ghost && !active.bridge && !tp.launcherOpen) {
+=======
+  // ghost / launcher / agent timeline 时不挂 xterm
+  const active = tp.sessions.find((s) => s.id === tp.activeSessionId);
+  if (active && !active._ghost && !tp.launcherOpen && !(active.kind === 'agent' || active.view === 'timeline')) {
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
     mountTerminal(active.id);
+  }
+  if (active && (active.kind === 'agent' || active.view === 'timeline') && !active._ghost && !tp.launcherOpen) {
+    mountAgentSession(active.id);
   }
   renderTermSidebar();
 }
@@ -1056,7 +1565,26 @@ function renderLauncherPage(tp, providers) {
                 sandboxOpts.map(([v, lab]) => ({ value: v, label: lab })),
                 tp.launcher.sandbox)}
             </div>
-          ` : ''}
+          ` : `
+            <div class="ea-term-launch-row">
+              <label class="ea-term-launch-lab">视图</label>
+              <div class="ea-term-launch-seg">
+                <button type="button" class="${(tp.launcher.viewMode || 'timeline') === 'timeline' ? 'is-on' : ''}" data-eat-launch-set="viewMode" data-value="timeline" title="stream-json 事件时间线（推荐）">Timeline</button>
+                <button type="button" class="${tp.launcher.viewMode === 'raw' ? 'is-on' : ''}" data-eat-launch-set="viewMode" data-value="raw" title="完整 Ink TUI 终端">Raw TUI</button>
+              </div>
+            </div>
+            <div class="ea-term-launch-row">
+              <label class="ea-term-launch-lab">权限 MODE</label>
+              ${renderLaunchSelect('permissionMode', [
+                { value: 'manual', label: 'manual · 每次确认' },
+                { value: 'acceptEdits', label: 'acceptEdits · 自动接受编辑' },
+                { value: 'auto', label: 'auto · 自动' },
+                { value: 'plan', label: 'plan · 仅规划' },
+                { value: 'dontAsk', label: 'dontAsk · 不问' },
+                { value: 'bypassPermissions', label: 'bypass · 跳过全部（危险）' },
+              ], tp.launcher.permissionMode || 'manual')}
+            </div>
+          `}
           <button type="button" class="ea-term-launch-more" data-eat-launch-more aria-expanded="${tp.launcher.moreOpen ? 'true' : 'false'}">
             <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="${tp.launcher.moreOpen ? 'is-open' : ''}"><path d="M4 6l4 4 4-4"/></svg>
             <span>更多参数</span>
@@ -1077,7 +1605,11 @@ function renderLauncherPage(tp, providers) {
           ` : ''}
         </div>
         <div class="ea-term-launch-foot">
-          <span class="ea-term-launch-hint">${isCodex ? 'codex' : 'claude'} 将在选定目录启动并接管终端</span>
+          <span class="ea-term-launch-hint">${isCodex
+            ? 'codex 将在选定目录启动并接管终端'
+            : ((tp.launcher.viewMode || 'timeline') === 'timeline'
+              ? 'Claude Timeline：stream-json 事件流 · 工具卡片 · 权限/MODE'
+              : 'Claude Raw TUI：完整交互式终端')}</span>
           <button type="button" class="ea-term-launch-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
             ${tp.starting ? '启动中…' : '启动'}
           </button>
@@ -1336,7 +1868,16 @@ function normalizeSession(s) {
     persistent: Boolean(s.persistent),
     running: Boolean(s.running),
     exitCode: s.exitCode ?? null,
+<<<<<<< HEAD
     bridge: Boolean(s.bridge),
+=======
+    kind: s.kind || (s.view === 'timeline' ? 'agent' : 'pty'),
+    view: s.view || (s.kind === 'agent' ? 'timeline' : 'raw'),
+    model: s.model || '',
+    permissionMode: s.permissionMode || '',
+    claudeSessionId: s.claudeSessionId || '',
+    eventCount: s.eventCount || 0,
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   };
 }
 
@@ -1434,6 +1975,7 @@ function onClick(e) {
   const t = e.target;
   if (!(t instanceof Element)) return;
   const tp = getState().terminalPage;
+<<<<<<< HEAD
   if (t.closest('[data-eat-status-close]')) {
     setStatusMenuOpen(false);
     return;
@@ -1452,6 +1994,51 @@ function onClick(e) {
     renderTerminalPage();
     return;
   }
+=======
+
+  // Agent timeline interactions
+  const agentSend = t.closest('[data-eat-agent-send]');
+  if (agentSend) {
+    const sess = tp.sessions.find((s) => s.id === tp.activeSessionId);
+    const input = document.getElementById('eaAgentInput');
+    if (sess && input) {
+      const text = input.value;
+      input.value = '';
+      agentSendPrompt(sess.id, text);
+    }
+    return;
+  }
+  const agentPerm = t.closest('[data-eat-agent-perm]');
+  if (agentPerm) {
+    const behavior = agentPerm.dataset.eatAgentPerm;
+    const requestId = agentPerm.dataset.requestId;
+    if (tp.activeSessionId && requestId) {
+      agentRespondPermission(tp.activeSessionId, requestId, behavior);
+    }
+    return;
+  }
+  const agentMode = t.closest('[data-eat-agent-mode]');
+  if (agentMode) {
+    const mode = agentMode.dataset.eatAgentMode;
+    if (tp.activeSessionId && mode) agentSetMode(tp.activeSessionId, mode);
+    return;
+  }
+  if (t.closest('[data-eat-agent-interrupt]')) {
+    if (tp.activeSessionId) agentInterrupt(tp.activeSessionId);
+    return;
+  }
+  const toolToggle = t.closest('[data-eat-agent-tool-toggle]');
+  if (toolToggle) {
+    const idx = Number(toolToggle.dataset.eatAgentToolToggle);
+    const sess = tp.sessions.find((s) => s.id === tp.activeSessionId);
+    if (sess?.timeline?.[idx]) {
+      sess.timeline[idx].expanded = !sess.timeline[idx].expanded;
+      refreshAgentTimelineDom(sess);
+    }
+    return;
+  }
+
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   if (t.closest('[data-eat-spawn]')) { spawnSession(); return; }
   if (t.closest('[data-eat-tab-new]')) {
     tp.launcherOpen = !tp.launcherOpen;
@@ -1614,6 +2201,15 @@ function onGlobalKey(e) {
     if (st.terminalPage.paletteOpen) { st.terminalPage.paletteOpen = false; renderTerminalPage(); return; }
     if (st.terminalPage.launcherOpen) { st.terminalPage.launcherOpen = false; renderTerminalPage(); return; }
     closeSearch();
+  }
+  // Agent composer: Enter 发送，Shift+Enter 换行
+  if (e.key === 'Enter' && !e.shiftKey && e.target instanceof HTMLTextAreaElement && e.target.id === 'eaAgentInput') {
+    e.preventDefault();
+    const text = e.target.value;
+    e.target.value = '';
+    if (st.terminalPage.activeSessionId) {
+      agentSendPrompt(st.terminalPage.activeSessionId, text);
+    }
   }
 }
 
@@ -1884,6 +2480,7 @@ async function spawnSession() {
   args.push(...rawFlags);
   const title = `${bin}${args.length ? ' ' + args[0] : ''}`;
   const commandPreview = [bin, ...args].join(' ');
+<<<<<<< HEAD
   const spawnSize = measureTerminalSpawnSize();
   tp.starting = true;
   renderTerminalPage();
@@ -1924,8 +2521,87 @@ async function spawnSession() {
         rememberProjectBinding(tp.launcher.cwd, tp.launcher.tool, tp.launcher.providerKey);
       }
       flash(`已启动 ${bin}`, 'success');
+=======
+  const useAgentTimeline = !isCodex && (tp.launcher.viewMode || 'timeline') === 'timeline';
+  if (useAgentTimeline && (tp.launcher.permissionMode || '') === 'bypassPermissions') {
+    if (!window.confirm('bypassPermissions 会跳过全部权限检查，等同高危模式。确认继续？')) {
+      return;
+    }
+  }
+  tp.starting = true;
+  renderTerminalPage();
+  try {
+    if (useAgentTimeline) {
+      const res = await api('/api/agent/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          program: bin,
+          cwd: tp.launcher.cwd || '',
+          model: finalModel || '',
+          permissionMode: tp.launcher.permissionMode || 'manual',
+          env: officialEnv || undefined,
+          flags: (tp.launcher.flags || '').trim(),
+          title: `claude · ${tp.launcher.permissionMode || 'manual'}`,
+        }),
+      });
+      const agentSess = res?.ok && (res.data?.agentSession || res.agentSession);
+      if (agentSess) {
+        const session = normalizeSession(agentSess);
+        session.kind = 'agent';
+        session.view = 'timeline';
+        session.program = bin;
+        session.args = args;
+        session.tool = 'claudecode';
+        session.cwd = tp.launcher.cwd || session.cwd || '';
+        session.permissionMode = tp.launcher.permissionMode || session.permissionMode || 'manual';
+        session.timeline = [];
+        session.pendingPermissions = [];
+        session.streamingText = '';
+        session.agentCursor = 0;
+        tp.sessions.unshift(session);
+        tp.activeSessionId = session.id;
+        tp.launcherOpen = false;
+        persistOneSession(session);
+        flash('已启动 Claude Timeline 会话', 'success');
+      } else {
+        flash(`启动失败: ${res?.error || '未知'}`, 'error');
+      }
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
     } else {
-      flash(`启动失败: ${res?.error || '未知'}`, 'error');
+      // 后端期望 program + args，不是 command 数组
+      const res = await api('/api/terminal/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool: tp.launcher.tool,
+          program: bin,
+          args,
+          cwd: tp.launcher.cwd || '',
+          env: officialEnv || undefined,
+          title,
+          commandPreview,
+          cols: 120,
+          rows: 32,
+        }),
+      });
+      if (res?.ok && res.data?.terminalSession) {
+        const session = normalizeSession(res.data.terminalSession);
+        // 记下原始 spawn 参数 — 给 [重启] 用
+        session.program = bin;
+        session.args = args;
+        session.tool = tp.launcher.tool;
+        session.cwd = tp.launcher.cwd || session.cwd || '';
+        session.kind = 'pty';
+        session.view = 'raw';
+        tp.sessions.unshift(session);
+        tp.activeSessionId = session.id;
+        tp.launcherOpen = false; // 启动后自动收 popover
+        persistOneSession(session);
+        flash(`已启动 ${bin}`, 'success');
+      } else {
+        flash(`启动失败: ${res?.error || '未知'}`, 'error');
+      }
     }
   } catch (err) {
     flash(`启动异常: ${err.message || err}`, 'error');
@@ -2026,6 +2702,7 @@ async function restartGhostSession(sessionId) {
   if (!ghost) return;
   const bin = ghost.program || (ghost.tool === 'codex' ? 'codex' : ghost.tool === 'claudecode' ? 'claude' : 'codex');
   const args = Array.isArray(ghost.args) ? ghost.args : [];
+<<<<<<< HEAD
   const spawnSize = measureTerminalSpawnSize();
   // 直接调 spawn 接口（绕过 launcher 表单）
   try {
@@ -2050,8 +2727,70 @@ async function restartGhostSession(sessionId) {
       forgetPersistedSession(sessionId);
       persistOneSession(fresh);
       flash('已重启会话', 'success');
+=======
+  try {
+    if (ghost.kind === 'agent' || ghost.view === 'timeline') {
+      const res = await api('/api/agent/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          program: bin,
+          cwd: ghost.cwd || '',
+          model: ghost.model || '',
+          permissionMode: ghost.permissionMode || 'manual',
+          title: ghost.title || `claude · ${ghost.permissionMode || 'manual'}`,
+          resume: ghost.claudeSessionId || '',
+        }),
+      });
+      const agentSess = res?.ok && (res.data?.agentSession || res.agentSession);
+      if (agentSess) {
+        const fresh = normalizeSession(agentSess);
+        fresh.kind = 'agent';
+        fresh.view = 'timeline';
+        fresh.program = bin;
+        fresh.args = args;
+        fresh.tool = 'claudecode';
+        fresh.cwd = ghost.cwd;
+        fresh.permissionMode = ghost.permissionMode || fresh.permissionMode;
+        fresh.timeline = [];
+        fresh.pendingPermissions = [];
+        fresh.streamingText = '';
+        fresh.agentCursor = 0;
+        const idx = tp.sessions.findIndex((s) => s.id === sessionId);
+        if (idx >= 0) tp.sessions[idx] = fresh;
+        else tp.sessions.unshift(fresh);
+        tp.activeSessionId = fresh.id;
+        forgetPersistedSession(sessionId);
+        persistOneSession(fresh);
+        flash('已重启 Claude Timeline 会话', 'success');
+      } else {
+        flash(`重启失败: ${res?.error || '未知'}`, 'error');
+      }
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
     } else {
-      flash(`重启失败: ${res?.error || '未知'}`, 'error');
+      const res = await api('/api/terminal/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool: ghost.tool, program: bin, args,
+          cwd: ghost.cwd || '', title: ghost.title || bin,
+          commandPreview: ghost.command || [bin, ...args].join(' '),
+          cols: 120, rows: 32,
+        }),
+      });
+      if (res?.ok && res.data?.terminalSession) {
+        const fresh = normalizeSession(res.data.terminalSession);
+        fresh.program = bin; fresh.args = args; fresh.tool = ghost.tool; fresh.cwd = ghost.cwd;
+        // 替换 ghost
+        const idx = tp.sessions.findIndex((s) => s.id === sessionId);
+        if (idx >= 0) tp.sessions[idx] = fresh;
+        else tp.sessions.unshift(fresh);
+        tp.activeSessionId = fresh.id;
+        // SQLite 里把旧 ghost id 删了再写新 id（活的 session id 跟着）
+        forgetPersistedSession(sessionId);
+        persistOneSession(fresh);
+        flash('已重启会话', 'success');
+      } else {
+        flash(`重启失败: ${res?.error || '未知'}`, 'error');
+      }
     }
   } catch (err) {
     flash(`重启异常: ${err.message || err}`, 'error');
@@ -2176,13 +2915,30 @@ async function deleteTerminalSession(sessionId) {
 
 async function closeSession(sessionId) {
   const tp = getState().terminalPage;
+  const sess = tp.sessions.find((s) => s.id === sessionId);
   try {
+<<<<<<< HEAD
     await api('/api/terminal/close', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // remove:true → 同时从 Rust session map 删除，避免已关闭会话堆积泄漏
       body: JSON.stringify({ sessionId, remove: true }),
     });
+=======
+    if (sess && (sess.kind === 'agent' || sess.view === 'timeline')) {
+      await api('/api/agent/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, remove: true }),
+      });
+    } else {
+      await api('/api/terminal/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+    }
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
   } catch (_) {}
   // 拆 instance
   const inst = tp.instances[sessionId];

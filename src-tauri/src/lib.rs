@@ -395,6 +395,7 @@ mod routes;
 mod shell_integration;
 mod terminal;
 mod terminal_persist;
+mod agent_session;
 mod tray;
 mod updater;
 mod usage_stats;
@@ -418,6 +419,7 @@ fn emit_asset_deep_link_opened(app: &tauri::AppHandle, urls: Vec<String>, source
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+<<<<<<< HEAD
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -464,4 +466,22 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![backend_request])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+=======
+  tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .setup(|app| {
+      if let Err(err) = tray::install(&app.handle()) {
+        log::warn!("tray install failed: {err}");
+      }
+      // 让 terminal / agent_session 模块拿到 AppHandle 以便 reader 线程 emit 推流事件
+      terminal::install(&app.handle());
+      agent_session::install(&app.handle());
+      Ok(())
+    })
+    .invoke_handler(tauri::generate_handler![backend_request])
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
+>>>>>>> 7cb9624 (feat: Timeline + 手机扫码远程接入 (QR + LAN) 已完成)
 }
