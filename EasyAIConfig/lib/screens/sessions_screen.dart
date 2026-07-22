@@ -228,27 +228,31 @@ class _SessionsScreenState extends State<SessionsScreen>
     if (res.ok) {
       final rows = (res.data?['rows'] as List?) ?? [];
       final pty = rows.map((e) => SessionInfo.fromJson(e as Map)).toList();
-      // 合并 app-server bridge 会话
+      // 合并 bridge 会话（Codex app-server + Claude print-bridge）
       List<SessionInfo> bridge = [];
-      try {
-        final br = await _client.get('/api/codex/list');
-        if (br.ok && br.data is Map) {
-          final list = (br.data['sessions'] as List?) ?? [];
-          bridge = list.map((e) {
-            final m = Map<String, dynamic>.from(e as Map);
-            m['bridge'] = true;
-            m['viewMode'] = 'bridge';
-            m['tool'] = m['tool'] ?? 'codex';
-            m['commandPreview'] = m['commandPreview'] ?? 'codex app-server';
-            m['createdAt'] = m['createdAt'] ?? '';
-            m['origin'] = m['origin'] ?? 'phone';
-            m['remoteActive'] = true;
-            m['persistent'] = false;
-            m['displayName'] = m['displayName'] ?? m['title'] ?? '';
-            return SessionInfo.fromJson(m);
-          }).toList();
-        }
-      } catch (_) {}
+      Future<void> loadBridge(String path, String defaultTool, String preview) async {
+        try {
+          final br = await _client.get(path);
+          if (br.ok && br.data is Map) {
+            final list = (br.data['sessions'] as List?) ?? [];
+            bridge.addAll(list.map((e) {
+              final m = Map<String, dynamic>.from(e as Map);
+              m['bridge'] = true;
+              m['viewMode'] = 'bridge';
+              m['tool'] = m['tool'] ?? defaultTool;
+              m['commandPreview'] = m['commandPreview'] ?? preview;
+              m['createdAt'] = m['createdAt'] ?? '';
+              m['origin'] = m['origin'] ?? 'phone';
+              m['remoteActive'] = true;
+              m['persistent'] = false;
+              m['displayName'] = m['displayName'] ?? m['title'] ?? '';
+              return SessionInfo.fromJson(m);
+            }));
+          }
+        } catch (_) {}
+      }
+      await loadBridge('/api/codex/list', 'codex', 'codex app-server');
+      await loadBridge('/api/claude/list', 'claude', 'claude -p stream-json');
       final wasUnreachable = !_reachable;
   setState(() {
         _sessions = [...bridge, ...pty];
@@ -441,20 +445,28 @@ class _SessionsScreenState extends State<SessionsScreen>
     final effort = (result['effort'] ?? '').toString();
     final env = (result['env'] as Map?)?.map((k, v) => MapEntry('$k', '$v'));
 
-    // Codex × 快速通道
-    if (tool == 'codex' && viewMode == 'bridge') {
+    // Codex / Claude × 快速通道
+    final isClaudeTool = tool == 'claude' || tool == 'claudecode';
+    if ((tool == 'codex' || isClaudeTool) && viewMode == 'bridge') {
       late final ApiResult res;
       try {
         if (!mounted) return;
         res = await BridgeLaunchDialog.run(
           context,
           title: '启动快速通道',
-          task: () => _client.codexThreadStart(
-            cwd: cwd,
-            model: model.isEmpty ? null : model,
-            title: (result['title'] ?? 'Codex').toString(),
-            env: env,
-          ),
+          task: () => isClaudeTool
+              ? _client.claudeThreadStart(
+                  cwd: cwd,
+                  model: model.isEmpty ? null : model,
+                  title: (result['title'] ?? 'Claude').toString(),
+                  env: env,
+                )
+              : _client.codexThreadStart(
+                  cwd: cwd,
+                  model: model.isEmpty ? null : model,
+                  title: (result['title'] ?? 'Codex').toString(),
+                  env: env,
+                ),
         );
       } catch (e) {
         if (!mounted) return;
@@ -468,16 +480,19 @@ class _SessionsScreenState extends State<SessionsScreen>
         final m = Map<String, dynamic>.from(res.data as Map);
         m['bridge'] = true;
         m['viewMode'] = 'bridge';
-        m['tool'] = 'codex';
-        m['commandPreview'] = 'codex app-server';
+        m['tool'] = isClaudeTool ? 'claude' : 'codex';
+        m['commandPreview'] = isClaudeTool
+            ? 'claude -p stream-json'
+            : 'codex app-server';
         m['createdAt'] = DateTime.now().toIso8601String();
         m['origin'] = 'phone';
         m['remoteActive'] = true;
         m['persistent'] = false;
-        m['displayName'] = m['title'] ?? 'Codex';
+        m['displayName'] =
+            m['title'] ?? (isClaudeTool ? 'Claude' : 'Codex');
         m['running'] = m['running'] ?? true;
         final s = SessionInfo.fromJson(m);
-        if (effort.isNotEmpty) {
+        if (!isClaudeTool && effort.isNotEmpty) {
           await _client.codexThreadSettings(s.id, reasoningEffort: effort);
         }
         _openTerminal(s);
@@ -1685,7 +1700,7 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
       'model': model,
       'effort': _effort,
       'env': env,
-      'viewMode': isCodex ? _viewMode : 'terminal',
+      'viewMode': _viewMode,
     });
   }
 
@@ -1936,14 +1951,13 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
   }
 
   String _startLabel(bool isCodex) {
-    if (!isCodex) return '启动终端';
     switch (_viewMode) {
       case 'bridge':
         return '启动快速通道';
       case 'terminal':
         return '启动终端模式';
       default:
-        return '启动 Timeline 模拟';
+        return isCodex ? '启动 Timeline 模拟' : '启动 Timeline 模拟';
     }
   }
 
@@ -1960,7 +1974,7 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
             _tool = value;
             _model = '';
             _accountHome = '';
-            _viewMode = value == 'codex' ? 'bridge' : 'terminal';
+            _viewMode = 'bridge';
           });
           _loadAccounts();
         },
@@ -2002,6 +2016,7 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
             ),
           ]
         : const [
+            ('bridge', '快速', '低延迟', Icons.bolt_rounded, kRunning),
             (
               'terminal',
               '终端',

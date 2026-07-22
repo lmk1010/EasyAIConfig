@@ -6481,6 +6481,21 @@ pub(crate) async fn dispatch(
         ("/api/codex/list", "GET") => crate::codex_app_server::api_list(query),
         ("/api/codex/close", "POST") => crate::codex_app_server::api_close(body),
 
+        // ─── Claude print-bridge（手机 Timeline 低延迟路径）──────────
+        ("/api/claude/thread/start", "POST") => crate::claude_print_bridge::api_thread_start(body),
+        ("/api/claude/thread/resume", "POST") => crate::claude_print_bridge::api_thread_resume(body),
+        ("/api/claude/turn/start", "POST") => crate::claude_print_bridge::api_turn_start(body),
+        ("/api/claude/turn/interrupt", "POST") => {
+            crate::claude_print_bridge::api_turn_interrupt(body)
+        }
+        ("/api/claude/approval", "POST") => crate::claude_print_bridge::api_approval(body),
+        ("/api/claude/thread/settings", "POST") => {
+            crate::claude_print_bridge::api_thread_settings(body)
+        }
+        ("/api/claude/session", "GET") => crate::claude_print_bridge::api_session_get(query),
+        ("/api/claude/list", "GET") => crate::claude_print_bridge::api_list(query),
+        ("/api/claude/close", "POST") => crate::claude_print_bridge::api_close(body),
+
         ("/api/shell-integration/status", "GET") => shell_integration_status(query),
         ("/api/shell-integration/enable", "POST") => enable_shell_integration(body),
         ("/api/shell-integration/disable", "POST") => disable_shell_integration(body),

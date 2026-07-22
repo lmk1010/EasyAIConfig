@@ -378,6 +378,7 @@ mod codex_model_catalog;
 mod codex_oauth_usage;
 mod config;
 mod cursor_usage;
+mod claude_print_bridge;
 mod codex_app_server;
 mod network;
 mod oauth_profiles;

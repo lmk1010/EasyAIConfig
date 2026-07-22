@@ -278,7 +278,93 @@ class ApiClient {
 
   /// app-server 事件 SSE：通知 + 审批请求。
   Stream<Map<String, dynamic>> streamCodexEvents(String sessionId) async* {
-    final uri = _uri('/api/codex/events', {'sessionId': sessionId});
+    yield* _streamBridgeEvents('/api/codex/events', sessionId);
+  }
+
+  // ── Claude print-bridge（低延迟 Timeline）────────────────────
+  Future<ApiResult> claudeThreadStart({
+    required String cwd,
+    String? model,
+    String? title,
+    Map<String, String>? env,
+    String? resumeThreadId,
+  }) =>
+      post('/api/claude/thread/start', {
+        'cwd': cwd,
+        if (model != null && model.isNotEmpty) 'model': model,
+        if (title != null && title.isNotEmpty) 'title': title,
+        if (env != null && env.isNotEmpty) 'env': env,
+        if (resumeThreadId != null && resumeThreadId.isNotEmpty)
+          'resumeThreadId': resumeThreadId,
+      });
+
+  Future<ApiResult> claudeTurnStart(String sessionId, String text,
+          {String? clientId}) =>
+      post('/api/claude/turn/start', {
+        'sessionId': sessionId,
+        'text': text,
+        if (clientId != null && clientId.isNotEmpty) 'clientId': clientId,
+      });
+
+  Future<ApiResult> claudeTurnInterrupt(String sessionId) =>
+      post('/api/claude/turn/interrupt', {'sessionId': sessionId});
+
+  Future<ApiResult> claudeApproval(
+          String sessionId, String requestId, String decision) =>
+      post('/api/claude/approval', {
+        'sessionId': sessionId,
+        'requestId': requestId,
+        'decision': decision,
+      });
+
+  Future<ApiResult> claudeThreadSettings(String sessionId, {String? model}) =>
+      post('/api/claude/thread/settings', {
+        'sessionId': sessionId,
+        if (model != null) 'model': model,
+      });
+
+  Future<ApiResult> claudeSessionGet(String sessionId) =>
+      get('/api/claude/session', query: {'sessionId': sessionId});
+
+  Stream<Map<String, dynamic>> streamClaudeEvents(String sessionId) async* {
+    yield* _streamBridgeEvents('/api/claude/events', sessionId);
+  }
+
+  /// 按 tool 选择 bridge API（codex app-server / claude print-bridge）。
+  bool _isClaudeTool(String tool) =>
+      tool == 'claude' || tool == 'claudecode';
+
+  Future<ApiResult> bridgeTurnStart(String tool, String sessionId, String text,
+          {String? clientId}) =>
+      _isClaudeTool(tool)
+          ? claudeTurnStart(sessionId, text, clientId: clientId)
+          : codexTurnStart(sessionId, text, clientId: clientId);
+
+  Future<ApiResult> bridgeTurnInterrupt(String tool, String sessionId) =>
+      _isClaudeTool(tool)
+          ? claudeTurnInterrupt(sessionId)
+          : codexTurnInterrupt(sessionId);
+
+  Future<ApiResult> bridgeApproval(
+          String tool, String sessionId, String requestId, String decision) =>
+      _isClaudeTool(tool)
+          ? claudeApproval(sessionId, requestId, decision)
+          : codexApproval(sessionId, requestId, decision);
+
+  Future<ApiResult> bridgeSessionGet(String tool, String sessionId) =>
+      _isClaudeTool(tool)
+          ? claudeSessionGet(sessionId)
+          : codexSessionGet(sessionId);
+
+  Stream<Map<String, dynamic>> streamBridgeEvents(
+          String tool, String sessionId) =>
+      _isClaudeTool(tool)
+          ? streamClaudeEvents(sessionId)
+          : streamCodexEvents(sessionId);
+
+  Stream<Map<String, dynamic>> _streamBridgeEvents(
+      String path, String sessionId) async* {
+    final uri = _uri(path, {'sessionId': sessionId});
     final client = http.Client();
     try {
       final req = http.Request('GET', uri);
@@ -286,7 +372,7 @@ class ApiClient {
       req.headers['Accept'] = 'text/event-stream';
       final res = await client.send(req).timeout(const Duration(seconds: 20));
       if (res.statusCode != 200) {
-        throw http.ClientException('codex events HTTP ${res.statusCode}', uri);
+        throw http.ClientException('bridge events HTTP ${res.statusCode}', uri);
       }
       final lines =
           res.stream.transform(utf8.decoder).transform(const LineSplitter());

@@ -40,6 +40,7 @@ const REMOTE_API_ALLOW: &[&str] = &[
     "/api/terminal/",
     "/api/terminal/stream",
     "/api/codex/",
+    "/api/claude/",
     "/api/state",
     "/api/sessions/inventory",
     "/api/claudecode/state",
@@ -1030,6 +1031,10 @@ fn handle_one_request(
         crate::codex_app_server::handle_events_sse(stream, &request.query);
         return false;
     }
+    if request.method.eq_ignore_ascii_case("GET") && request.path == "/api/claude/events" {
+        crate::claude_print_bridge::handle_events_sse(stream, &request.query);
+        return false;
+    }
 
     // 白名单
     let allowed = REMOTE_API_ALLOW
@@ -1084,8 +1089,12 @@ fn handle_one_request(
             crate::terminal::mark_remote_activity(&sid);
         }
     }
-    // app-server 桥：手机新建也标 origin=phone
-    if request.path == "/api/codex/thread/start" || request.path == "/api/codex/thread/resume" {
+    // app-server / print-bridge：手机新建也标 origin=phone
+    if request.path == "/api/codex/thread/start"
+        || request.path == "/api/codex/thread/resume"
+        || request.path == "/api/claude/thread/start"
+        || request.path == "/api/claude/thread/resume"
+    {
         if let Some(obj) = body_value.as_object_mut() {
             obj.insert("origin".to_string(), json!("phone"));
         }

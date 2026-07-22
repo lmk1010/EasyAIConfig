@@ -81,7 +81,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
   DateTime? _lastMetaPoll; // 节流：token / TUI 状态条
   bool _manualPickerOpen = false; // 用户从菜单主动进「切换模型/推理」流程，暂停自动 surface
   DateTime? _fastPollUntil; // 发送后短时加速拉 timeline
-  late final bool _bridge; // app-server 桥模式
+  late final bool _bridge; // app-server / print-bridge
+  late final bool _claudeBridge;
   StreamSubscription? _bridgeSub;
   int _bridgeSeq = 0;
   final Map<String, int> _itemSeq = {}; // itemId -> local seq
@@ -91,6 +92,9 @@ class _TimelineScreenState extends State<TimelineScreen> {
   void initState() {
     super.initState();
     _bridge = widget.session.bridge;
+    _claudeBridge = _bridge &&
+        (widget.session.tool == 'claude' ||
+            widget.session.tool == 'claudecode');
     _running = widget.session.running;
     if (widget.session.model.isNotEmpty) _model = widget.session.model;
     _seedModelFromSession();
@@ -142,7 +146,9 @@ class _TimelineScreenState extends State<TimelineScreen> {
 
   void _openBridgeStream() {
     _bridgeSub?.cancel();
-    _bridgeSub = widget.client.streamCodexEvents(widget.session.id).listen(
+    _bridgeSub = widget.client
+        .streamBridgeEvents(widget.session.tool, widget.session.id)
+        .listen(
       _onBridgeEvent,
       onError: (_) {
         if (!mounted) return;
@@ -431,7 +437,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
     }
     _lastMetaPoll = now;
     try {
-      final snap = await widget.client.codexSessionGet(widget.session.id);
+      final snap = await widget.client
+          .bridgeSessionGet(widget.session.tool, widget.session.id);
       if (!mounted || !snap.ok || snap.data is! Map) return;
       final d = snap.data as Map;
       final model = (d['model'] ?? '').toString();
@@ -667,8 +674,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
       _awaitingSince = DateTime.now();
     });
     if (bridgeApproval && requestId != null && decision.isNotEmpty) {
-      await widget.client
-          .codexApproval(widget.session.id, '$requestId', decision);
+      await widget.client.bridgeApproval(
+          widget.session.tool, widget.session.id, '$requestId', decision);
       return;
     }
     if (key.isNotEmpty) {
@@ -728,7 +735,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
       });
       _scrollToBottom();
       widget.client
-          .codexTurnStart(widget.session.id, text, clientId: clientId)
+          .bridgeTurnStart(widget.session.tool, widget.session.id, text,
+              clientId: clientId)
           .then((res) {
         if (!mounted) return;
         if (!res.ok) {
@@ -756,9 +764,11 @@ class _TimelineScreenState extends State<TimelineScreen> {
   void _openRawTerminal() {
     if (_bridge) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('当前为 app-server 会话，无原始 TUI 终端'),
-          duration: Duration(seconds: 2),
+        SnackBar(
+          content: Text(_claudeBridge
+              ? '当前为 Claude 快速通道，无原始 TUI 终端'
+              : '当前为 app-server 会话，无原始 TUI 终端'),
+          duration: const Duration(seconds: 2),
         ),
       );
       return;
@@ -935,7 +945,11 @@ class _TimelineScreenState extends State<TimelineScreen> {
               PopupMenuItem(
                 enabled: false,
                 child: Text(
-                  _bridge ? '通道：快速（app-server）' : '通道：模拟（PTY）',
+                  _bridge
+                      ? (_claudeBridge
+                          ? '通道：快速（print-bridge）'
+                          : '通道：快速（app-server）')
+                      : '通道：模拟（PTY）',
                   style: TextStyle(
                     color: channelColor,
                     fontSize: 12.5,
@@ -2093,6 +2107,20 @@ class _TimelineScreenState extends State<TimelineScreen> {
 
 
   Future<void> _bridgeShowUsage() async {
+    if (_claudeBridge) {
+      // Claude print-bridge 无 account/rateLimits；展示会话累计 token
+      await CodexUsageSheet.show(
+        context,
+        raw: {
+          'note': 'Claude 快速通道：本会话累计 token（非官方配额面板）',
+          'sessionTokens': _tokenTotal,
+        },
+        sessionTokens: _tokenTotal > 0 ? _tokenTotal : null,
+        contextWindow: _contextWindow > 0 ? _contextWindow : null,
+      );
+      _refreshBridgeMeta(force: true);
+      return;
+    }
     final res = await _withLoading(
         '读取用量…', () => widget.client.codexRateLimits(widget.session.id));
     if (!mounted) return;
@@ -2112,6 +2140,10 @@ class _TimelineScreenState extends State<TimelineScreen> {
   }
 
   Future<void> _bridgeSwitchModel({required bool reasoningOnly}) async {
+    if (_claudeBridge) {
+      await _claudeBridgeSwitchModel(reasoningOnly: reasoningOnly);
+      return;
+    }
     final res = await _withLoading(
         '读取模型列表…', () => widget.client.codexModels(widget.session.id));
     if (!mounted) return;
@@ -2241,6 +2273,60 @@ class _TimelineScreenState extends State<TimelineScreen> {
         SnackBar(content: Text('切换失败: ${set.error ?? '未知'}')),
       );
       await _refreshBridgeMeta(force: true);
+    }
+  }
+
+  Future<void> _claudeBridgeSwitchModel({required bool reasoningOnly}) async {
+    if (reasoningOnly) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Claude 快速通道暂不支持改推理强度')),
+      );
+      return;
+    }
+    const models = [
+      'claude-opus-4-8',
+      'claude-sonnet-4-6',
+      'claude-sonnet-5',
+      'claude-haiku-4-5',
+      'opus',
+      'sonnet',
+      'haiku',
+    ];
+    final options = <Map>[];
+    for (var i = 0; i < models.length; i++) {
+      final id = models[i];
+      options.add({
+        'index': i + 1,
+        'label': id,
+        'detail': '',
+        'current': id == _model,
+        'id': id,
+      });
+    }
+    final idx = await _showPickerSheet('选择模型', options, _model);
+    if (idx == null || !mounted) return;
+    final sel = options.firstWhere((o) => o['index'] == idx, orElse: () => {});
+    final pickedModel = (sel['id'] ?? '').toString();
+    if (pickedModel.isEmpty) return;
+    setState(() => _model = pickedModel);
+    final set = await _withLoading(
+      '应用设置…',
+      () => widget.client.claudeThreadSettings(widget.session.id, model: pickedModel),
+    );
+    if (!mounted) return;
+    if (set.ok) {
+      await _refreshBridgeMeta(force: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已切换为 $pickedModel'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('切换失败: ${set.error ?? '未知'}')),
+      );
     }
   }
 
