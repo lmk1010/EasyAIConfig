@@ -448,6 +448,20 @@ class ApiClient {
           ? claudeSessionGet(sessionId)
           : codexSessionGet(sessionId);
 
+  /// 结束远程会话（bridge 关进程 / PTY 关终端）。
+  Future<ApiResult> closeRemoteSession({
+    required String tool,
+    required String sessionId,
+    required bool bridge,
+  }) {
+    if (bridge) {
+      return _isClaudeTool(tool)
+          ? post('/api/claude/close', {'sessionId': sessionId})
+          : post('/api/codex/close', {'sessionId': sessionId});
+    }
+    return post('/api/terminal/close', {'sessionId': sessionId});
+  }
+
   Stream<Map<String, dynamic>> streamBridgeEvents(
           String tool, String sessionId,
           {int after = 0}) =>

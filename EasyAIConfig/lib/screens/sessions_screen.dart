@@ -38,6 +38,8 @@ class SessionInfo {
   /// working | waiting | done（服务端）；列表再归一 exited
   final String agentStatus;
   final String pendingSummary;
+  /// bridge 审批请求 id（列表 Allow/Deny 需要）
+  final String pendingRequestId;
   final String authLabel;
   final String providerName;
 
@@ -60,6 +62,7 @@ class SessionInfo {
     this.model = '',
     this.agentStatus = '',
     this.pendingSummary = '',
+    this.pendingRequestId = '',
     this.authLabel = '',
     this.providerName = '',
   });
@@ -96,10 +99,21 @@ class SessionInfo {
     }
     final pending = j['pendingApproval'];
     var pendingSummary = '';
+    var pendingRequestId = '';
     if (pending is Map) {
       pendingSummary =
           (pending['summary'] ?? pending['command'] ?? pending['message'] ?? '')
               .toString();
+      pendingRequestId = (pending['requestId'] ??
+              pending['id'] ??
+              pending['approvalId'] ??
+              '')
+          .toString();
+    }
+    // 顶层兜底（部分 SSE 把 id 摊平）
+    if (pendingRequestId.isEmpty) {
+      pendingRequestId =
+          (j['pendingRequestId'] ?? j['approvalRequestId'] ?? '').toString();
     }
     return SessionInfo(
       id: (j['sessionId'] ?? j['id'] ?? '').toString(),
@@ -121,6 +135,7 @@ class SessionInfo {
       model: (j['model'] ?? '').toString(),
       agentStatus: (j['agentStatus'] ?? '').toString(),
       pendingSummary: pendingSummary,
+      pendingRequestId: pendingRequestId,
       authLabel: (j['authLabel'] ?? '').toString(),
       providerName: (j['providerName'] ?? '').toString(),
     );
@@ -217,6 +232,32 @@ class _SessionsScreenState extends State<SessionsScreen>
     _ensureHooks();
     _refresh();
     _startSessionsStream();
+    AgentNotify.instance.onOpenSession = _openSessionById;
+  }
+
+  void _openSessionById(String sessionId) {
+    if (!mounted || sessionId.isEmpty) return;
+    SessionInfo? hit;
+    for (final s in _sessions) {
+      if (s.id == sessionId) {
+        hit = s;
+        break;
+      }
+    }
+    if (hit != null) {
+      _openTerminal(hit);
+      return;
+    }
+    // 列表还没刷到：先刷新再开
+    _refresh(silent: true).then((_) {
+      if (!mounted) return;
+      for (final s in _sessions) {
+        if (s.id == sessionId) {
+          _openTerminal(s);
+          return;
+        }
+      }
+    });
   }
 
   Future<void> _ensureHooks() async {
@@ -231,6 +272,9 @@ class _SessionsScreenState extends State<SessionsScreen>
 
   @override
   void dispose() {
+    if (identical(AgentNotify.instance.onOpenSession, _openSessionById)) {
+      AgentNotify.instance.onOpenSession = null;
+    }
     _streamGen++;
     _tab.removeListener(_onTabChanged);
     _tab.dispose();
@@ -478,12 +522,37 @@ class _SessionsScreenState extends State<SessionsScreen>
   }
 
   void _sortSessionsInPlace() {
+    _sessions = _dedupeSessions(_sessions);
     _sessions.sort((a, b) {
       final ra = AgentStatus.sortRank(a.status);
       final rb = AgentStatus.sortRank(b.status);
       if (ra != rb) return ra.compareTo(rb);
       return b.createdAt.compareTo(a.createdAt);
     });
+  }
+
+  /// 同 id 去重：bridge 优先，其次 waiting。
+  List<SessionInfo> _dedupeSessions(List<SessionInfo> list) {
+    final byId = <String, SessionInfo>{};
+    for (final s in list) {
+      if (s.id.isEmpty) continue;
+      final prev = byId[s.id];
+      if (prev == null) {
+        byId[s.id] = s;
+        continue;
+      }
+      if (s.bridge && !prev.bridge) {
+        byId[s.id] = s;
+      } else if (!prev.bridge &&
+          s.status == AgentStatus.waiting &&
+          prev.status != AgentStatus.waiting) {
+        byId[s.id] = s;
+      } else if (s.pendingRequestId.isNotEmpty &&
+          prev.pendingRequestId.isEmpty) {
+        byId[s.id] = s;
+      }
+    }
+    return byId.values.toList();
   }
 
   void _notifyStatusTransitions(List<SessionInfo> rows) {
@@ -641,7 +710,7 @@ class _SessionsScreenState extends State<SessionsScreen>
           }
         }
       } catch (_) {}
-      final merged = [...bridge, ...pty];
+      final merged = _dedupeSessions([...bridge, ...pty]);
       merged.sort((a, b) {
         final ra = AgentStatus.sortRank(a.status);
         final rb = AgentStatus.sortRank(b.status);
@@ -1116,12 +1185,110 @@ class _SessionsScreenState extends State<SessionsScreen>
         : TerminalScreen(client: _client, session: s, displayTitle: displayTitle);
     Navigator.push(context, MaterialPageRoute(builder: (_) => page)).then((result) {
       _refresh(silent: true);
-      if (result == 'resume' && mounted) {
-        _tab.animateTo(1);
-        if (!_histLoaded) _loadHistory();
-        _scaffoldKey.currentState?.openDrawer();
+      if (!mounted) return;
+      if (result is Map && result['action'] == 'resume') {
+        final sid = (result['sessionId'] ?? s.id).toString();
+        final tool = (result['tool'] ?? s.tool).toString();
+        final cwd = (result['cwd'] ?? s.cwd).toString();
+        final threadId = (result['threadId'] ?? s.threadId).toString();
+        final model = (result['model'] ?? s.model).toString();
+        final title = (result['title'] ?? _displayTitle(s)).toString();
+        _resumeBridge(
+          tool: tool,
+          cwd: cwd.isEmpty ? '.' : cwd,
+          resumeId: threadId.isNotEmpty ? threadId : sid,
+          title: title,
+          model: model,
+        );
       }
     });
+  }
+
+  /// 列表「等你」动作：有 requestId → Allow/Deny；否则快捷回复 / 打开。
+  Future<void> _actOnWaiting(SessionInfo s) async {
+    if (!s.bridge) {
+      _openTerminal(s);
+      return;
+    }
+    if (s.pendingRequestId.isEmpty) {
+      await _quickReply(s);
+      return;
+    }
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: kBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Agent 在等你',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              if (s.pendingSummary.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(s.pendingSummary,
+                    style: const TextStyle(color: kMuted, fontSize: 13.5)),
+              ],
+              const SizedBox(height: 14),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, 'accept'),
+                child: const Text('允许'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: () => Navigator.pop(ctx, 'acceptForSession'),
+                child: const Text('本会话允许'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(foregroundColor: kExited),
+                onPressed: () => Navigator.pop(ctx, 'decline'),
+                child: const Text('拒绝'),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'open'),
+                child: const Text('打开会话'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'reply'),
+                child: const Text('文字回复…'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'open') {
+      _openTerminal(s);
+      return;
+    }
+    if (choice == 'reply') {
+      await _quickReply(s);
+      return;
+    }
+    final res = await _client.bridgeApproval(
+        s.tool, s.id, s.pendingRequestId, choice);
+    if (!mounted) return;
+    if (!res.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res.error ?? '审批失败')),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(choice == 'decline' ? '已拒绝' : '已允许'),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+    _refresh(silent: true);
   }
 
   /// 列表级快捷回复：等你时不用先进 Timeline。
@@ -1190,6 +1357,45 @@ class _SessionsScreenState extends State<SessionsScreen>
     }
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('已发送'), duration: Duration(seconds: 1)),
+    );
+  }
+
+  Future<void> _closeRemoteSession(SessionInfo s) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('结束会话？'),
+        content: Text(
+          s.bridge
+              ? '将关闭电脑端的快速通道进程（不只是本机隐藏）。'
+              : '将关闭电脑端对应终端会话。',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: kExited),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('结束'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final res = await _client.closeRemoteSession(
+      tool: s.tool,
+      sessionId: s.id,
+      bridge: s.bridge,
+    );
+    if (!mounted) return;
+    if (!res.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res.error ?? '关闭失败')),
+      );
+      return;
+    }
+    setState(() => _sessions.removeWhere((x) => x.id == s.id));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已结束'), duration: Duration(seconds: 1)),
     );
   }
 
@@ -1364,13 +1570,19 @@ class _SessionsScreenState extends State<SessionsScreen>
         ),
       );
 
-  /// 顶栏连接状态：已连接 / 无连接 / 连接中
+  /// 顶栏连接状态：已连接 · 实时 / 已连接 · 轮询 / 无连接 / 连接中
   Widget _linkStatusChip() {
     final Color color;
     final String label;
     if (_reachable == true) {
       color = kRunning;
-      label = '已连接';
+      if (_streamAlive) {
+        label = '已连接';
+      } else if (_streamFallbackPoll) {
+        label = '轮询';
+      } else {
+        label = '已连接';
+      }
     } else if (_reachable == false) {
       color = kExited;
       label = '无连接';
@@ -1378,25 +1590,28 @@ class _SessionsScreenState extends State<SessionsScreen>
       color = kFaint;
       label = '连接中';
     }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 5),
-          Text(label,
-              style: TextStyle(
-                  color: color, fontSize: 11, fontWeight: FontWeight.w600)),
-        ],
+    return GestureDetector(
+      onTap: _reachable == false ? _forceReconnect : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 5),
+            Text(label,
+                style: TextStyle(
+                    color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
     );
   }
@@ -1676,7 +1891,7 @@ class _SessionsScreenState extends State<SessionsScreen>
         Icon(Icons.terminal, size: 48, color: kFaint),
         SizedBox(height: 12),
         Center(
-          child: Text('还没有会话\n在电脑端新建，或点右下角「新建会话」',
+          child: Text('还没有会话\n在电脑端新建，或点右上角「+」',
               textAlign: TextAlign.center,
               style: TextStyle(color: kFaint)),
         ),
@@ -1829,11 +2044,18 @@ class _SessionsScreenState extends State<SessionsScreen>
                     ],
                   ),
                 ),
-                if (s.status == AgentStatus.waiting && s.bridge)
+                if (s.status == AgentStatus.waiting)
                   IconButton(
-                    tooltip: '快捷回复',
-                    icon: const Icon(Icons.reply_rounded, color: kWaiting),
-                    onPressed: () => _quickReply(s),
+                    tooltip: s.bridge && s.pendingRequestId.isNotEmpty
+                        ? '审批'
+                        : '快捷回复',
+                    icon: Icon(
+                      s.bridge && s.pendingRequestId.isNotEmpty
+                          ? Icons.gavel_rounded
+                          : Icons.reply_rounded,
+                      color: kWaiting,
+                    ),
+                    onPressed: () => _actOnWaiting(s),
                   ),
                 SizedBox(
                   width: 32,
@@ -1854,18 +2076,26 @@ class _SessionsScreenState extends State<SessionsScreen>
                           _hide(s);
                           break;
                         case 'reply':
-                          _quickReply(s);
+                          _actOnWaiting(s);
+                          break;
+                        case 'close':
+                          _closeRemoteSession(s);
                           break;
                       }
                     },
                     itemBuilder: (_) => [
-                      if (s.status == AgentStatus.waiting && s.bridge)
-                        const PopupMenuItem(
-                            value: 'reply', child: Text('快捷回复')),
                       const PopupMenuItem(value: 'rename', child: Text('重命名')),
                       PopupMenuItem(
-                          value: 'pin', child: Text(pinned ? '取消置顶' : '置顶')),
-                      const PopupMenuItem(value: 'hide', child: Text('隐藏')),
+                          value: 'pin',
+                          child: Text(pinned ? '取消置顶' : '置顶')),
+                      if (s.status == AgentStatus.waiting)
+                        const PopupMenuItem(
+                            value: 'reply', child: Text('处理「等你」')),
+                      const PopupMenuItem(value: 'hide', child: Text('本机隐藏')),
+                      const PopupMenuItem(
+                          value: 'close',
+                          child: Text('结束会话',
+                              style: TextStyle(color: kExited))),
                     ],
                   ),
                 ),
@@ -2064,7 +2294,9 @@ class _SessionsScreenState extends State<SessionsScreen>
   }
 
   Future<void> _openHistory(HistItem h) async {
-    final canResume = h.tool == 'codex' || h.tool == 'claudecode';
+    final canResume = h.tool == 'codex' ||
+        h.tool == 'claudecode' ||
+        h.tool == 'claude';
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -2079,70 +2311,78 @@ class _SessionsScreenState extends State<SessionsScreen>
 
   Future<void> _resumeHistory(HistItem h) async {
     Navigator.pop(context); // 关闭详情弹窗
-    final isCodex = h.tool == 'codex';
-    if (isCodex) {
-      // 历史会话走 app-server thread/resume
-      late final ApiResult res;
-      try {
-        res = await BridgeLaunchDialog.run(
-          context,
-          title: '恢复快速通道',
-          steps: const [
-            '拉起 app-server…',
-            '恢复历史线程…',
-            '同步上下文…',
-            '即将就绪…',
-          ],
-          task: () => _client.codexThreadStart(
-            cwd: h.cwd.isEmpty ? '.' : h.cwd,
-            model: h.model.isEmpty ? null : h.model,
-            title: h.title.isEmpty ? 'Codex' : h.title,
-            resumeThreadId: h.sessionId,
-          ),
-        );
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('恢复失败: $e')),
-        );
-        return;
-      }
+    final isClaude = h.tool == 'claude' || h.tool == 'claudecode';
+    await _resumeBridge(
+      tool: isClaude ? 'claude' : 'codex',
+      cwd: h.cwd.isEmpty ? '.' : h.cwd,
+      resumeId: h.sessionId,
+      title: h.title.isEmpty ? (isClaude ? 'Claude' : 'Codex') : h.title,
+      model: h.model,
+    );
+  }
+
+  Future<void> _resumeBridge({
+    required String tool,
+    required String cwd,
+    required String resumeId,
+    required String title,
+    String model = '',
+  }) async {
+    final isClaude = tool == 'claude' || tool == 'claudecode';
+    late final ApiResult res;
+    try {
+      res = await BridgeLaunchDialog.run(
+        context,
+        title: '恢复快速通道',
+        steps: isClaude
+            ? const [
+                '拉起 Claude 快速通道…',
+                '恢复历史线程…',
+                '同步上下文…',
+                '即将就绪…',
+              ]
+            : const [
+                '拉起 app-server…',
+                '恢复历史线程…',
+                '同步上下文…',
+                '即将就绪…',
+              ],
+        task: () => isClaude
+            ? _client.claudeThreadStart(
+                cwd: cwd,
+                model: model.isEmpty ? null : model,
+                title: title,
+                resumeThreadId: resumeId,
+              )
+            : _client.codexThreadStart(
+                cwd: cwd,
+                model: model.isEmpty ? null : model,
+                title: title,
+                resumeThreadId: resumeId,
+              ),
+      );
+    } catch (e) {
       if (!mounted) return;
-      if (res.ok && res.data is Map) {
-        final m = Map<String, dynamic>.from(res.data as Map);
-        m['bridge'] = true;
-        m['viewMode'] = 'bridge';
-        m['tool'] = 'codex';
-        m['commandPreview'] = 'codex app-server resume';
-        m['createdAt'] = DateTime.now().toIso8601String();
-        m['origin'] = 'phone';
-        m['remoteActive'] = true;
-        m['persistent'] = false;
-        m['displayName'] = h.title;
-        m['running'] = true;
-        final s = SessionInfo.fromJson(m);
-        _tab.animateTo(0);
-        _openTerminal(s);
-        _refresh(silent: true);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('恢复失败: ${res.error ?? '未知'}')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('恢复失败: $e')),
+      );
       return;
     }
-    final program = 'claude';
-    final args = <String>['--continue'];
-    final res = await _client.createSession(
-      tool: h.tool,
-      program: program,
-      args: args,
-      cwd: h.cwd,
-      title: 'claude --continue',
-    );
     if (!mounted) return;
-    if (res.ok && res.data?['terminalSession'] != null) {
-      final s = SessionInfo.fromJson(res.data['terminalSession'] as Map);
+    if (res.ok && res.data is Map) {
+      final m = Map<String, dynamic>.from(res.data as Map);
+      m['bridge'] = true;
+      m['viewMode'] = 'bridge';
+      m['tool'] = isClaude ? 'claude' : 'codex';
+      m['commandPreview'] =
+          isClaude ? 'claude print-bridge resume' : 'codex app-server resume';
+      m['createdAt'] = DateTime.now().toIso8601String();
+      m['origin'] = 'phone';
+      m['remoteActive'] = true;
+      m['persistent'] = false;
+      m['displayName'] = title;
+      m['running'] = true;
+      final s = SessionInfo.fromJson(m);
       _tab.animateTo(0);
       _openTerminal(s);
       _refresh(silent: true);
@@ -2191,8 +2431,8 @@ class _HistoryDetailSheet extends StatelessWidget {
               onPressed: onResume,
               icon: const Icon(Icons.play_arrow),
               label: Text(item.tool == 'codex'
-                  ? '以 app-server 继续'
-                  : '以 claude --continue 继续'),
+                  ? '以快速通道继续'
+                  : '以快速通道继续'),
               style: FilledButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14)),
             )

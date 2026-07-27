@@ -8,6 +8,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:xterm/xterm.dart';
 
 import '../api.dart';
+import '../agent_notify.dart';
 import '../settings.dart';
 import '../theme.dart';
 import 'sessions_screen.dart';
@@ -62,6 +63,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     };
     _applyWakelock();
     AppSettings.instance.keepAwake.addListener(_applyWakelock);
+    AgentNotify.instance.foregroundSessionId = widget.session.id;
     _start();
     // Android：不要自动拉起 xterm 伪键盘（vivo 会当成安全键盘）
     if (!Platform.isAndroid) {
@@ -74,6 +76,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
   @override
   void dispose() {
     _disposed = true;
+    if (AgentNotify.instance.foregroundSessionId == widget.session.id) {
+      AgentNotify.instance.foregroundSessionId = null;
+    }
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     AppSettings.instance.keepAwake.removeListener(_applyWakelock);

@@ -137,6 +137,7 @@ impl BridgeSession {
             *p = Some(json!({
                 "method": method,
                 "id": id,
+                "requestId": id,
                 "summary": summary,
             }));
         }

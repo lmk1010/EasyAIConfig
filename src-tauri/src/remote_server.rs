@@ -41,7 +41,6 @@ const REMOTE_API_ALLOW: &[&str] = &[
     "/api/terminal/stream",
     "/api/codex/",
     "/api/claude/",
-    "/api/agent/",
     "/api/agent-hooks/",
     "/api/tmux/",
     "/api/state",
@@ -53,7 +52,29 @@ const REMOTE_API_ALLOW: &[&str] = &[
     "/api/project-binding",
     "/api/project-bindings",
     "/api/provider/test-saved",
+];
+
+/// 手机远程禁止的危险写操作（即使落在 allow 前缀下）。
+const REMOTE_API_DENY: &[&str] = &[
+    "/api/codex/install",
+    "/api/codex/reinstall",
+    "/api/codex/update",
+    "/api/codex/update-domestic",
+    "/api/codex/install-version",
+    "/api/codex/install-version-domestic",
+    "/api/codex/uninstall",
+    "/api/codex/oauth/profiles/create",
+    "/api/codex/oauth/profiles/switch",
+    "/api/codex/oauth/profiles/delete",
+    "/api/codex/oauth/profiles/rename",
+    "/api/codex/oauth/profiles/save-current",
+    "/api/codex/fork",
+    "/api/codex/sessions/migrate",
+    "/api/codex/model-catalog/sync",
+    "/api/codex/model-catalog/content",
     "/api/config/save",
+    "/api/agent/",
+    "/api/claudecode/oauth/profiles/switch",
 ];
 
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
@@ -1058,6 +1079,18 @@ fn handle_one_request(
             stream,
             "403 Forbidden",
             &json!({ "ok": false, "error": "该接口不允许远程调用" }),
+            keep_alive,
+        );
+        return keep_alive;
+    }
+    let denied = REMOTE_API_DENY.iter().any(|p| {
+        request.path == *p || request.path.starts_with(p)
+    });
+    if denied {
+        write_json(
+            stream,
+            "403 Forbidden",
+            &json!({ "ok": false, "error": "该接口不允许远程调用（危险操作）" }),
             keep_alive,
         );
         return keep_alive;

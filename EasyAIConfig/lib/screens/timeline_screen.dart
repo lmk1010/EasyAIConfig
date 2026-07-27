@@ -123,6 +123,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
     if (_bridge) {
       _loading = false;
       _bridgeWarming = true;
+      AgentNotify.instance.foregroundSessionId = widget.session.id;
       _openBridgeStream();
       _refreshBridgeMeta(force: true).whenComplete(() {
         if (!mounted) return;
@@ -137,6 +138,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
         }
       });
     } else {
+      AgentNotify.instance.foregroundSessionId = widget.session.id;
       _poll(first: true);
       _timer = Timer.periodic(const Duration(milliseconds: 900), (_) => _poll());
     }
@@ -153,6 +155,9 @@ class _TimelineScreenState extends State<TimelineScreen> {
 
   @override
   void dispose() {
+    if (AgentNotify.instance.foregroundSessionId == widget.session.id) {
+      AgentNotify.instance.foregroundSessionId = null;
+    }
     _timer?.cancel();
     _idleTimer?.cancel();
     _bridgeSub?.cancel();
@@ -766,28 +771,77 @@ class _TimelineScreenState extends State<TimelineScreen> {
     final bridgeApproval = _approval?['bridge'] == true;
     final requestId = _approval?['requestId'];
     final decision = (option['decision'] ?? '').toString();
+    final saved = _approval;
     setState(() {
       _approval = null;
       _awaitingReply = true;
       _awaitingSince = DateTime.now();
     });
     if (bridgeApproval && requestId != null && decision.isNotEmpty) {
-      await widget.client.bridgeApproval(
+      final res = await widget.client.bridgeApproval(
           widget.session.tool, widget.session.id, '$requestId', decision);
+      if (!mounted) return;
+      if (!res.ok) {
+        setState(() {
+          _approval = saved;
+          _awaitingReply = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.error ?? '审批失败')),
+        );
+      }
       return;
     }
     if (key.isNotEmpty) {
-      await widget.client
+      final res = await widget.client
           .writeSession(widget.session.id, key == 'esc' ? '\x1b' : key);
+      if (!mounted) return;
+      if (!res.ok) {
+        setState(() {
+          _approval = saved;
+          _awaitingReply = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.error ?? '发送失败')),
+        );
+        return;
+      }
     } else if (index != null) {
-      if (stage != 'reasoning' && stage != 'model') {
-        await widget.client
-            .writeSession(widget.session.id, '$index', submit: true);
-      } else {
-        await widget.client.writeSession(widget.session.id, '$index');
+      final res = (stage != 'reasoning' && stage != 'model')
+          ? await widget.client
+              .writeSession(widget.session.id, '$index', submit: true)
+          : await widget.client.writeSession(widget.session.id, '$index');
+      if (!mounted) return;
+      if (!res.ok) {
+        setState(() {
+          _approval = saved;
+          _awaitingReply = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.error ?? '发送失败')),
+        );
+        return;
       }
     }
     _bumpFastPoll();
+  }
+
+  Future<void> _interruptTurn() async {
+    if (_bridge) {
+      final res = await widget.client
+          .bridgeTurnInterrupt(widget.session.tool, widget.session.id);
+      if (!mounted) return;
+      if (!res.ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.error ?? '停止失败')),
+        );
+        return;
+      }
+      setState(() => _awaitingReply = false);
+      return;
+    }
+    await widget.client.writeSession(widget.session.id, '\x03'); // Ctrl-C
+    if (mounted) setState(() => _awaitingReply = false);
   }
 
   void _bumpFastPoll() {
@@ -1375,7 +1429,15 @@ class _TimelineScreenState extends State<TimelineScreen> {
                 style: TextStyle(color: kExited, fontSize: 12.5)),
           ),
           TextButton(
-            onPressed: () => Navigator.of(context).pop('resume'),
+            onPressed: () => Navigator.of(context).pop({
+              'action': 'resume',
+              'sessionId': widget.session.id,
+              'tool': widget.session.tool,
+              'cwd': widget.session.cwd,
+              'threadId': widget.session.threadId,
+              'model': widget.session.model,
+              'title': widget.displayTitle ?? widget.session.title,
+            }),
             child: const Text('恢复会话'),
           ),
           TextButton(
@@ -2048,6 +2110,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
         controller: _compose,
         onSend: _submit,
         onAttach: _openAttach,
+        busy: _awaitingReply,
+        onStop: _awaitingReply ? _interruptTurn : null,
         hint: '做点什么…',
       );
 

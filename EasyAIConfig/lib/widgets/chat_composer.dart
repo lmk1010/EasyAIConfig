@@ -3,16 +3,21 @@ import '../theme.dart';
 
 /// 统一的对话输入条（对标 Codex App 浮动输入）：
 /// 大圆角白底浅阴影，`+` 在左、占位「做点什么…」、发送圆钮在右。
+/// [busy] 时发送钮变停止，点 [onStop]。
 class ChatComposer extends StatefulWidget {
   final TextEditingController controller;
   final VoidCallback onSend;
   final VoidCallback? onAttach;
+  final VoidCallback? onStop;
+  final bool busy;
   final String hint;
   const ChatComposer({
     super.key,
     required this.controller,
     required this.onSend,
     this.onAttach,
+    this.onStop,
+    this.busy = false,
     this.hint = '做点什么…',
   });
 
@@ -115,24 +120,31 @@ class _ChatComposerState extends State<ChatComposer> {
         ),
       );
 
-  Widget _sendBtn(bool hasText) => Padding(
-        padding: const EdgeInsets.only(left: 2),
-        child: Material(
-          color: hasText ? kPrimary : const Color(0xFFF0F0F2),
-          shape: const CircleBorder(),
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: widget.onSend,
-            child: SizedBox(
-              width: 42,
-              height: 42,
-              child: Icon(
-                Icons.arrow_upward_rounded,
-                color: hasText ? kOnPrimary : kFaint,
-                size: 22,
-              ),
+  Widget _sendBtn(bool hasText) {
+    final stop = widget.busy && widget.onStop != null;
+    return Padding(
+      padding: const EdgeInsets.only(left: 2),
+      child: Material(
+        color: stop
+            ? kExited
+            : (hasText ? kPrimary : const Color(0xFFF0F0F2)),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: stop
+              ? widget.onStop
+              : (hasText ? widget.onSend : null),
+          child: SizedBox(
+            width: 42,
+            height: 42,
+            child: Icon(
+              stop ? Icons.stop_rounded : Icons.arrow_upward_rounded,
+              color: stop || hasText ? kOnPrimary : kFaint,
+              size: 22,
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
