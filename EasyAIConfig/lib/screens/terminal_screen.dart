@@ -9,6 +9,7 @@ import 'package:xterm/xterm.dart';
 
 import '../api.dart';
 import '../agent_notify.dart';
+import '../session_capabilities.dart';
 import '../settings.dart';
 import '../theme.dart';
 import 'sessions_screen.dart';
@@ -40,6 +41,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   bool _reading = false;
   bool _running = true;
   bool _disposed = false;
+  bool _agentWaiting = false;
+  String _waitingSummary = '';
 
   bool _landscape = false;
   /// Enter/y/n 半透明条；默认开（无输入框时靠它确认）
@@ -55,6 +58,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
   void initState() {
     super.initState();
     _running = widget.session.running;
+    _agentWaiting = widget.session.status == AgentStatus.waiting;
+    _waitingSummary = widget.session.pendingSummary;
     _termController = TerminalController();
     _terminal = Terminal(maxLines: 10000);
     _terminal.onOutput = (data) => _send(data);
@@ -439,6 +444,66 @@ class _TerminalScreenState extends State<TerminalScreen> {
             right: 10,
             child: _fabMenu(isLand),
           ),
+          if (_agentWaiting)
+            Positioned(
+              top: media.padding.top + 8,
+              left: 12,
+              right: 56,
+              child: Material(
+                color: const Color(0xE5C7841F),
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Agent 在等你',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13.5)),
+                      if (_waitingSummary.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(_waitingSummary,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Color(0xF2FFFFFF), fontSize: 12)),
+                      ],
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        _waitBtn('允许 y', () {
+                          _tapKey('y');
+                          setState(() => _agentWaiting = false);
+                        }),
+                        const SizedBox(width: 6),
+                        _waitBtn('拒绝 n', () {
+                          _tapKey('n');
+                          setState(() => _agentWaiting = false);
+                        }),
+                        const SizedBox(width: 6),
+                        _waitBtn('Esc', () {
+                          _tapKey('\x1b');
+                          setState(() => _agentWaiting = false);
+                        }),
+                        const Spacer(),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 28, minHeight: 28),
+                          onPressed: () =>
+                              setState(() => _agentWaiting = false),
+                          icon: const Icon(Icons.close,
+                              color: Colors.white70, size: 18),
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           // 底部半透明快捷键（可收起）
           if (_keysOpen)
             Positioned(
@@ -451,6 +516,23 @@ class _TerminalScreenState extends State<TerminalScreen> {
       ),
     );
   }
+
+  Widget _waitBtn(String label, VoidCallback onTap) => Material(
+        color: const Color(0x33FFFFFF),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Text(label,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
+          ),
+        ),
+      );
 
   Widget _fabMenu(bool isLand) {
     return Material(

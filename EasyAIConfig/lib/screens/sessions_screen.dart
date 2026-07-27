@@ -372,18 +372,25 @@ class _SessionsScreenState extends State<SessionsScreen>
     final type = (ev['type'] ?? '').toString();
     if (type == 'sessions/snapshot') {
       final list = (ev['sessions'] as List?) ?? [];
-      final bridge = list
+      final rows = list
           .whereType<Map>()
           .map((e) {
             final m = Map<String, dynamic>.from(e);
-            m['bridge'] = true;
-            m['viewMode'] = m['viewMode'] ?? 'bridge';
+            final isBridge = m['bridge'] == true ||
+                (m['viewMode'] ?? '').toString() == 'bridge';
+            m['bridge'] = isBridge;
+            m['viewMode'] = m['viewMode'] ??
+                (isBridge ? 'bridge' : 'terminal');
             return SessionInfo.fromJson(m);
           })
           .toList();
       setState(() {
-        final pty = _sessions.where((s) => !s.bridge).toList();
-        _sessions = [...bridge, ...pty];
+        // 保留未匹配的 hook 雷达卡（电脑 CLI 等你、无对应 PTY/bridge）
+        final radar = _sessions
+            .where((s) => s.origin == 'hook')
+            .where((r) => !rows.any((x) => x.id == r.id))
+            .toList();
+        _sessions = [...rows, ...radar];
         _sortSessionsInPlace();
         _loading = false;
         _reachable ??= true;
@@ -395,8 +402,11 @@ class _SessionsScreenState extends State<SessionsScreen>
       final raw = ev['session'];
       if (raw is! Map) return;
       final m = Map<String, dynamic>.from(raw);
-      m['bridge'] = m['bridge'] ?? true;
-      m['viewMode'] = m['viewMode'] ?? 'bridge';
+      final isBridge = m['bridge'] == true ||
+          (m['viewMode'] ?? '').toString() == 'bridge';
+      m['bridge'] = isBridge;
+      m['viewMode'] = m['viewMode'] ??
+          (isBridge ? 'bridge' : 'terminal');
       final s = SessionInfo.fromJson(m);
       setState(() {
         final i = _sessions.indexWhere((x) => x.id == s.id);
@@ -405,6 +415,15 @@ class _SessionsScreenState extends State<SessionsScreen>
         } else {
           _sessions.insert(0, s);
         }
+        // 同 cwd 的 hook 雷达卡被真实会话接管后移除
+        _sessions.removeWhere((x) =>
+            x.origin == 'hook' &&
+            x.id != s.id &&
+            x.cwd.isNotEmpty &&
+            s.cwd.isNotEmpty &&
+            (x.cwd == s.cwd ||
+                x.cwd.startsWith('${s.cwd}/') ||
+                s.cwd.startsWith('${x.cwd}/')));
         _sortSessionsInPlace();
         _loading = false;
       });
@@ -429,8 +448,11 @@ class _SessionsScreenState extends State<SessionsScreen>
         final i = _sessions.indexWhere((x) => x.id == id);
         if (sessionRaw is Map) {
           final m = Map<String, dynamic>.from(sessionRaw);
-          m['bridge'] = true;
-          m['viewMode'] = 'bridge';
+          final isBridge = m['bridge'] == true ||
+              (m['viewMode'] ?? '').toString() == 'bridge';
+          m['bridge'] = isBridge;
+          m['viewMode'] = m['viewMode'] ??
+              (isBridge ? 'bridge' : 'terminal');
           final s = SessionInfo.fromJson(m);
           if (i >= 0) {
             _sessions[i] = s;
@@ -452,7 +474,9 @@ class _SessionsScreenState extends State<SessionsScreen>
             'remoteActive': cur.remoteActive,
             'persistent': cur.persistent,
             'bridge': cur.bridge,
-            'viewMode': cur.viewMode.isEmpty ? 'bridge' : cur.viewMode,
+            'viewMode': cur.viewMode.isEmpty
+                ? (cur.bridge ? 'bridge' : 'terminal')
+                : cur.viewMode,
             'threadId': cur.threadId,
             'model': cur.model,
             'agentStatus': st,
@@ -469,6 +493,7 @@ class _SessionsScreenState extends State<SessionsScreen>
     if (type == 'hook/status') {
       final cwd = (ev['cwd'] ?? '').toString();
       final st = (ev['agentStatus'] ?? '').toString();
+      final tool = (ev['tool'] ?? 'codex').toString();
       final summary = (ev['pendingApproval'] is Map)
           ? ((ev['pendingApproval']['summary'] ?? '').toString())
           : '';
@@ -487,13 +512,22 @@ class _SessionsScreenState extends State<SessionsScreen>
         return na == nb || na.startsWith('$nb/') || nb.startsWith('$na/');
       }
       setState(() {
+        var hit = false;
         for (var i = 0; i < _sessions.length; i++) {
           if (!cwdMatch(_sessions[i].cwd, cwd)) continue;
           if (_sessions[i].bridge &&
               _sessions[i].agentStatus == AgentStatus.waiting) {
             continue; // bridge 自身 waiting 优先
           }
-          if (st != AgentStatus.waiting) continue;
+          hit = true;
+          if (st != AgentStatus.waiting && st != AgentStatus.working) {
+            // done：清掉 hook 叠的 waiting
+            if (_sessions[i].origin == 'hook') {
+              _sessions.removeAt(i);
+              break;
+            }
+            continue;
+          }
           final cur = _sessions[i];
           _sessions[i] = SessionInfo.fromJson({
             'sessionId': cur.id,
@@ -515,6 +549,34 @@ class _SessionsScreenState extends State<SessionsScreen>
             'agentStatus': st,
             'pendingApproval': {'summary': summary},
           });
+        }
+        // 孤儿 Hook：电脑 CLI 等你，列表里却没有对应会话 → 造雷达卡
+        if (!hit && st == AgentStatus.waiting) {
+          final id = 'hook:$tool:${cwd.hashCode & 0x7fffffff}';
+          final existing = _sessions.indexWhere((s) => s.id == id);
+          final card = SessionInfo.fromJson({
+            'sessionId': id,
+            'tool': tool,
+            'title': '$tool · 电脑等你',
+            'displayName': summary.isNotEmpty ? summary : '$tool 等待确认',
+            'cwd': cwd,
+            'commandPreview': 'agent-hook',
+            'createdAt': DateTime.now().toIso8601String(),
+            'running': true,
+            'origin': 'hook',
+            'remoteActive': false,
+            'persistent': false,
+            'bridge': false,
+            'viewMode': 'terminal',
+            'agentStatus': AgentStatus.waiting,
+            'pendingApproval': {'summary': summary},
+          });
+          if (existing >= 0) {
+            _sessions[existing] = card;
+          } else {
+            _sessions.insert(0, card);
+          }
+          _notifyStatusTransitions([card]);
         }
         _sortSessionsInPlace();
       });
@@ -627,6 +689,7 @@ class _SessionsScreenState extends State<SessionsScreen>
       await loadBridge('/api/codex/list', 'codex', 'codex app-server');
       await loadBridge('/api/claude/list', 'claude', 'claude -p stream-json');
       // Hook 雷达：按 cwd 叠加 waiting/working 到已有会话（含终端/镜像）
+      final orphans = <SessionInfo>[];
       try {
         if (AppSettings.instance.agentHooksEnabled.value) {
           final hr = await _client.agentHooksSessions();
@@ -653,6 +716,7 @@ class _SessionsScreenState extends State<SessionsScreen>
               final st = (h['agentStatus'] ?? '').toString();
               final summary = (h['pendingSummary'] ?? '').toString();
               if (cwd.isEmpty || st.isEmpty) continue;
+              var matched = false;
               for (var i = 0; i < bridge.length; i++) {
                 if (cwdMatch(bridge[i].cwd, cwd) &&
                     bridge[i].agentStatus != AgentStatus.waiting) {
@@ -678,7 +742,10 @@ class _SessionsScreenState extends State<SessionsScreen>
                       'pendingApproval': {'summary': summary},
                     };
                     bridge[i] = SessionInfo.fromJson(m);
+                    matched = true;
                   }
+                } else if (cwdMatch(bridge[i].cwd, cwd)) {
+                  matched = true;
                 }
               }
               for (var i = 0; i < pty.length; i++) {
@@ -704,13 +771,37 @@ class _SessionsScreenState extends State<SessionsScreen>
                     'pendingApproval': {'summary': summary},
                   };
                   pty[i] = SessionInfo.fromJson(m);
+                  matched = true;
                 }
+              }
+              // 孤儿 Hook → 雷达卡（电脑 CLI 等你，无对应会话）
+              if (!matched && st == AgentStatus.waiting) {
+                final tool = (h['tool'] ?? 'codex').toString();
+                final id = 'hook:$tool:${cwd.hashCode & 0x7fffffff}';
+                orphans.add(SessionInfo.fromJson({
+                  'sessionId': id,
+                  'tool': tool,
+                  'title': '$tool · 电脑等你',
+                  'displayName':
+                      summary.isNotEmpty ? summary : '$tool 等待确认',
+                  'cwd': cwd,
+                  'commandPreview': 'agent-hook',
+                  'createdAt': DateTime.now().toIso8601String(),
+                  'running': true,
+                  'origin': 'hook',
+                  'remoteActive': false,
+                  'persistent': false,
+                  'bridge': false,
+                  'viewMode': 'terminal',
+                  'agentStatus': AgentStatus.waiting,
+                  'pendingApproval': {'summary': summary},
+                }));
               }
             }
           }
         }
       } catch (_) {}
-      final merged = _dedupeSessions([...bridge, ...pty]);
+      final merged = _dedupeSessions([...bridge, ...pty, ...orphans]);
       merged.sort((a, b) {
         final ra = AgentStatus.sortRank(a.status);
         final rb = AgentStatus.sortRank(b.status);
@@ -1176,6 +1267,10 @@ class _SessionsScreenState extends State<SessionsScreen>
     if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
       _scaffoldKey.currentState?.closeDrawer();
     }
+    if (s.origin == 'hook' || s.id.startsWith('hook:')) {
+      _openHookRadar(s);
+      return;
+    }
     final displayTitle = _displayTitle(s);
     // bridge（及遗留刮屏）→ Timeline UI；terminal/tmux → 完整 TUI
     final useTimeline =
@@ -1202,6 +1297,121 @@ class _SessionsScreenState extends State<SessionsScreen>
         );
       }
     });
+  }
+
+  /// 电脑 CLI Hook 雷达卡：无法直连审批，引导新建同目录会话。
+  Future<void> _openHookRadar(SessionInfo s) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: kBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('电脑端 Agent 在等你',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Text(
+                s.pendingSummary.isNotEmpty
+                    ? s.pendingSummary
+                    : '该进程不在本 App 托管。可在同目录新建快速通道/终端，或到电脑上确认。',
+                style: const TextStyle(color: kMuted, fontSize: 13.5),
+              ),
+              if (s.cwd.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(s.cwd,
+                    style: const TextStyle(color: kFaint, fontSize: 12)),
+              ],
+              const SizedBox(height: 14),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, 'bridge'),
+                child: const Text('同目录新建快速通道'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: () => Navigator.pop(ctx, 'terminal'),
+                child: const Text('同目录新建终端'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('知道了'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    final tool = (s.tool == 'claude' || s.tool == 'claudecode')
+        ? 'claude'
+        : 'codex';
+    if (choice == 'bridge') {
+      late final ApiResult res;
+      try {
+        res = await BridgeLaunchDialog.run(
+          context,
+          title: '快速通道',
+          steps: const ['握手…', '创建会话…', '同步…', '即将就绪…'],
+          task: () => tool == 'claude'
+              ? _client.claudeThreadStart(
+                  cwd: s.cwd.isEmpty ? '.' : s.cwd,
+                  title: s.pendingSummary.isNotEmpty
+                      ? s.pendingSummary
+                      : '跟进电脑等待',
+                )
+              : _client.codexThreadStart(
+                  cwd: s.cwd.isEmpty ? '.' : s.cwd,
+                  title: s.pendingSummary.isNotEmpty
+                      ? s.pendingSummary
+                      : '跟进电脑等待',
+                ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+        return;
+      }
+      if (!mounted) return;
+      if (res.ok && res.data is Map) {
+        final m = Map<String, dynamic>.from(res.data as Map);
+        m['bridge'] = true;
+        m['viewMode'] = 'bridge';
+        m['tool'] = tool;
+        m['origin'] = 'phone';
+        m['running'] = true;
+        m['createdAt'] = DateTime.now().toIso8601String();
+        _openTerminal(SessionInfo.fromJson(m));
+        _refresh(silent: true);
+      }
+      return;
+    }
+    if (choice == 'terminal') {
+      final program = tool == 'claude' ? 'claude' : 'codex';
+      final res = await _client.createSession(
+        tool: tool,
+        program: program,
+        args: const [],
+        cwd: s.cwd.isEmpty ? '.' : s.cwd,
+        title: '$program · 跟进',
+      );
+      if (!mounted) return;
+      if (res.ok && res.data?['terminalSession'] != null) {
+        _openTerminal(
+            SessionInfo.fromJson(res.data['terminalSession'] as Map));
+        _refresh(silent: true);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.error ?? '创建失败')),
+        );
+      }
+    }
   }
 
   /// 列表「等你」动作：有 requestId → Allow/Deny；否则快捷回复 / 打开。
@@ -1447,6 +1657,8 @@ class _SessionsScreenState extends State<SessionsScreen>
       tags.add(_chip('手机', Icons.smartphone, kAccent));
     } else if (s.origin == 'desktop') {
       tags.add(_chip('电脑', Icons.computer, const Color(0xFF5B8CFF)));
+    } else if (s.origin == 'hook') {
+      tags.add(_chip('电脑CLI', Icons.sensors, kWaiting));
     }
     if (s.remoteActive && s.origin != 'phone') {
       tags.add(_chip('在看', Icons.visibility, kRunning));
@@ -2092,10 +2304,11 @@ class _SessionsScreenState extends State<SessionsScreen>
                         const PopupMenuItem(
                             value: 'reply', child: Text('处理「等你」')),
                       const PopupMenuItem(value: 'hide', child: Text('本机隐藏')),
-                      const PopupMenuItem(
-                          value: 'close',
-                          child: Text('结束会话',
-                              style: TextStyle(color: kExited))),
+                      if (s.origin != 'hook')
+                        const PopupMenuItem(
+                            value: 'close',
+                            child: Text('结束会话',
+                                style: TextStyle(color: kExited))),
                     ],
                   ),
                 ),
@@ -2849,7 +3062,18 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
                   decoration: _dec(hint: 'gpt-5-pro / claude-opus-4-x'),
                 ),
               ),
-            if (isCodex) ...[
+            if (_tool == 'codex' && _viewMode == SessionMode.bridge)
+              _labeled(
+                '推理强度',
+                _dropdownBox<String>(
+                  value: _effort,
+                  items: _efforts
+                      .map((e) => (e, e.isEmpty ? '默认（跟随 profile）' : e))
+                      .toList(),
+                  onChanged: (v) => setState(() => _effort = v ?? ''),
+                ),
+              ),
+            if (isCodex && _viewMode != SessionMode.bridge) ...[
               InkWell(
                 borderRadius: BorderRadius.circular(8),
                 onTap: () => setState(() => _advanced = !_advanced),

@@ -123,12 +123,45 @@ fn bridge_snapshot_sessions() -> Vec<Value> {
     let mut out = Vec::new();
     if let Ok(v) = crate::codex_app_server::api_list(&json!({})) {
         if let Some(arr) = v.get("sessions").and_then(Value::as_array) {
-            out.extend(arr.iter().cloned());
+            for s in arr {
+                let mut m = s.clone();
+                if let Some(obj) = m.as_object_mut() {
+                    obj.insert("bridge".to_string(), json!(true));
+                    obj
+                        .entry("viewMode".to_string())
+                        .or_insert_with(|| json!("bridge"));
+                }
+                out.push(m);
+            }
         }
     }
     if let Ok(v) = crate::claude_print_bridge::api_list(&json!({})) {
         if let Some(arr) = v.get("sessions").and_then(Value::as_array) {
-            out.extend(arr.iter().cloned());
+            for s in arr {
+                let mut m = s.clone();
+                if let Some(obj) = m.as_object_mut() {
+                    obj.insert("bridge".to_string(), json!(true));
+                    obj
+                        .entry("viewMode".to_string())
+                        .or_insert_with(|| json!("bridge"));
+                }
+                out.push(m);
+            }
+        }
+    }
+    // PTY / tmux：一并进快照，手机不用再 REST 猜桌面新建
+    if let Ok(v) = crate::terminal::terminal_list(&json!({})) {
+        if let Some(arr) = v.get("rows").and_then(Value::as_array) {
+            for s in arr {
+                let mut m = s.clone();
+                if let Some(obj) = m.as_object_mut() {
+                    obj.insert("bridge".to_string(), json!(false));
+                    if !obj.contains_key("viewMode") {
+                        obj.insert("viewMode".to_string(), json!("terminal"));
+                    }
+                }
+                out.push(m);
+            }
         }
     }
     out

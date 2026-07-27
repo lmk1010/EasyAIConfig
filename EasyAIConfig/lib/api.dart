@@ -459,7 +459,10 @@ class ApiClient {
           ? post('/api/claude/close', {'sessionId': sessionId})
           : post('/api/codex/close', {'sessionId': sessionId});
     }
-    return post('/api/terminal/close', {'sessionId': sessionId});
+    return post('/api/terminal/close', {
+      'sessionId': sessionId,
+      'remove': true,
+    });
   }
 
   Stream<Map<String, dynamic>> streamBridgeEvents(

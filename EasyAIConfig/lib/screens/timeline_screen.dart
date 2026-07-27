@@ -116,6 +116,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
     }
     _seedModelFromSession();
     if (AppSettings.instance.keepAwake.value) WakelockPlus.enable();
+    AppSettings.instance.keepAwake.addListener(_onKeepAwakeChanged);
     _scroll.addListener(() {
       _atBottom = !_scroll.hasClients ||
           _scroll.offset >= _scroll.position.maxScrollExtent - 80;
@@ -153,11 +154,16 @@ class _TimelineScreenState extends State<TimelineScreen> {
     }
   }
 
+  void _onKeepAwakeChanged() {
+    WakelockPlus.toggle(enable: AppSettings.instance.keepAwake.value);
+  }
+
   @override
   void dispose() {
     if (AgentNotify.instance.foregroundSessionId == widget.session.id) {
       AgentNotify.instance.foregroundSessionId = null;
     }
+    AppSettings.instance.keepAwake.removeListener(_onKeepAwakeChanged);
     _timer?.cancel();
     _idleTimer?.cancel();
     _bridgeSub?.cancel();

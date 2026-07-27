@@ -1385,6 +1385,14 @@ fn finalize_session(
     });
 
     insert_session(Arc::clone(&session))?;
+    // 列表总线：手机即时看到桌面新建的终端 / tmux
+    if let Ok(info) = serde_json::to_value(session_info(&session)) {
+        let mut snap = info;
+        if let Some(obj) = snap.as_object_mut() {
+            obj.insert("bridge".to_string(), json!(false));
+        }
+        crate::session_bus::publish_upsert(snap);
+    }
     Ok(json!({
       "ok": true,
       "terminalSession": session_info(&session),
@@ -2885,6 +2893,13 @@ pub(crate) fn terminal_close(body: &Value) -> Result<Value, String> {
             remove_tmux_meta(&name);
         }
         let _ = remove_session(&session_id)?;
+        crate::session_bus::publish_remove(&session_id, &session.tool);
+    } else if let Ok(info) = serde_json::to_value(session_info(&session)) {
+        let mut snap = info;
+        if let Some(obj) = snap.as_object_mut() {
+            obj.insert("bridge".to_string(), json!(false));
+        }
+        crate::session_bus::publish_upsert(snap);
     }
     Ok(json!({
       "ok": true,
