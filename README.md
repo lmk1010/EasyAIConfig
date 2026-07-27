@@ -44,8 +44,11 @@ EasyAIConfig 用来把 Codex、Claude Code、OpenCode、OpenClaw、Gemini CLI、
 | 反代网关 | 本地统一入口，支持请求日志、搜索、分页、清理和保留策略 |
 | 工具安装 | 管理 Codex、Claude Code、OpenCode、OpenClaw、IDE 插件和桌面应用 |
 | 资产中心 | 查看配置、MCP、Skill、会话、提示词等本地资产 |
+| 手机遥控 | Flutter App 扫码配对，远程新建 / 审批 / 镜像 Codex 与 Claude Code |
 
 ## 截图
+
+### 桌面端
 
 <img src="assets/screenshot-quick-setup.png" alt="一键配置与 Provider 管理" width="100%" />
 
@@ -54,6 +57,37 @@ EasyAIConfig 用来把 Codex、Claude Code、OpenCode、OpenClaw、Gemini CLI、
 <img src="assets/screenshot-router.png" alt="自动路由网关" width="100%" />
 
 <img src="assets/screenshot-tools.png" alt="工具安装与管理" width="100%" />
+
+### 手机端
+
+扫码配对电脑上的远程服务后，可在手机上建会话、走快速通道、镜像终端，并查看用量。
+
+<p align="center">
+  <img src="assets/screenshot-mobile-pair.png" alt="扫码 / 手动配对" width="180" />
+  &nbsp;
+  <img src="assets/screenshot-mobile-sessions.png" alt="会话列表" width="180" />
+  &nbsp;
+  <img src="assets/screenshot-mobile-new-session.png" alt="新建会话 · 快速 / 终端 / 镜像" width="180" />
+</p>
+
+<p align="center">
+  <img src="assets/screenshot-mobile-fast-start.png" alt="启动快速通道" width="180" />
+  &nbsp;
+  <img src="assets/screenshot-mobile-chat-tools.png" alt="对话工具菜单" width="180" />
+  &nbsp;
+  <img src="assets/screenshot-mobile-usage.png" alt="Codex 用量" width="180" />
+</p>
+
+| 截图 | 说明 |
+|------|------|
+| 配对 | 扫码或手动填入电脑局域网地址 + token |
+| 会话列表 | 查看进行中的 Codex / Claude Code 会话与连接状态 |
+| 新建会话 | 选择快速 / 终端 / 镜像模式，指定工作目录与模型 |
+| 快速通道 | 手机直接起桥接会话，不必先开电脑终端 |
+| 工具菜单 | 发图、切模型、推理强度、用量、进入全屏终端 |
+| 用量 | 查看 Codex 周限额与 Credits |
+
+更多手机端说明见 [`EasyAIConfig/README.md`](EasyAIConfig/README.md)。
 
 ## 安装
 
@@ -69,6 +103,18 @@ EasyAIConfig 用来把 Codex、Claude Code、OpenCode、OpenClaw、Gemini CLI、
 | macOS Intel | `.dmg` / `x64` |
 | Windows | `.msi` / `.exe` |
 | Linux | `.AppImage` / `.deb` |
+
+### 手机端（Android）
+
+Release 页可下载 APK，或自行构建：
+
+```bash
+cd EasyAIConfig
+flutter build apk --release
+# 产物：build/app/outputs/flutter-apk/app-release.apk
+```
+
+使用前先在桌面端开启「远程」服务，再用手机扫码配对。同一 Wi‑Fi 直连；跨网可走 VPS 反向隧道。
 
 ### Web 模式
 
@@ -87,6 +133,12 @@ Web 模式会启动本地服务并打开浏览器。Windows 下推荐优先使�
 4. 填写 Base URL、API Key、模型
 5. 点击保存
 6. 点击启动，选择应用内终端或外部终端
+
+手机遥控：
+
+1. 桌面端打开终端页 →「远程」→ 开启本机服务
+2. 手机 App 扫码配对（确认顶栏 IP 是你这台电脑）
+3. 新建会话，选快速 / 终端 / 镜像
 
 ## 本地文件
 

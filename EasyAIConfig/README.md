@@ -6,7 +6,26 @@
 - 同一 WiFi：直连电脑内网地址
 - 跨网 / 4G：电脑端用 VPS 反向隧道中转
 - 实时查看 agent 输出，随手回复 `y/n`、`Enter`、`Esc`、`Ctrl-C` 等（专为审批 codex/claude 交互设计）
-- 可在手机上直接新建 codex / claude 会话
+- 可在手机上直接新建会话：快速通道 / 终端 / 镜像
+- 顶栏显示当前电脑 IP 与连接状态（已连接 / 轮询 / 无连接）
+
+## 截图
+
+<p align="center">
+  <img src="../assets/screenshot-mobile-pair.png" alt="扫码 / 手动配对" width="180" />
+  &nbsp;
+  <img src="../assets/screenshot-mobile-sessions.png" alt="会话列表" width="180" />
+  &nbsp;
+  <img src="../assets/screenshot-mobile-new-session.png" alt="新建会话" width="180" />
+</p>
+
+<p align="center">
+  <img src="../assets/screenshot-mobile-fast-start.png" alt="启动快速通道" width="180" />
+  &nbsp;
+  <img src="../assets/screenshot-mobile-chat-tools.png" alt="对话工具菜单" width="180" />
+  &nbsp;
+  <img src="../assets/screenshot-mobile-usage.png" alt="Codex 用量" width="180" />
+</p>
 
 ## 工作原理
 
