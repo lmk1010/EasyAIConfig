@@ -177,8 +177,8 @@ class _SessionsScreenState extends State<SessionsScreen>
   List<SessionInfo> _sessions = [];
   String? _error;
   bool _loading = true;
-  /// REST 是否可达（真正掉线才亮大红条）
-  bool _reachable = true;
+  /// REST 是否可达；null = 尚未探测完
+  bool? _reachable;
   Timer? _retryTimer;
   int _retryAttempt = 0;
   String _query = '';
@@ -342,7 +342,7 @@ class _SessionsScreenState extends State<SessionsScreen>
         _sessions = [...bridge, ...pty];
         _sortSessionsInPlace();
         _loading = false;
-        _reachable = true;
+        _reachable ??= true;
       });
       _notifyStatusTransitions(_sessions);
       return;
@@ -708,7 +708,7 @@ class _SessionsScreenState extends State<SessionsScreen>
       _sessions = [];
       _loading = true;
       _error = null;
-      _reachable = true;
+      _reachable = null;
       _hist = [];
       _histLoaded = false;
       _retryAttempt = 0;
@@ -1364,6 +1364,43 @@ class _SessionsScreenState extends State<SessionsScreen>
         ),
       );
 
+  /// 顶栏连接状态：已连接 / 无连接 / 连接中
+  Widget _linkStatusChip() {
+    final Color color;
+    final String label;
+    if (_reachable == true) {
+      color = kRunning;
+      label = '已连接';
+    } else if (_reachable == false) {
+      color = kExited;
+      label = '无连接';
+    } else {
+      color = kFaint;
+      label = '连接中';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(label,
+              style: TextStyle(
+                  color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1390,6 +1427,9 @@ class _SessionsScreenState extends State<SessionsScreen>
                     style: const TextStyle(
                         fontSize: 16, fontWeight: FontWeight.w600)),
               ),
+              const SizedBox(width: 8),
+              _linkStatusChip(),
+              const SizedBox(width: 2),
               const Icon(Icons.expand_more, size: 18, color: kMuted),
             ]),
           ),
@@ -1403,7 +1443,7 @@ class _SessionsScreenState extends State<SessionsScreen>
       ),
       body: Column(
         children: [
-          if (!_reachable) _healthBanner(),
+          if (_reachable == false) _healthBanner(),
           Expanded(child: _home()),
         ],
       ),
@@ -1430,9 +1470,9 @@ class _SessionsScreenState extends State<SessionsScreen>
         const SizedBox(height: 22),
         Center(
           child: FilledButton.icon(
-            onPressed: _newSession,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('新建会话'),
+            onPressed: _reachable == false ? _forceReconnect : _newSession,
+            icon: Icon(_reachable == false ? Icons.refresh : Icons.add, size: 18),
+            label: Text(_reachable == false ? '重新连接' : '新建会话'),
           ),
         ),
         if (live.isNotEmpty) ...[
@@ -1447,12 +1487,26 @@ class _SessionsScreenState extends State<SessionsScreen>
                     letterSpacing: 0.2)),
           ),
           ...live.take(8).map(_sessionCard),
-        ] else if (_reachable) ...[
+        ] else if (_reachable == true) ...[
           const SizedBox(height: 24),
           const Center(
             child: Text('还没有进行中的会话',
                 style: TextStyle(color: kFaint, fontSize: 12.5)),
           ),
+        ] else if (_reachable == false) ...[
+          const SizedBox(height: 28),
+          const Center(
+            child: Text('无连接：打不开桌面远程服务',
+                style: TextStyle(color: kExited, fontSize: 13)),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 6),
+            Center(
+              child: Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: kFaint, fontSize: 12)),
+            ),
+          ],
         ],
       ],
     );
@@ -1492,11 +1546,25 @@ class _SessionsScreenState extends State<SessionsScreen>
             ),
             const Divider(height: 1),
             ListTile(
-              leading: const Icon(Icons.dns_outlined),
+              leading: Icon(
+                _reachable == true
+                    ? Icons.dns_outlined
+                    : (_reachable == false
+                        ? Icons.cloud_off_outlined
+                        : Icons.hourglass_empty),
+                color: _reachable == true
+                    ? kRunning
+                    : (_reachable == false ? kExited : kFaint),
+              ),
               title: Text(_server.name,
                   maxLines: 1, overflow: TextOverflow.ellipsis),
-              subtitle: const Text('切换 / 管理服务器',
-                  style: TextStyle(fontSize: 11.5)),
+              subtitle: Text(
+                  _reachable == true
+                      ? '已连接 · 点此切换服务器'
+                      : (_reachable == false
+                          ? '无连接 · 点此切换 / 重试'
+                          : '连接中…'),
+                  style: const TextStyle(fontSize: 11.5)),
               onTap: () {
                 Navigator.pop(context);
                 _quickSwitch();
@@ -1524,28 +1592,24 @@ class _SessionsScreenState extends State<SessionsScreen>
 
   Widget _healthBanner() {
     return Material(
-      color: kWarn.withValues(alpha: 0.14),
+      color: kExited.withValues(alpha: 0.10),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
         child: Row(
           children: [
-            const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2, color: kWarn),
-            ),
-            const SizedBox(width: 12),
+            const Icon(Icons.cloud_off, size: 18, color: kExited),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
-                '连接已断开，正在自动重连…${_error != null ? '（$_error）' : ''}',
+                '无连接${_error != null ? ' · $_error' : ''}',
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: kWarn, fontSize: 12.5),
+                style: const TextStyle(color: kExited, fontSize: 12.5),
               ),
             ),
             TextButton(
               onPressed: _forceReconnect,
-              child: const Text('立即重试'),
+              child: const Text('重试'),
             ),
           ],
         ),
@@ -1577,7 +1641,7 @@ class _SessionsScreenState extends State<SessionsScreen>
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : (_sessions.isEmpty
-                    ? (_reachable ? _emptyLive() : _errorLive())
+                    ? (_reachable == true ? _emptyLive() : _errorLive())
                     : _liveList()),
           ),
         ),
@@ -1589,13 +1653,21 @@ class _SessionsScreenState extends State<SessionsScreen>
         const SizedBox(height: 100),
         const Icon(Icons.cloud_off, size: 48, color: kFaint),
         const SizedBox(height: 12),
+        const Center(
+            child: Text('无连接',
+                style: TextStyle(
+                    color: kExited,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600))),
+        const SizedBox(height: 6),
         Center(
-            child: Text(_error ?? '连接失败',
+            child: Text(_error ?? '打不开桌面远程服务',
+                textAlign: TextAlign.center,
                 style: const TextStyle(color: kMuted))),
         const SizedBox(height: 20),
         Center(
           child:
-              FilledButton(onPressed: () => _refresh(), child: const Text('重试')),
+              FilledButton(onPressed: _forceReconnect, child: const Text('重试')),
         ),
       ]);
 
