@@ -47,6 +47,11 @@ struct BridgeSession {
     /// 当前 assistant 流式 item（message.id）
     active_item_id: Mutex<String>,
     origin: Mutex<String>,
+    /// working | waiting | done
+    agent_status: Mutex<String>,
+    pending_approval: Mutex<Option<Value>>,
+    /// 最近一次 rate_limit_event（供用量面板）
+    last_rate_limits: Mutex<Option<Value>>,
 }
 
 impl BridgeSession {
@@ -73,6 +78,79 @@ impl BridgeSession {
         Ok(())
     }
 
+    fn set_agent_status(&self, status: &str) {
+        let next = match status {
+            "working" | "waiting" | "done" => status,
+            _ => "done",
+        };
+        let changed = {
+            let mut g = self.agent_status.lock().unwrap_or_else(|e| e.into_inner());
+            if *g == next {
+                false
+            } else {
+                *g = next.to_string();
+                true
+            }
+        };
+        if !changed {
+            return;
+        }
+        let pending = self
+            .pending_approval
+            .lock()
+            .ok()
+            .and_then(|p| p.clone())
+            .unwrap_or(Value::Null);
+        let summary = pending
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let title = self
+            .title
+            .lock()
+            .ok()
+            .map(|t| t.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "Claude".to_string());
+        crate::desktop_notify::agent_status_changed(&title, next, &summary);
+        self.push_event(json!({
+            "type": "notification",
+            "method": "agent/status",
+            "params": {
+                "agentStatus": next,
+                "pendingApproval": pending,
+            },
+            "sessionId": self.session_id,
+        }));
+        crate::session_bus::publish_agent_status(
+            &self.session_id,
+            "claude",
+            next,
+            &pending,
+            Some(self.snapshot()),
+        );
+    }
+
+    fn set_waiting(&self, method: &str, id: &Value, summary: &str) {
+        if let Ok(mut p) = self.pending_approval.lock() {
+            *p = Some(json!({
+                "method": method,
+                "id": id,
+                "summary": summary,
+            }));
+        }
+        self.set_agent_status("waiting");
+    }
+
+    fn clear_waiting_after_approval(&self) {
+        if let Ok(mut p) = self.pending_approval.lock() {
+            *p = None;
+        }
+        let busy = *self.turn_active.lock().unwrap_or_else(|e| e.into_inner());
+        self.set_agent_status(if busy { "working" } else { "done" });
+    }
+
     fn snapshot(&self) -> Value {
         let claude_sid = self
             .claude_session_id
@@ -80,6 +158,17 @@ impl BridgeSession {
             .ok()
             .map(|t| t.clone())
             .unwrap_or_default();
+        let pending = self
+            .pending_approval
+            .lock()
+            .ok()
+            .and_then(|p| p.clone());
+        let agent_status = self
+            .agent_status
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "done".to_string());
         json!({
             "sessionId": self.session_id,
             "threadId": claude_sid,
@@ -95,9 +184,12 @@ impl BridgeSession {
             "createdAt": self.created_at,
             "running": *self.alive.lock().unwrap_or_else(|e| e.into_inner()),
             "bridge": true,
+            "viewMode": "bridge",
             "tool": "claude",
             "origin": self.origin.lock().ok().map(|o| o.clone()).unwrap_or_default(),
             "commandPreview": "claude -p stream-json",
+            "agentStatus": agent_status,
+            "pendingApproval": pending,
             "tokens": {
                 "total": *self.token_total.lock().unwrap_or_else(|e| e.into_inner()),
                 "contextWindow": *self.context_window.lock().unwrap_or_else(|e| e.into_inner()),
@@ -240,6 +332,10 @@ fn start_reader(session: Arc<BridgeSession>, stdout: std::process::ChildStdout) 
         if let Ok(mut t) = session.turn_active.lock() {
             *t = false;
         }
+        if let Ok(mut p) = session.pending_approval.lock() {
+            *p = None;
+        }
+        session.set_agent_status("done");
         session.push_event(json!({
             "type": "bridge/closed",
             "sessionId": session.session_id,
@@ -444,6 +540,15 @@ fn handle_inbound(session: &BridgeSession, msg: Value) {
             if let Ok(mut id) = session.active_item_id.lock() {
                 *id = String::new();
             }
+            let waiting = session
+                .pending_approval
+                .lock()
+                .ok()
+                .map(|p| p.is_some())
+                .unwrap_or(false);
+            if !waiting {
+                session.set_agent_status("done");
+            }
             // usage
             let input = msg
                 .pointer("/usage/input_tokens")
@@ -480,11 +585,11 @@ fn handle_inbound(session: &BridgeSession, msg: Value) {
             notify(session, "turn/completed", json!({}));
         }
         "rate_limit_event" => {
-            notify(
-                session,
-                "account/rateLimits/updated",
-                msg.get("rate_limit_info").cloned().unwrap_or(json!({})),
-            );
+            let info = msg.get("rate_limit_info").cloned().unwrap_or(json!({}));
+            if let Ok(mut g) = session.last_rate_limits.lock() {
+                *g = Some(info.clone());
+            }
+            notify(session, "account/rateLimits/updated", info);
         }
         "control_request" => {
             // Claude → host：审批等
@@ -508,12 +613,14 @@ fn handle_inbound(session: &BridgeSession, msg: Value) {
                     .or_else(|| request.get("description"))
                     .and_then(Value::as_str)
                     .unwrap_or(tool);
+                let summary = format!("{tool}: {title}");
+                session.set_waiting("item/tool/requestApproval", &request_id, &summary);
                 session.push_event(json!({
                     "type": "serverRequest",
                     "method": "item/tool/requestApproval",
                     "id": request_id,
                     "params": {
-                        "command": format!("{tool}: {title}"),
+                        "command": summary,
                         "tool": tool,
                         "input": request.get("input").cloned().unwrap_or(json!({})),
                         "toolUseId": request.get("tool_use_id").cloned().unwrap_or(Value::Null),
@@ -525,6 +632,7 @@ fn handle_inbound(session: &BridgeSession, msg: Value) {
                     .get("message")
                     .and_then(Value::as_str)
                     .unwrap_or("需要确认");
+                session.set_waiting("item/tool/elicitation", &request_id, message);
                 session.push_event(json!({
                     "type": "serverRequest",
                     "method": "item/tool/elicitation",
@@ -609,6 +717,9 @@ pub(crate) fn api_thread_start(body: &Value) -> Result<Value, String> {
         turn_active: Mutex::new(false),
         active_item_id: Mutex::new(String::new()),
         origin: Mutex::new(origin),
+        agent_status: Mutex::new("done".to_string()),
+        pending_approval: Mutex::new(None),
+        last_rate_limits: Mutex::new(None),
     });
 
     start_reader(session.clone(), stdout);
@@ -617,7 +728,9 @@ pub(crate) fn api_thread_start(body: &Value) -> Result<Value, String> {
         .map_err(|e| e.to_string())?
         .insert(session_id, session.clone());
 
-    Ok(session.snapshot())
+    let snap = session.snapshot();
+    crate::session_bus::publish_upsert(snap.clone());
+    Ok(snap)
 }
 
 /// POST /api/claude/thread/resume
@@ -666,6 +779,7 @@ pub(crate) fn api_turn_start(body: &Value) -> Result<Value, String> {
     if let Ok(mut id) = session.active_item_id.lock() {
         *id = String::new();
     }
+    session.set_agent_status("working");
     notify(&session, "turn/started", json!({ "turn": { "id": "active" } }));
 
     let user_msg = json!({
@@ -700,8 +814,12 @@ pub(crate) fn api_turn_interrupt(body: &Value) -> Result<Value, String> {
     if let Ok(mut t) = session.turn_active.lock() {
         *t = false;
     }
+    if let Ok(mut p) = session.pending_approval.lock() {
+        *p = None;
+    }
+    session.set_agent_status("done");
     notify(&session, "turn/completed", json!({}));
-    Ok(json!({ "ok": true }))
+    Ok(json!({ "ok": true, "session": session.snapshot() }))
 }
 
 /// POST /api/claude/approval
@@ -774,7 +892,8 @@ pub(crate) fn api_approval(body: &Value) -> Result<Value, String> {
         }
     });
     session.write_line(&msg.to_string())?;
-    Ok(json!({ "ok": true }))
+    session.clear_waiting_after_approval();
+    Ok(json!({ "ok": true, "session": session.snapshot() }))
 }
 
 /// POST /api/claude/thread/settings
@@ -811,6 +930,71 @@ pub(crate) fn api_session_get(query: &Value) -> Result<Value, String> {
     let object = parse_json_object(query);
     let session_id = get_string(&object, "sessionId");
     Ok(get_session(&session_id)?.snapshot())
+}
+
+/// GET /api/claude/models — print-bridge 无上游 model/list，返回常用预设
+pub(crate) fn api_models(query: &Value) -> Result<Value, String> {
+    let object = parse_json_object(query);
+    let session_id = get_string(&object, "sessionId");
+    let current = if session_id.is_empty() {
+        String::new()
+    } else {
+        get_session(&session_id)
+            .ok()
+            .and_then(|s| s.model.lock().ok().map(|m| m.clone()))
+            .unwrap_or_default()
+    };
+    let presets = [
+        ("claude-opus-4-20250514", "Opus 4"),
+        ("claude-sonnet-4-20250514", "Sonnet 4"),
+        ("claude-haiku-4-20250514", "Haiku 4"),
+        ("claude-opus-4-1-20250805", "Opus 4.1"),
+        ("claude-sonnet-4-5-20250929", "Sonnet 4.5"),
+        ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+        ("claude-opus-4-6", "Opus 4.6"),
+        ("claude-sonnet-4-6", "Sonnet 4.6"),
+        ("opus", "opus（别名）"),
+        ("sonnet", "sonnet（别名）"),
+        ("haiku", "haiku（别名）"),
+    ];
+    let data: Vec<Value> = presets
+        .iter()
+        .map(|(id, name)| {
+            json!({
+                "id": id,
+                "slug": id,
+                "model": id,
+                "displayName": name,
+                "name": name,
+                "current": *id == current,
+            })
+        })
+        .collect();
+    Ok(json!({ "data": data, "models": data, "current": current }))
+}
+
+/// GET /api/claude/rate-limits — 最近 rate_limit_event + 会话 token + 本地 5h 窗口
+pub(crate) fn api_rate_limits(query: &Value) -> Result<Value, String> {
+    let object = parse_json_object(query);
+    let session_id = get_string(&object, "sessionId");
+    let session = get_session(&session_id)?;
+    let last = session
+        .last_rate_limits
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or(Value::Null);
+    let local = crate::usage_stats::claudecode_local_usage(&json!({})).unwrap_or(json!({}));
+    Ok(json!({
+        "note": "Claude 快速通道：官方配额事件（若有）+ 本会话 token + 本地 5h 消息窗口",
+        "rateLimitEvent": last,
+        "sessionTokens": {
+            "total": *session.token_total.lock().unwrap_or_else(|e| e.into_inner()),
+            "contextWindow": *session.context_window.lock().unwrap_or_else(|e| e.into_inner()),
+        },
+        "localUsage": local,
+        "model": session.model.lock().ok().map(|m| m.clone()).unwrap_or_default(),
+    }))
 }
 
 /// GET /api/claude/list
@@ -857,6 +1041,7 @@ pub(crate) fn api_close(body: &Value) -> Result<Value, String> {
                 let _ = c.wait();
             }
         }
+        crate::session_bus::publish_remove(&session_id, "claude");
     }
     Ok(json!({ "ok": true }))
 }

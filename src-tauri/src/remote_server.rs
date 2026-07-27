@@ -42,10 +42,13 @@ const REMOTE_API_ALLOW: &[&str] = &[
     "/api/codex/",
     "/api/claude/",
     "/api/agent/",
+    "/api/agent-hooks/",
+    "/api/tmux/",
     "/api/state",
     "/api/sessions/inventory",
     "/api/claudecode/state",
     "/api/claudecode/oauth/profiles",
+    "/api/claudecode/local-usage",
     "/api/codex/oauth/profiles",
     "/api/project-binding",
     "/api/project-bindings",
@@ -56,6 +59,7 @@ const REMOTE_API_ALLOW: &[&str] = &[
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 pub(crate) fn install(handle: &AppHandle) {
     let _ = APP_HANDLE.set(handle.clone());
+    crate::session_bus::install(handle);
 }
 
 struct RemoteState {
@@ -1034,6 +1038,10 @@ fn handle_one_request(
     }
     if request.method.eq_ignore_ascii_case("GET") && request.path == "/api/claude/events" {
         crate::claude_print_bridge::handle_events_sse(stream, &request.query);
+        return false;
+    }
+    if request.method.eq_ignore_ascii_case("GET") && request.path == "/api/sessions/stream" {
+        crate::session_bus::handle_sessions_stream(stream, &request.query);
         return false;
     }
 

@@ -268,8 +268,74 @@ async function installTermEventListeners() {
   await listen('agent-event', (event) => {
     applyAgentEnvelope(event.payload || {});
   });
+  // 列表级推送：bridge agentStatus / upsert / remove（取代 4s 轮询猜状态）
+  await listen('sessions-delta', (event) => {
+    try { applySessionsDelta(event.payload || {}); } catch (_) {}
+  });
 }
 installTermEventListeners().catch(() => {});
+
+function applySessionsDelta(ev) {
+  const tp = getState()?.terminalPage;
+  if (!tp || !Array.isArray(tp.sessions)) return;
+  const type = String(ev?.type || '');
+  let changed = false;
+
+  const upsert = (raw) => {
+    if (!raw || typeof raw !== 'object') return;
+    const row = normalizeSession({ ...raw, bridge: true, tool: raw.tool || 'codex' });
+    if (!row.id) return;
+    const existing = tp.sessions.find((s) => s.id === row.id);
+    if (existing) {
+      if (row.agentStatus && existing.agentStatus !== row.agentStatus) {
+        const prev = existing.agentStatus;
+        existing.agentStatus = row.agentStatus;
+        try { eaNotifyAgentStatus(row, prev); } catch (_) {}
+      }
+      if (row.title) existing.title = row.title;
+      if (row.pendingApproval !== undefined) existing.pendingApproval = row.pendingApproval;
+      if (row.running !== undefined) existing.running = row.running;
+      existing.bridge = true;
+      existing._ghost = false;
+      changed = true;
+    } else {
+      tp.sessions.unshift(row);
+      changed = true;
+    }
+  };
+
+  if (type === 'sessions/snapshot') {
+    const list = Array.isArray(ev.sessions) ? ev.sessions : [];
+    for (const raw of list) upsert(raw);
+  } else if (type === 'session/upsert') {
+    upsert(ev.session);
+  } else if (type === 'session/remove') {
+    const id = String(ev.sessionId || '');
+    const i = tp.sessions.findIndex((s) => s.id === id);
+    if (i >= 0) {
+      tp.sessions[i].running = false;
+      changed = true;
+    }
+  } else if (type === 'agent/status') {
+    if (ev.session) upsert(ev.session);
+    else {
+      const id = String(ev.sessionId || '');
+      const existing = tp.sessions.find((s) => s.id === id);
+      if (existing) {
+        const prev = existing.agentStatus;
+        existing.agentStatus = ev.agentStatus || existing.agentStatus;
+        if (ev.pendingApproval !== undefined) existing.pendingApproval = ev.pendingApproval;
+        changed = true;
+        try { eaNotifyAgentStatus(existing, prev); } catch (_) {}
+      }
+    }
+  }
+
+  if (changed) {
+    try { renderTermSidebar(); } catch (_) {}
+    try { renderTermStatus(); } catch (_) {}
+  }
+}
 
 // ─── Agent Timeline (Claude stream-json) ─────────────────────────────
 
@@ -886,10 +952,13 @@ function renderTermSidebar() {
   // 快速=app-server 桥；模拟=本机 PTY TUI（切模型慢，model:loading 常见）。
   const flagsHtml = (s) => {
     const bits = [];
+    if (s.agentStatus === 'waiting') {
+      bits.push('<span class="sec-flag sec-flag-sim" title="等待你的确认或输入">等你</span>');
+    }
     if (s.bridge) {
-      bits.push('<span class="sec-flag sec-flag-fast" title="app-server 快速通道（手机 Timeline）">快速</span>');
+      bits.push('<span class="sec-flag sec-flag-fast" title="快速通道（app-server / print-bridge）">快速</span>');
     } else if (s.tool === 'codex') {
-      bits.push('<span class="sec-flag sec-flag-sim" title="模拟终端 PTY（刮屏切模型）">模拟</span>');
+      bits.push('<span class="sec-flag sec-flag-sim" title="完整终端 PTY">终端</span>');
     }
     if (s.origin === 'phone') bits.push('<span class="sec-flag sec-flag-phone" title="手机新建的会话">手机</span>');
     if (s.remoteActive) bits.push('<span class="sec-flag sec-flag-live" title="手机端正在查看此会话">在看</span>');
@@ -1537,10 +1606,10 @@ function renderLauncherPage(tp, providers) {
             </div>
           ` : `
             <div class="ea-term-launch-row">
-              <label class="ea-term-launch-lab">视图</label>
+              <label class="ea-term-launch-lab">模式</label>
               <div class="ea-term-launch-seg">
-                <button type="button" class="${(tp.launcher.viewMode || 'timeline') === 'timeline' ? 'is-on' : ''}" data-eat-launch-set="viewMode" data-value="timeline" title="stream-json 事件时间线（推荐）">Timeline</button>
-                <button type="button" class="${tp.launcher.viewMode === 'raw' ? 'is-on' : ''}" data-eat-launch-set="viewMode" data-value="raw" title="完整 Ink TUI 终端">Raw TUI</button>
+                <button type="button" class="${(tp.launcher.viewMode || 'timeline') === 'timeline' ? 'is-on' : ''}" data-eat-launch-set="viewMode" data-value="timeline" title="快速通道：print-bridge / stream-json（推荐）">快速通道</button>
+                <button type="button" class="${tp.launcher.viewMode === 'raw' ? 'is-on' : ''}" data-eat-launch-set="viewMode" data-value="raw" title="完整 Ink TUI 终端">完整终端</button>
               </div>
             </div>
             <div class="ea-term-launch-row">
@@ -1578,8 +1647,8 @@ function renderLauncherPage(tp, providers) {
           <span class="ea-term-launch-hint">${isCodex
             ? 'codex 将在选定目录启动并接管终端'
             : ((tp.launcher.viewMode || 'timeline') === 'timeline'
-              ? 'Claude Timeline：stream-json 事件流 · 工具卡片 · 权限/MODE'
-              : 'Claude Raw TUI：完整交互式终端')}</span>
+              ? 'Claude 快速通道：stream-json · 工具卡片 · 审批 · 低延迟'
+              : 'Claude 完整终端：原生 Ink TUI')}</span>
           <button type="button" class="ea-term-launch-go ${tp.starting ? 'is-busy' : ''}" data-eat-spawn ${tp.starting ? 'disabled' : ''}>
             ${tp.starting ? '启动中…' : '启动'}
           </button>
@@ -1845,6 +1914,8 @@ function normalizeSession(s) {
     permissionMode: s.permissionMode || '',
     claudeSessionId: s.claudeSessionId || '',
     eventCount: s.eventCount || 0,
+    agentStatus: s.agentStatus || '',
+    pendingApproval: s.pendingApproval || null,
   };
 }
 
@@ -3892,6 +3963,35 @@ function renderRemotePanel(opts = {}) {
   }
 }
 
+// 浏览器本地通知：等你 / 完成（需用户曾授权 Notification）
+const __eaAgentNotifyAt = new Map();
+function eaNotifyAgentStatus(row, prevStatus) {
+  if (typeof Notification === 'undefined') return;
+  const next = String(row?.agentStatus || '');
+  if (next !== 'waiting' && !(next === 'done' && prevStatus === 'working')) return;
+  if (Notification.permission === 'default') {
+    try { Notification.requestPermission(); } catch (_) {}
+    return;
+  }
+  if (Notification.permission !== 'granted') return;
+  const id = String(row?.id || '');
+  const key = `${id}:${next}`;
+  const now = Date.now();
+  const last = __eaAgentNotifyAt.get(key) || 0;
+  if (now - last < 8000) return;
+  __eaAgentNotifyAt.set(key, now);
+  const title = row?.title || row?.displayName || 'Agent';
+  const body = next === 'waiting'
+    ? (row?.pendingApproval?.summary || '正在等待你的确认或回复')
+    : '本轮任务已结束';
+  try {
+    new Notification(next === 'waiting' ? `等你 · ${title}` : `已完成 · ${title}`, {
+      body: String(body).slice(0, 160),
+      tag: key,
+    });
+  } catch (_) {}
+}
+
 // 会话列表实时轮询：拉 PTY 列表 + bridge 列表，合并手机新建会话并标快速/模拟。
 let __eaTermSessionsTimer = 0;
 async function refreshTermSessionsLive() {
@@ -3936,6 +4036,12 @@ async function refreshTermSessionsLive() {
         if (existing.origin !== row.origin) { existing.origin = row.origin; changed = true; }
         if (existing.running !== row.running) { existing.running = row.running; changed = true; }
         if (row.title && existing.title !== row.title) { existing.title = row.title; changed = true; }
+        if (row.agentStatus && existing.agentStatus !== row.agentStatus) {
+          const prevStatus = existing.agentStatus;
+          existing.agentStatus = row.agentStatus; changed = true;
+          try { eaNotifyAgentStatus(row, prevStatus); } catch (_) {}
+        }
+        if (row.pendingApproval !== undefined) existing.pendingApproval = row.pendingApproval;
         existing._ghost = false;
       } else {
         tp.sessions.push(row);
@@ -3958,10 +4064,17 @@ async function refreshTermSessionsLive() {
 }
 export function startTermSessionsPoller() {
   if (__eaTermSessionsTimer) return;
+  // bridge 状态靠 sessions-delta 推送；此处仅低频同步 PTY 列表（新建/退出）
   __eaTermSessionsTimer = setInterval(() => {
-    if (getState()?.activePage !== 'terminal') { clearInterval(__eaTermSessionsTimer); __eaTermSessionsTimer = 0; return; }
+    if (getState()?.activePage !== 'terminal') {
+      clearInterval(__eaTermSessionsTimer);
+      __eaTermSessionsTimer = 0;
+      return;
+    }
     refreshTermSessionsLive();
-  }, 4000);
+  }, 30000);
+  // 进页立刻刷一次
+  refreshTermSessionsLive();
 }
 window.startTermSessionsPoller = startTermSessionsPoller;
 

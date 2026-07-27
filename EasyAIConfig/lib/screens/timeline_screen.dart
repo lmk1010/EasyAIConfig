@@ -5,7 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../agent_notify.dart';
 import '../api.dart';
+import '../session_capabilities.dart';
 import '../settings.dart';
 import '../theme.dart';
 import '../widgets/chat_composer.dart';
@@ -72,6 +74,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
   int _goneStreak = 0; // 连续「会话不存在」次数(避免误判)
   String _model = ''; // 当前模型(顶部状态条)
   String _effort = ''; // 当前推理级别
+  String _authLabel = ''; // 订阅 / BYOK
+  String _providerName = ''; // ChatGPT / lucoo / …
   int _tokenTotal = 0; // 已用 token（上下文占用）
   int _contextWindow = 0; // 上下文窗口
   Map? _approval; // codex 待审批提示(命令 + 选项) / 模型-推理级别选择器
@@ -85,6 +89,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
   late final bool _claudeBridge;
   StreamSubscription? _bridgeSub;
   int _bridgeSeq = 0;
+  /// 延后确认空闲：工具间隙可能短暂 done/turn.completed，避免「当场已完成」
+  Timer? _idleTimer;
   final Map<String, int> _itemSeq = {}; // itemId -> local seq
   int _eventAfter = 0;
 
@@ -97,6 +103,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
             widget.session.tool == 'claudecode');
     _running = widget.session.running;
     if (widget.session.model.isNotEmpty) _model = widget.session.model;
+    if (widget.session.authLabel.isNotEmpty) {
+      _authLabel = widget.session.authLabel;
+    }
+    if (widget.session.providerName.isNotEmpty) {
+      _providerName = widget.session.providerName;
+    }
     _seedModelFromSession();
     if (AppSettings.instance.keepAwake.value) WakelockPlus.enable();
     _scroll.addListener(() {
@@ -137,6 +149,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _idleTimer?.cancel();
     _bridgeSub?.cancel();
     WakelockPlus.disable();
     _scroll.dispose();
@@ -144,10 +157,39 @@ class _TimelineScreenState extends State<TimelineScreen> {
     super.dispose();
   }
 
+  void _markWorking({bool resetClock = false}) {
+    _idleTimer?.cancel();
+    _idleTimer = null;
+    setState(() {
+      _awaitingReply = true;
+      if (resetClock || _awaitingSince == null) {
+        _awaitingSince = DateTime.now();
+      }
+    });
+  }
+
+  void _scheduleIdle({bool notifyDone = false}) {
+    _idleTimer?.cancel();
+    _idleTimer = Timer(const Duration(milliseconds: 700), () {
+      if (!mounted) return;
+      setState(() => _awaitingReply = false);
+      if (notifyDone) {
+        AgentNotify.instance.done(
+          sessionId: widget.session.id,
+          title: widget.displayTitle ?? widget.session.title,
+        );
+      }
+    });
+  }
+
   void _openBridgeStream() {
     _bridgeSub?.cancel();
     _bridgeSub = widget.client
-        .streamBridgeEvents(widget.session.tool, widget.session.id)
+        .streamBridgeEvents(
+          widget.session.tool,
+          widget.session.id,
+          after: _eventAfter,
+        )
         .listen(
       _onBridgeEvent,
       onError: (_) {
@@ -231,15 +273,34 @@ class _TimelineScreenState extends State<TimelineScreen> {
     final p = params is Map ? Map<String, dynamic>.from(params) : <String, dynamic>{};
 
     switch (method) {
+      case 'agent/status':
+        final st = (p['agentStatus'] ?? '').toString();
+        if (st == 'waiting') {
+          _idleTimer?.cancel();
+          setState(() {
+            _awaitingReply = false;
+          });
+          AgentNotify.instance.waiting(
+            sessionId: widget.session.id,
+            title: widget.displayTitle ?? widget.session.title,
+            body: (p['pendingApproval'] is Map
+                    ? (p['pendingApproval']['summary'] ?? '')
+                    : '')
+                .toString(),
+          );
+        } else if (st == 'working') {
+          _markWorking();
+        } else if (st == 'done') {
+          // 不立刻清：工具间隙常会闪一下 done
+          _scheduleIdle(notifyDone: true);
+        }
+        break;
       case 'turn/started':
-        setState(() {
-          _awaitingReply = true;
-          _awaitingSince = DateTime.now();
-          _approval = null;
-        });
+        _markWorking(resetClock: true);
+        setState(() => _approval = null);
         break;
       case 'turn/completed':
-        setState(() => _awaitingReply = false);
+        _scheduleIdle();
         _refreshBridgeMeta();
         break;
       case 'item/agentMessage/delta':
@@ -285,8 +346,11 @@ class _TimelineScreenState extends State<TimelineScreen> {
     final itemId = (p['itemId'] ?? p['id'] ?? '').toString();
     final delta = (p['delta'] ?? p['text'] ?? '').toString();
     if (delta.isEmpty) return;
+    _idleTimer?.cancel();
+    _idleTimer = null;
     setState(() {
-      _awaitingReply = false;
+      _awaitingReply = true;
+      _awaitingSince ??= DateTime.now();
       var seq = _itemSeq[itemId];
       if (seq == null) {
         seq = ++_bridgeSeq;
@@ -330,12 +394,18 @@ class _TimelineScreenState extends State<TimelineScreen> {
       final label = (item['command'] ?? item['tool'] ?? type).toString();
       final seq = ++_bridgeSeq;
       if (id.isNotEmpty) _itemSeq['tool:$id'] = seq;
+      _idleTimer?.cancel();
+      _idleTimer = null;
       setState(() {
         _messages.add(_Msg(seq, 'tool', 'tool_call', label,
             tool: type, itemId: 'tool:$id'));
         _seen.add(seq);
-        _awaitingReply = false;
+        // 工具执行中仍算运行中（旧逻辑误清成 false → 当场「已完成」）
+        _awaitingReply = true;
+        _awaitingSince ??= DateTime.now();
       });
+    } else if (type == 'agentMessage' || type == 'reasoning' || type == 'reasoningSummary') {
+      _markWorking();
     }
   }
 
@@ -359,7 +429,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
           _messages.add(_Msg(seq, 'assistant', 'text', text, itemId: id));
           _seen.add(seq);
         }
-        _awaitingReply = false;
+        // 不在这里清 _awaitingReply：工具调用可能还在跑，等 turn/completed
       });
       if (_atBottom) _scrollToBottom();
     } else if (type == 'commandExecution' || type == 'fileChange') {
@@ -443,10 +513,14 @@ class _TimelineScreenState extends State<TimelineScreen> {
       final d = snap.data as Map;
       final model = (d['model'] ?? '').toString();
       final effort = (d['effort'] ?? '').toString();
+      final authLabel = (d['authLabel'] ?? '').toString();
+      final providerName = (d['providerName'] ?? '').toString();
       final tokens = d['tokens'];
       setState(() {
         if (model.isNotEmpty) _model = model;
         if (effort.isNotEmpty) _effort = effort;
+        if (authLabel.isNotEmpty) _authLabel = authLabel;
+        if (providerName.isNotEmpty) _providerName = providerName;
         if (tokens is Map) {
           _tokenTotal = (tokens['total'] as num?)?.toInt() ?? _tokenTotal;
           _contextWindow =
@@ -457,6 +531,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
   }
 
   Future<void> _poll({bool first = false}) async {
+    // 快速通道(bridge)没有 PTY timeline；误拉会得到「终端会话不存在」并误判结束
+    if (_bridge) return;
     if (_polling && !first) return;
     _polling = true;
     try {
@@ -693,6 +769,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
   }
 
   void _bumpFastPoll() {
+    if (_bridge) return;
     _fastPollUntil = DateTime.now().add(const Duration(seconds: 4));
     Future.delayed(const Duration(milliseconds: 350), () => _poll());
     Future.delayed(const Duration(milliseconds: 900), () => _poll());
@@ -824,12 +901,23 @@ class _TimelineScreenState extends State<TimelineScreen> {
             : widget.session.title);
     final effort = _effort.isEmpty ? null : (_effortLabels[_effort] ?? _effort);
     final ctx = _contextLabel;
+    final statusLabel = AgentStatus.label(
+      AgentStatus.normalize(
+        _awaitingReply
+            ? AgentStatus.working
+            : (_sessionGone || !_running ? AgentStatus.exited : AgentStatus.done),
+        running: _running && !_sessionGone,
+      ),
+    );
+    // 订阅用户必须一眼看到：订阅/BYOK · Provider · 模型 · 推理（用量改顶栏 pill）
     final metaParts = <String>[
-      if (_modelLabel.isNotEmpty) _modelLabel,
+      if (_authLabel.isNotEmpty) _authLabel,
+      if (_providerName.isNotEmpty) _providerName,
+      if (_model.isNotEmpty) _model,
       if (effort != null) effort,
-      if (ctx != null) ctx,
+      if (_sessionGone || !_running) statusLabel,
     ];
-    final meta = metaParts.join(' · ');
+    final meta = metaParts.isEmpty ? '账号信息加载中…' : metaParts.join(' · ');
     final channelLabel = _bridge ? '快速' : '模拟';
     final channelColor = _bridge ? kRunning : kMuted;
 
@@ -920,6 +1008,16 @@ class _TimelineScreenState extends State<TimelineScreen> {
           ),
         ),
         actions: [
+          if (ctx != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 2),
+              child: Center(
+                child: _TokenPill(
+                  label: ctx,
+                  streaming: _awaitingReply && _bridge,
+                ),
+              ),
+            ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_horiz),
             onSelected: (v) {
@@ -941,29 +1039,40 @@ class _TimelineScreenState extends State<TimelineScreen> {
                   break;
               }
             },
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                enabled: false,
-                child: Text(
-                  _bridge
-                      ? (_claudeBridge
-                          ? '通道：快速（print-bridge）'
-                          : '通道：快速（app-server）')
-                      : '通道：模拟（PTY）',
-                  style: TextStyle(
-                    color: channelColor,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
+            itemBuilder: (_) {
+              final caps = SessionCapabilities.of(
+                tool: widget.session.tool,
+                mode: widget.session.mode.isNotEmpty
+                    ? widget.session.mode
+                    : (_bridge ? SessionMode.bridge : SessionMode.terminal),
+              );
+              return [
+                PopupMenuItem(
+                  enabled: false,
+                  child: Text(
+                    _bridge
+                        ? (_claudeBridge
+                            ? '通道：快速（print-bridge）'
+                            : '通道：快速（app-server）')
+                        : '通道：模拟（PTY）',
+                    style: TextStyle(
+                      color: channelColor,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
-              ),
-              const PopupMenuItem(value: 'model', child: Text('切换模型')),
-              const PopupMenuItem(value: 'reasoning', child: Text('推理强度')),
-              const PopupMenuItem(value: 'usage', child: Text('查看用量')),
-              const PopupMenuItem(value: 'bottom', child: Text('滚动到底部')),
-              if (!_bridge)
-                const PopupMenuItem(value: 'raw', child: Text('切换到原始终端')),
-            ],
+                if (caps.modelSwitch)
+                  const PopupMenuItem(value: 'model', child: Text('切换模型')),
+                if (caps.reasoningSwitch)
+                  const PopupMenuItem(value: 'reasoning', child: Text('推理强度')),
+                if (caps.usagePanel)
+                  const PopupMenuItem(value: 'usage', child: Text('查看用量')),
+                const PopupMenuItem(value: 'bottom', child: Text('滚动到底部')),
+                if (!_bridge)
+                  const PopupMenuItem(value: 'raw', child: Text('切换到原始终端')),
+              ];
+            },
           ),
         ],
       ),
@@ -972,6 +1081,11 @@ class _TimelineScreenState extends State<TimelineScreen> {
           if (_sessionGone) _endedBanner() else if (_reconnecting) _reconnectBanner(),
           Expanded(child: _body()),
           if (_approval != null) _approvalCard(),
+          if (!_sessionGone)
+            _FooterRunStatus(
+              awaiting: _awaitingReply,
+              since: _awaitingSince,
+            ),
           if (!_sessionGone && _approval == null) _composer(),
         ],
       ),
@@ -1217,11 +1331,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
     'ultra': 'Ultra',
   };
 
-  String get _modelLabel {
-    if (_model.isNotEmpty) return _model;
-    return toolLabel(widget.session.tool);
-  }
-
   String? get _contextLabel {
     if (_contextWindow <= 0 || _tokenTotal <= 0) return null;
     final pct = ((_tokenTotal / _contextWindow) * 100).clamp(0, 100);
@@ -1281,7 +1390,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
       }
       // codex 要等第一条消息才写会话文件；这里不显示"等待/卡住"，
       // 直接引导用户开始，输入框已可用（发送即写进 codex）。
-      return ListView(children: [
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: BouncingScrollPhysics(),
+        ),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        children: [
         const SizedBox(height: 100),
         Center(child: toolLogo(widget.session.tool, size: 40, running: true)),
         const SizedBox(height: 22),
@@ -1317,11 +1431,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
         ],
       ]);
     }
-    // 只要还在等回复、且最后一条不是最终回答/推理流，就显示 Working shimmer
-    final lastRole = _messages.isEmpty ? '' : _messages.last.role;
-    final showThinking = _awaitingReply &&
-        (lastRole.isEmpty ||
-            (lastRole != 'assistant' && lastRole != 'reasoning'));
+    // 状态只放输入框上方；列表不再重复「思考中」
+    final showThinking = false;
     int lastAssistantSeq = -1;
     for (final m in _messages) {
       if (m.role == 'assistant') lastAssistantSeq = m.seq;
@@ -1329,6 +1440,10 @@ class _TimelineScreenState extends State<TimelineScreen> {
     final entries = _renderEntries();
     return ListView.builder(
       controller: _scroll,
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
       itemCount: entries.length + (showThinking ? 1 : 0),
       itemBuilder: (_, i) {
@@ -1336,28 +1451,45 @@ class _TimelineScreenState extends State<TimelineScreen> {
           return _Appear(
             key: const ValueKey('thinking'),
             child: _ThinkingBubble(
-                since: _awaitingSince, onOpenRaw: _openRawTerminal),
+                since: _awaitingSince, onOpenRaw: _bridge ? null : _openRawTerminal),
           );
         }
         final e = entries[i];
         if (e.isTool) {
+          final running = e.toolOutput == null ||
+              (e.toolOutput!.text.trim().isEmpty);
           return _Appear(
             key: ValueKey('tool_${e.toolCall!.seq}'),
             child: _ToolCard(
               call: e.toolCall!,
               output: e.toolOutput,
+              running: running && _awaitingReply,
             ),
           );
         }
         final m = e.msg!;
-        final animate = m.role == 'assistant' &&
+        // bridge：真流式（delta 已写入），不用假打字机；非 bridge 短回复可打字机
+        final streaming = _bridge &&
+            m.role == 'assistant' &&
+            m.seq == lastAssistantSeq &&
+            _awaitingReply;
+        final animate = !_bridge &&
+            m.role == 'assistant' &&
             m.seq == lastAssistantSeq &&
             !_revealed.contains(m.seq) &&
             m.text.length < 900 &&
             !m.text.contains('```');
+        final showActions = m.role == 'assistant' &&
+            m.seq == lastAssistantSeq &&
+            !_awaitingReply;
         return _Appear(
           key: ValueKey('msg_${m.seq}'),
-          child: _bubble(m, animate: animate),
+          child: _bubble(
+            m,
+            animate: animate,
+            showActions: showActions,
+            streaming: streaming,
+          ),
         );
       },
     );
@@ -1387,14 +1519,25 @@ class _TimelineScreenState extends State<TimelineScreen> {
     return out;
   }
 
-  Widget _bubble(_Msg m, {bool animate = false}) {
+  Widget _bubble(
+    _Msg m, {
+    bool animate = false,
+    bool showActions = false,
+    bool streaming = false,
+  }) {
     switch (m.role) {
       case 'user':
         return _userBubble(m.text);
       case 'reasoning':
         return _reasoningBlock(m.text);
       default:
-        return _assistantBlock(m.text, animate: animate, seq: m.seq);
+        return _assistantBlock(
+          m.text,
+          animate: animate,
+          seq: m.seq,
+          showActions: showActions,
+          streaming: streaming,
+        );
     }
   }
 
@@ -1413,26 +1556,40 @@ class _TimelineScreenState extends State<TimelineScreen> {
         ),
       );
 
-  // 纯对话样式：左对齐正文，底部轻量操作（对标 Codex App）。
-  Widget _assistantBlock(String text, {bool animate = false, int seq = -1}) =>
+  // 纯对话样式：左对齐正文；操作仅最后一条助手消息显示（避免每条占一行）
+  Widget _assistantBlock(
+    String text, {
+    bool animate = false,
+    int seq = -1,
+    bool showActions = false,
+    bool streaming = false,
+  }) =>
       Container(
         width: double.infinity,
         margin: const EdgeInsets.only(top: 18, right: 4, bottom: 4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            animate
-                ? _TypingText(
-                    text,
-                    key: ValueKey('typing_$seq'),
-                    style: const TextStyle(
-                        color: kText, fontSize: 15.5, height: 1.65),
-                    onDone: () {
-                      if (mounted) setState(() => _revealed.add(seq));
-                    },
-                  )
-                : _richText(text),
-            if (!animate || _revealed.contains(seq)) _msgActions(text),
+            if (streaming)
+              _StreamingRichText(text: text, richBuilder: _richText)
+            else if (animate)
+              _TypingText(
+                text,
+                key: ValueKey('typing_$seq'),
+                style: const TextStyle(
+                    color: kText, fontSize: 15.5, height: 1.65),
+                onDone: () {
+                  if (mounted) setState(() => _revealed.add(seq));
+                },
+              )
+            else
+              _richText(text),
+            if (streaming) ...[
+              const SizedBox(height: 8),
+              const _ShimmerBar(height: 3, widthFactor: 0.42),
+            ],
+            if (showActions && (!animate || _revealed.contains(seq)))
+              _msgActions(text),
           ],
         ),
       );
@@ -1452,8 +1609,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
               ),
             );
           }),
-          _ghostIconBtn(Icons.vertical_align_bottom_rounded, '到底',
-              _scrollToBottom),
         ],
       ),
     );
@@ -2108,16 +2263,27 @@ class _TimelineScreenState extends State<TimelineScreen> {
 
   Future<void> _bridgeShowUsage() async {
     if (_claudeBridge) {
-      // Claude print-bridge 无 account/rateLimits；展示会话累计 token
-      await CodexUsageSheet.show(
-        context,
-        raw: {
-          'note': 'Claude 快速通道：本会话累计 token（非官方配额面板）',
-          'sessionTokens': _tokenTotal,
-        },
-        sessionTokens: _tokenTotal > 0 ? _tokenTotal : null,
-        contextWindow: _contextWindow > 0 ? _contextWindow : null,
-      );
+      final res = await _withLoading(
+          '读取用量…', () => widget.client.claudeRateLimits(widget.session.id));
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        await CodexUsageSheet.show(
+          context,
+          raw: {
+            'note': 'Claude 快速通道：本会话累计 token',
+            'sessionTokens': _tokenTotal,
+          },
+          sessionTokens: _tokenTotal > 0 ? _tokenTotal : null,
+          contextWindow: _contextWindow > 0 ? _contextWindow : null,
+        );
+      } else {
+        await CodexUsageSheet.show(
+          context,
+          raw: res.data,
+          sessionTokens: _tokenTotal > 0 ? _tokenTotal : null,
+          contextWindow: _contextWindow > 0 ? _contextWindow : null,
+        );
+      }
       _refreshBridgeMeta(force: true);
       return;
     }
@@ -2283,15 +2449,32 @@ class _TimelineScreenState extends State<TimelineScreen> {
       );
       return;
     }
-    const models = [
-      'claude-opus-4-8',
-      'claude-sonnet-4-6',
-      'claude-sonnet-5',
-      'claude-haiku-4-5',
-      'opus',
-      'sonnet',
-      'haiku',
-    ];
+    final res = await _withLoading(
+        '读取模型列表…', () => widget.client.claudeModels(widget.session.id));
+    if (!mounted) return;
+    final models = <String>[];
+    if (res.ok && res.data is Map) {
+      final list =
+          (res.data['data'] as List?) ?? (res.data['models'] as List?) ?? [];
+      for (final m in list) {
+        if (m is Map) {
+          final id = (m['id'] ?? m['slug'] ?? m['model'] ?? '').toString();
+          if (id.isNotEmpty) models.add(id);
+        } else if (m is String && m.isNotEmpty) {
+          models.add(m);
+        }
+      }
+    }
+    if (models.isEmpty) {
+      models.addAll(const [
+        'claude-sonnet-4-20250514',
+        'claude-opus-4-20250514',
+        'claude-haiku-4-20250514',
+        'sonnet',
+        'opus',
+        'haiku',
+      ]);
+    }
     final options = <Map>[];
     for (var i = 0; i < models.length; i++) {
       final id = models[i];
@@ -2745,25 +2928,107 @@ class _ThinkingBubbleState extends State<_ThinkingBubble> {
   Widget build(BuildContext context) {
     final slow = _secs >= 20;
     final worked = _secs <= 0
-        ? 'Working…'
+        ? '思考中'
         : (_secs < 60
-            ? 'Worked for ${_secs}s'
-            : 'Worked for ${_secs ~/ 60}m ${(_secs % 60).toString().padLeft(2, '0')}s');
-    // Codex App：细灰时钟 + Worked for，不做成厚卡片
+            ? '思考中 · ${_secs}s'
+            : '思考中 · ${_secs ~/ 60}m ${(_secs % 60).toString().padLeft(2, '0')}s');
+    // 简洁一行，避免厚卡片抢视觉
     return Padding(
-      padding: const EdgeInsets.only(top: 16, bottom: 8),
+      padding: const EdgeInsets.only(top: 14, bottom: 6),
+      child: Row(
+        children: [
+          const Icon(Icons.schedule_rounded, size: 15, color: kFaint),
+          const SizedBox(width: 7),
+          Text(
+            worked,
+            style: const TextStyle(
+              color: kMuted,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+          const SizedBox(width: 8),
+          const _TypingDots(),
+          if (slow && widget.onOpenRaw != null) ...[
+            const Spacer(),
+            TextButton(
+              onPressed: widget.onOpenRaw,
+              style: TextButton.styleFrom(
+                foregroundColor: kMuted,
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('耗时较长 · 原始终端',
+                  style: TextStyle(fontSize: 12.5)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 输入框上方唯一运行态：仅「思考中」；空闲不占位（避免误报已完成）
+class _FooterRunStatus extends StatefulWidget {
+  final bool awaiting;
+  final DateTime? since;
+  const _FooterRunStatus({
+    required this.awaiting,
+    required this.since,
+  });
+  @override
+  State<_FooterRunStatus> createState() => _FooterRunStatusState();
+}
+
+class _FooterRunStatusState extends State<_FooterRunStatus> {
+  Timer? _t;
+
+  @override
+  void initState() {
+    super.initState();
+    _t = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && widget.awaiting) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.awaiting) return const SizedBox.shrink();
+    final since = widget.since;
+    final secs =
+        since == null ? 0 : DateTime.now().difference(since).inSeconds;
+    final time = secs <= 0
+        ? ''
+        : (secs < 60
+            ? '${secs}s'
+            : '${secs ~/ 60}m ${(secs % 60).toString().padLeft(2, '0')}s');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.schedule_rounded, size: 15, color: kFaint),
-              const SizedBox(width: 7),
+              const SizedBox(
+                width: 12,
+                height: 12,
+                child:
+                    CircularProgressIndicator(strokeWidth: 1.6, color: kMuted),
+              ),
+              const SizedBox(width: 8),
               Text(
-                worked,
+                time.isEmpty ? '思考中' : '思考中 · $time',
                 style: const TextStyle(
                   color: kMuted,
-                  fontSize: 13,
+                  fontSize: 12.5,
                   fontWeight: FontWeight.w500,
                   fontFeatures: [FontFeature.tabularFigures()],
                 ),
@@ -2772,25 +3037,8 @@ class _ThinkingBubbleState extends State<_ThinkingBubble> {
               const _TypingDots(),
             ],
           ),
-          const SizedBox(height: 12),
-          const _ShimmerBar(height: 7, widthFactor: 0.72),
-          const SizedBox(height: 7),
-          const _ShimmerBar(height: 7, widthFactor: 0.48),
-          if (slow && widget.onOpenRaw != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: TextButton(
-                onPressed: widget.onOpenRaw,
-                style: TextButton.styleFrom(
-                  foregroundColor: kMuted,
-                  padding: EdgeInsets.zero,
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: const Text('耗时较长 · 查看原始终端',
-                    style: TextStyle(fontSize: 12.5)),
-              ),
-            ),
+          const SizedBox(height: 6),
+          const _ShimmerBar(height: 2.5, widthFactor: 0.55),
         ],
       ),
     );
@@ -2885,6 +3133,92 @@ class _AppearState extends State<_Appear>
   }
 }
 
+/// 真流式正文：delta 已写入时直接渲染，末尾闪烁光标（对齐 Codex App）。
+class _StreamingRichText extends StatefulWidget {
+  final String text;
+  final Widget Function(String) richBuilder;
+  const _StreamingRichText({required this.text, required this.richBuilder});
+  @override
+  State<_StreamingRichText> createState() => _StreamingRichTextState();
+}
+
+class _StreamingRichTextState extends State<_StreamingRichText>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        widget.richBuilder(widget.text),
+        const SizedBox(height: 2),
+        FadeTransition(
+          opacity: _c,
+          child: Container(
+            width: 8,
+            height: 14,
+            margin: const EdgeInsets.only(left: 1),
+            decoration: BoxDecoration(
+              color: kText.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(1.5),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 顶栏 token 用量胶囊；流式更新时带轻 shimmer。
+class _TokenPill extends StatelessWidget {
+  final String label;
+  final bool streaming;
+  const _TokenPill({required this.label, this.streaming = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F0F2),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (streaming) ...[
+            const SizedBox(
+              width: 18,
+              height: 3,
+              child: _ShimmerBar(height: 3, widthFactor: 1),
+            ),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: kMuted,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 打字机效果：新回复逐字浮现，给"正在生成"的渲染感。
 class _TypingText extends StatefulWidget {
   final String text;
@@ -2933,7 +3267,13 @@ class _TypingTextState extends State<_TypingText> {
 class _ToolCard extends StatefulWidget {
   final _Msg call;
   final _Msg? output;
-  const _ToolCard({required this.call, this.output, super.key});
+  final bool running;
+  const _ToolCard({
+    required this.call,
+    this.output,
+    this.running = false,
+    super.key,
+  });
   @override
   State<_ToolCard> createState() => _ToolCardState();
 }
@@ -2944,30 +3284,31 @@ class _ToolCardState extends State<_ToolCard> {
   @override
   Widget build(BuildContext context) {
     final tool = widget.call.tool;
+    final running = widget.running;
     IconData icon;
     String verb;
     switch (tool) {
       case 'exec':
       case 'commandExecution':
         icon = Icons.terminal_rounded;
-        verb = 'Ran';
+        verb = running ? 'Running' : 'Ran';
         break;
       case 'patch':
       case 'fileChange':
         icon = Icons.edit_outlined;
-        verb = 'Edited';
+        verb = running ? 'Editing' : 'Edited';
         break;
       case 'read':
         icon = Icons.description_outlined;
-        verb = 'Read';
+        verb = running ? 'Reading' : 'Read';
         break;
       case 'mcpToolCall':
         icon = Icons.extension_outlined;
-        verb = 'Called';
+        verb = running ? 'Calling' : 'Called';
         break;
       default:
         icon = Icons.handyman_outlined;
-        verb = 'Used';
+        verb = running ? 'Using' : 'Used';
     }
     final cmd = widget.call.text;
     final firstLine =
@@ -2975,7 +3316,7 @@ class _ToolCardState extends State<_ToolCard> {
     final hasOutput = (widget.output?.text.trim().isNotEmpty ?? false);
     final multiline = cmd.contains('\n');
     return Padding(
-      padding: const EdgeInsets.only(top: 14, bottom: 2),
+      padding: const EdgeInsets.only(top: 8, bottom: 2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2983,15 +3324,16 @@ class _ToolCardState extends State<_ToolCard> {
             borderRadius: BorderRadius.circular(8),
             onTap: () => setState(() => _expanded = !_expanded),
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(vertical: 3),
               child: Row(children: [
-                Icon(icon, size: 15, color: kFaint),
+                Icon(icon, size: 15, color: running ? kMuted : kFaint),
                 const SizedBox(width: 8),
                 Text('$verb ',
-                    style: const TextStyle(
-                        color: kMuted,
+                    style: TextStyle(
+                        color: running ? kText : kMuted,
                         fontSize: 13,
-                        fontWeight: FontWeight.w500)),
+                        fontWeight:
+                            running ? FontWeight.w600 : FontWeight.w500)),
                 Expanded(
                   child: Text(
                     firstLine,
@@ -3003,11 +3345,22 @@ class _ToolCardState extends State<_ToolCard> {
                         color: kFaint),
                   ),
                 ),
+                if (running) ...[
+                  const SizedBox(width: 6),
+                  const _TypingDots(),
+                ],
                 Icon(_expanded ? Icons.expand_less : Icons.expand_more,
                     size: 16, color: kFaint),
               ]),
             ),
           ),
+          if (running && !_expanded) ...[
+            const SizedBox(height: 4),
+            const Padding(
+              padding: EdgeInsets.only(left: 23),
+              child: _ShimmerBar(height: 2.5, widthFactor: 0.72),
+            ),
+          ],
           if (_expanded) ...[
             if (multiline)
               Container(
@@ -3025,6 +3378,11 @@ class _ToolCardState extends State<_ToolCard> {
                         height: 1.45)),
               ),
             if (hasOutput) _ToolOutput(text: widget.output!.text),
+            if (running && !hasOutput)
+              const Padding(
+                padding: EdgeInsets.only(top: 8, left: 4),
+                child: _ShimmerBar(height: 3, widthFactor: 0.85),
+              ),
           ],
         ],
       ),

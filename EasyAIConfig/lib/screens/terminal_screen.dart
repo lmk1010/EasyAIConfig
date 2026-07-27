@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -62,10 +63,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _applyWakelock();
     AppSettings.instance.keepAwake.addListener(_applyWakelock);
     _start();
-    // 进页后稍晚要一次软键盘焦点，方便直接打字
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_disposed) _termKey.currentState?.requestKeyboard();
-    });
+    // Android：不要自动拉起 xterm 伪键盘（vivo 会当成安全键盘）
+    if (!Platform.isAndroid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_disposed) _showKeyboard();
+      });
+    }
   }
 
   @override
@@ -105,7 +108,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
         if (!mounted || _disposed) return;
         _reconnectAttempts = 0;
         if (evt.exited) {
-          if (_running) setState(() => _running = false);
+          if (_running) {
+            setState(() => _running = false);
+            // 给用户明确退出反馈（避免只剩空白 + 顶栏「已退出」）
+            _terminal.write('\r\n\x1b[31m[已退出]\x1b[0m\r\n');
+          }
           return;
         }
         if (evt.cursor >= 0) _cursor = evt.cursor;
@@ -202,8 +209,100 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   void _showKeyboard() {
-    _termKey.currentState?.requestKeyboard();
-    _termFocus.requestFocus();
+    // vivo/OriginOS：xterm 伪 TextInputClient（关联想/关个性化）会被识别成「安全键盘」
+    if (Platform.isAndroid) {
+      _openSafeInput();
+      return;
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_disposed) return;
+      _termFocus.requestFocus();
+      _termKey.currentState?.requestKeyboard();
+    });
+  }
+
+  Future<void> _openChineseInput() => _openSafeInput(hint: '输入中文后点发送…');
+
+  /// 系统 TextField：正常键盘 + 中文组词；避免 vivo 安全键盘。
+  Future<void> _openSafeInput({String hint = '输入内容，发送写入终端…'}) async {
+    final ctl = TextEditingController();
+    final focus = FocusNode();
+    final text = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF161B22),
+      builder: (ctx) {
+        final inset = MediaQuery.of(ctx).viewInsets.bottom;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 14 + inset),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('输入',
+                  style: TextStyle(
+                      color: Color(0xFFC9D1D9),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              const Text('使用系统普通键盘（避免厂商安全键盘）。',
+                  style: TextStyle(color: Color(0xFF8B949E), fontSize: 12)),
+              const SizedBox(height: 10),
+              TextField(
+                controller: ctl,
+                focusNode: focus,
+                autofocus: true,
+                obscureText: false,
+                enableInteractiveSelection: true,
+                minLines: 1,
+                maxLines: 5,
+                autocorrect: true,
+                enableSuggestions: true,
+                enableIMEPersonalizedLearning: true,
+                textCapitalization: TextCapitalization.none,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                autofillHints: const <String>[],
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+                decoration: InputDecoration(
+                  hintText: hint,
+                  hintStyle: const TextStyle(color: Color(0xFF8B949E)),
+                  filled: true,
+                  fillColor: const Color(0xFF0D1117),
+                  border: const OutlineInputBorder(
+                    borderSide: BorderSide.none,
+                    borderRadius: BorderRadius.all(Radius.circular(10)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(ctx, ctl.text),
+                      child: const Text('发送'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    focus.dispose();
+    ctl.dispose();
+    if (text == null || text.isEmpty || _disposed) return;
+    await _send(text);
   }
 
   void _hideKeyboard() {
@@ -305,10 +404,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   controller: _termController,
                   focusNode: _termFocus,
                   scrollController: _scrollController,
-                  autofocus: true,
+                  autofocus: !Platform.isAndroid,
                   deleteDetection: true,
-                  simulateScroll: true,
-                  hardwareKeyboardOnly: false,
+                  // 手指滑动转方向键会灌进 Codex 输入框，镜像/终端一律关掉
+                  simulateScroll: false,
+                  // Android：禁用 xterm 伪 IME，避免 vivo 安全键盘；用底栏「键盘/中文」
+                  hardwareKeyboardOnly: Platform.isAndroid,
                   keyboardType: TextInputType.text,
                   keyboardAppearance: Brightness.dark,
                   padding: EdgeInsets.fromLTRB(
@@ -405,10 +506,19 @@ class _TerminalScreenState extends State<TerminalScreen> {
         child: ListView.separated(
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          itemCount: keys.length + 2,
+          itemCount: keys.length + 3,
           separatorBuilder: (_, __) => const SizedBox(width: 5),
           itemBuilder: (_, i) {
             if (i == keys.length) {
+              return Center(
+                child: _miniChip(
+                  icon: Icons.translate_rounded,
+                  label: '中文',
+                  onTap: _openChineseInput,
+                ),
+              );
+            }
+            if (i == keys.length + 1) {
               return Center(
                 child: _miniChip(
                   icon: Icons.keyboard_outlined,
@@ -417,7 +527,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ),
               );
             }
-            if (i == keys.length + 1) {
+            if (i == keys.length + 2) {
               return Center(
                 child: _miniChip(
                   icon: Icons.keyboard_arrow_down,

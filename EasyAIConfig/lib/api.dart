@@ -277,8 +277,45 @@ class ApiClient {
       get('/api/codex/session', query: {'sessionId': sessionId});
 
   /// app-server 事件 SSE：通知 + 审批请求。
-  Stream<Map<String, dynamic>> streamCodexEvents(String sessionId) async* {
-    yield* _streamBridgeEvents('/api/codex/events', sessionId);
+  Stream<Map<String, dynamic>> streamCodexEvents(String sessionId,
+      {int after = 0}) async* {
+    yield* _streamBridgeEvents('/api/codex/events', sessionId, after: after);
+  }
+
+  Stream<Map<String, dynamic>> streamClaudeEvents(String sessionId,
+      {int after = 0}) async* {
+    yield* _streamBridgeEvents('/api/claude/events', sessionId, after: after);
+  }
+
+  /// 列表级推送：agent/status · session/upsert · session/remove · hook/status · snapshot
+  Stream<Map<String, dynamic>> streamSessions({int after = 0}) async* {
+    final q = <String, String>{};
+    if (after > 0) q['after'] = '$after';
+    final uri = _uri('/api/sessions/stream', q.isEmpty ? null : q);
+    final client = http.Client();
+    try {
+      final req = http.Request('GET', uri);
+      req.headers['x-remote-token'] = token;
+      req.headers['Accept'] = 'text/event-stream';
+      final res = await client.send(req).timeout(const Duration(seconds: 20));
+      if (res.statusCode != 200) {
+        throw http.ClientException('sessions stream HTTP ${res.statusCode}', uri);
+      }
+      final lines =
+          res.stream.transform(utf8.decoder).transform(const LineSplitter());
+      await for (final line in lines) {
+        if (line.isEmpty || line.startsWith(':')) continue;
+        if (!line.startsWith('data:')) continue;
+        final raw = line.substring(5).trim();
+        if (raw.isEmpty) continue;
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is Map<String, dynamic>) yield decoded;
+        } catch (_) {}
+      }
+    } finally {
+      client.close();
+    }
   }
 
   // ── Claude print-bridge（低延迟 Timeline）────────────────────
@@ -326,9 +363,47 @@ class ApiClient {
   Future<ApiResult> claudeSessionGet(String sessionId) =>
       get('/api/claude/session', query: {'sessionId': sessionId});
 
-  Stream<Map<String, dynamic>> streamClaudeEvents(String sessionId) async* {
-    yield* _streamBridgeEvents('/api/claude/events', sessionId);
-  }
+  Future<ApiResult> claudeModels(String sessionId) =>
+      get('/api/claude/models', query: {'sessionId': sessionId});
+
+  Future<ApiResult> claudeRateLimits(String sessionId) =>
+      get('/api/claude/rate-limits', query: {'sessionId': sessionId});
+
+  // ── tmux 镜像 ───────────────────────────────────────────────
+  Future<ApiResult> tmuxList() => get('/api/tmux/list');
+
+  Future<ApiResult> tmuxAttach({
+    required String name,
+    String tool = 'shell',
+    String? cwd,
+  }) =>
+      post('/api/tmux/attach', {
+        'name': name,
+        'tool': tool,
+        'origin': 'phone',
+        if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+      });
+
+  /// 新建 tmux 会话并附着；[launchAgent] 为 true 时在窗内启动 codex/claude。
+  Future<ApiResult> tmuxCreate({
+    String? name,
+    String tool = 'codex',
+    String? cwd,
+    bool launchAgent = true,
+  }) =>
+      post('/api/tmux/create', {
+        'tool': tool,
+        'origin': 'phone',
+        'launchAgent': launchAgent,
+        if (name != null && name.isNotEmpty) 'name': name,
+        if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+      });
+
+  // ── Agent Hook 雷达 ─────────────────────────────────────────
+  Future<ApiResult> agentHooksStatus() => get('/api/agent-hooks/status');
+  Future<ApiResult> agentHooksOn() => post('/api/agent-hooks/on', {});
+  Future<ApiResult> agentHooksOff() => post('/api/agent-hooks/off', {});
+  Future<ApiResult> agentHooksSessions() => get('/api/agent-hooks/sessions');
 
   /// 按 tool 选择 bridge API（codex app-server / claude print-bridge）。
   bool _isClaudeTool(String tool) =>
@@ -357,14 +432,18 @@ class ApiClient {
           : codexSessionGet(sessionId);
 
   Stream<Map<String, dynamic>> streamBridgeEvents(
-          String tool, String sessionId) =>
+          String tool, String sessionId,
+          {int after = 0}) =>
       _isClaudeTool(tool)
-          ? streamClaudeEvents(sessionId)
-          : streamCodexEvents(sessionId);
+          ? streamClaudeEvents(sessionId, after: after)
+          : streamCodexEvents(sessionId, after: after);
 
   Stream<Map<String, dynamic>> _streamBridgeEvents(
-      String path, String sessionId) async* {
-    final uri = _uri(path, {'sessionId': sessionId});
+      String path, String sessionId,
+      {int after = 0}) async* {
+    final q = <String, String>{'sessionId': sessionId};
+    if (after > 0) q['after'] = '$after';
+    final uri = _uri(path, q);
     final client = http.Client();
     try {
       final req = http.Request('GET', uri);

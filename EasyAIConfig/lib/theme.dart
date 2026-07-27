@@ -24,6 +24,8 @@ const kAccentSoft = Color(0x1FC96442); // 12% 珊瑚，选中底
 const kRunning = Color(0xFF1F9D57);
 const kExited = Color(0xFFD24B44);
 const kWarn = Color(0xFFC7841F);
+/// 等你 / waiting on input（Orca-style amber）
+const kWaiting = Color(0xFFE5A84B);
 
 const kCodex = Color(0xFFC96442);
 const kClaude = Color(0xFFB4632F);

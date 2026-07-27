@@ -11,6 +11,8 @@ class AppSettings {
   static const _kFont = 'term_font_size';
   static const _kAwake = 'keep_awake';
   static const _kHaptics = 'haptics';
+  static const _kHooks = 'agent_hooks_enabled';
+  static const _kNotify = 'agent_notify_enabled';
 
   static const double minFont = 8;
   static const double maxFont = 28;
@@ -20,6 +22,10 @@ class AppSettings {
   final ValueNotifier<double> terminalFontSize = ValueNotifier(defaultFont);
   final ValueNotifier<bool> keepAwake = ValueNotifier(false);
   final ValueNotifier<bool> haptics = ValueNotifier(true);
+  /// 桌面托管 Hook 雷达（等你状态）
+  final ValueNotifier<bool> agentHooksEnabled = ValueNotifier(true);
+  /// 本地「等你 / 完成」通知
+  final ValueNotifier<bool> agentNotifyEnabled = ValueNotifier(true);
 
   bool _loaded = false;
 
@@ -31,6 +37,8 @@ class AppSettings {
     if (f != null) terminalFontSize.value = f.clamp(minFont, maxFont);
     keepAwake.value = p.getBool(_kAwake) ?? false;
     haptics.value = p.getBool(_kHaptics) ?? true;
+    agentHooksEnabled.value = p.getBool(_kHooks) ?? true;
+    agentNotifyEnabled.value = p.getBool(_kNotify) ?? true;
     _loaded = true;
   }
 
@@ -61,6 +69,18 @@ class AppSettings {
     haptics.value = value;
     final p = await SharedPreferences.getInstance();
     await p.setBool(_kHaptics, value);
+  }
+
+  Future<void> setAgentHooksEnabled(bool value) async {
+    agentHooksEnabled.value = value;
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kHooks, value);
+  }
+
+  Future<void> setAgentNotifyEnabled(bool value) async {
+    agentNotifyEnabled.value = value;
+    final p = await SharedPreferences.getInstance();
+    await p.setBool(_kNotify, value);
   }
 
   static ThemeMode _themeFromString(String? s) {

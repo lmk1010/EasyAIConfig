@@ -50,6 +50,9 @@ struct TerminalSession {
     /// tmux 会话名(常驻持久化)：进程跑在 tmux 里，PTY 只是附着的客户端，
     /// App/PTY 断了 tmux 里的 codex 还活着，重开直接 reattach。None 表示未用 tmux。
     tmux_name: Option<String>,
+    /// 界面模式：terminal（完整 TUI，可常驻 tmux）| tmux（手机↔电脑镜像 attach）。
+    /// 注意：不能用「有没有 tmux_name」推断——终端模式也会包进 tmux 做持久化。
+    view_mode: String,
     /// PTY 尺寸(渲染 codex TUI picker 时按此还原屏幕)
     term_size: Mutex<(u16, u16)>,
     /// 最近一次被远程(手机)请求的时间戳(ms)；用于「手机在看」标识
@@ -104,6 +107,21 @@ struct TerminalSessionInfo {
     remote_active: bool,
     /// 是否常驻(跑在 tmux 里，App 重启进程仍存活)
     persistent: bool,
+    /// bridge | terminal | tmux
+    #[serde(skip_serializing_if = "Option::is_none")]
+    view_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_name: Option<String>,
 }
 
 type SessionMap = BTreeMap<String, Arc<TerminalSession>>;
@@ -137,6 +155,58 @@ pub(crate) fn utf8_valid_prefix_len(bytes: &[u8]) -> usize {
         Ok(_) => bytes.len(),
         Err(error) => error.valid_up_to(),
     }
+}
+
+/// 从 PTY 字节流提取 OSC 标题（`ESC ] Ps ; Pt BEL` / `ESC ] Ps ; Pt ESC \\`）。
+fn extract_osc_titles(bytes: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 3 < bytes.len() {
+        if bytes[i] == 0x1b && bytes[i + 1] == b']' {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j] != b';' {
+                // Ps 通常很短
+                if j > i + 8 {
+                    break;
+                }
+                j += 1;
+            }
+            if j >= bytes.len() || bytes[j] != b';' {
+                i += 1;
+                continue;
+            }
+            j += 1;
+            let start = j;
+            let mut end = None;
+            while j < bytes.len() {
+                if bytes[j] == 0x07 {
+                    end = Some(j);
+                    break;
+                }
+                if bytes[j] == 0x1b && j + 1 < bytes.len() && bytes[j + 1] == b'\\' {
+                    end = Some(j);
+                    break;
+                }
+                // 标题过长则放弃本段
+                if j - start > 256 {
+                    break;
+                }
+                j += 1;
+            }
+            if let Some(e) = end {
+                if let Ok(s) = std::str::from_utf8(&bytes[start..e]) {
+                    let t = s.trim();
+                    if !t.is_empty() {
+                        out.push(t.to_string());
+                    }
+                }
+                i = if bytes[e] == 0x1b { e + 2 } else { e + 1 };
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
 }
 
 fn quote_windows_cmd_arg(value: &str) -> String {
@@ -361,6 +431,52 @@ fn session_info(session: &Arc<TerminalSession>) -> TerminalSessionInfo {
         .lock()
         .map(|v| now - *v < 15_000 && *v > 0)
         .unwrap_or(false);
+    let view_mode = Some(if session.view_mode == "tmux" {
+        "tmux".to_string()
+    } else {
+        "terminal".to_string()
+    });
+    let mut model = None;
+    let mut effort = None;
+    let mut auth_mode = None;
+    let mut auth_label = None;
+    let mut provider = None;
+    let mut provider_name = None;
+    if session.tool.eq_ignore_ascii_case("codex") {
+        let home = session
+            .codex_home
+            .clone()
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".codex"));
+        let ctx = codex_account_context(&home);
+        model = ctx
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        effort = ctx
+            .get("effort")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        auth_mode = ctx
+            .get("authMode")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+        auth_label = ctx
+            .get("authLabel")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string());
+        provider = ctx
+            .get("provider")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        provider_name = ctx
+            .get("providerName")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+    }
     TerminalSessionInfo {
         session_id: session.id.clone(),
         tool: session.tool.clone(),
@@ -374,6 +490,13 @@ fn session_info(session: &Arc<TerminalSession>) -> TerminalSessionInfo {
         origin: session.origin.clone(),
         remote_active,
         persistent: session.tmux_name.is_some(),
+        view_mode,
+        model,
+        effort,
+        auth_mode,
+        auth_label,
+        provider,
+        provider_name,
     }
 }
 
@@ -767,6 +890,29 @@ fn tmux_bin() -> Option<String> {
     None
 }
 
+/// 从 `tmux … -t name` / `attach-session -t name` 参数里取出目标会话名。
+fn extract_tmux_target_name(args: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "-t" || a == "-s" {
+            if let Some(name) = args.get(i + 1) {
+                let name = name.trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        } else if let Some(rest) = a.strip_prefix("-t") {
+            let name = rest.trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 fn eac_home() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join(".codex-config-ui"))
@@ -774,7 +920,7 @@ fn eac_home() -> PathBuf {
 }
 
 /// 干净的 tmux 配置：关状态栏/鼠标、Esc 零延迟、会话保活。
-fn tmux_config_path() -> String {
+pub(crate) fn tmux_config_path() -> String {
     let dir = eac_home();
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("tmux.conf");
@@ -975,6 +1121,20 @@ pub(crate) fn spawn_embedded_terminal_with_origin(
     // 代理适配：codex/claude 官方账号直连 OpenAI/Anthropic 常被墙(tls handshake eof)，
     // 自动带上系统代理让其走代理，稳定可用。用户已显式传代理则尊重之。
     let mut effective_envs: Vec<(String, String)> = envs.to_vec();
+    // 远程 / 无 shell 的 PTY 经常不带 TERM；tmux/TUI 会报
+    // "open terminal failed: terminal does not support clear"
+    if !effective_envs
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("TERM"))
+    {
+        effective_envs.push(("TERM".to_string(), "xterm-256color".to_string()));
+    }
+    if !effective_envs
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("COLORTERM"))
+    {
+        effective_envs.push(("COLORTERM".to_string(), "truecolor".to_string()));
+    }
     let is_ai_tool =
         tool.eq_ignore_ascii_case("codex") || tool.eq_ignore_ascii_case("claudecode");
     let has_proxy = effective_envs.iter().any(|(k, _)| {
@@ -998,31 +1158,56 @@ pub(crate) fn spawn_embedded_terminal_with_origin(
         }
     }
 
-    // tmux 常驻：codex/claude 跑进 tmux 会话，App/PTY 断了进程还活着。
+    // tmux 常驻：仅当「真正启动 codex/claude」时包进 tmux。
+    // 镜像模式 program 本身已是 tmux attach，再包一层会导致：
+    // 内层 attach 失败 → pane 退出 → 外层 session 销毁 → 手机立刻「已退出」。
     let session_id = uuid::Uuid::new_v4().to_string();
     let tmux = tmux_bin();
-    let use_tmux = is_ai_tool && tmux.is_some();
-    let tmux_name = if use_tmux {
-        Some(format!("eac-{}", &session_id[..8]))
+    let program_is_tmux = Path::new(program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| {
+            let s = s.to_ascii_lowercase();
+            s == "tmux" || s.starts_with("tmux.")
+        })
+        .unwrap_or(false);
+    let use_tmux = is_ai_tool && tmux.is_some() && !program_is_tmux;
+    let mirror_target = if program_is_tmux {
+        extract_tmux_target_name(args)
     } else {
         None
     };
+    let tmux_name = if use_tmux {
+        Some(format!("eac-{}", &session_id[..8]))
+    } else {
+        mirror_target.clone()
+    };
+    // 镜像 = program 本身是 tmux attach；终端模式即便包进 tmux 也仍是 terminal
+    let view_mode = if program_is_tmux {
+        "tmux".to_string()
+    } else {
+        "terminal".to_string()
+    };
     let (real_program, real_args) = if let (Some(tmux), Some(name)) = (&tmux, &tmux_name) {
-        // 记录元数据，重启后可把常驻会话恢复成「可重连」
-        save_tmux_meta(
-            name,
-            json!({
-                "tool": tool,
-                "title": title,
-                "cwd": cwd.to_string_lossy(),
-                "program": program,
-                "args": args,
-                "codexHome": effective_envs.iter().find(|(k,_)| k=="CODEX_HOME").map(|(_,v)| v.clone()).unwrap_or_default(),
-                "commandPreview": command_preview.clone().unwrap_or_else(|| build_command_preview(program, args)),
-                "createdAt": chrono::Utc::now().to_rfc3339(),
-            }),
-        );
-        build_tmux_command(tmux, program, args, &effective_envs, name, cols, rows)
+        if use_tmux {
+            // 记录元数据，重启后可把常驻会话恢复成「可重连」
+            save_tmux_meta(
+                name,
+                json!({
+                    "tool": tool,
+                    "title": title,
+                    "cwd": cwd.to_string_lossy(),
+                    "program": program,
+                    "args": args,
+                    "codexHome": effective_envs.iter().find(|(k,_)| k=="CODEX_HOME").map(|(_,v)| v.clone()).unwrap_or_default(),
+                    "commandPreview": command_preview.clone().unwrap_or_else(|| build_command_preview(program, args)),
+                    "createdAt": chrono::Utc::now().to_rfc3339(),
+                }),
+            );
+            build_tmux_command(tmux, program, args, &effective_envs, name, cols, rows)
+        } else {
+            (program.to_string(), args.to_vec())
+        }
     } else {
         (program.to_string(), args.to_vec())
     };
@@ -1063,6 +1248,7 @@ pub(crate) fn spawn_embedded_terminal_with_origin(
             .map(|(_, v)| PathBuf::from(v))
             .filter(|p| !p.as_os_str().is_empty()),
         tmux_name,
+        view_mode,
         term_size: Mutex::new((rows.max(1), cols.max(1))),
         last_remote_ms: Mutex::new(0),
         display_title: Mutex::new(None),
@@ -1150,6 +1336,10 @@ fn finalize_session(
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
                         output.extend_from_slice(data);
                     }
+                    // OSC 标题兜底 → Hook 雷达（cwd 匹配终端/镜像）
+                    for title in extract_osc_titles(data) {
+                        crate::agent_hooks::note_osc_title(&session_for_reader.cwd, &title);
+                    }
                     // 2) push 给前端：只 emit 合法 UTF-8 前缀，半个多字节字符留到下次
                     if let Some(app) = APP_HANDLE.get() {
                         pending.extend_from_slice(data);
@@ -1228,17 +1418,15 @@ fn reattach_tmux_session(name: &str, meta: &Value) -> Result<Value, String> {
     if !cwd.is_empty() {
         command.cwd(cwd);
     }
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    // 恢复时只 attach，不要再 new-session -A（避免空 pane / 语义混乱）
     command.args([
         "-f",
         &tmux_config_path(),
-        "new-session",
-        "-A",
-        "-s",
+        "attach-session",
+        "-t",
         name,
-        "-x",
-        &cols.to_string(),
-        "-y",
-        &rows.to_string(),
     ]);
     let master = pair.master;
     let reader = master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -1262,6 +1450,8 @@ fn reattach_tmux_session(name: &str, meta: &Value) -> Result<Value, String> {
         origin: "desktop".to_string(),
         codex_home,
         tmux_name: Some(name.to_string()),
+        // 重启恢复的是「终端常驻」会话，不是镜像 attach
+        view_mode: "terminal".to_string(),
         term_size: Mutex::new((rows.max(1), cols.max(1))),
         last_remote_ms: Mutex::new(0),
         display_title: Mutex::new(None),
@@ -1765,34 +1955,94 @@ fn args_have_model_provider_override(args: &[String]) -> bool {
     })
 }
 
+/// 从 CODEX_HOME/config.toml 读顶层字符串配置（如 model / model_provider）。
+pub(crate) fn read_codex_config_str(codex_home: &Path, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(codex_home.join("config.toml")).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix(key) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let val = rest
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string();
+        if !val.is_empty() {
+            return Some(val);
+        }
+    }
+    None
+}
+
+/// 账号上下文：订阅(ChatGPT OAuth) / BYOK(API Key 或第三方 Provider) + 模型。
+/// 供手机 Timeline / 终端顶栏展示。
+pub(crate) fn codex_account_context(codex_home: &Path) -> Value {
+    let auth_text = std::fs::read_to_string(codex_home.join("auth.json")).unwrap_or_default();
+    let auth = serde_json::from_str::<Value>(&auth_text).unwrap_or_else(|_| json!({}));
+    let auth_mode_raw = auth
+        .get("auth_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let has_chatgpt_tokens = auth
+        .get("tokens")
+        .and_then(Value::as_object)
+        .map(|obj| {
+            obj.contains_key("access_token")
+                || obj.contains_key("id_token")
+                || obj.contains_key("refresh_token")
+        })
+        .unwrap_or(false);
+    let has_api_key = auth
+        .get("OPENAI_API_KEY")
+        .and_then(Value::as_str)
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let chatgpt = auth_mode_raw == "chatgpt" || has_chatgpt_tokens;
+    let provider = read_codex_config_str(codex_home, "model_provider")
+        .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("openai"));
+    let model = read_codex_config_str(codex_home, "model").unwrap_or_default();
+    let effort = read_codex_config_str(codex_home, "model_reasoning_effort").unwrap_or_default();
+
+    let (auth_mode, auth_label, provider_name) = if chatgpt && provider.is_none() {
+        ("chatgpt", "订阅", "ChatGPT")
+    } else if let Some(ref p) = provider {
+        ("provider", "BYOK", p.as_str())
+    } else if has_api_key {
+        ("api_key", "BYOK", "OpenAI API")
+    } else if chatgpt {
+        ("chatgpt", "订阅", "ChatGPT")
+    } else {
+        ("unknown", "未登录", "")
+    };
+
+    json!({
+        "authMode": auth_mode,
+        "authLabel": auth_label,
+        "provider": provider.clone().unwrap_or_default(),
+        "providerName": provider_name,
+        "model": model,
+        "effort": effort,
+        "codexHome": codex_home.to_string_lossy(),
+    })
+}
+
 /// 从 CODEX_HOME/config.toml 读取**显式**配置的 model_provider。
 ///
 /// 不再从 `model_catalog_json` 文件名（如 model-catalog.lucoo.json）或「唯一
 /// provider」推断：catalog 只是模型列表，用户用 ChatGPT 账号登录时 config 里
 /// 故意不写 model_provider；乱注入 lucoo 等会劫持账号登录。
 fn infer_codex_model_provider(codex_home: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(codex_home.join("config.toml")).ok()?;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('#') {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("model_provider") {
-            let rest = rest.trim_start();
-            if let Some(rest) = rest.strip_prefix('=') {
-                let val = rest
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('\'')
-                    .trim()
-                    .to_string();
-                if !val.is_empty() {
-                    return Some(val);
-                }
-            }
-        }
-    }
-    None
+    read_codex_config_str(codex_home, "model_provider")
 }
 
 fn resolve_session_codex_home(envs: &[(String, String)]) -> PathBuf {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'agent_notify.dart';
 import 'api.dart';
 import 'settings.dart';
 import 'store.dart';
@@ -10,6 +11,10 @@ import 'screens/sessions_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppSettings.instance.load();
+  // 本地通知：等你 / 完成（失败不阻断启动）
+  try {
+    await AgentNotify.instance.init();
+  } catch (_) {}
   runApp(const EasyAIConfigApp());
 }
 

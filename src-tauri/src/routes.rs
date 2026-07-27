@@ -6489,6 +6489,20 @@ pub(crate) async fn dispatch(
         ("/api/claude/session", "GET") => crate::claude_print_bridge::api_session_get(query),
         ("/api/claude/list", "GET") => crate::claude_print_bridge::api_list(query),
         ("/api/claude/close", "POST") => crate::claude_print_bridge::api_close(body),
+        ("/api/claude/models", "GET") => crate::claude_print_bridge::api_models(query),
+        ("/api/claude/rate-limits", "GET") => crate::claude_print_bridge::api_rate_limits(query),
+
+        // ─── tmux 镜像同步 ──────────────────────────────────────────
+        ("/api/tmux/list", "GET") => crate::tmux_remote::api_list(query),
+        ("/api/tmux/attach", "POST") => crate::tmux_remote::api_attach(body),
+        ("/api/tmux/create", "POST") => crate::tmux_remote::api_create(body),
+
+        // ─── Agent Hook 雷达（等你 / working / done）────────────────
+        ("/api/agent-hooks/status", "GET") => crate::agent_hooks::api_status(query),
+        ("/api/agent-hooks/on", "POST") => crate::agent_hooks::api_on(body),
+        ("/api/agent-hooks/off", "POST") => crate::agent_hooks::api_off(body),
+        ("/api/agent-hooks/sessions", "GET") => crate::agent_hooks::api_sessions(query),
+        ("/api/agent-hooks/toggle", "POST") => crate::agent_hooks::api_toggle(body),
 
         ("/api/shell-integration/status", "GET") => shell_integration_status(query),
         ("/api/shell-integration/enable", "POST") => enable_shell_integration(body),

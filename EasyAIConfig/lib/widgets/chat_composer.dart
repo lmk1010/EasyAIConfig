@@ -74,7 +74,10 @@ class _ChatComposerState extends State<ChatComposer> {
                     controller: widget.controller,
                     minLines: 1,
                     maxLines: 6,
-                    autocorrect: false,
+                    autocorrect: true,
+                    enableSuggestions: true,
+                    enableIMEPersonalizedLearning: true,
+                    textCapitalization: TextCapitalization.sentences,
                     keyboardType: TextInputType.multiline,
                     textInputAction: TextInputAction.newline,
                     style: const TextStyle(

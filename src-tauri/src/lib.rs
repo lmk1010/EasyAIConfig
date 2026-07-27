@@ -380,6 +380,10 @@ mod config;
 mod cursor_usage;
 mod claude_print_bridge;
 mod codex_app_server;
+mod agent_hooks;
+mod desktop_notify;
+mod tmux_remote;
+mod session_bus;
 mod network;
 mod oauth_profiles;
 mod processes;
@@ -461,6 +465,8 @@ pub fn run() {
             remote_server::install(&app.handle());
             // 若上次开启过远程/隧道，开机自动恢复（token 持久化 → 手机免重配对）
             std::thread::spawn(remote_server::restore_on_launch);
+            // Hook 雷达：开机恢复 loopback + 重写 env（hooks 命令保持稳定）
+            std::thread::spawn(agent_hooks::restore_on_launch);
             // 常驻会话：重连上次仍在 tmux 里存活的 codex/claude 会话
             std::thread::spawn(terminal::restore_tmux_sessions);
             Ok(())

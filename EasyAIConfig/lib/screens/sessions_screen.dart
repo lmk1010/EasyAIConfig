@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 
+import '../agent_notify.dart';
 import '../api.dart';
 import '../models/server.dart';
+import '../session_capabilities.dart';
+import '../settings.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../util.dart';
@@ -26,15 +29,17 @@ class SessionInfo {
   final String origin;
   final bool remoteActive;
   final bool persistent;
-  /// true = Codex app-server 桥（低延迟 Timeline），非 PTY。
+  /// true = Codex app-server / Claude print-bridge（低延迟 Timeline），非 PTY。
   final bool bridge;
-  /// bridge | timeline | terminal
-  /// - bridge: app-server 快速 Timeline
-  /// - timeline: PTY + 手机 Timeline 刮屏
-  /// - terminal: 完整远程 TUI 终端
+  /// bridge | terminal | tmux（timeline 旧值映射为 bridge）
   final String viewMode;
   final String threadId;
   final String model;
+  /// working | waiting | done（服务端）；列表再归一 exited
+  final String agentStatus;
+  final String pendingSummary;
+  final String authLabel;
+  final String providerName;
 
   SessionInfo({
     required this.id,
@@ -53,27 +58,48 @@ class SessionInfo {
     this.viewMode = '',
     this.threadId = '',
     this.model = '',
+    this.agentStatus = '',
+    this.pendingSummary = '',
+    this.authLabel = '',
+    this.providerName = '',
   });
 
   /// 规范化后的界面模式。
   String get mode {
-    if (viewMode == 'bridge' || viewMode == 'timeline' || viewMode == 'terminal') {
+    if (viewMode == SessionMode.bridge ||
+        viewMode == SessionMode.terminal ||
+        viewMode == SessionMode.tmux) {
       return viewMode;
     }
-    if (bridge) return 'bridge';
-    if (tool == 'codex') return 'timeline';
-    return 'terminal';
+    // 遗留刮屏会话：仍可打开，但不再作为启动入口
+    if (viewMode == 'timeline') return 'timeline';
+    if (bridge) return SessionMode.bridge;
+    return SessionMode.terminal;
   }
+
+  String get status =>
+      AgentStatus.normalize(agentStatus, running: running);
+
+  SessionCapabilities get caps =>
+      SessionCapabilities.of(tool: tool, mode: mode);
 
   static SessionInfo fromJson(Map j) {
     final bridge = j['bridge'] == true;
     var viewMode = (j['viewMode'] ?? j['mode'] ?? '').toString();
+    if (viewMode == 'timeline') viewMode = SessionMode.bridge;
     if (viewMode.isEmpty) {
       viewMode = bridge
-          ? 'bridge'
+          ? SessionMode.bridge
           : ((j['preferTerminal'] == true || j['rawTerminal'] == true)
-              ? 'terminal'
-              : '');
+              ? SessionMode.terminal
+              : SessionMode.terminal);
+    }
+    final pending = j['pendingApproval'];
+    var pendingSummary = '';
+    if (pending is Map) {
+      pendingSummary =
+          (pending['summary'] ?? pending['command'] ?? pending['message'] ?? '')
+              .toString();
     }
     return SessionInfo(
       id: (j['sessionId'] ?? j['id'] ?? '').toString(),
@@ -93,6 +119,10 @@ class SessionInfo {
       viewMode: viewMode,
       threadId: (j['threadId'] ?? '').toString(),
       model: (j['model'] ?? '').toString(),
+      agentStatus: (j['agentStatus'] ?? '').toString(),
+      pendingSummary: pendingSummary,
+      authLabel: (j['authLabel'] ?? '').toString(),
+      providerName: (j['providerName'] ?? '').toString(),
     );
   }
 }
@@ -148,7 +178,6 @@ class _SessionsScreenState extends State<SessionsScreen>
   String? _error;
   bool _loading = true;
   bool _reachable = true;
-  Timer? _timer;
   Timer? _retryTimer;
   int _retryAttempt = 0;
   String _query = '';
@@ -165,6 +194,13 @@ class _SessionsScreenState extends State<SessionsScreen>
   List<HistItem> _hist = [];
   String _histQuery = ''; // 历史搜索
   final Set<String> _histCollapsed = {}; // 已折叠的历史分组
+  /// 上次 agentStatus（用于等你/完成通知去重）
+  final Map<String, String> _prevAgentStatus = {};
+  bool _hooksArmed = false;
+  /// 列表级 SSE：取代 3s 轮询
+  int _streamGen = 0;
+  int _sessionsAfter = 0;
+  bool _streamAlive = false;
 
   @override
   void initState() {
@@ -174,15 +210,26 @@ class _SessionsScreenState extends State<SessionsScreen>
     _tab = TabController(length: 2, vsync: this);
     _tab.addListener(_onTabChanged);
     _loadPrefs();
+    _ensureHooks();
     _refresh();
-    _startPolling();
+    _startSessionsStream();
+  }
+
+  Future<void> _ensureHooks() async {
+    if (_hooksArmed) return;
+    _hooksArmed = true;
+    // 仅在用户开启时装一次；已装则后端返回 already，不重复写配置
+    if (!AppSettings.instance.agentHooksEnabled.value) return;
+    try {
+      await _client.agentHooksOn();
+    } catch (_) {}
   }
 
   @override
   void dispose() {
+    _streamGen++;
     _tab.removeListener(_onTabChanged);
     _tab.dispose();
-    _timer?.cancel();
     _retryTimer?.cancel();
     super.dispose();
   }
@@ -204,21 +251,238 @@ class _SessionsScreenState extends State<SessionsScreen>
     });
   }
 
-  void _startPolling() {
-    _timer?.cancel();
-    _timer =
-        Timer.periodic(const Duration(seconds: 3), (_) => _refresh(silent: true));
+  void _startSessionsStream() {
+    final gen = ++_streamGen;
+    () async {
+      var backoffMs = 600;
+      while (mounted && gen == _streamGen) {
+        try {
+          await for (final ev
+              in _client.streamSessions(after: _sessionsAfter)) {
+            if (!mounted || gen != _streamGen) return;
+            final seq = (ev['seq'] as num?)?.toInt();
+            if (seq != null && seq > _sessionsAfter) _sessionsAfter = seq;
+            _applySessionsEvent(ev);
+            if (!_streamAlive || !_reachable) {
+              setState(() {
+                _streamAlive = true;
+                _reachable = true;
+                _error = null;
+              });
+            }
+            backoffMs = 600;
+            _retryAttempt = 0;
+            _retryTimer?.cancel();
+          }
+          // 正常结束 → 立刻重连
+        } catch (e) {
+          if (!mounted || gen != _streamGen) return;
+          setState(() {
+            _streamAlive = false;
+            _reachable = false;
+            _error = '推送断开，重连中…';
+          });
+        }
+        if (!mounted || gen != _streamGen) return;
+        await Future.delayed(Duration(milliseconds: backoffMs));
+        backoffMs = min(15000, backoffMs * 2);
+        // 重连时补一次 REST，覆盖 PTY 等非总线源
+        if (mounted && gen == _streamGen) {
+          await _refresh(silent: true);
+        }
+      }
+    }();
   }
 
-  void _stopPolling() {
-    _timer?.cancel();
-    _timer = null;
+  void _applySessionsEvent(Map<String, dynamic> ev) {
+    final type = (ev['type'] ?? '').toString();
+    if (type == 'sessions/snapshot') {
+      final list = (ev['sessions'] as List?) ?? [];
+      final bridge = list
+          .whereType<Map>()
+          .map((e) {
+            final m = Map<String, dynamic>.from(e);
+            m['bridge'] = true;
+            m['viewMode'] = m['viewMode'] ?? 'bridge';
+            return SessionInfo.fromJson(m);
+          })
+          .toList();
+      setState(() {
+        final pty = _sessions.where((s) => !s.bridge).toList();
+        _sessions = [...bridge, ...pty];
+        _sortSessionsInPlace();
+        _loading = false;
+        _reachable = true;
+      });
+      _notifyStatusTransitions(_sessions);
+      return;
+    }
+    if (type == 'session/upsert') {
+      final raw = ev['session'];
+      if (raw is! Map) return;
+      final m = Map<String, dynamic>.from(raw);
+      m['bridge'] = m['bridge'] ?? true;
+      m['viewMode'] = m['viewMode'] ?? 'bridge';
+      final s = SessionInfo.fromJson(m);
+      setState(() {
+        final i = _sessions.indexWhere((x) => x.id == s.id);
+        if (i >= 0) {
+          _sessions[i] = s;
+        } else {
+          _sessions.insert(0, s);
+        }
+        _sortSessionsInPlace();
+        _loading = false;
+      });
+      _notifyStatusTransitions([s]);
+      return;
+    }
+    if (type == 'session/remove') {
+      final id = (ev['sessionId'] ?? '').toString();
+      if (id.isEmpty) return;
+      setState(() {
+        _sessions.removeWhere((s) => s.id == id);
+      });
+      return;
+    }
+    if (type == 'agent/status') {
+      final id = (ev['sessionId'] ?? '').toString();
+      if (id.isEmpty) return;
+      final st = (ev['agentStatus'] ?? '').toString();
+      final pending = ev['pendingApproval'];
+      final sessionRaw = ev['session'];
+      setState(() {
+        final i = _sessions.indexWhere((x) => x.id == id);
+        if (sessionRaw is Map) {
+          final m = Map<String, dynamic>.from(sessionRaw);
+          m['bridge'] = true;
+          m['viewMode'] = 'bridge';
+          final s = SessionInfo.fromJson(m);
+          if (i >= 0) {
+            _sessions[i] = s;
+          } else {
+            _sessions.insert(0, s);
+          }
+        } else if (i >= 0) {
+          final cur = _sessions[i];
+          final m = {
+            'sessionId': cur.id,
+            'tool': cur.tool,
+            'title': cur.title,
+            'displayName': cur.displayName,
+            'cwd': cur.cwd,
+            'commandPreview': cur.commandPreview,
+            'createdAt': cur.createdAt,
+            'running': cur.running,
+            'origin': cur.origin,
+            'remoteActive': cur.remoteActive,
+            'persistent': cur.persistent,
+            'bridge': cur.bridge,
+            'viewMode': cur.viewMode.isEmpty ? 'bridge' : cur.viewMode,
+            'threadId': cur.threadId,
+            'model': cur.model,
+            'agentStatus': st,
+            'pendingApproval': pending,
+          };
+          _sessions[i] = SessionInfo.fromJson(m);
+        }
+        _sortSessionsInPlace();
+      });
+      final hit = _sessions.where((s) => s.id == id);
+      if (hit.isNotEmpty) _notifyStatusTransitions([hit.first]);
+      return;
+    }
+    if (type == 'hook/status') {
+      final cwd = (ev['cwd'] ?? '').toString();
+      final st = (ev['agentStatus'] ?? '').toString();
+      final summary = (ev['pendingApproval'] is Map)
+          ? ((ev['pendingApproval']['summary'] ?? '').toString())
+          : '';
+      if (cwd.isEmpty || st.isEmpty) return;
+      bool cwdMatch(String a, String b) {
+        String norm(String p) {
+          var s = p.trim();
+          while (s.length > 1 && s.endsWith('/')) {
+            s = s.substring(0, s.length - 1);
+          }
+          return s;
+        }
+        final na = norm(a);
+        final nb = norm(b);
+        if (na.isEmpty || nb.isEmpty) return false;
+        return na == nb || na.startsWith('$nb/') || nb.startsWith('$na/');
+      }
+      setState(() {
+        for (var i = 0; i < _sessions.length; i++) {
+          if (!cwdMatch(_sessions[i].cwd, cwd)) continue;
+          if (_sessions[i].bridge &&
+              _sessions[i].agentStatus == AgentStatus.waiting) {
+            continue; // bridge 自身 waiting 优先
+          }
+          if (st != AgentStatus.waiting) continue;
+          final cur = _sessions[i];
+          _sessions[i] = SessionInfo.fromJson({
+            'sessionId': cur.id,
+            'tool': cur.tool,
+            'title': cur.title,
+            'displayName': cur.displayName,
+            'cwd': cur.cwd,
+            'commandPreview': cur.commandPreview,
+            'createdAt': cur.createdAt,
+            'running': cur.running,
+            'exitCode': cur.exitCode,
+            'origin': cur.origin,
+            'remoteActive': cur.remoteActive,
+            'persistent': cur.persistent,
+            'bridge': cur.bridge,
+            'viewMode':
+                cur.viewMode.isEmpty ? (cur.bridge ? 'bridge' : 'terminal') : cur.viewMode,
+            'model': cur.model,
+            'agentStatus': st,
+            'pendingApproval': {'summary': summary},
+          });
+        }
+        _sortSessionsInPlace();
+      });
+    }
+  }
+
+  void _sortSessionsInPlace() {
+    _sessions.sort((a, b) {
+      final ra = AgentStatus.sortRank(a.status);
+      final rb = AgentStatus.sortRank(b.status);
+      if (ra != rb) return ra.compareTo(rb);
+      return b.createdAt.compareTo(a.createdAt);
+    });
+  }
+
+  void _notifyStatusTransitions(List<SessionInfo> rows) {
+    for (final s in rows) {
+      final prev = _prevAgentStatus[s.id] ?? '';
+      final cur = s.status;
+      if (prev.isNotEmpty && prev != cur) {
+        if (cur == AgentStatus.waiting) {
+          AgentNotify.instance.waiting(
+            sessionId: s.id,
+            title: _displayTitle(s),
+            body: s.pendingSummary,
+          );
+        } else if (cur == AgentStatus.done && prev == AgentStatus.working) {
+          AgentNotify.instance.done(
+            sessionId: s.id,
+            title: _displayTitle(s),
+          );
+        }
+      }
+      _prevAgentStatus[s.id] = cur;
+    }
   }
 
   void _scheduleRetry() {
     _retryTimer?.cancel();
     _retryAttempt++;
     final secs = min(30, 3 * pow(2, _retryAttempt - 1).toInt());
+    // 仅补 REST；SSE 自带重连循环，避免双开流
     _retryTimer = Timer(Duration(seconds: secs), () => _refresh(silent: true));
   }
 
@@ -253,30 +517,116 @@ class _SessionsScreenState extends State<SessionsScreen>
       }
       await loadBridge('/api/codex/list', 'codex', 'codex app-server');
       await loadBridge('/api/claude/list', 'claude', 'claude -p stream-json');
+      // Hook 雷达：按 cwd 叠加 waiting/working 到已有会话（含终端/镜像）
+      try {
+        if (AppSettings.instance.agentHooksEnabled.value) {
+          final hr = await _client.agentHooksSessions();
+          if (hr.ok && hr.data is Map) {
+            final hooks = (hr.data['sessions'] as List?) ?? [];
+            bool cwdMatch(String a, String b) {
+              String norm(String p) {
+                var s = p.trim();
+                while (s.length > 1 && s.endsWith('/')) {
+                  s = s.substring(0, s.length - 1);
+                }
+                return s;
+              }
+              final na = norm(a);
+              final nb = norm(b);
+              if (na.isEmpty || nb.isEmpty) return false;
+              return na == nb ||
+                  na.startsWith('$nb/') ||
+                  nb.startsWith('$na/');
+            }
+            for (final h in hooks) {
+              if (h is! Map) continue;
+              final cwd = (h['cwd'] ?? '').toString();
+              final st = (h['agentStatus'] ?? '').toString();
+              final summary = (h['pendingSummary'] ?? '').toString();
+              if (cwd.isEmpty || st.isEmpty) continue;
+              for (var i = 0; i < bridge.length; i++) {
+                if (cwdMatch(bridge[i].cwd, cwd) &&
+                    bridge[i].agentStatus != AgentStatus.waiting) {
+                  // bridge 自身状态优先；仅在空/done 时用 hook 补 waiting
+                  if (st == AgentStatus.waiting) {
+                    final m = {
+                      'sessionId': bridge[i].id,
+                      'tool': bridge[i].tool,
+                      'title': bridge[i].title,
+                      'displayName': bridge[i].displayName,
+                      'cwd': bridge[i].cwd,
+                      'commandPreview': bridge[i].commandPreview,
+                      'createdAt': bridge[i].createdAt,
+                      'running': bridge[i].running,
+                      'origin': bridge[i].origin,
+                      'remoteActive': bridge[i].remoteActive,
+                      'persistent': bridge[i].persistent,
+                      'bridge': true,
+                      'viewMode': 'bridge',
+                      'threadId': bridge[i].threadId,
+                      'model': bridge[i].model,
+                      'agentStatus': st,
+                      'pendingApproval': {'summary': summary},
+                    };
+                    bridge[i] = SessionInfo.fromJson(m);
+                  }
+                }
+              }
+              for (var i = 0; i < pty.length; i++) {
+                if (cwdMatch(pty[i].cwd, cwd)) {
+                  final m = {
+                    'sessionId': pty[i].id,
+                    'tool': pty[i].tool,
+                    'title': pty[i].title,
+                    'displayName': pty[i].displayName,
+                    'cwd': pty[i].cwd,
+                    'commandPreview': pty[i].commandPreview,
+                    'createdAt': pty[i].createdAt,
+                    'running': pty[i].running,
+                    'exitCode': pty[i].exitCode,
+                    'origin': pty[i].origin,
+                    'remoteActive': pty[i].remoteActive,
+                    'persistent': pty[i].persistent,
+                    'bridge': false,
+                    'viewMode':
+                        pty[i].viewMode.isEmpty ? 'terminal' : pty[i].viewMode,
+                    'model': pty[i].model,
+                    'agentStatus': st,
+                    'pendingApproval': {'summary': summary},
+                  };
+                  pty[i] = SessionInfo.fromJson(m);
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      final merged = [...bridge, ...pty];
+      merged.sort((a, b) {
+        final ra = AgentStatus.sortRank(a.status);
+        final rb = AgentStatus.sortRank(b.status);
+        if (ra != rb) return ra.compareTo(rb);
+        return b.createdAt.compareTo(a.createdAt);
+      });
       final wasUnreachable = !_reachable;
-  setState(() {
-        _sessions = [...bridge, ...pty];
-        // 立即按时间排一次，避免首帧闪乱序（_visibleSessions 也会再排）
-        _sessions.sort((a, b) {
-          final ta = parseTime(a.createdAt)?.millisecondsSinceEpoch ?? 0;
-          final tb = parseTime(b.createdAt)?.millisecondsSinceEpoch ?? 0;
-          if (ta != tb) return tb.compareTo(ta);
-          return b.id.compareTo(a.id);
-        });
+      setState(() {
+        _sessions = merged;
+        _sortSessionsInPlace();
         _error = null;
         _reachable = true;
         _loading = false;
       });
+      _notifyStatusTransitions(merged);
       _retryAttempt = 0;
       _retryTimer?.cancel();
-      if (wasUnreachable) _startPolling();
+      if (wasUnreachable) _startSessionsStream();
     } else {
       setState(() {
         _error = res.error;
         _reachable = false;
         _loading = false;
+        _streamAlive = false;
       });
-      _stopPolling();
       _scheduleRetry();
     }
   }
@@ -323,9 +673,13 @@ class _SessionsScreenState extends State<SessionsScreen>
       _hist = [];
       _histLoaded = false;
       _retryAttempt = 0;
+      _sessionsAfter = 0;
+      _streamAlive = false;
+      _hooksArmed = false;
     });
+    _ensureHooks();
     _refresh();
-    _startPolling();
+    _startSessionsStream();
   }
 
   Future<void> _openServers() async {
@@ -505,28 +859,25 @@ class _SessionsScreenState extends State<SessionsScreen>
       return;
     }
 
-    // PTY：Timeline 模拟 或 终端模式（Codex / Claude）
-    final launchLabel =
-        viewMode == 'terminal' ? '启动终端模式' : '启动 Timeline 模拟';
+    // tmux 镜像：列出本机会话并附着
+    if (viewMode == SessionMode.tmux) {
+      await _attachTmuxSession(tool: tool, cwd: cwd);
+      return;
+    }
+
+    // PTY：仅完整终端（刮屏 Timeline 已淘汰）
     late final ApiResult res;
     try {
       if (!mounted) return;
       res = await BridgeLaunchDialog.run(
         context,
-        title: launchLabel,
-        steps: viewMode == 'terminal'
-            ? const [
-                '分配远程终端…',
-                '启动 CLI…',
-                '同步窗口尺寸…',
-                '即将就绪…',
-              ]
-            : const [
-                '分配远程终端…',
-                '启动 CLI…',
-                '接入 Timeline…',
-                '即将就绪…',
-              ],
+        title: '启动终端模式',
+        steps: const [
+          '分配远程终端…',
+          '启动 CLI…',
+          '同步窗口尺寸…',
+          '即将就绪…',
+        ],
         task: () => _client.createSession(
           tool: tool,
           program: result['program'],
@@ -546,7 +897,7 @@ class _SessionsScreenState extends State<SessionsScreen>
     if (!mounted) return;
     if (res.ok && res.data?['terminalSession'] != null) {
       final m = Map<String, dynamic>.from(res.data['terminalSession'] as Map);
-      m['viewMode'] = viewMode == 'terminal' ? 'terminal' : 'timeline';
+      m['viewMode'] = SessionMode.terminal;
       m['bridge'] = false;
       final s = SessionInfo.fromJson(m);
       _openTerminal(s);
@@ -558,13 +909,167 @@ class _SessionsScreenState extends State<SessionsScreen>
     }
   }
 
+  Future<void> _attachTmuxSession({required String tool, required String cwd}) async {
+    final listRes = await _client.tmuxList();
+    if (!mounted) return;
+    if (!listRes.ok || listRes.data is! Map) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('无法列出 tmux：${listRes.error ?? '未知'}')),
+      );
+      return;
+    }
+    if (listRes.data['available'] != true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text((listRes.data['error'] ?? '本机未安装 tmux').toString()),
+        ),
+      );
+      return;
+    }
+    final sessions = (listRes.data['sessions'] as List?) ?? [];
+    // null = 取消；'' = 新建并启动 agent；其它 = 附着已有名
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('镜像 tmux',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '新建后手机与电脑同屏；也可附着已有会话',
+                  style: TextStyle(fontSize: 12, color: kMuted),
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_circle_outline, color: kAccent),
+              title: Text('新建并启动 ${tool == 'claude' || tool == 'claudecode' ? 'Claude' : 'Codex'}'),
+              subtitle: const Text('tmux new → 启动 agent → 附着'),
+              onTap: () => Navigator.pop(context, ''),
+            ),
+            if (sessions.isNotEmpty) const Divider(height: 1),
+            if (sessions.isEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 8, 20, 16),
+                child: Text(
+                  '本机暂无其它 tmux 会话',
+                  style: TextStyle(fontSize: 12.5, color: kFaint),
+                ),
+              )
+            else
+              ...sessions.map((raw) {
+                final m = raw is Map ? raw : <String, dynamic>{};
+                final n = (m['name'] ?? '').toString();
+                final attached = m['attached'] == true;
+                final windows = m['windows'];
+                return ListTile(
+                  leading: Icon(
+                    Icons.desktop_windows_outlined,
+                    color: attached ? kRunning : kMuted,
+                  ),
+                  title: Text(n),
+                  subtitle: Text(
+                    [
+                      attached ? '已有附着' : '空闲',
+                      '${windows ?? '?'} windows',
+                      if ((m['cwd'] ?? '').toString().isNotEmpty)
+                        (m['cwd'] ?? '').toString(),
+                    ].join(' · '),
+                  ),
+                  onTap: () => Navigator.pop(context, n),
+                );
+              }),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    final createNew = choice.isEmpty;
+    var attachCwd = cwd;
+    if (!createNew) {
+      for (final raw in sessions) {
+        if (raw is! Map) continue;
+        if ((raw['name'] ?? '').toString() == choice) {
+          final sc = (raw['cwd'] ?? '').toString().trim();
+          if (sc.isNotEmpty) attachCwd = sc;
+          break;
+        }
+      }
+    }
+    late final ApiResult res;
+    try {
+      res = await BridgeLaunchDialog.run(
+        context,
+        title: createNew ? '新建 tmux 并启动' : '附着 tmux · $choice',
+        steps: createNew
+            ? const [
+                '创建 tmux 会话…',
+                '启动 agent…',
+                '分配远程 PTY…',
+                '即将就绪…',
+              ]
+            : const [
+                '连接本机 tmux…',
+                '分配远程 PTY…',
+                '同步画面…',
+                '即将就绪…',
+              ],
+        task: () => createNew
+            ? _client.tmuxCreate(tool: tool, cwd: cwd, launchAgent: true)
+            : _client.tmuxAttach(name: choice, tool: tool, cwd: attachCwd),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${createNew ? '创建' : '附着'}失败: $e')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    final term = res.data is Map
+        ? (res.data['terminalSession'] ?? res.data)
+        : null;
+    if (res.ok && term is Map) {
+      final m = Map<String, dynamic>.from(term);
+      m['viewMode'] = SessionMode.tmux;
+      m['bridge'] = false;
+      m['tool'] = tool.isEmpty ? (m['tool'] ?? 'shell') : tool;
+      final s = SessionInfo.fromJson(m);
+      _openTerminal(s);
+      _refresh(silent: true);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${createNew ? '创建' : '附着'}失败: ${res.error ?? '未知'}',
+          ),
+        ),
+      );
+    }
+  }
+
   void _openTerminal(SessionInfo s) {
     if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
       _scaffoldKey.currentState?.closeDrawer();
     }
     final displayTitle = _displayTitle(s);
-    // bridge / timeline → Timeline；terminal → 完整 TUI
-    final useTimeline = s.mode == 'bridge' || s.mode == 'timeline';
+    // bridge（及遗留刮屏）→ Timeline UI；terminal/tmux → 完整 TUI
+    final useTimeline =
+        s.bridge || s.mode == 'bridge' || s.mode == 'timeline';
     final Widget page = useTimeline
         ? TimelineScreen(client: _client, session: s, displayTitle: displayTitle)
         : TerminalScreen(client: _client, session: s, displayTitle: displayTitle);
@@ -576,6 +1081,75 @@ class _SessionsScreenState extends State<SessionsScreen>
         _scaffoldKey.currentState?.openDrawer();
       }
     });
+  }
+
+  /// 列表级快捷回复：等你时不用先进 Timeline。
+  Future<void> _quickReply(SessionInfo s) async {
+    if (!s.bridge) {
+      _openTerminal(s);
+      return;
+    }
+    final ctrl = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('快捷回复'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (s.pendingSummary.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  s.pendingSummary,
+                  style: const TextStyle(color: kMuted, fontSize: 13),
+                ),
+              ),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                hintText: '发给 Agent…',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (v) => Navigator.pop(ctx, v),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _openTerminal(s);
+            },
+            child: const Text('打开会话'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+            child: const Text('发送'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (text == null || text.trim().isEmpty || !mounted) return;
+    final res = await _client.bridgeTurnStart(s.tool, s.id, text.trim());
+    if (!mounted) return;
+    if (!res.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(res.error ?? '发送失败')),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已发送'), duration: Duration(seconds: 1)),
+    );
   }
 
   // ── 本地个性化操作 ──────────────────────────────────────────
@@ -599,23 +1173,25 @@ class _SessionsScreenState extends State<SessionsScreen>
     ].contains(n);
   }
 
-  /// 会话来源标签：通道 / 手机·电脑 / 常驻 / 在看。
+  /// 会话来源标签：通道 / 等你 / 手机·电脑 / 常驻 / 在看。
   List<Widget> _deviceTags(SessionInfo s) {
     final tags = <Widget>[];
-    // Codex：快速 / 模拟 / 终端
-    if (s.tool == 'codex') {
-      switch (s.mode) {
-        case 'bridge':
-          tags.add(_chip('快速', Icons.speed, kRunning));
-          break;
-        case 'terminal':
-          tags.add(_chip('终端', Icons.terminal, const Color(0xFF5B8CFF)));
-          break;
-        default:
-          tags.add(_chip('模拟', Icons.chat_bubble_outline, kMuted));
-      }
-    } else if (s.mode == 'terminal') {
-      tags.add(_chip('终端', Icons.terminal, const Color(0xFF5B8CFF)));
+    final st = s.status;
+    if (st == AgentStatus.waiting) {
+      tags.add(_chip('等你', Icons.priority_high_rounded, kWaiting));
+    } else if (st == AgentStatus.working) {
+      tags.add(_chip('工作中', Icons.autorenew_rounded, kRunning));
+    }
+    switch (s.mode) {
+      case SessionMode.bridge:
+        tags.add(_chip('快速', Icons.bolt_rounded, kRunning));
+        break;
+      case SessionMode.terminal:
+        tags.add(_chip('终端', Icons.terminal, const Color(0xFF5B8CFF)));
+        break;
+      case SessionMode.tmux:
+        tags.add(_chip('镜像', Icons.phone_android_rounded, const Color(0xFF8B6DFF)));
+        break;
     }
     if (s.persistent) {
       tags.add(_chip('常驻', Icons.bolt, const Color(0xFF2FA860)));
@@ -634,18 +1210,7 @@ class _SessionsScreenState extends State<SessionsScreen>
     ];
   }
 
-  String _modeLabel(String mode) {
-    switch (mode) {
-      case 'bridge':
-        return '快速通道';
-      case 'terminal':
-        return '终端模式';
-      case 'timeline':
-        return 'Timeline 模拟';
-      default:
-        return mode;
-    }
-  }
+  String _modeLabel(String mode) => SessionMode.shortLabel(mode);
 
   Widget _chip(String label, IconData icon, Color color) {
     // 无边框：只用极浅底色区分
@@ -729,11 +1294,13 @@ class _SessionsScreenState extends State<SessionsScreen>
       final pa = _pinned.contains(SessionPrefs.key(_server.id, a.id)) ? 0 : 1;
       final pb = _pinned.contains(SessionPrefs.key(_server.id, b.id)) ? 0 : 1;
       if (pa != pb) return pa - pb;
-      // 新 → 旧；无时间戳的沉底
+      // 等你 > 工作中 > 空闲/退出
+      final sa = AgentStatus.sortRank(a.status);
+      final sb = AgentStatus.sortRank(b.status);
+      if (sa != sb) return sa.compareTo(sb);
       final ta = parseTime(a.createdAt)?.millisecondsSinceEpoch ?? 0;
       final tb = parseTime(b.createdAt)?.millisecondsSinceEpoch ?? 0;
       if (ta != tb) return tb.compareTo(ta);
-      // 同时间：运行中优先
       if (a.running != b.running) return a.running ? -1 : 1;
       return b.id.compareTo(a.id);
     });
@@ -901,7 +1468,9 @@ class _SessionsScreenState extends State<SessionsScreen>
                 Navigator.pop(context);
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => SettingsScreen(client: _client),
+                  ),
                 );
               },
             ),
@@ -1128,16 +1697,31 @@ class _SessionsScreenState extends State<SessionsScreen>
                       const SizedBox(height: 2),
                       Text(
                         '${toolLabel(s.tool)}'
-                        '${s.tool == 'codex' || s.mode == 'terminal' ? ' · ${_modeLabel(s.mode)}' : ''}'
-                        '${s.running ? '' : ' · 已退出'}'
+                        ' · ${_modeLabel(s.mode)}'
+                        ' · ${AgentStatus.label(s.status)}'
+                        '${s.pendingSummary.isNotEmpty && s.status == AgentStatus.waiting ? ' · ${s.pendingSummary}' : ''}'
                         '${created != null ? ' · ${relativeTime(created)}' : ''}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: kMuted, fontSize: 11.5),
+                        style: TextStyle(
+                          color: s.status == AgentStatus.waiting
+                              ? kWaiting
+                              : kMuted,
+                          fontSize: 11.5,
+                          fontWeight: s.status == AgentStatus.waiting
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                        ),
                       ),
                     ],
                   ),
                 ),
+                if (s.status == AgentStatus.waiting && s.bridge)
+                  IconButton(
+                    tooltip: '快捷回复',
+                    icon: const Icon(Icons.reply_rounded, color: kWaiting),
+                    onPressed: () => _quickReply(s),
+                  ),
                 SizedBox(
                   width: 32,
                   height: 32,
@@ -1156,9 +1740,15 @@ class _SessionsScreenState extends State<SessionsScreen>
                         case 'hide':
                           _hide(s);
                           break;
+                        case 'reply':
+                          _quickReply(s);
+                          break;
                       }
                     },
                     itemBuilder: (_) => [
+                      if (s.status == AgentStatus.waiting && s.bridge)
+                        const PopupMenuItem(
+                            value: 'reply', child: Text('快捷回复')),
                       const PopupMenuItem(value: 'rename', child: Text('重命名')),
                       PopupMenuItem(
                           value: 'pin', child: Text(pinned ? '取消置顶' : '置顶')),
@@ -1659,6 +2249,19 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
   List<String> get _models => _tool == 'codex' ? _codexModels : _claudeModels;
 
   void _start() {
+    // 旧刮屏模式已淘汰，强制走快速通道
+    if (_viewMode == 'timeline') {
+      _viewMode = SessionMode.bridge;
+    }
+    if (_viewMode == SessionMode.tmux) {
+      Navigator.pop(context, {
+        'tool': _tool,
+        'viewMode': SessionMode.tmux,
+        'cwd': _cwd.text.trim(),
+        'title': 'tmux',
+      });
+      return;
+    }
     final isCodex = _tool == 'codex';
     final program = isCodex ? 'codex' : 'claude';
     final args = <String>[];
@@ -1930,14 +2533,7 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      _viewMode == 'bridge'
-                          ? Icons.bolt_rounded
-                          : (_viewMode == 'terminal'
-                              ? Icons.terminal_rounded
-                              : Icons.chat_bubble_outline),
-                      size: 17,
-                    ),
+                    Icon(SessionMode.icon(_viewMode), size: 17),
                     const SizedBox(width: 5),
                     Text(_startLabel(isCodex)),
                   ],
@@ -1952,12 +2548,14 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
 
   String _startLabel(bool isCodex) {
     switch (_viewMode) {
-      case 'bridge':
+      case SessionMode.bridge:
         return '启动快速通道';
-      case 'terminal':
+      case SessionMode.terminal:
         return '启动终端模式';
+      case SessionMode.tmux:
+        return '打开镜像…';
       default:
-        return isCodex ? '启动 Timeline 模拟' : '启动 Timeline 模拟';
+        return isCodex ? '启动快速通道' : '启动快速通道';
     }
   }
 
@@ -2003,32 +2601,9 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
   }
 
   Widget _modePicker(bool isCodex) {
-    final modes = isCodex
-        ? const [
-            ('bridge', '快速', '低延迟', Icons.bolt_rounded, kRunning),
-            ('timeline', '模拟', '刮屏', Icons.chat_bubble_outline, kMuted),
-            (
-              'terminal',
-              '终端',
-              '完整 TUI',
-              Icons.terminal_rounded,
-              Color(0xFF5B8CFF)
-            ),
-          ]
-        : const [
-            ('bridge', '快速', '低延迟', Icons.bolt_rounded, kRunning),
-            (
-              'terminal',
-              '终端',
-              '完整 TUI',
-              Icons.terminal_rounded,
-              Color(0xFF5B8CFF)
-            ),
-          ];
-    final selected = modes.firstWhere(
-      (m) => m.$1 == _viewMode,
-      orElse: () => modes.first,
-    );
+    // 两工具对称：快速 / 终端 / 镜像；已淘汰刮屏
+    final modes = SessionMode.launchable;
+    final caps = SessionCapabilities.of(tool: _tool, mode: _viewMode);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -2044,9 +2619,9 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
                         fontSize: 11.5,
                         fontWeight: FontWeight.w500)),
                 const Spacer(),
-                Text(selected.$3,
+                Text(SessionMode.subtitle(_viewMode),
                     style: TextStyle(
-                        color: selected.$5,
+                        color: SessionMode.accent(_viewMode),
                         fontSize: 11,
                         fontWeight: FontWeight.w600)),
               ],
@@ -2060,17 +2635,48 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
               ],
             ],
           ),
+          if (caps.chips.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 5,
+              runSpacing: 5,
+              children: [
+                for (final c in caps.chips)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: SessionMode.accent(_viewMode).withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      c,
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                        color: SessionMode.accent(_viewMode),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+          if (_viewMode == SessionMode.tmux) ...[
+            const SizedBox(height: 6),
+            const Text(
+              '镜像同步：可新建并启动 agent，或附着电脑已有 tmux，手机与电脑同屏',
+              style: TextStyle(fontSize: 11, color: kFaint, height: 1.25),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _modeCell(
-      (String, String, String, IconData, Color) m) {
-    final id = m.$1;
-    final title = m.$2;
-    final icon = m.$4;
-    final color = m.$5;
+  Widget _modeCell(String id) {
+    final title = SessionMode.shortLabel(id);
+    final icon = SessionMode.icon(id);
+    final color = SessionMode.accent(id);
     final on = _viewMode == id;
     return Material(
       color: on ? color.withValues(alpha: 0.12) : kSurfaceHigh,

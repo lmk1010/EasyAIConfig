@@ -3,15 +3,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../api.dart';
 import '../apk_updater.dart';
 import '../settings.dart';
 import '../store.dart';
 import '../theme.dart';
 import 'pair_screen.dart';
 
-/// 设置页：主题、终端字号、常亮、震动、清除数据、关于 / APK 更新。
+/// 设置页：主题、终端字号、常亮、震动、Hook/通知、清除数据、关于 / APK 更新。
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final ApiClient? client;
+  const SettingsScreen({super.key, this.client});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -22,11 +24,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _checking = false;
   bool _downloading = false;
   double? _progress;
+  bool _hooksBusy = false;
+  String? _hooksHint;
 
   @override
   void initState() {
     super.initState();
     _loadVersion();
+    _refreshHooksStatus();
+  }
+
+  Future<void> _refreshHooksStatus() async {
+    final c = widget.client;
+    if (c == null) return;
+    try {
+      final res = await c.agentHooksStatus();
+      if (!mounted || !res.ok || res.data is! Map) return;
+      final on = res.data['enabled'] == true;
+      final port = res.data['port'];
+      final trust = (res.data['trustHint'] ?? '').toString().trim();
+      setState(() {
+        if (!on) {
+          _hooksHint = '桌面 Hook 雷达未开启';
+        } else if (trust.isNotEmpty) {
+          _hooksHint = trust;
+        } else {
+          _hooksHint =
+              '桌面已开启${port is num && port > 0 ? ' · 端口 $port' : ''}';
+        }
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _setHooks(bool value) async {
+    final s = AppSettings.instance;
+    await s.setAgentHooksEnabled(value);
+    final c = widget.client;
+    if (c == null) return;
+    setState(() => _hooksBusy = true);
+    try {
+      final res = value ? await c.agentHooksOn() : await c.agentHooksOff();
+      if (!mounted) return;
+      if (!res.ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.error ?? '同步 Hook 失败')),
+        );
+      }
+      await _refreshHooksStatus();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    } finally {
+      if (mounted) setState(() => _hooksBusy = false);
+    }
   }
 
   Future<void> _loadVersion() async {
@@ -182,6 +234,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title: const Text('快捷键震动反馈'),
               value: v,
               onChanged: s.setHaptics,
+            ),
+          ),
+          const Divider(height: 1),
+          _section('远程雷达'),
+          ValueListenableBuilder<bool>(
+            valueListenable: s.agentHooksEnabled,
+            builder: (_, v, __) => SwitchListTile(
+              title: const Text('Agent Hook 雷达'),
+              subtitle: Text(
+                _hooksHint ??
+                    (widget.client == null
+                        ? '打开会话页后可同步到桌面'
+                        : '电脑原生 TUI 的「等你」状态叠加到会话列表'),
+              ),
+              value: v,
+              onChanged: _hooksBusy ? null : _setHooks,
+            ),
+          ),
+          ValueListenableBuilder<bool>(
+            valueListenable: s.agentNotifyEnabled,
+            builder: (_, v, __) => SwitchListTile(
+              title: const Text('等你 / 完成通知'),
+              subtitle: const Text('状态变化时弹出本地通知'),
+              value: v,
+              onChanged: s.setAgentNotifyEnabled,
             ),
           ),
           const Divider(height: 1),

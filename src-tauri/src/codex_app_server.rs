@@ -8,6 +8,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -51,6 +52,12 @@ struct BridgeSession {
     alive: Mutex<bool>,
     /// phone | desktop | ""
     origin: Mutex<String>,
+    /// working | waiting | done — Orca-style agent status for phone list / 等你
+    agent_status: Mutex<String>,
+    /// pending server→client approval summary (cleared on respond)
+    pending_approval: Mutex<Option<Value>>,
+    /// 会话 CODEX_HOME（多账号）；空则 ~/.codex
+    codex_home: PathBuf,
 }
 
 impl BridgeSession {
@@ -120,21 +127,150 @@ impl BridgeSession {
         self.write_line(&msg.to_string())
     }
 
+    fn set_agent_status(&self, status: &str) {
+        let next = match status {
+            "working" | "waiting" | "done" => status,
+            _ => "done",
+        };
+        let changed = {
+            let mut g = self.agent_status.lock().unwrap_or_else(|e| e.into_inner());
+            if *g == next {
+                false
+            } else {
+                *g = next.to_string();
+                true
+            }
+        };
+        if !changed {
+            return;
+        }
+        let pending = self
+            .pending_approval
+            .lock()
+            .ok()
+            .and_then(|p| p.clone())
+            .unwrap_or(Value::Null);
+        let summary = pending
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let title = self
+            .title
+            .lock()
+            .ok()
+            .map(|t| t.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "Codex".to_string());
+        crate::desktop_notify::agent_status_changed(&title, next, &summary);
+        self.push_event(json!({
+            "type": "notification",
+            "method": "agent/status",
+            "params": {
+                "agentStatus": next,
+                "pendingApproval": pending,
+            },
+            "sessionId": self.session_id,
+        }));
+        crate::session_bus::publish_agent_status(
+            &self.session_id,
+            "codex",
+            next,
+            &pending,
+            Some(self.snapshot()),
+        );
+    }
+
+    fn set_waiting(&self, method: &str, id: &Value, params: &Value) {
+        let summary = params
+            .get("command")
+            .or_else(|| params.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or(method)
+            .to_string();
+        if let Ok(mut p) = self.pending_approval.lock() {
+            *p = Some(json!({
+                "method": method,
+                "id": id,
+                "summary": summary,
+            }));
+        }
+        self.set_agent_status("waiting");
+    }
+
+    fn clear_waiting_after_approval(&self) {
+        if let Ok(mut p) = self.pending_approval.lock() {
+            *p = None;
+        }
+        let busy = self
+            .turn_id
+            .lock()
+            .ok()
+            .and_then(|t| t.clone())
+            .is_some();
+        self.set_agent_status(if busy { "working" } else { "done" });
+    }
+
     fn snapshot(&self) -> Value {
+        let pending = self
+            .pending_approval
+            .lock()
+            .ok()
+            .and_then(|p| p.clone());
+        let agent_status = self
+            .agent_status
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "done".to_string());
+        let mut model = self
+            .model
+            .lock()
+            .ok()
+            .map(|t| t.clone())
+            .unwrap_or_default();
+        let mut effort = self
+            .effort
+            .lock()
+            .ok()
+            .map(|t| t.clone())
+            .unwrap_or_default();
+        let account = crate::terminal::codex_account_context(&self.codex_home);
+        if model.is_empty() {
+            model = account
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+        }
+        if effort.is_empty() {
+            effort = account
+                .get("effort")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+        }
         json!({
             "sessionId": self.session_id,
             "threadId": self.thread_id.lock().ok().map(|t| t.clone()).unwrap_or_default(),
             "turnId": self.turn_id.lock().ok().and_then(|t| t.clone()),
             "title": self.title.lock().ok().map(|t| t.clone()).unwrap_or_default(),
             "cwd": self.cwd.lock().ok().map(|t| t.clone()).unwrap_or_default(),
-            "model": self.model.lock().ok().map(|t| t.clone()).unwrap_or_default(),
-            "effort": self.effort.lock().ok().map(|t| t.clone()).unwrap_or_default(),
+            "model": model,
+            "effort": effort,
             "createdAt": self.created_at,
             "running": *self.alive.lock().unwrap_or_else(|e| e.into_inner()),
             "bridge": true,
+            "viewMode": "bridge",
             "tool": "codex",
             "origin": self.origin.lock().ok().map(|o| o.clone()).unwrap_or_default(),
             "commandPreview": "codex app-server",
+            "agentStatus": agent_status,
+            "pendingApproval": pending,
+            "authMode": account.get("authMode").cloned().unwrap_or(json!("")),
+            "authLabel": account.get("authLabel").cloned().unwrap_or(json!("")),
+            "provider": account.get("provider").cloned().unwrap_or(json!("")),
+            "providerName": account.get("providerName").cloned().unwrap_or(json!("")),
             "tokens": {
                 "total": *self.token_total.lock().unwrap_or_else(|e| e.into_inner()),
                 "contextWindow": *self.context_window.lock().unwrap_or_else(|e| e.into_inner()),
@@ -264,9 +400,16 @@ fn handle_inbound(session: &BridgeSession, msg: Value) {
             }
             return;
         }
-        // Server → client request（审批等）
+        // Server → client request（审批等）→ 等你
         let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
         let params = msg.get("params").cloned().unwrap_or(json!({}));
+        let method_l = method.to_ascii_lowercase();
+        if method_l.contains("requestapproval")
+            || method_l.contains("requestuserinput")
+            || method_l.contains("elicitation")
+        {
+            session.set_waiting(method, &id_v, &params);
+        }
         session.push_event(json!({
             "type": "serverRequest",
             "method": method,
@@ -302,10 +445,28 @@ fn on_notification(session: &BridgeSession, method: &str, params: &Value) {
                     *t = Some(tid);
                 }
             }
+            let waiting = session
+                .pending_approval
+                .lock()
+                .ok()
+                .map(|p| p.is_some())
+                .unwrap_or(false);
+            if !waiting {
+                session.set_agent_status("working");
+            }
         }
         "turn/completed" => {
             if let Ok(mut t) = session.turn_id.lock() {
                 *t = None;
+            }
+            let waiting = session
+                .pending_approval
+                .lock()
+                .ok()
+                .map(|p| p.is_some())
+                .unwrap_or(false);
+            if !waiting {
+                session.set_agent_status("done");
             }
         }
         "thread/tokenUsage/updated" => {
@@ -443,6 +604,29 @@ pub(crate) fn api_thread_start(body: &Value) -> Result<Value, String> {
         let o = get_string(&object, "origin");
         if o.is_empty() { "desktop".to_string() } else { o }
     };
+    let codex_home = {
+        let from_env = env
+            .get("CODEX_HOME")
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if let Some(h) = from_env {
+            std::path::PathBuf::from(h)
+        } else {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".codex")
+        }
+    };
+    // 启动参数未带 model 时，从 config 预填，避免顶栏只显示 "Codex"
+    let model = if model.is_empty() {
+        crate::terminal::read_codex_config_str(&codex_home, "model").unwrap_or_default()
+    } else {
+        model
+    };
+    let effort_seed =
+        crate::terminal::read_codex_config_str(&codex_home, "model_reasoning_effort")
+            .unwrap_or_default();
 
     let codex_bin = resolve_codex_bin()?;
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -456,7 +640,7 @@ pub(crate) fn api_thread_start(body: &Value) -> Result<Value, String> {
         title: Mutex::new(title.clone()),
         cwd: Mutex::new(cwd.clone()),
         model: Mutex::new(model.clone()),
-        effort: Mutex::new(String::new()),
+        effort: Mutex::new(effort_seed),
         child: Mutex::new(Some(child)),
         stdin: Mutex::new(Some(stdin)),
         pending: Mutex::new(HashMap::new()),
@@ -467,6 +651,9 @@ pub(crate) fn api_thread_start(body: &Value) -> Result<Value, String> {
         context_window: Mutex::new(0),
         alive: Mutex::new(true),
         origin: Mutex::new(origin),
+        agent_status: Mutex::new("done".to_string()),
+        pending_approval: Mutex::new(None),
+        codex_home,
     });
 
     start_reader(session.clone(), stdout);
@@ -520,7 +707,9 @@ pub(crate) fn api_thread_start(body: &Value) -> Result<Value, String> {
         .map_err(|e| e.to_string())?
         .insert(session_id.clone(), session.clone());
 
-    Ok(session.snapshot())
+    let snap = session.snapshot();
+    crate::session_bus::publish_upsert(snap.clone());
+    Ok(snap)
 }
 
 /// POST /api/codex/thread/resume — 对本 bridge session 再 resume（或用已有 sessionId）
@@ -595,6 +784,7 @@ pub(crate) fn api_turn_start(body: &Value) -> Result<Value, String> {
             *t = Some(tid.to_string());
         }
     }
+    session.set_agent_status("working");
     Ok(json!({
         "ok": true,
         "turn": result.get("turn").cloned().unwrap_or(result),
@@ -639,7 +829,8 @@ pub(crate) fn api_approval(body: &Value) -> Result<Value, String> {
     }
     let session = get_session(&session_id)?;
     session.respond(request_id, json!({ "decision": decision }))?;
-    Ok(json!({ "ok": true }))
+    session.clear_waiting_after_approval();
+    Ok(json!({ "ok": true, "session": session.snapshot() }))
 }
 
 /// GET /api/codex/models
@@ -737,6 +928,7 @@ pub(crate) fn api_close(body: &Value) -> Result<Value, String> {
                 let _ = c.wait();
             }
         }
+        crate::session_bus::publish_remove(&session_id, "codex");
     }
     Ok(json!({ "ok": true }))
 }
