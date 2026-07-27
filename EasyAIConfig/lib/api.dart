@@ -449,10 +449,12 @@ class ApiClient {
           : codexSessionGet(sessionId);
 
   /// 结束远程会话（bridge 关进程 / PTY 关终端）。
+  /// [remove] 仅对 PTY：true 会 kill tmux 常驻；false 只拆本机附着。
   Future<ApiResult> closeRemoteSession({
     required String tool,
     required String sessionId,
     required bool bridge,
+    bool remove = false,
   }) {
     if (bridge) {
       return _isClaudeTool(tool)
@@ -461,7 +463,7 @@ class ApiClient {
     }
     return post('/api/terminal/close', {
       'sessionId': sessionId,
-      'remove': true,
+      'remove': remove,
     });
   }
 

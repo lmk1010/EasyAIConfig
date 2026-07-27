@@ -552,7 +552,7 @@ class _SessionsScreenState extends State<SessionsScreen>
         }
         // 孤儿 Hook：电脑 CLI 等你，列表里却没有对应会话 → 造雷达卡
         if (!hit && st == AgentStatus.waiting) {
-          final id = 'hook:$tool:${cwd.hashCode & 0x7fffffff}';
+          final id = _hookRadarId(tool, cwd);
           final existing = _sessions.indexWhere((s) => s.id == id);
           final card = SessionInfo.fromJson({
             'sessionId': id,
@@ -581,6 +581,16 @@ class _SessionsScreenState extends State<SessionsScreen>
         _sortSessionsInPlace();
       });
     }
+  }
+
+  /// 稳定 hook 雷达 id（跨重启一致，避免隐藏状态丢）。
+  String _hookRadarId(String tool, String cwd) {
+    final norm = cwd.trim().toLowerCase();
+    var h = 0;
+    for (final u in norm.codeUnits) {
+      h = (h * 131 + u) & 0x7fffffff;
+    }
+    return 'hook:$tool:$h';
   }
 
   void _sortSessionsInPlace() {
@@ -777,7 +787,7 @@ class _SessionsScreenState extends State<SessionsScreen>
               // 孤儿 Hook → 雷达卡（电脑 CLI 等你，无对应会话）
               if (!matched && st == AgentStatus.waiting) {
                 final tool = (h['tool'] ?? 'codex').toString();
-                final id = 'hook:$tool:${cwd.hashCode & 0x7fffffff}';
+                final id = _hookRadarId(tool, cwd);
                 orphans.add(SessionInfo.fromJson({
                   'sessionId': id,
                   'tool': tool,
@@ -1571,21 +1581,26 @@ class _SessionsScreenState extends State<SessionsScreen>
   }
 
   Future<void> _closeRemoteSession(SessionInfo s) async {
+    // 常驻/镜像：默认只拆手机附着，避免误杀电脑上还在跑的 tmux
+    final killPersistent = s.persistent || s.mode == SessionMode.tmux;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('结束会话？'),
+        title: Text(killPersistent ? '断开手机附着？' : '结束会话？'),
         content: Text(
           s.bridge
               ? '将关闭电脑端的快速通道进程（不只是本机隐藏）。'
-              : '将关闭电脑端对应终端会话。',
+              : (killPersistent
+                  ? '这是常驻/镜像会话。默认只断开手机端附着，电脑上的 tmux/Agent 会继续跑。\n若要彻底杀掉电脑会话，请在电脑端操作。'
+                  : '将关闭电脑端对应终端会话。'),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: kExited),
+            style: FilledButton.styleFrom(
+                backgroundColor: killPersistent ? kPrimary : kExited),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('结束'),
+            child: Text(killPersistent ? '断开附着' : '结束'),
           ),
         ],
       ),
@@ -1595,6 +1610,8 @@ class _SessionsScreenState extends State<SessionsScreen>
       tool: s.tool,
       sessionId: s.id,
       bridge: s.bridge,
+      // 常驻永不从手机 remove；普通终端允许真正关掉
+      remove: !s.bridge && !killPersistent,
     );
     if (!mounted) return;
     if (!res.ok) {
@@ -1605,7 +1622,10 @@ class _SessionsScreenState extends State<SessionsScreen>
     }
     setState(() => _sessions.removeWhere((x) => x.id == s.id));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已结束'), duration: Duration(seconds: 1)),
+      SnackBar(
+        content: Text(killPersistent ? '已断开附着' : '已结束'),
+        duration: const Duration(seconds: 1),
+      ),
     );
   }
 
@@ -1782,28 +1802,42 @@ class _SessionsScreenState extends State<SessionsScreen>
         ),
       );
 
-  /// 顶栏连接状态：已连接 · 实时 / 已连接 · 轮询 / 无连接 / 连接中
+  /// 顶栏连接状态：已连接 / 轮询(桌面偏旧或推送降级) / 无连接 / 连接中
   Widget _linkStatusChip() {
     final Color color;
     final String label;
+    String? tip;
     if (_reachable == true) {
-      color = kRunning;
       if (_streamAlive) {
+        color = kRunning;
         label = '已连接';
       } else if (_streamFallbackPoll) {
+        color = kWarn;
         label = '轮询';
+        tip = '实时推送不可用（桌面可能需升级）。列表仍可用，点此重试推送。';
       } else {
+        color = kRunning;
         label = '已连接';
       }
     } else if (_reachable == false) {
       color = kExited;
       label = '无连接';
+      tip = _error;
     } else {
       color = kFaint;
       label = '连接中';
     }
     return GestureDetector(
-      onTap: _reachable == false ? _forceReconnect : null,
+      onTap: () {
+        if (_reachable == false || _streamFallbackPoll) {
+          _forceReconnect();
+          if (tip != null && tip.isNotEmpty && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(tip), duration: const Duration(seconds: 3)),
+            );
+          }
+        }
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
