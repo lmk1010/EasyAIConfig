@@ -28,6 +28,21 @@ class TerminalStreamEvent {
   });
 }
 
+/// SSE / 长连接失败：带 HTTP 状态，便于区分「桌面太旧/无权限」与瞬时断线。
+class StreamHttpException implements Exception {
+  final int statusCode;
+  final String message;
+  final Uri? uri;
+  const StreamHttpException(this.statusCode, this.message, [this.uri]);
+
+  /// 401/403/404：重试无意义，应降级轮询或停手。
+  bool get permanent =>
+      statusCode == 401 || statusCode == 403 || statusCode == 404;
+
+  @override
+  String toString() => message;
+}
+
 /// EasyAIConfig 远程 API 客户端。指向桌面端开启的远程服务
 /// (LAN: http://内网IP:端口，或 VPS 中转地址)，带 token 鉴权。
 class ApiClient {
@@ -119,7 +134,8 @@ class ApiClient {
       req.headers['Accept'] = 'text/event-stream';
       final res = await client.send(req).timeout(const Duration(seconds: 20));
       if (res.statusCode != 200) {
-        throw http.ClientException('stream HTTP ${res.statusCode}', uri);
+        throw StreamHttpException(
+            res.statusCode, 'stream HTTP ${res.statusCode}', uri);
       }
       final lines =
           res.stream.transform(utf8.decoder).transform(const LineSplitter());
@@ -299,7 +315,8 @@ class ApiClient {
       req.headers['Accept'] = 'text/event-stream';
       final res = await client.send(req).timeout(const Duration(seconds: 20));
       if (res.statusCode != 200) {
-        throw http.ClientException('sessions stream HTTP ${res.statusCode}', uri);
+        throw StreamHttpException(
+            res.statusCode, 'sessions stream HTTP ${res.statusCode}', uri);
       }
       final lines =
           res.stream.transform(utf8.decoder).transform(const LineSplitter());
@@ -451,7 +468,8 @@ class ApiClient {
       req.headers['Accept'] = 'text/event-stream';
       final res = await client.send(req).timeout(const Duration(seconds: 20));
       if (res.statusCode != 200) {
-        throw http.ClientException('bridge events HTTP ${res.statusCode}', uri);
+        throw StreamHttpException(
+            res.statusCode, 'bridge events HTTP ${res.statusCode}', uri);
       }
       final lines =
           res.stream.transform(utf8.decoder).transform(const LineSplitter());

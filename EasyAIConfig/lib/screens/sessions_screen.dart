@@ -177,6 +177,7 @@ class _SessionsScreenState extends State<SessionsScreen>
   List<SessionInfo> _sessions = [];
   String? _error;
   bool _loading = true;
+  /// REST 是否可达（真正掉线才亮大红条）
   bool _reachable = true;
   Timer? _retryTimer;
   int _retryAttempt = 0;
@@ -201,6 +202,9 @@ class _SessionsScreenState extends State<SessionsScreen>
   int _streamGen = 0;
   int _sessionsAfter = 0;
   bool _streamAlive = false;
+  /// 桌面太旧/无此接口 → 降级安静 REST 轮询，不再狂刷 SSE
+  bool _streamFallbackPoll = false;
+  int _streamFailStreak = 0;
 
   @override
   void initState() {
@@ -254,8 +258,16 @@ class _SessionsScreenState extends State<SessionsScreen>
   void _startSessionsStream() {
     final gen = ++_streamGen;
     () async {
-      var backoffMs = 600;
+      // 2s 起跳，封顶 30s；别用 600ms 狂刷（会把「推送抖一下」打成断线风暴）
+      var backoffMs = 2000;
       while (mounted && gen == _streamGen) {
+        if (_streamFallbackPoll) {
+          // 桌面无 SSE 或永久失败：安静 REST 轮询
+          await _refresh(silent: true);
+          if (!mounted || gen != _streamGen) return;
+          await Future.delayed(const Duration(seconds: 8));
+          continue;
+        }
         try {
           await for (final ev
               in _client.streamSessions(after: _sessionsAfter)) {
@@ -263,31 +275,49 @@ class _SessionsScreenState extends State<SessionsScreen>
             final seq = (ev['seq'] as num?)?.toInt();
             if (seq != null && seq > _sessionsAfter) _sessionsAfter = seq;
             _applySessionsEvent(ev);
-            if (!_streamAlive || !_reachable) {
+            if (!_streamAlive) {
               setState(() {
                 _streamAlive = true;
-                _reachable = true;
-                _error = null;
+                // SSE 恢复不代表要改 REST 状态；只清「推送」相关噪音
               });
             }
-            backoffMs = 600;
+            _streamFailStreak = 0;
+            backoffMs = 2000;
             _retryAttempt = 0;
             _retryTimer?.cancel();
           }
-          // 正常结束 → 立刻重连
+          // 对端正常关流 → 温和重连，绝不标成整站掉线
+          _streamFailStreak++;
+          if (mounted && gen == _streamGen) {
+            setState(() => _streamAlive = false);
+          }
         } catch (e) {
           if (!mounted || gen != _streamGen) return;
-          setState(() {
-            _streamAlive = false;
-            _reachable = false;
-            _error = '推送断开，重连中…';
-          });
+          _streamFailStreak++;
+          final permanent = e is StreamHttpException && e.permanent;
+          if (mounted) {
+            setState(() {
+              _streamAlive = false;
+              // 关键：不要把 SSE 失败写成 _reachable=false
+              // 列表 REST 仍可用时，不应出现「连接已断开」大红条
+            });
+          }
+          if (permanent) {
+            _streamFallbackPoll = true;
+            // 立刻补一枪 REST，然后进 8s 轮询
+            if (mounted && gen == _streamGen) {
+              await _refresh(silent: true);
+            }
+            continue;
+          }
         }
         if (!mounted || gen != _streamGen) return;
         await Future.delayed(Duration(milliseconds: backoffMs));
-        backoffMs = min(15000, backoffMs * 2);
-        // 重连时补一次 REST，覆盖 PTY 等非总线源
-        if (mounted && gen == _streamGen) {
+        backoffMs = min(30000, (backoffMs * 1.8).round());
+        // 偶发补 REST（第 1 次、之后每 3 次），避免每次重连都打 4 个接口
+        if (mounted &&
+            gen == _streamGen &&
+            (_streamFailStreak == 1 || _streamFailStreak % 3 == 0)) {
           await _refresh(silent: true);
         }
       }
@@ -486,6 +516,16 @@ class _SessionsScreenState extends State<SessionsScreen>
     _retryTimer = Timer(Duration(seconds: secs), () => _refresh(silent: true));
   }
 
+  /// 用户点「立即重试」：重置降级/退避，强制重开 SSE + REST。
+  void _forceReconnect() {
+    _retryTimer?.cancel();
+    _retryAttempt = 0;
+    _streamFailStreak = 0;
+    _streamFallbackPoll = false;
+    _refresh();
+    _startSessionsStream();
+  }
+
   Future<void> _refresh({bool silent = false}) async {
     final res = await _client.listSessions();
     if (!mounted) return;
@@ -608,7 +648,6 @@ class _SessionsScreenState extends State<SessionsScreen>
         if (ra != rb) return ra.compareTo(rb);
         return b.createdAt.compareTo(a.createdAt);
       });
-      final wasUnreachable = !_reachable;
       setState(() {
         _sessions = merged;
         _sortSessionsInPlace();
@@ -619,7 +658,7 @@ class _SessionsScreenState extends State<SessionsScreen>
       _notifyStatusTransitions(merged);
       _retryAttempt = 0;
       _retryTimer?.cancel();
-      if (wasUnreachable) _startSessionsStream();
+      // SSE 由独立循环维护；REST 恢复时不要反复 _startSessionsStream 造成双开/风暴
     } else {
       setState(() {
         _error = res.error;
@@ -675,6 +714,8 @@ class _SessionsScreenState extends State<SessionsScreen>
       _retryAttempt = 0;
       _sessionsAfter = 0;
       _streamAlive = false;
+      _streamFallbackPoll = false;
+      _streamFailStreak = 0;
       _hooksArmed = false;
     });
     _ensureHooks();
@@ -1503,7 +1544,7 @@ class _SessionsScreenState extends State<SessionsScreen>
               ),
             ),
             TextButton(
-              onPressed: () => _refresh(),
+              onPressed: _forceReconnect,
               child: const Text('立即重试'),
             ),
           ],

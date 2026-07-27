@@ -1029,18 +1029,22 @@ fn handle_one_request(
 
     // SSE 实时推流：独占连接，结束后关闭。
     if request.method.eq_ignore_ascii_case("GET") && request.path == "/api/terminal/stream" {
+        let _ = stream.set_read_timeout(None);
         handle_terminal_stream(stream, &request.query);
         return false;
     }
     if request.method.eq_ignore_ascii_case("GET") && request.path == "/api/codex/events" {
+        let _ = stream.set_read_timeout(None);
         crate::codex_app_server::handle_events_sse(stream, &request.query);
         return false;
     }
     if request.method.eq_ignore_ascii_case("GET") && request.path == "/api/claude/events" {
+        let _ = stream.set_read_timeout(None);
         crate::claude_print_bridge::handle_events_sse(stream, &request.query);
         return false;
     }
     if request.method.eq_ignore_ascii_case("GET") && request.path == "/api/sessions/stream" {
+        let _ = stream.set_read_timeout(None);
         crate::session_bus::handle_sessions_stream(stream, &request.query);
         return false;
     }

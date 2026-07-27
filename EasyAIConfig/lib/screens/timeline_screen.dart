@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -89,6 +90,10 @@ class _TimelineScreenState extends State<TimelineScreen> {
   late final bool _claudeBridge;
   StreamSubscription? _bridgeSub;
   int _bridgeSeq = 0;
+  /// bridge SSE 重连退避（毫秒）；成功收包后归零
+  int _bridgeBackoffMs = 1500;
+  int _bridgeFailStreak = 0;
+  bool _bridgeStreamStopped = false; // 永久失败（401/403/404）停手
   /// 延后确认空闲：工具间隙可能短暂 done/turn.completed，避免「当场已完成」
   Timer? _idleTimer;
   final Map<String, int> _itemSeq = {}; // itemId -> local seq
@@ -183,6 +188,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
   }
 
   void _openBridgeStream() {
+    if (_bridgeStreamStopped || !_bridge) return;
     _bridgeSub?.cancel();
     _bridgeSub = widget.client
         .streamBridgeEvents(
@@ -191,24 +197,40 @@ class _TimelineScreenState extends State<TimelineScreen> {
           after: _eventAfter,
         )
         .listen(
-      _onBridgeEvent,
-      onError: (_) {
-        if (!mounted) return;
-        setState(() => _reconnecting = true);
-        Future.delayed(const Duration(milliseconds: 1500), () {
-          if (!mounted || !_bridge) return;
-          _openBridgeStream();
-        });
+      (evt) {
+        _bridgeFailStreak = 0;
+        _bridgeBackoffMs = 1500;
+        _onBridgeEvent(evt);
+      },
+      onError: (e) {
+        if (!mounted || _sessionGone) return;
+        if (e is StreamHttpException && e.permanent) {
+          _bridgeStreamStopped = true;
+          setState(() => _reconnecting = false);
+          return;
+        }
+        _scheduleBridgeReconnect();
       },
       onDone: () {
-        if (!mounted || !_bridge) return;
-        Future.delayed(const Duration(milliseconds: 1200), () {
-          if (!mounted) return;
-          _openBridgeStream();
-        });
+        if (!mounted || !_bridge || _sessionGone || _bridgeStreamStopped) return;
+        _scheduleBridgeReconnect();
       },
       cancelOnError: true,
     );
+  }
+
+  void _scheduleBridgeReconnect() {
+    _bridgeFailStreak++;
+    if (!mounted) return;
+    if (_bridgeFailStreak >= 2 && !_reconnecting) {
+      setState(() => _reconnecting = true);
+    }
+    final wait = _bridgeBackoffMs;
+    _bridgeBackoffMs = min(30000, (_bridgeBackoffMs * 1.8).round());
+    Future.delayed(Duration(milliseconds: wait), () {
+      if (!mounted || !_bridge || _sessionGone || _bridgeStreamStopped) return;
+      _openBridgeStream();
+    });
   }
 
   void _onBridgeEvent(Map<String, dynamic> evt) {

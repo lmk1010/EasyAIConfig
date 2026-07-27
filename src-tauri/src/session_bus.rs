@@ -136,6 +136,10 @@ fn bridge_snapshot_sessions() -> Vec<Value> {
 
 /// GET /api/sessions/stream — 列表级 SSE（鉴权后由 remote_server 独占连接调用）
 pub(crate) fn handle_sessions_stream(stream: &mut TcpStream, query: &str) {
+    // 长连接只写不读：清掉 keep-alive 阶段的读超时，避免误伤；写超时防半死连接。
+    let _ = stream.set_read_timeout(None);
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+
     let pairs: Vec<(String, String)> = query
         .split('&')
         .filter(|s| !s.is_empty())
@@ -154,7 +158,8 @@ pub(crate) fn handle_sessions_stream(stream: &mut TcpStream, query: &str) {
 Content-Type: text/event-stream\r\n\
 Cache-Control: no-cache\r\n\
 Connection: keep-alive\r\n\
-Access-Control-Allow-Origin: *\r\n\r\n";
+Access-Control-Allow-Origin: *\r\n\
+X-Accel-Buffering: no\r\n\r\n";
     if stream.write_all(header.as_bytes()).is_err() {
         return;
     }
@@ -178,7 +183,8 @@ Access-Control-Allow-Origin: *\r\n\r\n";
                 Err(e) => e.into_inner(),
             };
             if !q.iter().any(|(s, _)| *s > cursor) {
-                match bus().cv.wait_timeout(q, Duration::from_secs(8)) {
+                // 5s：兼顾手机 NAT / 省电中间盒，别等太久才 ping
+                match bus().cv.wait_timeout(q, Duration::from_secs(5)) {
                     Ok((guard, _)) => q = guard,
                     Err(e) => q = e.into_inner().0,
                 }
@@ -189,7 +195,7 @@ Access-Control-Allow-Origin: *\r\n\r\n";
                 .collect()
         };
         if batch.is_empty() {
-            if last_ping.elapsed() >= Duration::from_secs(8) {
+            if last_ping.elapsed() >= Duration::from_secs(5) {
                 if stream.write_all(b": ping\n\n").is_err() {
                     break;
                 }
