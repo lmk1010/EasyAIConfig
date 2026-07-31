@@ -50,16 +50,21 @@ jobs:
               repo: context.repo.repo,
               tag
             });
+            const ver = tag.replace(/^v/, '');
+            const base = 'https://download.cursorxyz.it.com';
             const body = [
               `## EasyAIConfig ${tag}`,
               '',
-              '### 📦 下载',
-              '| 平台 | 文件 |',
+              '> **首次安装请下 `.dmg` / `.exe` / `.AppImage`。** `.app.tar.gz` 仅供应用内自动更新。',
+              '',
+              '### 📦 下载（用户安装包）',
+              '| 平台 | 链接 |',
               '|------|------|',
-              '| macOS (Apple Silicon) | `.dmg` |',
-              '| macOS (Intel) | `.dmg` |',
-              '| Windows | `.exe`（支持应用内覆盖更新） |',
-              '| Linux | `.deb` / `.AppImage` |',
+              `| macOS Apple Silicon | ${base}/EasyAIConfig_${ver}_aarch64.dmg |`,
+              `| macOS Intel | ${base}/EasyAIConfig_${ver}_x64.dmg |`,
+              `| Windows | ${base}/EasyAIConfig_${ver}_x64-setup.exe |`,
+              `| Linux AppImage | ${base}/EasyAIConfig_${ver}_amd64.AppImage |`,
+              `| Android APK | ${base}/EasyAIConfig_${ver}.apk |`,
               '',
               '### 🍎 macOS 安装说明',
               '下载 `.dmg` 后拖入 Applications，首次打开前运行：',

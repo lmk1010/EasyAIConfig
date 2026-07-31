@@ -59,21 +59,25 @@ jobs:
             const body = [
               `## EasyAIConfig ${tag}`,
               '',
-              '> 安装包托管在 Cloudflare R2；GitHub Release 额外上传 `latest.json`，兼容只查 GitHub 的旧版客户端。',
+              '> 安装包托管在 Cloudflare R2。`.app.tar.gz` 仅供应用内自动更新；**首次安装请下 `.dmg` / `.exe` / `.AppImage`。**',
               '',
-              '### 📦 下载',
+              '### 📦 下载（用户安装包）',
               `| 平台 | 链接 |`,
               `|------|------|`,
-              `| 更新清单（R2） | ${base}/latest.json |`,
-              `| 更新清单（GitHub 兼容） | https://github.com/${context.repo.owner}/${context.repo.repo}/releases/latest/download/latest.json |`,
+              `| macOS Apple Silicon | ${base}/EasyAIConfig_${ver}_aarch64.dmg |`,
+              `| macOS Intel | ${base}/EasyAIConfig_${ver}_x64.dmg |`,
+              `| Windows | ${base}/EasyAIConfig_${ver}_x64-setup.exe |`,
+              `| Linux AppImage | ${base}/EasyAIConfig_${ver}_amd64.AppImage |`,
               `| Android APK | ${base}/EasyAIConfig_${ver}.apk |`,
-              `| macOS Apple Silicon | 见 latest.json → darwin-aarch64 |`,
-              `| macOS Intel | 见 latest.json → darwin-x86_64 |`,
-              `| Windows | 见 latest.json → windows-x86_64 |`,
-              `| Linux AppImage | 见 latest.json → linux-x86_64 |`,
+              '',
+              '### 🔄 自动更新清单',
+              `| | 链接 |`,
+              `|---|------|`,
+              `| R2 | ${base}/latest.json |`,
+              `| GitHub 兼容 | https://github.com/${context.repo.owner}/${context.repo.repo}/releases/latest/download/latest.json |`,
               '',
               '### 🍎 macOS 安装说明',
-              '下载 `.dmg` / `.app.tar.gz` 后，首次打开前可运行：',
+              '下载 `.dmg` 后拖入 Applications；首次打开若被拦截，可运行：',
               '```bash',
               'sudo xattr -rd com.apple.quarantine /Applications/EasyAIConfig.app',
               '```',
@@ -207,23 +211,29 @@ jobs:
         with:
           args: ${{ matrix.args }}
 
-      - name: Collect updater bundle
+      - name: Collect updater + install bundles
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/updater
+          release_version='${{ needs.create-release.outputs.tag }}'
+          release_version="${release_version#v}"
           case '${{ matrix.updater_platform }}' in
             darwin-aarch64)
               asset=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/macos -type f -name '*.app.tar.gz' | head -n 1)
+              dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -type f -name '*.dmg' | head -n 1)
               ;;
             darwin-x86_64)
               asset=$(find src-tauri/target/x86_64-apple-darwin/release/bundle/macos -type f -name '*.app.tar.gz' | head -n 1)
+              dmg=$(find src-tauri/target/x86_64-apple-darwin/release/bundle/dmg -type f -name '*.dmg' | head -n 1)
               ;;
             windows-x86_64)
               asset=$(find src-tauri/target/release/bundle/nsis -type f -name '*-setup.exe' | head -n 1)
+              dmg=''
               ;;
             linux-x86_64)
               asset=$(find src-tauri/target/release/bundle/appimage -type f -name '*.AppImage' | head -n 1)
+              dmg=''
               ;;
             *)
               echo 'unsupported updater platform'
@@ -234,20 +244,23 @@ jobs:
           sig="${asset}.sig"
           test -f "$sig"
           asset_name=$(basename "$asset")
-          release_version='${{ needs.create-release.outputs.tag }}'
-          release_version="${release_version#v}"
           case '${{ matrix.updater_platform }}' in
             darwin-aarch64)
-              renamed="${asset_name%.app.tar.gz}_${release_version}_aarch64.app.tar.gz"
+              # .app.tar.gz → 应用内自动更新；.dmg → 用户首次安装
+              renamed="EasyAIConfig_${release_version}_aarch64.app.tar.gz"
               cp "$asset" "dist/updater/${renamed}"
               cp "$sig" "dist/updater/${renamed}.sig"
               asset_name="$renamed"
+              test -n "${dmg:-}"
+              cp "$dmg" "dist/updater/EasyAIConfig_${release_version}_aarch64.dmg"
               ;;
             darwin-x86_64)
-              renamed="${asset_name%.app.tar.gz}_${release_version}_x64.app.tar.gz"
+              renamed="EasyAIConfig_${release_version}_x64.app.tar.gz"
               cp "$asset" "dist/updater/${renamed}"
               cp "$sig" "dist/updater/${renamed}.sig"
               asset_name="$renamed"
+              test -n "${dmg:-}"
+              cp "$dmg" "dist/updater/EasyAIConfig_${release_version}_x64.dmg"
               ;;
             *)
               cp "$asset" dist/updater/

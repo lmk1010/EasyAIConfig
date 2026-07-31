@@ -93,20 +93,20 @@ EasyAIConfig 用来把 Codex、Claude Code、OpenCode、OpenClaw、Gemini CLI、
 
 ### 桌面版
 
-推荐直接下载桌面版：
-
-[https://github.com/lmk1010/EasyAIConfig/releases/latest](https://github.com/lmk1010/EasyAIConfig/releases/latest)
+安装包在 [Release 说明](https://github.com/lmk1010/EasyAIConfig/releases/latest) 与 Cloudflare R2。**macOS 请下 `.dmg`（首次安装）**；`.app.tar.gz` 仅供应用内自动更新。
 
 | 平台 | 安装包 |
 |------|--------|
-| macOS Apple Silicon | `.dmg` / `aarch64` |
-| macOS Intel | `.dmg` / `x64` |
-| Windows | `.msi` / `.exe` |
-| Linux | `.AppImage` / `.deb` |
+| macOS Apple Silicon | `EasyAIConfig_<ver>_aarch64.dmg` |
+| macOS Intel | `EasyAIConfig_<ver>_x64.dmg` |
+| Windows | `EasyAIConfig_<ver>_x64-setup.exe` |
+| Linux | `EasyAIConfig_<ver>_amd64.AppImage` |
+
+直链前缀：`https://download.cursorxyz.it.com/`（具体文件名见最新 Release）。
 
 ### 手机端（Android）
 
-Release 页可下载 APK，或自行构建：
+Release 页或 R2 可下载 APK，或自行构建：
 
 ```bash
 cd EasyAIConfig
