@@ -93,17 +93,19 @@ EasyAIConfig 用来把 Codex、Claude Code、OpenCode、OpenClaw、Gemini CLI、
 
 ### 桌面版 / 手机版（推荐）
 
-安装包在 Cloudflare R2（GitHub Release 只挂更新清单，不占仓库空间）。**macOS 请下 `.dmg`**；`.app.tar.gz` 仅供应用内自动更新，不要当安装包。
+安装包在 Cloudflare R2（GitHub Release **不放**大安装包，只在介绍里放下载链接）。
 
-| 平台 | 下载（始终最新版） |
-|------|-------------------|
+打开 [最新 Release](https://github.com/lmk1010/EasyAIConfig/releases/latest) 看本版本直链，或用下面固定入口（始终最新版）：
+
+| 平台 | 下载 |
+|------|------|
 | macOS Apple Silicon | [EasyAIConfig_aarch64.dmg](https://download.cursorxyz.it.com/EasyAIConfig_aarch64.dmg) |
 | macOS Intel | [EasyAIConfig_x64.dmg](https://download.cursorxyz.it.com/EasyAIConfig_x64.dmg) |
 | Windows | [EasyAIConfig_x64-setup.exe](https://download.cursorxyz.it.com/EasyAIConfig_x64-setup.exe) |
 | Linux | [EasyAIConfig_amd64.AppImage](https://download.cursorxyz.it.com/EasyAIConfig_amd64.AppImage) |
 | Android | [EasyAIConfig.apk](https://download.cursorxyz.it.com/EasyAIConfig.apk) |
 
-更新日志与带版本号备份包见 [Releases](https://github.com/lmk1010/EasyAIConfig/releases/latest)。
+**macOS 请下 `.dmg`**；不要下 `.app.tar.gz`（应用内自动更新用）。
 
 macOS 首次打开若被拦截：
 
