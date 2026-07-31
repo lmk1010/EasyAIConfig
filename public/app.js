@@ -314,6 +314,7 @@ const state = {
     running: null,
     lastAt: 0,
   },
+  toolBinaryBlockFlashKey: '',
   openClawSetupFlowId: 0,
   openClawSetupContext: null,
   openClawLastRepair: null,
@@ -1358,11 +1359,35 @@ async function refreshToolRuntimeAfterMutation(toolId = '') {
   renderToolConsole();
 }
 
+function hasBlockedToolBinary() {
+  if (state.current?.codexBinary?.blocked) return true;
+  return (state.tools || []).some((tool) => tool?.binary?.blocked);
+}
+
+function binaryBlockHint(binary = {}) {
+  const reason = binary?.blockReason || '';
+  if (reason === 'macos_quarantine' || reason === 'macos_exec_blocked') {
+    const path = binary?.path ? String(binary.path) : 'codex';
+    return `Codex 被 macOS 拦截（隔离/未公证）。可在「系统设置 → 隐私与安全性」允许，或终端执行：xattr -dr com.apple.quarantine "${path}"`;
+  }
+  return 'Codex 被系统安全策略拦截，暂时无法启动。';
+}
+
+function maybeFlashBinaryBlock(binary = {}, toolLabel = '工具') {
+  if (!binary?.blocked) return;
+  const key = `${toolLabel}:${binary.path || ''}:${binary.blockReason || ''}`;
+  if (state.toolBinaryBlockFlashKey === key) return;
+  state.toolBinaryBlockFlashKey = key;
+  flash(binaryBlockHint(binary).replace(/^Codex/, toolLabel), 'warning');
+}
+
 async function resyncToolRuntimeState({ force = false } = {}) {
   if (!force && !shouldResyncToolRuntimeState()) return;
   const now = Date.now();
   if (!force && state.toolRuntimeSync.running) return state.toolRuntimeSync.running;
-  if (!force && now - (state.toolRuntimeSync.lastAt || 0) < 1200) return;
+  // 被 Gatekeeper 拦截时拉长冷却，避免关弹窗后 focus 立刻再探活
+  const minGapMs = (!force && hasBlockedToolBinary()) ? 60000 : 1200;
+  if (!force && now - (state.toolRuntimeSync.lastAt || 0) < minGapMs) return;
 
   const job = refreshToolRuntimeAfterMutation(state.activeTool || '').catch((e) => console.warn('[resyncToolRuntimeState] refresh failed:', e));
 
@@ -6160,6 +6185,15 @@ function populateOpenCodeConfigEditor() {
 function getToolBinaryStatus(toolId = '', runtimeBinary = null) {
   const detectedBinary = state.tools.find((tool) => tool.id === toolId)?.binary || null;
   const runtime = runtimeBinary && typeof runtimeBinary === 'object' ? runtimeBinary : null;
+  if (runtime?.blocked || detectedBinary?.blocked) {
+    return {
+      ...(detectedBinary || {}),
+      ...(runtime || {}),
+      installed: true,
+      blocked: true,
+      blockReason: runtime?.blockReason || detectedBinary?.blockReason || null,
+    };
+  }
   if (runtime?.installed) return { ...(detectedBinary || {}), ...runtime };
   if (detectedBinary?.installed) return { ...(runtime || {}), ...detectedBinary };
   return runtime || detectedBinary || { installed: false };
@@ -14193,6 +14227,7 @@ function buildConsoleV2Model(tool) {
 
     const issues = [];
     if (!codexBinary.installed) issues.push({ tone: 'error', title: 'Codex 未安装', copy: '还没检测到 codex 命令，先去「工具安装」页面。' });
+    else if (codexBinary.blocked) issues.push({ tone: 'warning', title: 'Codex 被系统拦截', copy: binaryBlockHint(codexBinary) });
     if (!data.configExists) issues.push({ tone: 'warn', title: '还没有 config.toml', copy: '当前作用域尚未写入 Codex 配置；建议先完成一次快速配置。' });
     if (!providers.length && !login.loggedIn) issues.push({ tone: 'error', title: '没有可用 Provider', copy: '既没有保存任何 Provider，也没有官方登录。' });
     if (active && !active.hasApiKey) issues.push({ tone: 'error', title: '当前 Provider 缺 Key', copy: `活动 Provider「${active.name}」未检测到可用 API Key。` });
@@ -14201,7 +14236,7 @@ function buildConsoleV2Model(tool) {
     // Only fields that actually affect user decisions. Install path / env path
     // / reasoning strength etc. are one-click-away in the config editor.
     const meta = [
-      { label: '版本', value: codexBinary.installed ? (codexBinary.version || '已安装') : '未安装' },
+      { label: '版本', value: codexBinary.blocked ? '被系统拦截' : (codexBinary.installed ? (codexBinary.version || '已安装') : '未安装') },
       { label: '作用域', value: data.scope === 'project' ? '项目级' : '全局' },
       { label: 'Sandbox', value: data.summary?.sandboxMode || '默认',
         tone: /danger/i.test(data.summary?.sandboxMode || '') ? 'warn' : '' },
@@ -14223,7 +14258,7 @@ function buildConsoleV2Model(tool) {
       meta,
       issues,
       providers: [],
-      canLaunch: Boolean(codexBinary.installed),
+      canLaunch: Boolean(codexBinary.installed) && !codexBinary.blocked,
     };
   }
 
@@ -24222,11 +24257,19 @@ function renderAppUpdateStatus() {
 function renderStatus() {
   renderAppUpdateStatus();
   const codex = getToolBinaryStatus('codex', state.current?.codexBinary);
+  maybeFlashBinaryBlock(codex, 'Codex');
 
   // Sidebar badge
   const pill = el('codexPill');
-  pill.className = `badge ${codex.installed ? 'success' : 'warning'}`;
-  pill.textContent = codex.installed ? (codex.version || '已安装') : '未安装';
+  if (codex.blocked) {
+    pill.className = 'badge warning';
+    pill.textContent = '被系统拦截';
+    pill.title = binaryBlockHint(codex);
+  } else {
+    pill.className = `badge ${codex.installed ? 'success' : 'warning'}`;
+    pill.textContent = codex.installed ? (codex.version || '已安装') : '未安装';
+    pill.title = '';
+  }
 
   // Tools page card
   const versionEl = el('toolCodexVersion');
@@ -24236,12 +24279,15 @@ function renderStatus() {
   const uninstallBtn = el('uninstallCodexBtn');
 
   if (versionEl) {
-    versionEl.textContent = codex.installed ? (codex.version || '已安装') : '未安装';
-    versionEl.classList.toggle('tool-version-muted', !codex.installed);
+    versionEl.textContent = codex.blocked
+      ? '被系统拦截'
+      : (codex.installed ? (codex.version || '已安装') : '未安装');
+    versionEl.classList.toggle('tool-version-muted', !codex.installed || Boolean(codex.blocked));
+    versionEl.title = codex.blocked ? binaryBlockHint(codex) : '';
   }
   if (badgeEl) {
-    badgeEl.textContent = codex.installed ? '已安装' : '';
-    badgeEl.className = `tool-badge ${codex.installed ? 'tool-badge-ok' : ''}`;
+    badgeEl.textContent = codex.blocked ? '被拦截' : (codex.installed ? '已安装' : '');
+    badgeEl.className = `tool-badge ${codex.blocked ? 'tool-badge-warn' : (codex.installed ? 'tool-badge-ok' : '')}`;
   }
   if (updateBtn) updateBtn.querySelector('span').textContent = codex.installed ? '更新' : '安装';
   if (reinstallBtn) reinstallBtn.hidden = !codex.installed;
@@ -35195,7 +35241,12 @@ function getCodexLaunchCredentialWarning() {
 }
 
 async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已启动', terminalProfile = '', codexHome = '') {
-  const codexInstalled = isCodexInstalled();
+  const binary = getToolBinaryStatus('codex', state.current?.codexBinary);
+  if (binary.blocked) {
+    flash(binaryBlockHint(binary), 'error');
+    return false;
+  }
+  const codexInstalled = Boolean(binary.installed);
   if (!codexInstalled) {
     const installed = await installCodex({ silent: true });
     if (!installed) return false;
@@ -35233,7 +35284,12 @@ async function launchCodex(buttonId = 'launchBtn', successMessage = 'Codex 已�
 }
 
 async function launchCodexLogin(buttonId = '', terminalProfile = '', codexHome = '') {
-  const codexInstalled = isCodexInstalled();
+  const binary = getToolBinaryStatus('codex', state.current?.codexBinary);
+  if (binary.blocked) {
+    flash(binaryBlockHint(binary), 'error');
+    return false;
+  }
+  const codexInstalled = Boolean(binary.installed);
   if (!codexInstalled) {
     const installed = await installCodex({ silent: true });
     if (!installed) return false;

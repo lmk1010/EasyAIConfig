@@ -534,6 +534,16 @@ function readBinaryVersion(binPath, { passive = true } = {}) {
     };
   }
 
+  // passive：只认文件存在，绝不 spawn —— 避免 macOS Gatekeeper 弹窗死循环
+  if (passive) {
+    return {
+      installed: true,
+      version: null,
+      path: binPath,
+      blocked: false,
+    };
+  }
+
   let result;
   try {
     if (process.platform === 'win32' && lower.endsWith('.ps1')) {
@@ -541,23 +551,28 @@ function readBinaryVersion(binPath, { passive = true } = {}) {
     } else if (process.platform === 'win32' && (lower.endsWith('.cmd') || lower.endsWith('.bat'))) {
       result = runSpawnSync('cmd.exe', ['/d', '/s', '/c', `"${binPath}" --version`], { encoding: 'utf8', timeout: TOOL_VERSION_TIMEOUT_MS });
     } else {
-      result = runSpawnSync(binPath, ['--version'], { encoding: 'utf8', timeout: passive ? TOOL_VERSION_TIMEOUT_MS : 5000 });
+      result = runSpawnSync(binPath, ['--version'], { encoding: 'utf8', timeout: 5000 });
     }
   } catch {
     return {
       installed: true,
       version: null,
       path: binPath,
+      blocked: process.platform === 'darwin',
+      blockReason: process.platform === 'darwin' ? 'macos_exec_blocked' : null,
     };
   }
 
   const versionText = result.status === 0
     ? String(result.stdout || result.stderr || '').trim()
     : null;
+  const blocked = process.platform === 'darwin' && result.status !== 0;
   return {
     installed: true,
     version: versionText,
     path: binPath,
+    blocked,
+    blockReason: blocked ? 'macos_exec_blocked' : null,
   };
 }
 
@@ -565,17 +580,22 @@ function readBinaryVersion(binPath, { passive = true } = {}) {
 function findToolBinary(toolId, options = {}) {
   const candidates = toolBinaryCandidates(toolId, options).map((candidatePath) => readBinaryVersion(candidatePath, options)).filter((item) => item.installed);
   candidates.sort((left, right) => {
+    const leftBlocked = Boolean(left.blocked);
+    const rightBlocked = Boolean(right.blocked);
+    if (leftBlocked !== rightBlocked) return leftBlocked ? 1 : -1;
     if (!options.passive) {
       const versionOrder = compareVersions(right.version || '', left.version || '');
       if (versionOrder !== 0) return versionOrder;
     }
     return windowsBinaryCandidateRank(left.path) - windowsBinaryCandidateRank(right.path);
   });
-  const selected = candidates[0];
+  const selected = candidates.find((item) => !item.blocked) || candidates[0];
   return {
     installed: Boolean(selected),
     version: selected?.version || null,
     path: selected?.path || null,
+    blocked: Boolean(selected?.blocked),
+    blockReason: selected?.blockReason || null,
     candidates,
   };
 }

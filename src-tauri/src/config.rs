@@ -614,7 +614,7 @@ pub(crate) fn load_state(query: &Value) -> Result<Value, String> {
         .cloned()
         .unwrap_or(Value::Null);
     let config_object = parse_json_object(&config);
-    let codex_binary = find_codex_binary_with_options(cfg!(target_os = "windows"));
+    let codex_binary = find_codex_binary_with_options(true);
     let provider_base_url = active_provider
         .get("baseUrl")
         .and_then(Value::as_str)

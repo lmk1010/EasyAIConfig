@@ -37,7 +37,16 @@ const CODEX_APP_DOCS_URL: &str = "https://developers.openai.com/codex/app";
 const ROUTER_CLIENT_PROVIDER_KEY: &str = "easyai-router";
 const LOCAL_ROUTER_NO_PROXY_VALUE: &str = "127.0.0.1,localhost,::1";
 const TOOL_VERSION_TIMEOUT_MS: u64 = 2500;
+/// Gatekeeper / quarantine 失败后的负缓存，避免 focus 重同步反复 spawn 弹窗
+const BINARY_BLOCK_CACHE_TTL_MS: u64 = 15 * 60 * 1000;
 
+#[derive(Clone)]
+struct BinaryBlockCacheEntry {
+    reason: String,
+    at: Instant,
+}
+
+static BINARY_BLOCK_CACHE: OnceLock<Mutex<BTreeMap<String, BinaryBlockCacheEntry>>> = OnceLock::new();
 static OPENCODE_INSTALL_TASK_SEQ: AtomicU64 = AtomicU64::new(1);
 static OPENCODE_INSTALL_TASKS: OnceLock<Mutex<BTreeMap<String, OpenCodeInstallTask>>> =
     OnceLock::new();
@@ -389,6 +398,63 @@ fn raw_command(program: &str) -> Command {
     }
 }
 
+fn binary_block_cache() -> &'static Mutex<BTreeMap<String, BinaryBlockCacheEntry>> {
+    BINARY_BLOCK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn remember_binary_block(path: &str, reason: &str) {
+    if let Ok(mut guard) = binary_block_cache().lock() {
+        guard.insert(
+            path.to_ascii_lowercase(),
+            BinaryBlockCacheEntry {
+                reason: reason.to_string(),
+                at: Instant::now(),
+            },
+        );
+    }
+}
+
+fn cached_binary_block(path: &str) -> Option<String> {
+    let key = path.to_ascii_lowercase();
+    let Ok(mut guard) = binary_block_cache().lock() else {
+        return None;
+    };
+    let Some(entry) = guard.get(&key) else {
+        return None;
+    };
+    if entry.at.elapsed() > Duration::from_millis(BINARY_BLOCK_CACHE_TTL_MS) {
+        guard.remove(&key);
+        return None;
+    }
+    Some(entry.reason.clone())
+}
+
+fn clear_binary_block(path: &str) {
+    if let Ok(mut guard) = binary_block_cache().lock() {
+        guard.remove(&path.to_ascii_lowercase());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_path_has_quarantine(path: &Path) -> bool {
+    let output = create_command("xattr")
+        .args(["-p", "com.apple.quarantine"])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+    match output {
+        Ok(out) => out.status.success() && !out.stdout.is_empty(),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_path_has_quarantine(_path: &Path) -> bool {
+    false
+}
+
 fn read_binary_version_output(candidate_path: &Path) -> Option<String> {
     if !candidate_path.exists() {
         return None;
@@ -453,14 +519,77 @@ fn read_binary_version_output(candidate_path: &Path) -> Option<String> {
     )
 }
 
-fn read_binary_version_output_with_options(
-    candidate_path: &Path,
-    _passive: bool,
-) -> Option<Option<String>> {
+/// Probe a binary candidate without causing macOS Gatekeeper dialog loops.
+///
+/// - `passive == true`: never spawn; existence (+ quarantine xattr) only
+/// - `passive == false`: may run `--version`, but cache macOS exec failures
+fn probe_binary_candidate(candidate_path: &Path, passive: bool) -> Option<Value> {
     if !candidate_path.exists() {
         return None;
     }
-    read_binary_version_output(candidate_path).map(Some)
+    let path_text = candidate_path.to_string_lossy().to_string();
+
+    if let Some(reason) = cached_binary_block(&path_text) {
+        return Some(json!({
+          "installed": true,
+          "version": Value::Null,
+          "path": path_text,
+          "blocked": true,
+          "blockReason": reason,
+        }));
+    }
+
+    if macos_path_has_quarantine(candidate_path) {
+        remember_binary_block(&path_text, "macos_quarantine");
+        return Some(json!({
+          "installed": true,
+          "version": Value::Null,
+          "path": path_text,
+          "blocked": true,
+          "blockReason": "macos_quarantine",
+        }));
+    }
+
+    if passive {
+        return Some(json!({
+          "installed": true,
+          "version": Value::Null,
+          "path": path_text,
+          "blocked": false,
+        }));
+    }
+
+    match read_binary_version_output(candidate_path) {
+        Some(version) => {
+            clear_binary_block(&path_text);
+            Some(json!({
+              "installed": true,
+              "version": version,
+              "path": path_text,
+              "blocked": false,
+            }))
+        }
+        None => {
+            // Existing binary that fails to exec on macOS is often Gatekeeper;
+            // treat as blocked and stop re-spawning on every focus/resync.
+            if cfg!(target_os = "macos") {
+                remember_binary_block(&path_text, "macos_exec_blocked");
+                return Some(json!({
+                  "installed": true,
+                  "version": Value::Null,
+                  "path": path_text,
+                  "blocked": true,
+                  "blockReason": "macos_exec_blocked",
+                }));
+            }
+            Some(json!({
+              "installed": true,
+              "version": Value::Null,
+              "path": path_text,
+              "blocked": false,
+            }))
+        }
+    }
 }
 
 fn collect_detected_binary_candidates(
@@ -472,18 +601,23 @@ fn collect_detected_binary_candidates(
     let mut candidates = candidate_paths
         .into_iter()
         .filter(|path| seen.insert(path.to_string_lossy().to_ascii_lowercase()))
-        .filter_map(|candidate_path| {
-            let version = read_binary_version_output_with_options(&candidate_path, passive)?;
-            let path_text = candidate_path.to_string_lossy().to_string();
-            Some(json!({
-              "installed": true,
-              "version": version.map(Value::String).unwrap_or(Value::Null),
-              "path": path_text,
-            }))
-        })
+        .filter_map(|candidate_path| probe_binary_candidate(&candidate_path, passive))
         .collect::<Vec<_>>();
 
     candidates.sort_by(|left, right| {
+        let left_blocked = left
+            .get("blocked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let right_blocked = right
+            .get("blocked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        match (left_blocked, right_blocked) {
+            (false, true) => return Ordering::Less,
+            (true, false) => return Ordering::Greater,
+            _ => {}
+        }
         if !passive {
             let left_version = left
                 .get("version")
@@ -511,9 +645,28 @@ fn collect_detected_binary_candidates(
         left_rank.cmp(&right_rank)
     });
 
-    let selected = candidates.first().cloned();
+    let selected = candidates
+        .iter()
+        .find(|item| {
+            !item
+                .get("blocked")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .or_else(|| candidates.first().cloned());
+    let blocked = selected
+        .as_ref()
+        .and_then(|item| item.get("blocked").and_then(Value::as_bool))
+        .unwrap_or(false);
+    let block_reason = selected
+        .as_ref()
+        .and_then(|item| item.get("blockReason").cloned())
+        .unwrap_or(Value::Null);
     json!({
       "installed": selected.is_some(),
+      "blocked": blocked,
+      "blockReason": block_reason,
       "version": selected.as_ref().and_then(|item| item.get("version")).cloned().unwrap_or(Value::Null),
       "path": selected
         .as_ref()
@@ -3110,6 +3263,43 @@ fn describe_codex_install_error() -> String {
     "Codex 尚未安装，请先点击安装".to_string()
 }
 
+fn describe_codex_blocked_error(binary: &Value) -> String {
+    let path = binary
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or("codex");
+    format!(
+        "Codex 被 macOS 系统拦截（隔离属性 / 未公证），无法启动。\n\
+         请到「系统设置 → 隐私与安全性」允许，或在终端执行：\n\
+         xattr -dr com.apple.quarantine \"{}\"",
+        path
+    )
+}
+
+fn ensure_codex_binary_runnable(binary: &Value) -> Result<String, String> {
+    if !binary
+        .get("installed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(describe_codex_install_error());
+    }
+    if binary
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(describe_codex_blocked_error(binary));
+    }
+    Ok(binary
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or("codex")
+        .to_string())
+}
+
 pub(crate) fn find_codex_binary_with_options(passive: bool) -> Value {
     let mut detected =
         collect_detected_binary_candidates(codex_candidates(passive), "codex", passive);
@@ -4441,24 +4631,13 @@ pub(crate) fn launch_codex(body: &Value) -> Result<Value, String> {
     // 但旧 config.toml 仍让 Codex 走 API-Key provider。
     let _ = clear_codex_oauth_active_provider(&codex_home, Some(&cwd))?;
     let codex_binary = find_codex_binary();
-    if !codex_binary
-        .get("installed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err(describe_codex_install_error());
-    }
-    let codex_path = codex_binary
-        .get("path")
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or("codex");
+    let codex_path = ensure_codex_binary_runnable(&codex_binary)?;
     if embedded_terminal_requested(&terminal_profile) {
         let extra_env = codex_launch_extra_env(&codex_home, Some(&cwd));
         let terminal_session = spawn_codex_embedded_session(
             &cwd,
             "Codex",
-            codex_path,
+            &codex_path,
             &[],
             "codex",
             &extra_env,
@@ -4497,25 +4676,14 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
         let _ = write_switch_backup(&live_auth_raw);
     }
     let codex_binary = find_codex_binary();
-    if !codex_binary
-        .get("installed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err(describe_codex_install_error());
-    }
-    let binary_path = codex_binary
-        .get("path")
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or("codex");
+    let binary_path = ensure_codex_binary_runnable(&codex_binary)?;
     if embedded_terminal_requested(&terminal_profile) {
         let args = vec!["login".to_string()];
         let extra_env = codex_launch_extra_env(&codex_home, Some(&cwd));
         let terminal_session = spawn_codex_embedded_session(
             &cwd,
             "Codex 登录",
-            binary_path,
+            &binary_path,
             &args,
             "codex",
             &extra_env,
@@ -4531,9 +4699,9 @@ pub(crate) fn login_codex(body: &Value) -> Result<Value, String> {
         }));
     }
     let command = if cfg!(target_os = "windows") {
-        build_windows_binary_command(binary_path, &["login".to_string()], "codex")
+        build_windows_binary_command(&binary_path, &["login".to_string()], "codex")
     } else {
-        format!("{} login", quote_posix_shell_arg(binary_path))
+        format!("{} login", quote_posix_shell_arg(&binary_path))
     };
     let command = with_codex_home_command(&command, &codex_home, Some(&cwd));
     let message = if cfg!(target_os = "macos") {
@@ -5074,13 +5242,7 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
     let last = object.get("last").and_then(Value::as_bool).unwrap_or(false);
     let terminal_profile = get_string(&object, "terminalProfile");
     let codex_binary = find_codex_binary();
-    if !codex_binary
-        .get("installed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err(describe_codex_install_error());
-    }
+    let binary_path = ensure_codex_binary_runnable(&codex_binary)?;
     let subcommand = if action == "fork" { "fork" } else { "resume" };
     let mut args = vec![subcommand.to_string()];
     if last {
@@ -5091,11 +5253,6 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
         return Err("缺少会话 ID".to_string());
     }
 
-    let binary_path = codex_binary
-        .get("path")
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or("codex");
     let tool_label = if action == "fork" {
         "Codex 分叉恢复"
     } else {
@@ -5106,11 +5263,11 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
         let terminal_session = spawn_codex_embedded_session(
             &cwd,
             tool_label,
-            binary_path,
+            &binary_path,
             &args,
             "codex",
             &extra_env,
-            Some(build_codex_session_command(binary_path, &args)),
+            Some(build_codex_session_command(&binary_path, &args)),
         )?;
         return Ok(json!({
           "ok": true,
@@ -5123,7 +5280,7 @@ fn launch_codex_session_action(body: &Value, action: &str) -> Result<Value, Stri
         }));
     }
     let command = with_codex_home_command(
-        &build_codex_session_command(binary_path, &args),
+        &build_codex_session_command(&binary_path, &args),
         &codex_home,
         Some(&cwd),
     );
