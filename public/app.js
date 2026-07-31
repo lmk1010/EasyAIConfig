@@ -38619,14 +38619,14 @@ function bindEvents() {
     const btn = el('aboutApkDownloadBtn');
     const url = btn?.getAttribute('data-external-url')
       || (typeof androidApkDownloadUrl === 'function' ? androidApkDownloadUrl() : '')
-      || 'https://download.cursorxyz.it.com/EasyAIConfig_1.0.75.apk';
+      || 'https://download.cursorxyz.it.com/EasyAIConfig.apk';
     void openExternalUrl(url);
   });
   el('sysApkDownloadBtn')?.addEventListener('click', () => {
     const btn = el('sysApkDownloadBtn');
     const url = btn?.getAttribute('data-external-url')
       || (typeof androidApkDownloadUrl === 'function' ? androidApkDownloadUrl() : '')
-      || 'https://download.cursorxyz.it.com/EasyAIConfig_1.0.75.apk';
+      || 'https://download.cursorxyz.it.com/EasyAIConfig.apk';
     void openExternalUrl(url);
   });
   el('aboutFeedbackBtn')?.addEventListener('click', () => {

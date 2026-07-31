@@ -4111,7 +4111,7 @@ async function handleRemoteAction(action, el) {
   if (action === 'download-apk') {
     const url = typeof window.androidApkDownloadUrl === 'function'
       ? window.androidApkDownloadUrl()
-      : 'https://download.cursorxyz.it.com/EasyAIConfig_1.0.75.apk';
+      : 'https://download.cursorxyz.it.com/EasyAIConfig.apk';
     if (typeof window.openExternalUrl === 'function') void window.openExternalUrl(url);
     else window.open(url, '_blank');
     flash('正在打开 APK 下载…', 'info');

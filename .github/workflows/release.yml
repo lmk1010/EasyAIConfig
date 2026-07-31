@@ -61,7 +61,16 @@ jobs:
               '',
               '> 安装包托管在 Cloudflare R2。`.app.tar.gz` 仅供应用内自动更新；**首次安装请下 `.dmg` / `.exe` / `.AppImage`。**',
               '',
-              '### 📦 下载（用户安装包）',
+              '### 📦 下载（固定最新入口，README 同款）',
+              `| 平台 | 链接 |`,
+              `|------|------|`,
+              `| macOS Apple Silicon | ${base}/EasyAIConfig_aarch64.dmg |`,
+              `| macOS Intel | ${base}/EasyAIConfig_x64.dmg |`,
+              `| Windows | ${base}/EasyAIConfig_x64-setup.exe |`,
+              `| Linux AppImage | ${base}/EasyAIConfig_amd64.AppImage |`,
+              `| Android APK | ${base}/EasyAIConfig.apk |`,
+              '',
+              '### 📦 本版本备份',
               `| 平台 | 链接 |`,
               `|------|------|`,
               `| macOS Apple Silicon | ${base}/EasyAIConfig_${ver}_aarch64.dmg |`,
@@ -459,19 +468,42 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
         run: |
+          set -euo pipefail
           base="${CF_R2_PUBLIC_BASE_URL:-${{ env.R2_PUBLIC_BASE }}}"
           base="${base%/}"
+          ver="${RELEASE_TAG#v}"
           aws s3 sync dist/r2 "s3://${CF_R2_BUCKET}/" \
             --endpoint-url "${CF_R2_ENDPOINT}" \
             --exclude '*.manifest.json' \
             --exclude '*.sha256' \
             --exclude 'latest.json'
+
+          # 固定文件名别名：README / 官网可永久指向，不必每次改版本号
+          copy_alias() {
+            local src="$1"
+            local dst="$2"
+            if [ -f "dist/r2/${src}" ]; then
+              aws s3 cp "dist/r2/${src}" "s3://${CF_R2_BUCKET}/${dst}" \
+                --endpoint-url "${CF_R2_ENDPOINT}" \
+                --cache-control 'no-store, no-cache, must-revalidate, max-age=0'
+              echo "alias: ${base}/${dst} <- ${src}"
+            else
+              echo "skip alias (missing): ${src}"
+            fi
+          }
+          copy_alias "EasyAIConfig_${ver}_aarch64.dmg" "EasyAIConfig_aarch64.dmg"
+          copy_alias "EasyAIConfig_${ver}_x64.dmg" "EasyAIConfig_x64.dmg"
+          copy_alias "EasyAIConfig_${ver}_x64-setup.exe" "EasyAIConfig_x64-setup.exe"
+          copy_alias "EasyAIConfig_${ver}_amd64.AppImage" "EasyAIConfig_amd64.AppImage"
+          copy_alias "EasyAIConfig_${ver}.apk" "EasyAIConfig.apk"
+
           aws s3 cp dist/r2/latest.json "s3://${CF_R2_BUCKET}/latest.json" \
             --endpoint-url "${CF_R2_ENDPOINT}" \
             --cache-control 'no-store, no-cache, must-revalidate, max-age=0' \
             --content-type 'application/json'
           echo "R2 updater endpoint: ${base}/latest.json"
-          echo "APK: ${base}/EasyAIConfig_${RELEASE_TAG#v}.apk"
+          echo "Stable macOS arm64: ${base}/EasyAIConfig_aarch64.dmg"
+          echo "APK: ${base}/EasyAIConfig.apk"
 
       - name: Upload latest.json to GitHub Release (compat old clients)
         if: steps.r2.outputs.enabled == 'true'

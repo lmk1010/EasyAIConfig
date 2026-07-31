@@ -91,22 +91,29 @@ EasyAIConfig 用来把 Codex、Claude Code、OpenCode、OpenClaw、Gemini CLI、
 
 ## 安装
 
-### 桌面版
+### 桌面版 / 手机版（推荐）
 
-安装包在 [Release 说明](https://github.com/lmk1010/EasyAIConfig/releases/latest) 与 Cloudflare R2。**macOS 请下 `.dmg`（首次安装）**；`.app.tar.gz` 仅供应用内自动更新。
+安装包在 Cloudflare R2（GitHub Release 只挂更新清单，不占仓库空间）。**macOS 请下 `.dmg`**；`.app.tar.gz` 仅供应用内自动更新，不要当安装包。
 
-| 平台 | 安装包 |
-|------|--------|
-| macOS Apple Silicon | `EasyAIConfig_<ver>_aarch64.dmg` |
-| macOS Intel | `EasyAIConfig_<ver>_x64.dmg` |
-| Windows | `EasyAIConfig_<ver>_x64-setup.exe` |
-| Linux | `EasyAIConfig_<ver>_amd64.AppImage` |
+| 平台 | 下载（始终最新版） |
+|------|-------------------|
+| macOS Apple Silicon | [EasyAIConfig_aarch64.dmg](https://download.cursorxyz.it.com/EasyAIConfig_aarch64.dmg) |
+| macOS Intel | [EasyAIConfig_x64.dmg](https://download.cursorxyz.it.com/EasyAIConfig_x64.dmg) |
+| Windows | [EasyAIConfig_x64-setup.exe](https://download.cursorxyz.it.com/EasyAIConfig_x64-setup.exe) |
+| Linux | [EasyAIConfig_amd64.AppImage](https://download.cursorxyz.it.com/EasyAIConfig_amd64.AppImage) |
+| Android | [EasyAIConfig.apk](https://download.cursorxyz.it.com/EasyAIConfig.apk) |
 
-直链前缀：`https://download.cursorxyz.it.com/`（具体文件名见最新 Release）。
+更新日志与带版本号备份包见 [Releases](https://github.com/lmk1010/EasyAIConfig/releases/latest)。
 
-### 手机端（Android）
+macOS 首次打开若被拦截：
 
-Release 页或 R2 可下载 APK，或自行构建：
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/EasyAIConfig.app
+```
+
+### 手机端自行构建
+
+也可本地打 APK：
 
 ```bash
 cd EasyAIConfig
